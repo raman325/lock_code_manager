@@ -1,0 +1,74 @@
+{
+  "config": {
+    "error": {
+      "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
+      "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "name": "Name",
+          "locks": "Locks"
+        },
+        "description": "Select the locks you would like to manage with this configuration.",
+        "title": "Lock Code Manager"
+      },
+      "choose_path": {
+        "menu_options": {
+          "ui": "UI",
+          "yaml": "YAML"
+        },
+        "description": "Choose whether you want to configure each slot via the UI or if you want to configure all slots in a YAML config.",
+        "title": "Choose Path"
+      },
+      "ui": {
+        "data": {
+          "num_slots": "Number of slots",
+          "start_slot": "Start from slot #"
+        },
+        "description": "You should only configure the slots you are ready to set up right now. You can easily add and remove slots later using the integration provided services. Existing user codes for the slot range specified will be removed.",
+        "title": "How Many Slots?"
+      },
+      "code_slot": {
+        "data": {
+          "name": "Name",
+          "pin": "PIN Code",
+          "enabled": "Enabled",
+          "calendar": "Calendar",
+          "number_of_uses": "Number of Uses"
+        },
+        "description": "**Configure slot {slot_num}:** Enabling the calendar will require you to set up a calendar schedule for the slot. The slot will only be active when there is an in progress event on the calendar, so the calendar should be disabled if you don't plan to use it. Number of Uses will only be enabled if set to a number greater than 0.",
+        "title": "Configure Slot {slot_num}"
+      },
+      "yaml": {
+        "data": {
+          "slots": "Slots YAML"
+        },
+        "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
+        "title": "Configure slots"
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
+      "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}."
+    },
+    "step": {
+      "init": {
+        "data": {
+          "locks": "Locks",
+          "slots": "Slots YAML"
+        },
+        "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
+        "title": "Lock Code Manager"
+      }
+    }
+  },
+  "system_health": {
+    "info": {
+      "zwave_integration": "Zwave Integration",
+      "network_status": "Network Status"
+    }
+  }
+}

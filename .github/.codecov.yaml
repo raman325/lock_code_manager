@@ -1,0 +1,24 @@
+codecov:
+  require_ci_to_pass: no
+  token: 0b03fce2-d1e9-4c64-8ff2-f7435f2c06a7
+  
+coverage:
+  precision: 2
+  round: down
+  range: "70...100"
+
+parsers:
+  gcov:
+    branch_detection:
+      conditional: yes
+      loop: yes
+      method: no
+      macro: no
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: no
+
+ignore:
+  - "tests/" # no need to test the tests

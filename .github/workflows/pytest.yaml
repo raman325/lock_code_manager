@@ -1,0 +1,37 @@
+name: Pytest
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 7 1-28/7 * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9, "3.10"]
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v1
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get install libudev-dev
+          python -m pip install --upgrade pip
+          pip install -r requirements_test.txt
+      - name: Run formatting
+        run: |
+          python -m isort -v --profile black .
+          python -m black -v .
+      - name: Generate coverage report
+        run: |
+          python -m pytest
+          pip install pytest-cov
+          pytest ./tests/ --cov=custom_components/keymaster/ --cov-report=xml
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v1

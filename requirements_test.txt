@@ -1,0 +1,4 @@
+aiohttp_cors
+aioresponses
+pytest
+pytest-homeassistant-custom-component

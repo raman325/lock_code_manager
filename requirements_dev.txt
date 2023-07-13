@@ -1,0 +1,8 @@
+homeassistant
+ical
+zwave-js-server-python
+pyserial
+pyudev
+
+-r requirements_lint.txt
+-r requirements_test.txt

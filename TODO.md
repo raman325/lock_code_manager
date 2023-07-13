@@ -1,0 +1,7 @@
+- Add binary sensor that calculates whether slot PIN should be set or cleared (watch for state updates from all entities that can impact this state)
+- Add sensor that tracks the lock state versus the desired state
+- Add strategy for a lock management dashboard
+- Fix dupe remove warnings
+- Add debug logging to track what gets added, what gets removed, etc.
+- Switch from the current strategy for number of uses (-1 is disable) to a checkbox
+- Update README + hacs.json
