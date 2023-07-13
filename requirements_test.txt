@@ -1,0 +1,7 @@
+aiohttp_cors
+aioresponses
+pyserial
+pytest
+pytest-homeassistant-custom-component
+pyudev
+zeroconf

@@ -1,0 +1,18 @@
+hard_refresh_usercodes:
+  name: Hard Refresh Usercodes
+  description: If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.
+  target:
+    entity:
+      domain: lock
+
+generate_lovelace:
+  name: Generate Lovelace strategy
+  description: Generates the YAML for a Lovelace strategy to manage all of the usercodes on the lock(s)
+  fields:
+    config_entry_id:
+      name: Config Entry ID
+      description: Config Entry ID for the lock(s) you want to generate the strategy for
+      required: true
+      selector:
+        config_entry:
+          integration: lock_code_manager

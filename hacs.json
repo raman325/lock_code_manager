@@ -1,0 +1,6 @@
+{
+  "name": "lock_code_manager",
+  "zip_release": true,
+  "filename": "lock_code_manager.zip",
+  "homeassistant": "2024.2.0"
+}

@@ -1,0 +1,5 @@
+homeassistant
+zwave-js-server-python
+
+-r requirements_lint.txt
+-r requirements_test.txt

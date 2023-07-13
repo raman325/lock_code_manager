@@ -1,0 +1,80 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
+      "locks_updated": "The locks for your config entry have been updated."
+    },
+    "error": {
+      "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
+      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
+      "missing_pin_if_enabled": "PIN must be set if slot is enabled."
+    },
+    "step": {
+      "user": {
+        "data": {
+          "name": "Name",
+          "locks": "Locks"
+        },
+        "description": "Select the locks you would like to manage with this configuration.",
+        "title": "Lock Code Manager"
+      },
+      "choose_path": {
+        "menu_options": {
+          "ui": "UI",
+          "yaml": "YAML"
+        },
+        "description": "Choose whether you want to configure each slot via the UI or if you want to configure all slots in a YAML config.",
+        "title": "Choose Path"
+      },
+      "ui": {
+        "data": {
+          "num_slots": "Number of slots",
+          "start_slot": "Start from slot #"
+        },
+        "description": "You should only configure the slots you are ready to set up right now. You can easily add and remove slots later using the integration provided services. Existing user codes for the slot range specified will be removed.",
+        "title": "How Many Slots?"
+      },
+      "code_slot": {
+        "data": {
+          "name": "Name",
+          "pin": "PIN Code",
+          "enabled": "Enabled",
+          "calendar": "Calendar",
+          "number_of_uses": "Number of Uses"
+        },
+        "description": "**Configure slot {slot_num}:** If you link a slot to a calendar, the slot will only be active when there is an in progress event, so the calendar should be disabled if you don't plan to use it. Number of Uses will only be enabled if set to a number greater than 0. Set to empty to disable.",
+        "title": "Configure Slot {slot_num}"
+      },
+      "yaml": {
+        "data": {
+          "slots": "Slots YAML"
+        },
+        "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
+        "title": "Configure slots"
+      },
+      "reauth": {
+        "data": {
+          "locks": "Locks"
+        },
+        "description": "The only lock, {lock}, in the configuration for {name}, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
+        "title": "Update locks for {name}"
+      }
+    }
+  },
+  "options": {
+    "error": {
+      "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
+      "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}."
+    },
+    "step": {
+      "init": {
+        "data": {
+          "locks": "Locks",
+          "slots": "Slots YAML"
+        },
+        "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
+        "title": "Lock Code Manager"
+      }
+    }
+  }
+}
