@@ -7,7 +7,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import EntityCategory
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -67,7 +67,11 @@ class LockCodeManagerCodeSlot(
         BaseLockCodeManagerEntity.__init__(self, config_entry, [lock], slot_num, "code")
         CoordinatorEntity.__init__(self, coordinator)
         self.lock = lock
-        self._attr_device_info = lock.device_info
+        if lock.device_entry:
+            self._attr_device_info = DeviceInfo(
+                connections=lock.device_entry.connections,
+                identifiers=lock.device_entry.identifiers,
+            )
 
     @property
     def native_value(self) -> str | None:

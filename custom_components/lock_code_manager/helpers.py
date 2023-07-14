@@ -1,4 +1,4 @@
-"""Helpers for keymaster."""
+"""Helpers for lock_code_manager."""
 from __future__ import annotations
 
 import logging

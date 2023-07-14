@@ -40,12 +40,8 @@ class BaseLock:
         raise NotImplementedError()
 
     @property
-    def device_info(self) -> DeviceInfo | None:
-        """
-        Return device info.
-
-        Typically attaches to the device registry entry for the lock.
-        """
+    def device_entry(self) -> dr.DeviceEntry | None:
+        """Return device registry entry for the lock."""
         return None
 
     def __post_init__(self) -> None:

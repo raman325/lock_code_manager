@@ -37,6 +37,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.event import Event
 
@@ -83,13 +84,11 @@ class ZWaveJSLock(BaseLock):
         return ZWAVE_JS_DOMAIN
 
     @property
-    def device_info(self) -> DeviceInfo | None:
+    def device_entry(self) -> dr.DeviceEntry | None:
         """Return device info."""
         device_id = self.lock.device_id
         assert device_id
-        device = self.dev_reg.async_get(device_id)
-        assert device
-        return DeviceInfo(identifiers=device.identifiers)
+        return self.dev_reg.async_get(device_id)
 
     async def async_setup(self) -> None:
         """Set up lock."""

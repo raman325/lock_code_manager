@@ -1,4 +1,4 @@
-"""Constants for keymaster."""
+"""Constants for lock_code_manager."""
 from __future__ import annotations
 
 from homeassistant.const import Platform

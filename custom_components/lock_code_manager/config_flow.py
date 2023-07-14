@@ -1,4 +1,4 @@
-"""Adds config flow for keymaster."""
+"""Adds config flow for lock_code_manager."""
 from __future__ import annotations
 
 import logging
