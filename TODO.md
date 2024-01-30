@@ -13,11 +13,3 @@ Test:
     - Test invalid lock entity ID:
         1. Test when there are multiple locks results in the lock being removed and a persistent notification automatically being created.
         2. Test when there are no valid locks that a reauth config flow is started.
-Docs:
-    - Add Wiki for:
-      - Developing new integration provider
-      - Explaining calendar
-        - why calendar over other methods
-      - Explaining number of uses
-      - Explaining configuration structure
-      - Explain missing features
