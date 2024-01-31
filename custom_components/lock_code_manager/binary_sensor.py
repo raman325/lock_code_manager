@@ -77,14 +77,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
             self, config_entry, locks, slot_num, ATTR_PIN_ENABLED
         )
         self._entity_id_map: dict[str, str] = {}
-        self._uid_cache: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
-
-    def _get_uid(self, key: str) -> str:
-        """Get and cache unique id for a given key."""
-        if key not in self._uid_cache:
-            self._uid_cache[key] = f"{self.base_unique_id}|{self.slot_num}|{key}"
-        return self._uid_cache[key]
 
     async def async_update_usercodes(self) -> None:
         """Update usercodes on locks based on state change."""
