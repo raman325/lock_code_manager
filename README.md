@@ -12,7 +12,7 @@ Features:
 Locks from the following integrations are currently supported:
 - Z-Wave JS
 
-The code was written to make it (I think) easy to add support for locks in other integrations. Check the Wiki if you want to learn more about that and take a stab at it. Contributors welcome!
+The code was written to make it (I think) easy to add support for locks in other integrations. Check the [Wiki](./wiki) if you want to learn more about that and take a stab at it. Contributors welcome!
 
 ## Installation
 
@@ -22,6 +22,10 @@ The best way to install this integration is via HACS.
 2. Go to Settings > Devices & Services > Add Integration
 3. Select Lock Code Manager
 4. Follow the prompts - additional information about the configuration options is available in the Wiki
+
+## Learn More
+
+The [Wiki](./wiki) is a WIP but has some content that might be helpful for you!
 
 ## Inspiration
 
