@@ -33,7 +33,7 @@ CONF_START_SLOT = "start_slot"
 
 # Additional entity keys
 ATTR_CODE = "code"
-ATTR_PIN_ENABLED = "pin_enabled"
+ATTR_PIN_SHOULD_BE_ENABLED = "pin_should_be_enabled"
 
 # Code slot properties
 CONF_NUMBER_OF_USES = "number_of_uses"

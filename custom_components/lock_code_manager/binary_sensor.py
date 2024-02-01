@@ -20,7 +20,7 @@ from homeassistant.helpers.event import MATCH_ALL, async_track_state_change
 
 from .const import (
     ATTR_CODE,
-    ATTR_PIN_ENABLED,
+    ATTR_PIN_SHOULD_BE_ENABLED,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
@@ -74,7 +74,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerEntity.__init__(
-            self, config_entry, locks, slot_num, ATTR_PIN_ENABLED
+            self, config_entry, locks, slot_num, ATTR_PIN_SHOULD_BE_ENABLED
         )
         self._entity_id_map: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
@@ -85,7 +85,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
             lock_slot_sensor_entity_id = self.ent_reg.async_get_entity_id(
                 SENSOR_DOMAIN,
                 DOMAIN,
-                f"{self.base_unique_id}|{lock.lock.entity_id}|{self.slot_num}|{ATTR_CODE}",
+                f"{self.base_unique_id}|{self.slot_num}|{ATTR_CODE}|{lock.lock.entity_id}",
             )
             assert lock_slot_sensor_entity_id
 
