@@ -17,16 +17,16 @@ import {
   LovelaceDashboardStrategyConfig,
 } from "../ha-frontend/src/data/lovelace/config/types";
 
-const codeKey = "code";
-const pinShouldBeEnabledKey = "pin_should_be_enabled";
-const conditionKeys = ["calendar", "number_of_uses"];
-const keyOrder = [
+const CODE_SENSOR_KEY = "code";
+const PIN_SHOULD_BE_ENABLED_KEY = "pin_should_be_enabled";
+const CONDITION_KEYS = ["calendar", "number_of_uses"];
+const KEY_ORDER = [
   "name",
   "enabled",
   "pin",
-  pinShouldBeEnabledKey,
-  ...conditionKeys,
-  codeKey,
+  PIN_SHOULD_BE_ENABLED_KEY,
+  ...CONDITION_KEYS,
+  CODE_SENSOR_KEY,
 ];
 
 interface LockCodeManagerEntity extends EntityRegistryEntry {
@@ -124,16 +124,16 @@ function getSlotMapping(
   entities
     .filter((entity) => entity.slotNum === slotNum)
     .forEach((entity) => {
-      if (entity.key === codeKey) {
+      if (entity.key === CODE_SENSOR_KEY) {
         codeSensorEntities.push(entity);
-      } else if (conditionKeys.includes(entity.key)) {
+      } else if (CONDITION_KEYS.includes(entity.key)) {
         conditionEntities.push(entity);
-      } else if (entity.key !== pinShouldBeEnabledKey) {
+      } else if (entity.key !== PIN_SHOULD_BE_ENABLED_KEY) {
         mainEntities.push(entity);
       }
     });
   const pinShouldBeEnabledEntity = entities.find(
-    (entity) => entity.key === pinShouldBeEnabledKey,
+    (entity) => entity.key === PIN_SHOULD_BE_ENABLED_KEY,
   ) as LockCodeManagerEntity;
   return {
     slotNum,
@@ -144,7 +144,7 @@ function getSlotMapping(
   };
 }
 
-function compareEntities(
+function compareAndSortEntities(
   entityA: LockCodeManagerEntity,
   entityB: LockCodeManagerEntity,
 ) {
@@ -153,7 +153,7 @@ function compareEntities(
   // sort by key order
   if (
     entityA.slotNum == entityB.slotNum &&
-    keyOrder.indexOf(entityA.key) < keyOrder.indexOf(entityB.key)
+    KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)
   )
     return -1;
   // sort code sensors alphabetically based on the lock entity_id
@@ -174,7 +174,9 @@ class LockCodeManagerViewStrategy extends ReactiveElement {
   ): Promise<LovelaceViewConfig> {
     const { configEntry, entities } = config.strategy;
 
-    entities.sort((entityA, entityB) => compareEntities(entityA, entityB));
+    entities.sort((entityA, entityB) =>
+      compareAndSortEntities(entityA, entityB),
+    );
     const slots = [
       ...new Set(
         entities.map((entity) => parseInt(entity.unique_id.split("|")[1])),
