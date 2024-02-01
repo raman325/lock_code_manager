@@ -1,63 +1,25 @@
 import { ReactiveElement } from "lit";
+
 import {
-  LovelaceStrategyViewConfig,
-  LovelaceViewConfig,
-} from "../ha-frontend/src/data/lovelace/config/view";
-import { HomeAssistant } from "../ha-frontend/src/types";
+  compareAndSortEntities,
+  createLockCodeManagerEntity,
+  getSlotMapping,
+} from "./helpers";
+import {
+  ConfigEntryToEntities,
+  LockCodeManagerDashboardStrategyConfig,
+  LockCodeManagerEntity,
+  LockCodeManagerViewStrategyConfig,
+  SlotMapping,
+} from "./types";
+import { getConfigEntries } from "../ha-frontend/src/data/config_entries";
 import {
   EntityRegistryEntry,
   fetchEntityRegistry,
 } from "../ha-frontend/src/data/entity_registry";
-import {
-  ConfigEntry,
-  getConfigEntries,
-} from "../ha-frontend/src/data/config_entries";
-import {
-  LovelaceConfig,
-  LovelaceDashboardStrategyConfig,
-} from "../ha-frontend/src/data/lovelace/config/types";
-
-const CODE_SENSOR_KEY = "code";
-const PIN_SHOULD_BE_ENABLED_KEY = "pin_should_be_enabled";
-const CONDITION_KEYS = ["calendar", "number_of_uses"];
-const KEY_ORDER = [
-  "name",
-  "enabled",
-  "pin",
-  PIN_SHOULD_BE_ENABLED_KEY,
-  ...CONDITION_KEYS,
-  CODE_SENSOR_KEY,
-];
-
-interface LockCodeManagerEntity extends EntityRegistryEntry {
-  slotNum: number;
-  key: string;
-  lockEntityId?: string;
-}
-
-export interface LockCodeManagerDashboardStrategyConfig
-  extends LovelaceDashboardStrategyConfig {
-  strategy: {
-    type: "lock-code-manager";
-  };
-}
-
-type ConfigEntryToEntities = {
-  configEntry: ConfigEntry;
-  entities: LockCodeManagerEntity[];
-};
-
-function createLockCodeManagerEntity(
-  entity: EntityRegistryEntry,
-): LockCodeManagerEntity {
-  const split = entity.unique_id.split("|");
-  return {
-    ...entity,
-    slotNum: parseInt(split[1]),
-    key: split[2],
-    lockEntityId: split.length === 4 ? split[3] : undefined,
-  };
-}
+import { LovelaceConfig } from "../ha-frontend/src/data/lovelace/config/types";
+import { LovelaceViewConfig } from "../ha-frontend/src/data/lovelace/config/view";
+import { HomeAssistant } from "../ha-frontend/src/types";
 
 class LockCodeManagerDashboard extends ReactiveElement {
   static async generate(
@@ -86,91 +48,17 @@ class LockCodeManagerDashboard extends ReactiveElement {
       views: configEntriesToEntities.map((configEntryToEntities) => ({
         strategy: {
           type: "lock-code-manager",
-          ...configEntriesToEntities,
+          ...configEntryToEntities,
         },
       })),
     };
   }
 }
 
-function getUniqueId(config_entry: ConfigEntry, slot_num: number, key: string) {
-  return `${config_entry.entry_id}|${slot_num}|${key}`;
-}
-
-type SlotMapping = {
-  slotNum: number;
-  mainEntities: LockCodeManagerEntity[]; // primary entities to always show
-  pinShouldBeEnabledEntity: LockCodeManagerEntity;
-  conditionEntities: LockCodeManagerEntity[]; // conditional entities
-  codeSensorEntities: LockCodeManagerEntity[]; // code sensor entities
-};
-
-export interface LockCodeManagerViewStrategyConfig
-  extends LovelaceStrategyViewConfig {
-  strategy: {
-    type: "lock-code-manager";
-    configEntry: ConfigEntry;
-    entities: LockCodeManagerEntity[];
-  };
-}
-
-function getSlotMapping(
-  slotNum: number,
-  entities: LockCodeManagerEntity[],
-): SlotMapping {
-  const mainEntities: LockCodeManagerEntity[] = [];
-  const conditionEntities: LockCodeManagerEntity[] = [];
-  const codeSensorEntities: LockCodeManagerEntity[] = [];
-  entities
-    .filter((entity) => entity.slotNum === slotNum)
-    .forEach((entity) => {
-      if (entity.key === CODE_SENSOR_KEY) {
-        codeSensorEntities.push(entity);
-      } else if (CONDITION_KEYS.includes(entity.key)) {
-        conditionEntities.push(entity);
-      } else if (entity.key !== PIN_SHOULD_BE_ENABLED_KEY) {
-        mainEntities.push(entity);
-      }
-    });
-  const pinShouldBeEnabledEntity = entities.find(
-    (entity) => entity.key === PIN_SHOULD_BE_ENABLED_KEY,
-  ) as LockCodeManagerEntity;
-  return {
-    slotNum,
-    mainEntities,
-    pinShouldBeEnabledEntity,
-    conditionEntities,
-    codeSensorEntities,
-  };
-}
-
-function compareAndSortEntities(
-  entityA: LockCodeManagerEntity,
-  entityB: LockCodeManagerEntity,
-) {
-  // sort by slot number
-  if (entityA.slotNum < entityB.slotNum) return -1;
-  // sort by key order
-  if (
-    entityA.slotNum == entityB.slotNum &&
-    KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)
-  )
-    return -1;
-  // sort code sensors alphabetically based on the lock entity_id
-  if (
-    entityA.slotNum == entityB.slotNum &&
-    entityA.key == entityB.key &&
-    entityA.key == "code" &&
-    (entityA.lockEntityId as string) < (entityB.lockEntityId as string)
-  )
-    return -1;
-  return 1;
-}
-
 class LockCodeManagerViewStrategy extends ReactiveElement {
   static async generate(
     config: LockCodeManagerViewStrategyConfig,
-    hass: HomeAssistant,
+    hass: HomeAssistant, // eslint-disable-line @typescript-eslint/no-unused-vars
   ): Promise<LovelaceViewConfig> {
     const { configEntry, entities } = config.strategy;
 
