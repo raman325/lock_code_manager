@@ -1,5 +1,4 @@
 import { ReactiveElement } from 'lit';
-// import { customElement } from 'lit/decorators';
 
 import { DOMAIN } from './const';
 import { ConfigEntry, EntityRegistryEntry, HomeAssistant } from './ha_type_stubs';
@@ -10,7 +9,6 @@ import {
   LockCodeManagerEntityEntry
 } from './types';
 
-// @customElement('ll-strategy-dashboard-lock-code-manager')
 export class LockCodeManagerDashboardStrategy extends ReactiveElement {
   static async generate(config: LockCodeManagerDashboardStrategyConfig, hass: HomeAssistant) {
     const [lockConfigEntries, entityEntries] = await Promise.all([
@@ -43,17 +41,11 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
       views: configEntriesToEntities.map((configEntryToEntities) => {
         return {
           strategy: {
-            type: 'lock-code-manager',
+            type: 'custom:lock-code-manager',
             ...configEntryToEntities
           }
         };
       })
     };
-  }
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'll-strategy-dashboard-lock-code-manager': LockCodeManagerDashboardStrategy;
   }
 }

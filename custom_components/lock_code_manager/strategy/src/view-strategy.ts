@@ -1,25 +1,25 @@
 import { ReactiveElement } from 'lit';
-// import { customElement } from 'lit/decorators';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { compareAndSortEntities, getSlotMapping } from './helpers';
 import { LockCodeManagerViewStrategyConfig, SlotMapping } from './types';
 
-// @customElement('ll-strategy-view-lock-code-manager')
 export class LockCodeManagerViewStrategy extends ReactiveElement {
   static async generate(config: LockCodeManagerViewStrategyConfig, hass: HomeAssistant) {
-    const { configEntry, entities } = config.strategy;
+    const { configEntry, entities } = config;
 
-    entities.sort((entityA, entityB) => compareAndSortEntities(entityA, entityB));
+    const sortedEntities = [...entities].sort((entityA, entityB) =>
+      compareAndSortEntities(entityA, entityB)
+    );
     const slots = [
-      ...new Set(entities.map((entity) => parseInt(entity.unique_id.split('|')[1], 10)))
+      ...new Set(sortedEntities.map((entity) => parseInt(entity.unique_id.split('|')[1], 10)))
     ];
     const slotMappings: SlotMapping[] = slots.map((slotNum) =>
-      getSlotMapping(hass, slotNum, entities)
+      getSlotMapping(hass, slotNum, sortedEntities)
     );
 
     return {
-      badges: entities
+      badges: sortedEntities
         .filter((entity) => entity.key === 'pin_enabled')
         .map((entity) => entity.entity_id),
       cards: slotMappings.map((slotMapping) => {
@@ -79,11 +79,5 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
       path: configEntry.entry_id,
       title: configEntry.title
     };
-  }
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    'll-strategy-view-lock-code-manager': LockCodeManagerViewStrategy;
   }
 }

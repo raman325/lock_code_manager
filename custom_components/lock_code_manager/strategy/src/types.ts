@@ -7,9 +7,7 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 }
 
 export interface LockCodeManagerDashboardStrategyConfig {
-  strategy: {
-    type: 'lock-code-manager';
-  };
+  type: 'custom:lock-code-manager';
 }
 
 export interface ConfigEntryToEntities {
@@ -26,9 +24,7 @@ export interface SlotMapping {
 }
 
 export interface LockCodeManagerViewStrategyConfig {
-  strategy: {
-    configEntry: ConfigEntry;
-    entities: LockCodeManagerEntityEntry[];
-    type: 'lock-code-manager';
-  };
+  configEntry: ConfigEntry;
+  entities: LockCodeManagerEntityEntry[];
+  type: 'custom:lock-code-manager';
 }

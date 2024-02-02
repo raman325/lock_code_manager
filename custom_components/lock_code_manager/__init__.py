@@ -12,6 +12,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
 from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
@@ -61,18 +62,17 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     resources: ResourceStorageCollection
-    if resources := hass.data["lovelace"].get("resources"):
+    if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
         hass.http.register_static_path(
             f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
             Path(__file__).parent / "strategy" / STRATEGY_FILENAME,
         )
-        add_extra_js_url(hass, f"{FILES_URL_BASE}/{STRATEGY_FILENAME}")
-        await resources.async_create_item({
-            "res_type": "module",
-            "url": f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
-        })
-
-    
+        await resources.async_create_item(
+            {
+                "res_type": "module",
+                "url": f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
+            }
+        )
 
     # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
@@ -264,14 +264,14 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     )
     async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add_locks", locks_to_add)
     for lock_entity_id in locks_to_add:
-        lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][
-            lock_entity_id
-        ] = async_create_lock_instance(
-            hass,
-            dr.async_get(hass),
-            er.async_get(hass),
-            config_entry,
-            lock_entity_id,
+        lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][lock_entity_id] = (
+            async_create_lock_instance(
+                hass,
+                dr.async_get(hass),
+                er.async_get(hass),
+                config_entry,
+                lock_entity_id,
+            )
         )
         await lock.async_setup()
 
@@ -295,9 +295,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         _LOGGER.debug(
             "%s (%s): Creating coordinator for lock %s", entry_id, entry_title, lock
         )
-        coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][
-            lock_entity_id
-        ] = LockUsercodeUpdateCoordinator(hass, lock)
+        coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][lock_entity_id] = (
+            LockUsercodeUpdateCoordinator(hass, lock)
+        )
         await coordinator.async_config_entry_first_refresh()
         for slot_num in new_slots:
             _LOGGER.debug(
