@@ -12,6 +12,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
 from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import Config, HomeAssistant, ServiceCall, SupportsResponse
@@ -59,11 +60,19 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {})
 
-    hass.http.register_static_path(
-        f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
-        Path(__file__).parent / "strategy" / STRATEGY_FILENAME,
-    )
-    add_extra_js_url(hass, f"{FILES_URL_BASE}/{STRATEGY_FILENAME}")
+    resources: ResourceStorageCollection
+    if resources := hass.data["lovelace"].get("resources"):
+        hass.http.register_static_path(
+            f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
+            Path(__file__).parent / "strategy" / STRATEGY_FILENAME,
+        )
+        add_extra_js_url(hass, f"{FILES_URL_BASE}/{STRATEGY_FILENAME}")
+        await resources.async_create_item({
+            "res_type": "module",
+            "url": f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
+        })
+
+    
 
     # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
