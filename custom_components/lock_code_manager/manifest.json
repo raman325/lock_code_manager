@@ -2,6 +2,7 @@
   "domain": "lock_code_manager",
   "name": "Lock Code Manager",
   "after_dependencies": [
+    "calendar",
     "zwave_js"
   ],
   "codeowners": [

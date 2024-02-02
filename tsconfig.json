@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "./custom_components/lock_code_manager/strategy",
+    "target": "es2022",
+    "baseUrl": ".",
+    "paths": {
+      "*": [
+        "./node_modules/*"
+      ],
+    },
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+  },
+  "include": [
+    "custom_components/lock_code_manager/strategy/src/**/*",
+    ".eslintrc.cjs",
+  ]
+}

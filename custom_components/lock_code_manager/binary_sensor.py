@@ -168,6 +168,9 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
         # If there is a calendar entity, we need to check its state as well
         if calendar_entity_id := self.config_entry.data.get(CONF_CALENDAR):
             entity_id_map[CONF_CALENDAR] = calendar_entity_id
+            self._attr_extra_state_attributes = {"calendar": calendar_entity_id}
+        else:
+            self._attr_extra_state_attributes = {}
 
         states = {
             key: state.state
