@@ -118,9 +118,3 @@ def get_lock_from_entity_id(hass: HomeAssistant, entity_id: str) -> BaseLock:
         if entity_id == lock.lock.entity_id:
             return lock
     raise ConfigEntryNotFoundError(f"Lock with entity ID {entity_id} not found.")
-
-
-async def generate_lovelace(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
-    """Generate Lovelace strategy for config entry."""
-    # lock: BaseLock = hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS]
-    pass

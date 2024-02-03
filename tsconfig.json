@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "target": "es2022",
+    "baseUrl": ".",
+    "paths": {
+      "*": [
+        "./node_modules/*"
+      ],
+    },
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+  },
+  "include": [
+    "strategy/src/**/*",
+    ".eslintrc.cjs",
+  ]
+}

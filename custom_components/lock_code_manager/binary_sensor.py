@@ -20,7 +20,7 @@ from homeassistant.helpers.event import MATCH_ALL, async_track_state_change
 
 from .const import (
     ATTR_CODE,
-    ATTR_PIN_ENABLED,
+    ATTR_PIN_SYNCED_TO_LOCKS,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
@@ -63,7 +63,6 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
     """PIN enabled binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_device_class = BinarySensorDeviceClass.RUNNING
     _attr_should_poll = False
 
     def __init__(
@@ -74,7 +73,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerEntity.__init__(
-            self, config_entry, locks, slot_num, ATTR_PIN_ENABLED
+            self, config_entry, locks, slot_num, ATTR_PIN_SYNCED_TO_LOCKS
         )
         self._entity_id_map: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
@@ -85,7 +84,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
             lock_slot_sensor_entity_id = self.ent_reg.async_get_entity_id(
                 SENSOR_DOMAIN,
                 DOMAIN,
-                f"{self.base_unique_id}|{lock.lock.entity_id}|{self.slot_num}|{ATTR_CODE}",
+                f"{self.base_unique_id}|{self.slot_num}|{ATTR_CODE}|{lock.lock.entity_id}",
             )
             assert lock_slot_sensor_entity_id
 
@@ -168,6 +167,9 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
         # If there is a calendar entity, we need to check its state as well
         if calendar_entity_id := self.config_entry.data.get(CONF_CALENDAR):
             entity_id_map[CONF_CALENDAR] = calendar_entity_id
+            self._attr_extra_state_attributes = {"calendar": calendar_entity_id}
+        else:
+            self._attr_extra_state_attributes = {}
 
         states = {
             key: state.state

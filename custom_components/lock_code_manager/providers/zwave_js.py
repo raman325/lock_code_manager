@@ -201,7 +201,12 @@ class ZWaveJSLock(BaseLock):
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
-        code_slots: Iterable[int] = self.config_entry.data[CONF_SLOTS].keys()
+        code_slots: Iterable[int] = (
+            self.config_entry.data.get(
+                CONF_SLOTS, self.config_entry.options.get(CONF_SLOTS)
+            ).keys()
+            or []
+        )
         data: dict[int, int | str] = {}
         code_slot = 1
 

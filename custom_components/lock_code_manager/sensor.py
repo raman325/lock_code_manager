@@ -18,7 +18,7 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_CODE, ATTR_PIN_ENABLED, CONF_PIN, COORDINATORS, DOMAIN
+from .const import ATTR_CODE, ATTR_PIN_SYNCED_TO_LOCKS, CONF_PIN, COORDINATORS, DOMAIN
 from .coordinator import LockUsercodeUpdateCoordinator
 from .entity import BaseLockCodeManagerEntity
 from .providers import BaseLock
@@ -83,7 +83,7 @@ class LockCodeManagerCodeSlot(
             )
 
         self._attr_unique_id = (
-            f"{self.base_unique_id}|{self.lock.lock.entity_id}|{slot_num}|{self.key}"
+            f"{self.base_unique_id}|{slot_num}|{self.key}|{self.lock.lock.entity_id}"
         )
 
     @property
@@ -113,7 +113,7 @@ class LockCodeManagerCodeSlot(
         pin_enabled_entity_id = self.ent_reg.async_get_entity_id(
             BINARY_SENSOR_DOMAIN,
             DOMAIN,
-            f"{self.base_unique_id}|{self.slot_num}|{ATTR_PIN_ENABLED}",
+            f"{self.base_unique_id}|{self.slot_num}|{ATTR_PIN_SYNCED_TO_LOCKS}",
         )
         if not pin_enabled_entity_id:
             return

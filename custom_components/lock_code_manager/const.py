@@ -5,8 +5,12 @@ from __future__ import annotations
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
-VERSION = "v0.0.0"  # this will be automatically updated as part of the release workflow
+VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
 PLATFORMS = (Platform.BINARY_SENSOR, Platform.SENSOR)
+
+FILES_URL_BASE = f"/{DOMAIN}_files"
+STRATEGY_FILENAME = "lock-code-manager-strategy.js"
+STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
 
 ATTR_CODE_SLOT = "code_slot"
 ATTR_USERCODE = "usercode"
@@ -33,7 +37,7 @@ CONF_START_SLOT = "start_slot"
 
 # Additional entity keys
 ATTR_CODE = "code"
-ATTR_PIN_ENABLED = "pin_enabled"
+ATTR_PIN_SYNCED_TO_LOCKS = "pin_synced_to_locks"
 
 # Code slot properties
 CONF_NUMBER_OF_USES = "number_of_uses"
