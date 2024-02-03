@@ -6,6 +6,8 @@ Dev:
     - Reevaluate logging
     - Figure out how to handle builds and releases
     - Use HACS websocket commands to check whether the dependent components are installed, and if not, install them.
+      - https://github.com/hacs/integration/blob/main/custom_components/hacs/websocket/repository.py#L19
+      - https://github.com/hacs/integration/blob/main/custom_components/hacs/websocket/repository.py#L211
 Test:
     - Test enabling and disabling calendar/number of uses, adding and removing locks, etc.
     - Test allowing two different config entries to use the same lock if they don't use overlapping slots
