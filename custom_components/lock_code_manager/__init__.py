@@ -15,7 +15,7 @@ from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
 from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
-from homeassistant.core import Config, HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
@@ -37,17 +37,12 @@ from .const import (
     Platform,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .helpers import (
-    async_create_lock_instance,
-    generate_lovelace,
-    get_lock_from_entity_id,
-)
+from .helpers import async_create_lock_instance, get_lock_from_entity_id
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_HARD_REFRESH_USERCODES = "hard_refresh_usercodes"
-SERVICE_GENERATE_LOVELACE = "generate_lovelace"
 
 ATTR_SETUP_TASKS = "setup_tasks"
 ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
@@ -85,41 +80,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         SERVICE_HARD_REFRESH_USERCODES,
         _hard_refresh_usercodes,
         schema=vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id}),
-    )
-
-    # Generate lovelace config
-    def _generate_lovelace(service: ServiceCall) -> None:
-        """Generate the package files."""
-        if ATTR_ENTITY_ID in service.data:
-            lock = get_lock_from_entity_id(hass, service.data[ATTR_ENTITY_ID])
-            try:
-                config_entry = next(
-                    entry
-                    for entry in hass.config_entries.async_entries(DOMAIN)
-                    if lock.lock.entity_id in entry.data[CONF_LOCKS]
-                )
-            except StopIteration:
-                raise HomeAssistantError("No config entry found for lock")
-            attr = "entity"
-        else:
-            config_entry = hass.config_entries.async_get_entry(
-                service.data[ATTR_CONFIG_ENTRY_ID]
-            )
-            if not config_entry:
-                raise HomeAssistantError("No config entry found for config entry id")
-            attr = "config entry"
-        _LOGGER.debug("Generate lovelace file using %s ID: %s", attr, service)
-        generate_lovelace(hass, config_entry)
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_GENERATE_LOVELACE,
-        _generate_lovelace,
-        schema=vol.Any(
-            vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id}),
-            vol.Schema({vol.Required(ATTR_CONFIG_ENTRY_ID): str}),
-        ),
-        supports_response=SupportsResponse.ONLY,
     )
 
     return True
@@ -274,14 +234,14 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     )
     async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add_locks", locks_to_add)
     for lock_entity_id in locks_to_add:
-        lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][lock_entity_id] = (
-            async_create_lock_instance(
-                hass,
-                dr.async_get(hass),
-                er.async_get(hass),
-                config_entry,
-                lock_entity_id,
-            )
+        lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][
+            lock_entity_id
+        ] = async_create_lock_instance(
+            hass,
+            dr.async_get(hass),
+            er.async_get(hass),
+            config_entry,
+            lock_entity_id,
         )
         await lock.async_setup()
 
@@ -305,9 +265,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         _LOGGER.debug(
             "%s (%s): Creating coordinator for lock %s", entry_id, entry_title, lock
         )
-        coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][lock_entity_id] = (
-            LockUsercodeUpdateCoordinator(hass, lock)
-        )
+        coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][
+            lock_entity_id
+        ] = LockUsercodeUpdateCoordinator(hass, lock)
         await coordinator.async_config_entry_first_refresh()
         for slot_num in new_slots:
             _LOGGER.debug(
