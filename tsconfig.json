@@ -2,7 +2,7 @@
   "compilerOptions": {
     "declaration": true,
     "outDir": "dist",
-    "rootDir": "./custom_components/lock_code_manager/strategy",
+    "rootDir": ".",
     "target": "es2022",
     "baseUrl": ".",
     "paths": {
@@ -15,7 +15,7 @@
     "resolveJsonModule": true,
   },
   "include": [
-    "custom_components/lock_code_manager/strategy/src/**/*",
+    "src/**/*",
     ".eslintrc.cjs",
   ]
 }

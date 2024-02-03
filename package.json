@@ -14,7 +14,7 @@
   "scripts": {
     "build": "yarn install ; rollup -c",
     "watch": "rollup -c --watch",
-    "lint": "eslint --ext .ts ./custom_components/lock_code_manager/strategy/src",
+    "lint": "eslint --ext .ts ./src",
     "lint:fix": "npm run lint -- --fix"
   },
   "dependencies": {
