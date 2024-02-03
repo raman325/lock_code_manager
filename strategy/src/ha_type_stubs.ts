@@ -15,3 +15,22 @@ export interface EntityRegistryEntry {
   entity_id: string;
   unique_id: string;
 }
+
+export interface LovelaceBaseViewConfig {
+  back_path?: string;
+  background?: string;
+  icon?: string;
+  index?: number;
+  panel?: boolean;
+  path?: string;
+  subview?: boolean;
+  theme?: string;
+  title?: string;
+  visible?: boolean;
+}
+
+export interface LovelaceViewConfig extends LovelaceBaseViewConfig {
+  badges?: Array<string | object>;
+  cards?: object[];
+  type?: string;
+}

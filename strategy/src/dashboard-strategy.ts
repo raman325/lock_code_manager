@@ -2,7 +2,7 @@ import { ReactiveElement } from 'lit';
 
 import { DOMAIN } from './const';
 import { ConfigEntry, EntityRegistryEntry, HomeAssistant } from './ha_type_stubs';
-import { createLockCodeManagerEntity } from './helpers';
+import { createLockCodeManagerEntity, generateView } from './helpers';
 import {
   ConfigEntryToEntities,
   LockCodeManagerDashboardStrategyConfig,
@@ -36,16 +36,38 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
       }
     );
 
+    if (configEntriesToEntities.length === 0) {
+      return {
+        title: 'Lock Code Manager',
+        views: [
+          {
+            badges: [],
+            cards: [
+              {
+                content: '# No Lock Code Manager configurations found!',
+                type: 'markdown'
+              }
+            ],
+            title: 'Lock Code Manager'
+          }
+        ]
+      };
+    }
+
+    const views = configEntriesToEntities.map((configEntryToEntities) =>
+      generateView(hass, configEntryToEntities.configEntry, configEntryToEntities.entities)
+    );
+
+    if (views.length === 1) {
+      views.push({
+        // Title is zero width space as a hack to get the view title to show
+        title: '​'
+      });
+    }
+
     return {
       title: 'Lock Code Manager',
-      views: configEntriesToEntities.map((configEntryToEntities) => {
-        return {
-          strategy: {
-            type: 'custom:lock-code-manager',
-            ...configEntryToEntities
-          }
-        };
-      })
+      views
     };
   }
 }

@@ -1,3 +1,5 @@
+> NOTE: This integration is in very early stages, so expect things to not work as expected. Feel free to open issues to report anything you find, but I would not recommend using this for production usage yet.
+
 # Lock Code Manager
 
 Lock Code Manager is a Home Assistant integration that allows you to more easily manage your usercodes on your locks. Once you have configured it, the integration will set and clear codes on your locks as needed depending on how you decide to configure them.
@@ -10,7 +12,7 @@ Features:
 Locks from the following integrations are currently supported:
 - Z-Wave JS
 
-The code was written to make it (I think) easy to add support for locks in other integrations. Check the Wiki if you want to learn more about that and take a stab at it. Contributors welcome!
+The code was written to make it (I think) easy to add support for locks in other integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you want to learn more about that and take a stab at it. Contributors welcome!
 
 ## Installation
 
@@ -20,6 +22,48 @@ The best way to install this integration is via HACS.
 2. Go to Settings > Devices & Services > Add Integration
 3. Select Lock Code Manager
 4. Follow the prompts - additional information about the configuration options is available in the Wiki
+
+## Learn More
+
+The [Wiki](https://github.com/raman325/lock_code_manager/wiki) is a WIP but has some content that might be helpful for you!
+
+## Add a UI for lock management
+
+`Lock Code Manager` makes it easy for you to generate a UI for managing and monitoring your PINs.
+
+### Dashboard
+
+To have a dedicated dashboard in the left side panel that has all of your `Lock Code Manager` config entries:
+1. Create a new Dashboard from scratch
+2. Give your Dashboard a name and an icon
+3. The YAML config for your new dashboard is as follows:
+
+```yaml
+strategy:
+  type: custom:lock-code-manager
+
+```
+
+The Dashboard will now expose all of your lock configurations across multiple views.
+
+### View
+
+To create a view for a specific `Lock Code Manager` config entry, your view definition should be as follows:
+
+```yaml
+strategy:
+  type: custom:lock-code-manager
+  config_entry_title: <Title of your config entry>  // Case sensitive!
+```
+
+Example minimal dashboard configuration using the view configuration:
+
+```yaml
+views:
+  - strategy:
+      type: custom:lock-code-manager
+      config_entry_name: House Locks
+```
 
 ## Inspiration
 

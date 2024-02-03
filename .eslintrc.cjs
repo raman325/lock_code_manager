@@ -18,6 +18,9 @@ module.exports = {
     "rollup",
   ],
   rules: {
+    "camelcase": "off",
+    "no-undefined": "off",
+    "@typescript-eslint/camelcase": "off",
     "sort-imports": [
       "error",
       {

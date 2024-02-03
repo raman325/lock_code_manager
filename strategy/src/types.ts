@@ -24,7 +24,6 @@ export interface SlotMapping {
 }
 
 export interface LockCodeManagerViewStrategyConfig {
-  configEntry: ConfigEntry;
-  entities: LockCodeManagerEntityEntry[];
+  config_entry_title: string;
   type: 'custom:lock-code-manager';
 }

@@ -11,7 +11,6 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
@@ -33,6 +32,8 @@ from .const import (
     DOMAIN,
     PLATFORM_MAP,
     PLATFORMS,
+    STRATEGY_FILENAME,
+    STRATEGY_PATH,
     Platform,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
@@ -53,9 +54,6 @@ ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
 ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 
-STRATEGY_FILENAME = "lock-code-manager-strategy.js"
-FILES_URL_BASE = "/lock_code_manager_files"
-
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
@@ -64,15 +62,12 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     resources: ResourceStorageCollection
     if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
         hass.http.register_static_path(
-            f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
-            Path(__file__).parent / "strategy" / STRATEGY_FILENAME,
+            STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
         )
-        await resources.async_create_item(
-            {
-                "res_type": "module",
-                "url": f"{FILES_URL_BASE}/{STRATEGY_FILENAME}",
-            }
+        data = await resources.async_create_item(
+            {"res_type": "module", "url": STRATEGY_PATH}
         )
+        _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
 
     # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
@@ -192,6 +187,21 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
 
     if unload_ok:
         hass.data[DOMAIN].pop(entry_id, None)
+
+    if not hass.data[DOMAIN]:
+        resources: ResourceStorageCollection
+        if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
+            try:
+                resource_id = next(
+                    id
+                    for id, data in resources.data.items()
+                    if data["url"] == STRATEGY_PATH
+                )
+            except StopIteration:
+                pass
+            else:
+                await resources.async_delete_item(resource_id)
+                _LOGGER.debug("Deleted strategy module (resource ID %s)", resource_id)
 
     return unload_ok
 

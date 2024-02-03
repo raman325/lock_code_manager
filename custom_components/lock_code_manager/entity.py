@@ -46,7 +46,13 @@ class BaseLockCodeManagerEntity(Entity):
         self._entity_id_map: dict[str, str] = {}
         self._unsub_initial_state: CALLBACK_TYPE | None = None
 
-        self._attr_name = f"Code slot {slot_num} {key.replace('_', ' ').lower()}"
+        key_parts = key.lower().split("_")
+        try:
+            key_parts[key_parts.index("pin")] = "PIN"
+        except ValueError:
+            pass
+
+        self._attr_name = f"Code slot {slot_num} {' '.join(key_parts)}"
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
         self._attr_extra_state_attributes = {ATTR_CODE_SLOT: int(slot_num)}
 

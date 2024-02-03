@@ -2,7 +2,7 @@
   "name": "lock-code-manager-strategy",
   "private": true,
   "type": "module",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "description": "lock-code-manager-strategy",
   "repository": {
     "type": "git",
@@ -14,7 +14,7 @@
   "scripts": {
     "build": "yarn install ; rollup -c",
     "watch": "rollup -c --watch",
-    "lint": "eslint --ext .ts ./src",
+    "lint": "eslint --ext .ts ./strategy/src",
     "lint:fix": "npm run lint -- --fix"
   },
   "dependencies": {
