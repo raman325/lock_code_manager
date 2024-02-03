@@ -5,7 +5,7 @@ Dev:
     - add repair issue if something else isn’t found (e.g. because someone renamed a lock_code_manager entity)
     - Reevaluate logging
     - Figure out how to handle builds and releases
-    - Figure out if we can handle dependent packages from HACS
+    - Use HACS websocket commands to check whether the dependent components are installed, and if not, install them.
 Test:
     - Test enabling and disabling calendar/number of uses, adding and removing locks, etc.
     - Test allowing two different config entries to use the same lock if they don't use overlapping slots
