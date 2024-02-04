@@ -277,7 +277,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 _LOGGER.error("Invalid YAML: %s", err)
                 errors["base"] = "invalid_config"
             else:
-                additional_errors, additional_placeholders = self._check_common_slots(
+                additional_errors, additional_placeholders = _check_common_slots(
                     self.hass, user_input[CONF_LOCKS], user_input[CONF_SLOTS]
                 )
                 errors.update(additional_errors)
