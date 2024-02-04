@@ -27,7 +27,8 @@ export interface SlotMapping {
 }
 
 export interface LockCodeManagerViewStrategyConfig {
-  config_entry_title: string;
+  config_entry_id?: string;
+  config_entry_title?: string;
   include_code_slot_sensors?: boolean;
   type: 'custom:lock-code-manager';
   use_fold_entity_row?: boolean;

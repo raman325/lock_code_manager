@@ -59,7 +59,7 @@ export async function generateView(
 function compareAndSortEntities(
   entityA: LockCodeManagerEntityEntry,
   entityB: LockCodeManagerEntityEntry
-) {
+): -1 | 1 {
   // sort by slot number
   if (entityA.slotNum < entityB.slotNum) return -1;
   if (entityA.slotNum > entityB.slotNum) return 1;
@@ -86,7 +86,7 @@ function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManag
   };
 }
 
-function generateEntityCards(entities: string[]) {
+function generateEntityCards(entities: string[]): { entity: string }[] {
   return entities.map((entityId) => {
     return {
       entity: entityId
@@ -98,7 +98,7 @@ function generateSlotCard(
   slotMapping: SlotMapping,
   use_fold_entity_row: boolean,
   include_code_slot_sensors: boolean
-) {
+): LovelaceViewConfig {
   return {
     cards: [
       {

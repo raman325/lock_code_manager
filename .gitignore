@@ -8,4 +8,4 @@ venv
 node_modules
 package-lock.json
 yarn.lock
-**/dist
+**/lock-code-manager-strategy.js
