@@ -62,7 +62,7 @@ Example minimal dashboard configuration using the view configuration:
 views:
   - strategy:
       type: custom:lock-code-manager
-      config_entry_name: House Locks
+      config_entry_title: House Locks
 ```
 
 ## Inspiration

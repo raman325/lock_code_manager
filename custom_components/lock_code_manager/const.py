@@ -6,11 +6,14 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
-PLATFORMS = (Platform.BINARY_SENSOR, Platform.SENSOR)
+PLATFORMS = (Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR)
+
+HACS_DOMAIN = "hacs"
 
 FILES_URL_BASE = f"/{DOMAIN}_files"
 STRATEGY_FILENAME = "lock-code-manager-strategy.js"
 STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
+FOLD_ENTITY_ROW_FILENAME = "fold-entity-row.js"
 
 ATTR_CODE_SLOT = "code_slot"
 ATTR_USERCODE = "usercode"
@@ -28,6 +31,9 @@ EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_state_changed"
 ATTR_ACTION_TEXT = "action_text"
 ATTR_CODE_SLOT_NAME = "code_slot_name"
 ATTR_NOTIFICATION_SOURCE = "notification_source"
+
+# Event entity event type
+EVENT_PIN_USED = "pin_used"
 
 # Configuration Properties
 CONF_LOCKS = "locks"
@@ -54,4 +60,5 @@ PLATFORM_MAP = {
     CONF_NAME: Platform.TEXT,
     CONF_NUMBER_OF_USES: Platform.NUMBER,
     CONF_PIN: Platform.TEXT,
+    EVENT_PIN_USED: Platform.EVENT,
 }

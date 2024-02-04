@@ -13,6 +13,8 @@ export interface ConfigEntry {
 export interface EntityRegistryEntry {
   config_entry_id: string;
   entity_id: string;
+  name: string;
+  original_name: string;
   unique_id: string;
 }
 

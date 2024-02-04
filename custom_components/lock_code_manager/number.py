@@ -72,16 +72,18 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
         """Set value of number."""
         self._update_config_entry(value)
 
-    async def _handle_lock_state_changed(self, event: Event):
-        """Handle lock state changed."""
-        if (
-            not any(
+    def _zwave_js_event_filter(self, event: Event) -> bool:
+        """Filter zwave_js events."""
+        return (
+            any(
                 event.data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
             )
-            or event.data[ATTR_CODE_SLOT] != self.slot_num
-            or event.data[ATTR_TO] != STATE_UNLOCKED
-        ):
-            return
+            and event.data[ATTR_CODE_SLOT] == int(self.slot_num)
+            and event.data[ATTR_TO] == STATE_UNLOCKED
+        )
+
+    async def _handle_lock_state_changed(self, event: Event):
+        """Handle lock state changed."""
         await self.async_set_native_value(self.native_value - 1)
 
     async def async_added_to_hass(self) -> None:
@@ -90,6 +92,8 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         self.async_on_remove(
             self.hass.bus.async_listen(
-                EVENT_LOCK_STATE_CHANGED, self._handle_lock_state_changed
+                EVENT_LOCK_STATE_CHANGED,
+                self._handle_lock_state_changed,
+                self._zwave_js_event_filter,
             )
         )

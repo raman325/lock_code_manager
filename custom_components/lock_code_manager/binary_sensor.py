@@ -10,6 +10,7 @@ from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_PIN, STATE_ON
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -22,6 +23,7 @@ from .const import (
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     DOMAIN,
+    EVENT_PIN_USED,
     PLATFORM_MAP,
 )
 from .entity import BaseLockCodeManagerEntity
@@ -44,7 +46,7 @@ async def async_setup_entry(
             hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS].values()
         )
         async_add_entities(
-            [LockCodeManagerPINEnabledEntity(config_entry, locks, slot_num)],
+            [LockCodeManagerPINSyncedEntity(config_entry, locks, slot_num)],
             True,
         )
 
@@ -56,8 +58,8 @@ async def async_setup_entry(
     return True
 
 
-class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEntity):
-    """PIN enabled binary sensor entity for lock code manager."""
+class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEntity):
+    """PIN synced to locks binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_should_poll = False
@@ -74,6 +76,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
         )
         self._entity_id_map: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
+        self._issue_reg: ir.IssueRegistry | None = None
 
     async def async_update_usercodes(self) -> None:
         """Update usercodes on locks based on state change."""
@@ -115,7 +118,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
                 self.config_entry.async_create_task(
                     self.hass,
                     lock.async_set_usercode(
-                        self.slot_num, pin_state.state, name_state.state
+                        int(self.slot_num), pin_state.state, name_state.state
                     ),
                     f"async_set_usercode_{lock.lock.entity_id}_{self.slot_num}",
                 )
@@ -135,7 +138,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
 
                 self.config_entry.async_create_task(
                     self.hass,
-                    lock.async_clear_usercode(self.slot_num),
+                    lock.async_clear_usercode(int(self.slot_num)),
                     f"async_clear_usercode_{lock.lock.entity_id}_{self.slot_num}",
                 )
 
@@ -164,16 +167,29 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
         # If there is a calendar entity, we need to check its state as well
         if calendar_entity_id := self.config_entry.data.get(CONF_CALENDAR):
             entity_id_map[CONF_CALENDAR] = calendar_entity_id
-            self._attr_extra_state_attributes = {"calendar": calendar_entity_id}
-        else:
-            self._attr_extra_state_attributes = {}
 
-        states = {
-            key: state.state
-            for key, entity_id in entity_id_map.items()
-            if key not in (CONF_NAME, CONF_PIN)
-            and (state := self.hass.states.get(entity_id))
-        }
+        states = {}
+        for key, entity_id in entity_id_map.items():
+            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN):
+                continue
+            issue_id = f"{self.config_entry.entry_id}_{self.slot_num}_no_{key}"
+            if not (state := self.hass.states.get(entity_id)):
+                ir.async_create_issue(
+                    self.hass,
+                    DOMAIN,
+                    issue_id,
+                    translation_key="no_state",
+                    translation_placeholders={
+                        "entity_id": entity_id,
+                        "entry_title": self.config_entry.title,
+                        "key": key,
+                    },
+                    severity=ir.IssueSeverity.ERROR,
+                )
+                continue
+            else:
+                ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            states[key] = state.state
 
         # For the binary sensor to be on, all states must be 'on', or for the number
         # of uses, greater than 0
@@ -222,7 +238,7 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
         if any(
             entity_id == key_entity_id
             for key, key_entity_id in entity_id_map.items()
-            if key not in (CONF_NAME, CONF_PIN)
+            if key not in (EVENT_PIN_USED, CONF_NAME, CONF_PIN)
         ):
             self._update_state()
 
@@ -230,6 +246,9 @@ class LockCodeManagerPINEnabledEntity(BaseLockCodeManagerEntity, BinarySensorEnt
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
+
+        if not self._issue_reg:
+            self._issue_reg = ir.async_get(self.hass)
 
         self.async_on_remove(
             async_dispatcher_connect(

@@ -14,7 +14,7 @@
   "scripts": {
     "build": "yarn install ; rollup -c",
     "watch": "rollup -c --watch",
-    "lint": "eslint --ext .ts ./strategy/src",
+    "lint": "eslint --ext .ts ./js",
     "lint:fix": "npm run lint -- --fix"
   },
   "dependencies": {

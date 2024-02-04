@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import functools
 import logging
 from typing import Callable, Iterable
 
@@ -25,10 +24,10 @@ from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
     ATTR_EVENT_LABEL,
-    ATTR_EVENT_TYPE,
     ATTR_HOME_ID,
     ATTR_NODE_ID,
     ATTR_PARAMETERS,
+    ATTR_TYPE,
     DATA_CLIENT,
     DOMAIN as ZWAVE_JS_DOMAIN,
     SERVICE_CLEAR_LOCK_USERCODE,
@@ -88,20 +87,22 @@ class ZWaveJSLock(BaseLock):
         )
 
     @callback
-    def _handle_zwave_js_event(self, evt: Event):
-        """Handle Z-Wave JS event."""
-        assert self._node.client.driver
+    def _zwave_js_event_filter(self, evt: Event) -> bool:
+        """Filter out events."""
         # Try to find the lock that we are getting an event for, skipping
         # ones that don't match
-        if (
-            not self._node
-            or evt.data[ATTR_HOME_ID] != self._node.client.driver.controller.home_id
-            or evt.data[ATTR_NODE_ID] != self._node.node_id
-            or evt.data[ATTR_DEVICE_ID] != self.lock.device_id
-        ):
-            return
+        assert self._node.client.driver
+        return (
+            self._node
+            and evt.data[ATTR_HOME_ID] == self._node.client.driver.controller.home_id
+            and evt.data[ATTR_NODE_ID] == self._node.node_id
+            and evt.data[ATTR_DEVICE_ID] == self.lock.device_id
+        )
 
-        if evt.data[ATTR_EVENT_TYPE] != NotificationType.ACCESS_CONTROL:
+    @callback
+    def _handle_zwave_js_event(self, evt: Event) -> None:
+        """Handle Z-Wave JS event."""
+        if evt.data[ATTR_TYPE] != NotificationType.ACCESS_CONTROL:
             _LOGGER.debug(
                 "%s (%s): Lock %s received non Access Control event: %s",
                 self.config_entry.entry_id,
@@ -124,7 +125,7 @@ class ZWaveJSLock(BaseLock):
                 None,
             ),
             action_text=evt.data.get(ATTR_EVENT_LABEL),
-            notification_source="event",
+            source_data=evt,
         )
 
     @property
@@ -144,7 +145,8 @@ class ZWaveJSLock(BaseLock):
         self._listeners.append(
             self.hass.bus.async_listen(
                 ZWAVE_JS_NOTIFICATION_EVENT,
-                functools.partial(self._handle_zwave_js_event),
+                self._handle_zwave_js_event,
+                self._zwave_js_event_filter,
             )
         )
 
