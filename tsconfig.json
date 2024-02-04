@@ -1,7 +1,5 @@
 {
   "compilerOptions": {
-    "declaration": true,
-    "outDir": "dist",
     "rootDir": ".",
     "target": "es2022",
     "baseUrl": ".",
@@ -17,5 +15,5 @@
   "include": [
     "js/**/*",
     ".eslintrc.cjs",
-  ]
+  ],
 }
