@@ -63,7 +63,9 @@ class LockCodeManagerCodeSlotEventEntity(
     _attr_icon = "mdi:gesture-tap"
     _attr_translation_key = EVENT_PIN_USED
 
-    def __init__(self, config_entry: ConfigEntry, lock: BaseLock, slot_num: int, key: str) -> None:
+    def __init__(
+        self, config_entry: ConfigEntry, lock: BaseLock, slot_num: int, key: str
+    ) -> None:
         """Initialize entity."""
         super().__init__(config_entry, lock, slot_num, key)
         self._attr_name = f"Code slot {slot_num}"
