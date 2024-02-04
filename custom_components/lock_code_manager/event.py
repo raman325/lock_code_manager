@@ -6,7 +6,7 @@ import logging
 
 from homeassistant.components.event import EventEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, CONF_EVENT, STATE_UNLOCKED
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNLOCKED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -37,7 +37,7 @@ async def async_setup_entry(
         async_add_entities(
             [
                 LockCodeManagerCodeSlotEventEntity(
-                    config_entry, lock, slot_num, CONF_EVENT
+                    config_entry, lock, slot_num, EVENT_PIN_USED
                 )
             ],
             True,
@@ -61,15 +61,27 @@ class LockCodeManagerCodeSlotEventEntity(
     _attr_entity_category = None
     _attr_event_types = [EVENT_PIN_USED]
     _attr_icon = "mdi:gesture-tap"
+    _attr_translation_key = EVENT_PIN_USED
+
+    def __init__(self, config_entry: ConfigEntry, lock: BaseLock, slot_num: int, key: str) -> None:
+        """Initialize entity."""
+        super().__init__(config_entry, lock, slot_num, key)
+        self._attr_name = f"Code slot {slot_num}"
 
     @callback
     def _event_filter(self, event: Event) -> bool:
         """Filter events."""
         return (
             event.data[ATTR_ENTITY_ID] == self.lock.lock.entity_id
-            and event.data[ATTR_CODE_SLOT] == self.slot_num
+            and event.data[ATTR_CODE_SLOT] == int(self.slot_num)
             and event.data[ATTR_TO] == STATE_UNLOCKED
         )
+
+    @callback
+    def _handle_event(self, event: Event) -> None:
+        """Handle event."""
+        self._trigger_event(EVENT_PIN_USED, event.data)
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -77,7 +89,7 @@ class LockCodeManagerCodeSlotEventEntity(
         self.async_on_remove(
             self.hass.bus.async_listen(
                 EVENT_LOCK_STATE_CHANGED,
-                lambda evt: self._trigger_event(EVENT_PIN_USED, evt.data),
+                self._handle_event,
                 self._event_filter,
             )
         )

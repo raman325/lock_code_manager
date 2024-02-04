@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-import copy
 import logging
 from pathlib import Path
 from typing import Any
@@ -17,7 +16,6 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryError
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
-    CONF_EVENT,
     CONF_NAME,
     CONF_PIN,
 )
@@ -37,6 +35,7 @@ from .const import (
     CONF_SLOTS,
     COORDINATORS,
     DOMAIN,
+    EVENT_PIN_USED,
     FOLD_ENTITY_ROW_FILENAME,
     HACS_DOMAIN,
     PLATFORM_MAP,
@@ -222,10 +221,10 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         ATTR_SETUP_TASKS
     ]
 
-    curr_slots: dict[int, Any] = copy.deepcopy(config_entry.data.get(CONF_SLOTS, {}))
-    new_slots: dict[int, Any] = copy.deepcopy(config_entry.options[CONF_SLOTS])
-    curr_locks: list[str] = copy.deepcopy(config_entry.data.get(CONF_LOCKS, []))
-    new_locks: list[str] = copy.deepcopy(config_entry.options[CONF_LOCKS])
+    curr_slots: dict[int, Any] = {**config_entry.data.get(CONF_SLOTS, {})}
+    new_slots: dict[int, Any] = {**config_entry.options.get(CONF_SLOTS, {})}
+    curr_locks: list[str] = [*config_entry.data.get(CONF_LOCKS, [])]
+    new_locks: list[str] = [*config_entry.options.get(CONF_LOCKS, [])]
 
     # Set up any platforms that the new slot configs need that haven't already been
     # setup
@@ -340,7 +339,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         # First we store the set of entities we are adding so we can track when they are
         # done
         entities_to_add.update(
-            {CONF_ENABLED: True, CONF_NAME: True, CONF_PIN: True, CONF_EVENT: True}
+            {CONF_ENABLED: True, CONF_NAME: True, CONF_PIN: True, EVENT_PIN_USED: True}
         )
         for lock_entity_id, lock in hass.data[DOMAIN][entry_id][CONF_LOCKS].items():
             if lock_entity_id in locks_to_add:

@@ -8,7 +8,7 @@ import logging
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_EVENT, CONF_NAME, CONF_PIN, STATE_ON
+from homeassistant.const import CONF_NAME, CONF_PIN, STATE_ON
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -23,6 +23,7 @@ from .const import (
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     DOMAIN,
+    EVENT_PIN_USED,
     PLATFORM_MAP,
 )
 from .entity import BaseLockCodeManagerEntity
@@ -117,7 +118,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 self.config_entry.async_create_task(
                     self.hass,
                     lock.async_set_usercode(
-                        self.slot_num, pin_state.state, name_state.state
+                        int(self.slot_num), pin_state.state, name_state.state
                     ),
                     f"async_set_usercode_{lock.lock.entity_id}_{self.slot_num}",
                 )
@@ -137,7 +138,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
 
                 self.config_entry.async_create_task(
                     self.hass,
-                    lock.async_clear_usercode(self.slot_num),
+                    lock.async_clear_usercode(int(self.slot_num)),
                     f"async_clear_usercode_{lock.lock.entity_id}_{self.slot_num}",
                 )
 
@@ -169,7 +170,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
 
         states = {}
         for key, entity_id in entity_id_map.items():
-            if key in (CONF_EVENT, CONF_NAME, CONF_PIN):
+            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN):
                 continue
             issue_id = f"{self.config_entry.entry_id}_{self.slot_num}_no_{key}"
             if not (state := self.hass.states.get(entity_id)):
@@ -237,7 +238,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         if any(
             entity_id == key_entity_id
             for key, key_entity_id in entity_id_map.items()
-            if key not in (CONF_EVENT, CONF_NAME, CONF_PIN)
+            if key not in (EVENT_PIN_USED, CONF_NAME, CONF_PIN)
         ):
             self._update_state()
 

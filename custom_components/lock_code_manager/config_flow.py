@@ -97,7 +97,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self.title = user_input.pop(CONF_NAME)
-            self.async_set_unique_id(slugify(self.title))
+            await self.async_set_unique_id(slugify(self.title))
             self._abort_if_unique_id_configured()
             self.data = user_input
             return await self.async_step_choose_path()

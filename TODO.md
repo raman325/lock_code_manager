@@ -15,4 +15,4 @@ Test:
     - Test strategy
 Docs:
     - Document how to use the strategy, including the additional custom card dependencies
-    - Document strategy configuration options
+    - Document strategy configuration options (use_fold_entity_row and include_code_slot_sensors)

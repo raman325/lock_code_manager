@@ -22,7 +22,7 @@ export async function generateView(
 ): Promise<LovelaceViewConfig> {
   const sortedEntities = entities
     .map((entity) => createLockCodeManagerEntity(entity))
-    .sort((entityA, entityB) => compareAndSortEntities(entityA, entityB));
+    .sort(compareAndSortEntities);
   const configEntryData = await hass.callWS<LockCodeManagerConfigEntryData>({
     config_entry_id: configEntryId,
     type: 'lock_code_manager/get_config_entry_data'
@@ -62,17 +62,14 @@ function compareAndSortEntities(
 ) {
   // sort by slot number
   if (entityA.slotNum < entityB.slotNum) return -1;
+  if (entityA.slotNum > entityB.slotNum) return 1;
   // sort by key order
-  if (
-    entityA.slotNum === entityB.slotNum &&
-    KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)
-  )
-    return -1;
+  if (KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)) return -1;
+  if (KEY_ORDER.indexOf(entityA.key) > KEY_ORDER.indexOf(entityB.key)) return 1;
   // sort code sensors alphabetically based on the lock entity_id
   if (
-    entityA.slotNum === entityB.slotNum &&
     entityA.key === entityB.key &&
-    entityA.key === 'code' &&
+    [CODE_EVENT_KEY, CODE_SENSOR_KEY].includes(entityA.key) &&
     entityA.lockEntityId < entityB.lockEntityId
   )
     return -1;

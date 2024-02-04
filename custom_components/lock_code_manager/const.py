@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.const import CONF_ENABLED, CONF_EVENT, CONF_NAME, CONF_PIN, Platform
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
@@ -56,9 +56,9 @@ DEFAULT_HIDE_PINS = False
 
 PLATFORM_MAP = {
     CONF_CALENDAR: Platform.CALENDAR,
-    CONF_EVENT: Platform.EVENT,
     CONF_ENABLED: Platform.SWITCH,
     CONF_NAME: Platform.TEXT,
     CONF_NUMBER_OF_USES: Platform.NUMBER,
     CONF_PIN: Platform.TEXT,
+    EVENT_PIN_USED: Platform.EVENT,
 }

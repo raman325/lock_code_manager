@@ -61,6 +61,19 @@
       }
     }
   },
+  "entity": {
+    "event": {
+      "pin_used": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "pin_used": "PIN used"
+            }
+          }
+        }
+      }
+    }
+  },
   "issues": {
     "fold_entity_row_js_not_found": {
       "description": "The [fold-entity-row](https://github.com/thomasloven/lovelace-fold-entity-row) card is not exposed as a package on your system so the Lock Code Manager UI will not work as expected. If you choose to, you can resolve this by either installing the manually or by using [HACS](https://hacs.xyz/) and reloading the integration.",
@@ -101,6 +114,12 @@
         "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"
       }
+    }
+  },
+  "services": {
+    "hard_refresh_usercodes": {
+      "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
+      "name": "Hard refresh usercodes"
     }
   }
 }

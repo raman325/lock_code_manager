@@ -235,10 +235,25 @@ class BaseLock:
         extra_data: dict[str, Any] | None = None
         if isinstance(source_data, Event):
             notification_source = "event"
-            extra_data = source_data.as_dict()
+            extra_data = {
+                "event_type": source_data.event_type,
+                "data": source_data.data,
+                "time_fired": source_data.time_fired.isoformat(),
+            }
         elif isinstance(source_data, State):
             notification_source = "state"
-            extra_data = source_data.as_dict()
+            last_changed_isoformat = source_data.last_changed.isoformat()
+            if source_data.last_changed == source_data.last_updated:
+                last_updated_isoformat = last_changed_isoformat
+            else:
+                last_updated_isoformat = source_data.last_updated.isoformat()
+            extra_data = {
+                "entity_id": source_data.entity_id,
+                "state": source_data.state,
+                "attributes": source_data.attributes,
+                "last_changed": last_changed_isoformat,
+                "last_updated": last_updated_isoformat,
+            }
         elif isinstance(source_data, dict):
             extra_data = source_data
 
