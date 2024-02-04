@@ -42,7 +42,7 @@
     "eslint-plugin-typescript-sort-keys": "^3.1.0",
     "prettier": "^3.2.4",
     "prettier-plugin-package": "^1.4.0",
-    "rollup": "^2.79.1",
+    "rollup": "^4.9.6",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }
