@@ -23,7 +23,7 @@ jobs:
         run: |
           sudo apt-get install libudev-dev
           python -m pip install --upgrade pip
-          pip install -r requirements_test.txt
+          pip install -r requirements_dev.txt
       - name: Run formatting
         run: |
           python -m isort -v --profile black .

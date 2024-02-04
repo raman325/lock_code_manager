@@ -13,12 +13,7 @@ import voluptuous as vol
 from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    CONF_ENABLED,
-    CONF_NAME,
-    CONF_PIN,
-)
+from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
@@ -57,6 +52,8 @@ ATTR_SETUP_TASKS = "setup_tasks"
 ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
 ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
