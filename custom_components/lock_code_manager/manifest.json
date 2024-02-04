@@ -3,6 +3,7 @@
   "name": "Lock Code Manager",
   "after_dependencies": [
     "calendar",
+    "hacs",
     "zwave_js"
   ],
   "codeowners": [

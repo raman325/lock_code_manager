@@ -14,13 +14,13 @@ from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
 )
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_CODE, ATTR_PIN_SYNCED_TO_LOCKS, CONF_PIN, COORDINATORS, DOMAIN
 from .coordinator import LockUsercodeUpdateCoordinator
-from .entity import BaseLockCodeManagerEntity
+from .entity import BaseLockCodeManagerCodeSlotEntity
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,21 +40,26 @@ async def async_setup_entry(
             config_entry.entry_id
         ][COORDINATORS][lock.lock.entity_id]
         async_add_entities(
-            [LockCodeManagerCodeSlot(config_entry, lock, coordinator, slot_num)], True
+            [
+                LockCodeManagerCodeSlotSensorEntity(
+                    config_entry, lock, coordinator, slot_num
+                )
+            ],
+            True,
         )
 
     config_entry.async_on_unload(
         async_dispatcher_connect(
             hass,
-            f"{DOMAIN}_{config_entry.entry_id}_add_lock_slot_sensor",
+            f"{DOMAIN}_{config_entry.entry_id}_add_lock_slot",
             add_code_slot_entities,
         )
     )
     return True
 
 
-class LockCodeManagerCodeSlot(
-    BaseLockCodeManagerEntity,
+class LockCodeManagerCodeSlotSensorEntity(
+    BaseLockCodeManagerCodeSlotEntity,
     SensorEntity,
     CoordinatorEntity[LockUsercodeUpdateCoordinator],
 ):
@@ -71,20 +76,10 @@ class LockCodeManagerCodeSlot(
         slot_num: int,
     ) -> None:
         """Initialize entity."""
-        BaseLockCodeManagerEntity.__init__(
-            self, config_entry, [lock], slot_num, ATTR_CODE
+        BaseLockCodeManagerCodeSlotEntity.__init__(
+            self, config_entry, lock, slot_num, ATTR_CODE
         )
         CoordinatorEntity.__init__(self, coordinator)
-        self.lock = lock
-        if lock.device_entry:
-            self._attr_device_info = DeviceInfo(
-                connections=lock.device_entry.connections,
-                identifiers=lock.device_entry.identifiers,
-            )
-
-        self._attr_unique_id = (
-            f"{self.base_unique_id}|{slot_num}|{self.key}|{self.lock.lock.entity_id}"
-        )
 
     @property
     def native_value(self) -> str | None:
@@ -96,16 +91,10 @@ class LockCodeManagerCodeSlot(
     @property
     def available(self) -> bool:
         """Return whether sensor is available or not."""
-        return (
+        return BaseLockCodeManagerCodeSlotEntity._lock_available(self) and (
             self.slot_num in self.coordinator.data
             or int(self.slot_num) in self.coordinator.data
         )
-
-    @callback
-    def _handle_remove_lock(self, entity_id: str) -> None:
-        """Handle lock entity is being removed."""
-        if self.lock.lock.entity_id == entity_id:
-            self._internal_async_remove()
 
     @callback
     def _check_desired_pin(self) -> None:
@@ -149,8 +138,8 @@ class LockCodeManagerCodeSlot(
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
+        await BaseLockCodeManagerCodeSlotEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
-        await BaseLockCodeManagerEntity.async_added_to_hass(self)
         self.async_on_remove(
             self.coordinator.async_add_listener(
                 self._check_desired_pin, self.coordinator_context

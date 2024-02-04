@@ -14,13 +14,20 @@ import voluptuous as vol
 from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_EVENT,
+    CONF_NAME,
+    CONF_PIN,
+)
 from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
+    issue_registry as ir,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
@@ -30,6 +37,8 @@ from .const import (
     CONF_SLOTS,
     COORDINATORS,
     DOMAIN,
+    FOLD_ENTITY_ROW_FILENAME,
+    HACS_DOMAIN,
     PLATFORM_MAP,
     PLATFORMS,
     STRATEGY_FILENAME,
@@ -39,6 +48,7 @@ from .const import (
 from .coordinator import LockUsercodeUpdateCoordinator
 from .helpers import async_create_lock_instance, get_lock_from_entity_id
 from .providers import BaseLock
+from .websocket import async_setup as async_websocket_setup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,13 +66,45 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     resources: ResourceStorageCollection
     if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
-        hass.http.register_static_path(
-            STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
-        )
-        data = await resources.async_create_item(
-            {"res_type": "module", "url": STRATEGY_PATH}
-        )
-        _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
+        # Load resources if needed
+        if not resources.loaded:
+            await resources.async_load()
+            resources.loaded = True
+
+        try:
+            next(
+                res
+                for res in resources.async_items()
+                if FOLD_ENTITY_ROW_FILENAME in res["url"]
+            )
+        except StopIteration:
+            _LOGGER.warning("fold-entity-row.js not found in Dashboard resources.")
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                "fold_entity_row_js_not_found",
+                is_fixable=bool(HACS_DOMAIN in hass.config.components),
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="fold_entity_row_js_not_found",
+            )
+        else:
+            ir.async_delete_issue(hass, DOMAIN, "fold_entity_row_js_not_found")
+        finally:
+            # Expose strategy javascript
+            hass.http.register_static_path(
+                STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
+            )
+
+            # Register strategy module
+            data = await resources.async_create_item(
+                {"res_type": "module", "url": STRATEGY_PATH}
+            )
+            _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
+
+            # Set up websocket API
+            await async_websocket_setup(hass)
+            _LOGGER.debug("Finished setting up websocket API")
 
     # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
@@ -234,14 +276,14 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     )
     async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add_locks", locks_to_add)
     for lock_entity_id in locks_to_add:
-        lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][
-            lock_entity_id
-        ] = async_create_lock_instance(
-            hass,
-            dr.async_get(hass),
-            er.async_get(hass),
-            config_entry,
-            lock_entity_id,
+        lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][lock_entity_id] = (
+            async_create_lock_instance(
+                hass,
+                dr.async_get(hass),
+                er.async_get(hass),
+                config_entry,
+                lock_entity_id,
+            )
         )
         await lock.async_setup()
 
@@ -265,20 +307,20 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         _LOGGER.debug(
             "%s (%s): Creating coordinator for lock %s", entry_id, entry_title, lock
         )
-        coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][
-            lock_entity_id
-        ] = LockUsercodeUpdateCoordinator(hass, lock)
+        coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][lock_entity_id] = (
+            LockUsercodeUpdateCoordinator(hass, lock)
+        )
         await coordinator.async_config_entry_first_refresh()
         for slot_num in new_slots:
             _LOGGER.debug(
-                "%s (%s): Adding lock %s slot %s sensor",
+                "%s (%s): Adding lock %s slot %s sensor and event entity",
                 entry_id,
                 entry_title,
                 lock_entity_id,
                 slot_num,
             )
             async_dispatcher_send(
-                hass, f"{DOMAIN}_{entry_id}_add_lock_slot_sensor", lock, slot_num
+                hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num
             )
 
     # Remove slot sensors that are no longer in the config
@@ -297,7 +339,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         ][slot_num]
         # First we store the set of entities we are adding so we can track when they are
         # done
-        entities_to_add.update({CONF_ENABLED: True, CONF_NAME: True, CONF_PIN: True})
+        entities_to_add.update(
+            {CONF_ENABLED: True, CONF_NAME: True, CONF_PIN: True, CONF_EVENT: True}
+        )
         for lock_entity_id, lock in hass.data[DOMAIN][entry_id][CONF_LOCKS].items():
             if lock_entity_id in locks_to_add:
                 continue
@@ -309,7 +353,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 slot_num,
             )
             async_dispatcher_send(
-                hass, f"{DOMAIN}_{entry_id}_add_lock_slot_sensor", lock, slot_num
+                hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num
             )
 
         # Check if we need to add a number of uses entity
