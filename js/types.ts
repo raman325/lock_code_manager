@@ -9,7 +9,6 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 export interface LockCodeManagerDashboardStrategyConfig {
   include_code_slot_sensors?: boolean;
   type: 'custom:lock-code-manager';
-  use_fold_entity_row?: boolean;
 }
 
 export interface ConfigEntryToEntities {

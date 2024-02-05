@@ -5,7 +5,12 @@ import {
   KEY_ORDER,
   PIN_SYNCED_TO_LOCKS_KEY
 } from './const';
-import { EntityRegistryEntry, HomeAssistant, LovelaceViewConfig } from './ha_type_stubs';
+import {
+  EntityRegistryEntry,
+  HomeAssistant,
+  LovelaceResource,
+  LovelaceViewConfig
+} from './ha_type_stubs';
 import { LockCodeManagerConfigEntryData, LockCodeManagerEntityEntry, SlotMapping } from './types';
 
 const DIVIDER_CARD = {
@@ -17,16 +22,22 @@ export async function generateView(
   configEntryId: string,
   configEntryTitle: string,
   entities: EntityRegistryEntry[],
-  use_fold_entity_row: boolean,
   include_code_slot_sensors: boolean
 ): Promise<LovelaceViewConfig> {
   const sortedEntities = entities
     .map((entity) => createLockCodeManagerEntity(entity))
     .sort(compareAndSortEntities);
-  const configEntryData = await hass.callWS<LockCodeManagerConfigEntryData>({
-    config_entry_id: configEntryId,
-    type: 'lock_code_manager/get_config_entry_data'
-  });
+  const [configEntryData, lovelaceResources] = await Promise.all([
+    hass.callWS<LockCodeManagerConfigEntryData>({
+      config_entry_id: configEntryId,
+      type: 'lock_code_manager/get_config_entry_data'
+    }),
+    hass.callWS<LovelaceResource[]>({
+      type: 'lovelace/resources'
+    })
+  ]);
+  const useFoldEntityRow =
+    lovelaceResources.filter((resource) => resource.url.includes('fold-entity-row')).length > 0;
   const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
   const slotMappings: SlotMapping[] = slots.map((slotNum) =>
     getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
@@ -48,7 +59,7 @@ export async function generateView(
         })
     ],
     cards: slotMappings.map((slotMapping) =>
-      generateSlotCard(slotMapping, use_fold_entity_row, include_code_slot_sensors)
+      generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
     ),
     panel: false,
     path: slugify(configEntryTitle),
@@ -188,6 +199,10 @@ function maybeGenerateFoldEntityRowCard(
         DIVIDER_CARD,
         {
           entities: entityCards,
+          head: {
+            label,
+            type: 'section'
+          },
           type: 'custom:fold-entity-row'
         }
       ]
