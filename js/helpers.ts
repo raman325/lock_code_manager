@@ -2,6 +2,7 @@ import {
   CODE_EVENT_KEY,
   CODE_SENSOR_KEY,
   CONDITION_KEYS,
+  FOLD_ENTITY_ROW_SEARCH_STRING,
   KEY_ORDER,
   PIN_SYNCED_TO_LOCKS_KEY
 } from './const';
@@ -58,7 +59,8 @@ export async function generateView(
   ];
 
   const useFoldEntityRow =
-    lovelaceResources.filter((resource) => resource.url.includes('fold-entity-row')).length > 0;
+    lovelaceResources.filter((resource) => resource.url.includes(FOLD_ENTITY_ROW_SEARCH_STRING))
+      .length > 0;
 
   const cards = slotMappings.map((slotMapping) =>
     generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
