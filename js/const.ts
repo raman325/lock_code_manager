@@ -13,4 +13,5 @@ export const KEY_ORDER = [
 ];
 export const DOMAIN = 'lock_code_manager';
 export const DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false;
-export const DEFAULT_USE_FOLD_ENTITY_ROW = true;
+
+export const FOLD_ENTITY_ROW_REPO_NAME = 'thomasloven/lovelace-fold-entity-row';

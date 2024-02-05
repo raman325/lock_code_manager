@@ -6,10 +6,12 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
   slotNum: number;
 }
 
-export interface LockCodeManagerDashboardStrategyConfig {
+export interface LockCodeManagerStrategyConfig {
   include_code_slot_sensors?: boolean;
+}
+
+export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {
   type: 'custom:lock-code-manager';
-  use_fold_entity_row?: boolean;
 }
 
 export interface ConfigEntryToEntities {
@@ -26,12 +28,10 @@ export interface SlotMapping {
   slotNum: number;
 }
 
-export interface LockCodeManagerViewStrategyConfig {
+export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrategyConfig {
   config_entry_id?: string;
   config_entry_title?: string;
-  include_code_slot_sensors?: boolean;
   type: 'custom:lock-code-manager';
-  use_fold_entity_row?: boolean;
 }
 
 export type LockCodeManagerEntitiesResponse = [string, string, EntityRegistryEntry[]];

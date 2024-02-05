@@ -6,16 +6,12 @@ import json
 from unittest.mock import DEFAULT, AsyncMock, patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry, load_fixture
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
 
 from homeassistant.core import HomeAssistant
-
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from tests.helpers import load_fixture
-
 
 # Z-Wave JS fixtures
 
@@ -58,25 +54,19 @@ def log_config_state_fixture():
 @pytest.fixture(name="lock_schlage_be469_state", scope="session")
 def lock_schlage_be469_state_fixture():
     """Load the schlage lock node state fixture data."""
-    return json.loads(
-        load_fixture("lock_schlage_be469_state.json")
-    )
+    return json.loads(load_fixture("lock_schlage_be469_state.json"))
 
 
 @pytest.fixture(name="lock_august_asl03_state", scope="session")
 def lock_august_asl03_state_fixture():
     """Load the August Pro lock node state fixture data."""
-    return json.loads(
-        load_fixture("lock_august_asl03_state.json")
-    )
+    return json.loads(load_fixture("lock_august_asl03_state.json"))
 
 
 @pytest.fixture(name="lock_id_lock_as_id150_state", scope="session")
 def lock_id_lock_as_id150_state_fixture():
     """Load the id lock id-150 lock node state fixture data."""
-    return json.loads(
-        load_fixture("/lock_id_lock_as_id150_state.json")
-    )
+    return json.loads(load_fixture("/lock_id_lock_as_id150_state.json"))
 
 
 # model fixtures

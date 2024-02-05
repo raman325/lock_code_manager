@@ -74,32 +74,6 @@
       }
     }
   },
-  "issues": {
-    "fold_entity_row_js_not_found": {
-      "description": "The [fold-entity-row](https://github.com/thomasloven/lovelace-fold-entity-row) card is not exposed as a package on your system so the Lock Code Manager UI will not work as expected. If you choose to, you can resolve this by either installing the manually or by using [HACS](https://hacs.xyz/) and reloading the integration.",
-      "fix_flow": {
-        "abort": {
-          "hacs_not_loaded": "[HACS](https://hacs.xyz/) is not loaded so the issue can't automatically be fixed.",
-          "issue_ignored": "Ignoring the fact that fold entity row JS is missing. You can always fix this later by installing the card manually or by using HACS. Alternatively, set `use_fold_entity_row` to `false` in the Lock Code Manager UI strategy configuration to skip using the card in the UI."
-        },
-        "step": {
-          "init": {
-            "description": "The [fold-entity-row](https://github.com/thomasloven/lovelace-fold-entity-row) card is not exposed as a package on your system so the Lock Code Manager UI will not work as expected. If you choose to, you can resolve this by either installing the manually or by using [HACS](https://hacs.xyz/) and reloading the integration. You can also have the integraiton fix this for you automatically.",
-            "menu_options": {
-              "fix": "Fix it",
-              "ignore": "Ignore issue"
-            },
-            "title": "Fold Entity Row JS not found"
-          }
-        }
-      },
-      "title": "Fold Entity Row JS not found"
-    },
-    "no_state": {
-      "description": "Entity {entity_id} for {entry_title} {key} not found, so its state will be skipped until it's corrected, at which point this issue will automatically disappear.",
-      "title": "Can't find state for {entry_title} {key}"
-    }
-  },
   "options": {
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",

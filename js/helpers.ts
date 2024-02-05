@@ -5,7 +5,12 @@ import {
   KEY_ORDER,
   PIN_SYNCED_TO_LOCKS_KEY
 } from './const';
-import { EntityRegistryEntry, HomeAssistant, LovelaceViewConfig } from './ha_type_stubs';
+import {
+  EntityRegistryEntry,
+  HomeAssistant,
+  LovelaceResource,
+  LovelaceViewConfig
+} from './ha_type_stubs';
 import { LockCodeManagerConfigEntryData, LockCodeManagerEntityEntry, SlotMapping } from './types';
 
 const DIVIDER_CARD = {
@@ -17,20 +22,33 @@ export async function generateView(
   configEntryId: string,
   configEntryTitle: string,
   entities: EntityRegistryEntry[],
-  use_fold_entity_row: boolean,
   include_code_slot_sensors: boolean
 ): Promise<LovelaceViewConfig> {
   const sortedEntities = entities
     .map((entity) => createLockCodeManagerEntity(entity))
     .sort(compareAndSortEntities);
-  const configEntryData = await hass.callWS<LockCodeManagerConfigEntryData>({
-    config_entry_id: configEntryId,
-    type: 'lock_code_manager/get_config_entry_data'
-  });
+  const [configEntryData, lovelaceResources] = await Promise.all([
+    hass.callWS<LockCodeManagerConfigEntryData>({
+      config_entry_id: configEntryId,
+      type: 'lock_code_manager/get_config_entry_data'
+    }),
+    hass.callWS<LovelaceResource[]>({
+      type: 'lovelace/resources'
+    })
+  ]);
+  const useFoldEntityRow =
+    lovelaceResources.filter((resource) => resource.url.includes('fold-entity-row')).length > 0;
   const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
   const slotMappings: SlotMapping[] = slots.map((slotNum) =>
     getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
   );
+
+  const cards = slotMappings.map((slotMapping) =>
+    generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
+  );
+  if (!useFoldEntityRow && hass.config.components.includes('hacs')) {
+    // cards.push({});
+  }
 
   return {
     badges: [
@@ -48,7 +66,7 @@ export async function generateView(
         })
     ],
     cards: slotMappings.map((slotMapping) =>
-      generateSlotCard(slotMapping, use_fold_entity_row, include_code_slot_sensors)
+      generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
     ),
     panel: false,
     path: slugify(configEntryTitle),
@@ -86,6 +104,13 @@ function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManag
   };
 }
 
+export async function downloadHacsRepository(
+  hass: HomeAssistant,
+  repository: string
+): Promise<void> {
+  await hass.callWS<void>({ repository, type: 'hacs/repository/download' });
+}
+
 function generateEntityCards(entities: string[]): { entity: string }[] {
   return entities.map((entityId) => {
     return {
@@ -96,7 +121,7 @@ function generateEntityCards(entities: string[]): { entity: string }[] {
 
 function generateSlotCard(
   slotMapping: SlotMapping,
-  use_fold_entity_row: boolean,
+  useFoldEntityRow: boolean,
   include_code_slot_sensors: boolean
 ): LovelaceViewConfig {
   return {
@@ -115,18 +140,18 @@ function generateSlotCard(
           ...maybeGenerateFoldEntityRowCard(
             slotMapping.codeEventEntityIds,
             'Unlock Events for this Slot',
-            use_fold_entity_row
+            useFoldEntityRow
           ),
           ...maybeGenerateFoldEntityRowCard(
             slotMapping.conditionEntityIds,
             'Conditions',
-            use_fold_entity_row
+            useFoldEntityRow
           ),
           ...(include_code_slot_sensors
             ? maybeGenerateFoldEntityRowCard(
                 slotMapping.codeSensorEntityIds,
                 'Code Slot Sensors',
-                use_fold_entity_row
+                useFoldEntityRow
               )
             : [])
         ],
@@ -136,6 +161,16 @@ function generateSlotCard(
     ],
     type: 'vertical-stack'
   };
+}
+
+export async function getHacsRepositoryId(
+  hass: HomeAssistant,
+  repoName: string
+): Promise<string | undefined> {
+  const repo = await hass
+    .callWS<{ full_name: string; id: string }[]>({ type: 'hacs/repositories/list' })
+    .then((repos) => repos.find((_repo) => _repo.full_name === repoName));
+  return repo.id;
 }
 
 function getSlotMapping(
@@ -179,15 +214,19 @@ function getSlotMapping(
 function maybeGenerateFoldEntityRowCard(
   entities: string[],
   label: string,
-  use_fold_entity_row: boolean
+  useFoldEntityRow: boolean
 ) {
   if (entities.length === 0) return [];
   const entityCards = generateEntityCards(entities);
-  return use_fold_entity_row
+  return useFoldEntityRow
     ? [
         DIVIDER_CARD,
         {
           entities: entityCards,
+          head: {
+            label,
+            type: 'section'
+          },
           type: 'custom:fold-entity-row'
         }
       ]

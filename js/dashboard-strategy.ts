@@ -1,6 +1,6 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS, DEFAULT_USE_FOLD_ENTITY_ROW } from './const';
+import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS } from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import { generateView } from './helpers';
 import { LockCodeManagerDashboardStrategyConfig, LockCodeManagerEntitiesResponse } from './types';
@@ -36,7 +36,6 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
           configEntryId,
           configEntryTitle,
           entities,
-          config.use_fold_entity_row ?? DEFAULT_USE_FOLD_ENTITY_ROW,
           config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS
         )
       )
