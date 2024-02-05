@@ -43,6 +43,13 @@ export async function generateView(
     getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
   );
 
+  const cards = slotMappings.map((slotMapping) =>
+    generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
+  );
+  if (!useFoldEntityRow && hass.config.components.includes('hacs')) {
+    // cards.push({});
+  }
+
   return {
     badges: [
       ...configEntryData.locks.sort((a, b) => a.localeCompare(b)),
@@ -97,6 +104,13 @@ function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManag
   };
 }
 
+export async function downloadHacsRepository(
+  hass: HomeAssistant,
+  repository: string
+): Promise<void> {
+  await hass.callWS<void>({ repository, type: 'hacs/repository/download' });
+}
+
 function generateEntityCards(entities: string[]): { entity: string }[] {
   return entities.map((entityId) => {
     return {
@@ -107,7 +121,7 @@ function generateEntityCards(entities: string[]): { entity: string }[] {
 
 function generateSlotCard(
   slotMapping: SlotMapping,
-  use_fold_entity_row: boolean,
+  useFoldEntityRow: boolean,
   include_code_slot_sensors: boolean
 ): LovelaceViewConfig {
   return {
@@ -126,18 +140,18 @@ function generateSlotCard(
           ...maybeGenerateFoldEntityRowCard(
             slotMapping.codeEventEntityIds,
             'Unlock Events for this Slot',
-            use_fold_entity_row
+            useFoldEntityRow
           ),
           ...maybeGenerateFoldEntityRowCard(
             slotMapping.conditionEntityIds,
             'Conditions',
-            use_fold_entity_row
+            useFoldEntityRow
           ),
           ...(include_code_slot_sensors
             ? maybeGenerateFoldEntityRowCard(
                 slotMapping.codeSensorEntityIds,
                 'Code Slot Sensors',
-                use_fold_entity_row
+                useFoldEntityRow
               )
             : [])
         ],
@@ -147,6 +161,16 @@ function generateSlotCard(
     ],
     type: 'vertical-stack'
   };
+}
+
+export async function getHacsRepositoryId(
+  hass: HomeAssistant,
+  repoName: string
+): Promise<string | undefined> {
+  const repo = await hass
+    .callWS<{ full_name: string; id: string }[]>({ type: 'hacs/repositories/list' })
+    .then((repos) => repos.find((_repo) => _repo.full_name === repoName));
+  return repo.id;
 }
 
 function getSlotMapping(
@@ -190,11 +214,11 @@ function getSlotMapping(
 function maybeGenerateFoldEntityRowCard(
   entities: string[],
   label: string,
-  use_fold_entity_row: boolean
+  useFoldEntityRow: boolean
 ) {
   if (entities.length === 0) return [];
   const entityCards = generateEntityCards(entities);
-  return use_fold_entity_row
+  return useFoldEntityRow
     ? [
         DIVIDER_CARD,
         {

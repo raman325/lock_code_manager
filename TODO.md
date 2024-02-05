@@ -2,6 +2,8 @@ Dev:
     - Track state updates to locks in event and sensor entities to update availability
     - Figure out how to handle builds and releases
     - Figure out how to use HACS from integration
+      - Finish building HACS card that allows a user to click a button to install HACS repo.
+      - Embed HACS card in generateView
       - Use HACS websocket commands to check whether the dependent components are installed, and if not, install them.
         - https://github.com/hacs/integration/blob/main/custom_components/hacs/websocket/repository.py#L19
         - https://github.com/hacs/integration/blob/main/custom_components/hacs/websocket/repository.py#L211
@@ -15,4 +17,4 @@ Test:
     - Test strategy
 Docs:
     - Document how to use the strategy, including the additional custom card dependencies
-    - Document strategy configuration options (use_fold_entity_row and include_code_slot_sensors)
+    - Document strategy configuration options (include_code_slot_sensors)

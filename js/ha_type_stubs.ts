@@ -1,4 +1,4 @@
-import { HassEntities, MessageBase } from 'home-assistant-js-websocket';
+import { HassConfig, HassEntities, MessageBase } from 'home-assistant-js-websocket';
 
 export interface ConfigEntry {
   entry_id: string;
@@ -14,6 +14,7 @@ export interface EntityRegistryEntry {
 }
 
 export interface HomeAssistant {
+  config: HassConfig;
   resources: object;
   states: HassEntities;
   callWS<T>(msg: MessageBase): Promise<T>; // eslint-disable-line typescript-sort-keys/interface
