@@ -24,9 +24,6 @@ export async function generateView(
   entities: EntityRegistryEntry[],
   include_code_slot_sensors: boolean
 ): Promise<LovelaceViewConfig> {
-  const sortedEntities = entities
-    .map((entity) => createLockCodeManagerEntity(entity))
-    .sort(compareAndSortEntities);
   const [configEntryData, lovelaceResources] = await Promise.all([
     hass.callWS<LockCodeManagerConfigEntryData>({
       config_entry_id: configEntryId,
@@ -36,12 +33,32 @@ export async function generateView(
       type: 'lovelace/resources'
     })
   ]);
-  const useFoldEntityRow =
-    lovelaceResources.filter((resource) => resource.url.includes('fold-entity-row')).length > 0;
+
+  const sortedEntities = entities
+    .map((entity) => createLockCodeManagerEntity(entity))
+    .sort(compareAndSortEntities);
   const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
   const slotMappings: SlotMapping[] = slots.map((slotNum) =>
     getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
   );
+
+  const badges = [
+    ...configEntryData.locks.sort((a, b) => a.localeCompare(b)),
+    ...sortedEntities
+      .filter((entity) => entity.key === 'pin_synced_to_locks')
+      .map((entity) => {
+        return {
+          entity: entity.entity_id,
+          name: (entity.name ? entity.name : entity.original_name)
+            .replace('PIN synced to locks', 'synced')
+            .replace('Code slot', 'Slot'),
+          type: 'state-label'
+        };
+      })
+  ];
+
+  const useFoldEntityRow =
+    lovelaceResources.filter((resource) => resource.url.includes('fold-entity-row')).length > 0;
 
   const cards = slotMappings.map((slotMapping) =>
     generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
@@ -51,20 +68,7 @@ export async function generateView(
   }
 
   return {
-    badges: [
-      ...configEntryData.locks.sort((a, b) => a.localeCompare(b)),
-      ...sortedEntities
-        .filter((entity) => entity.key === 'pin_synced_to_locks')
-        .map((entity) => {
-          return {
-            entity: entity.entity_id,
-            name: (entity.name ? entity.name : entity.original_name)
-              .replace('PIN synced to locks', 'synced')
-              .replace('Code slot', 'Slot'),
-            type: 'state-label'
-          };
-        })
-    ],
+    badges,
     cards,
     panel: false,
     path: slugify(configEntryTitle),
