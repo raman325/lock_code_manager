@@ -65,9 +65,7 @@ export async function generateView(
           };
         })
     ],
-    cards: slotMappings.map((slotMapping) =>
-      generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
-    ),
+    cards,
     panel: false,
     path: slugify(configEntryTitle),
     title: configEntryTitle
