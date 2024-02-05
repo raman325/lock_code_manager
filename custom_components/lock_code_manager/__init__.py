@@ -20,7 +20,6 @@ from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
-    issue_registry as ir,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
@@ -31,8 +30,6 @@ from .const import (
     COORDINATORS,
     DOMAIN,
     EVENT_PIN_USED,
-    FOLD_ENTITY_ROW_FILENAME,
-    HACS_DOMAIN,
     PLATFORM_MAP,
     PLATFORMS,
     STRATEGY_FILENAME,
@@ -67,40 +64,20 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             await resources.async_load()
             resources.loaded = True
 
-        try:
-            next(
-                res
-                for res in resources.async_items()
-                if FOLD_ENTITY_ROW_FILENAME in res["url"]
-            )
-        except StopIteration:
-            _LOGGER.warning("fold-entity-row.js not found in Dashboard resources.")
-            ir.async_create_issue(
-                hass,
-                DOMAIN,
-                "fold_entity_row_js_not_found",
-                is_fixable=bool(HACS_DOMAIN in hass.config.components),
-                is_persistent=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key="fold_entity_row_js_not_found",
-            )
-        else:
-            ir.async_delete_issue(hass, DOMAIN, "fold_entity_row_js_not_found")
-        finally:
-            # Expose strategy javascript
-            hass.http.register_static_path(
-                STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
-            )
+        # Expose strategy javascript
+        hass.http.register_static_path(
+            STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
+        )
 
-            # Register strategy module
-            data = await resources.async_create_item(
-                {"res_type": "module", "url": STRATEGY_PATH}
-            )
-            _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
+        # Register strategy module
+        data = await resources.async_create_item(
+            {"res_type": "module", "url": STRATEGY_PATH}
+        )
+        _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
 
-            # Set up websocket API
-            await async_websocket_setup(hass)
-            _LOGGER.debug("Finished setting up websocket API")
+        # Set up websocket API
+        await async_websocket_setup(hass)
+        _LOGGER.debug("Finished setting up websocket API")
 
     # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:

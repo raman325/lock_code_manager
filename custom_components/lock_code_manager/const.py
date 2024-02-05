@@ -8,12 +8,9 @@ DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
 PLATFORMS = (Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR)
 
-HACS_DOMAIN = "hacs"
-
 FILES_URL_BASE = f"/{DOMAIN}_files"
 STRATEGY_FILENAME = "lock-code-manager-strategy.js"
 STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
-FOLD_ENTITY_ROW_FILENAME = "fold-entity-row.js"
 
 ATTR_CODE_SLOT = "code_slot"
 ATTR_USERCODE = "usercode"
