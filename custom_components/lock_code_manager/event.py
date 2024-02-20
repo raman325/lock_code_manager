@@ -37,7 +37,7 @@ async def async_setup_entry(
         async_add_entities(
             [
                 LockCodeManagerCodeSlotEventEntity(
-                    config_entry, lock, slot_num, EVENT_PIN_USED
+                    hass, config_entry, lock, slot_num, EVENT_PIN_USED
                 )
             ],
             True,
@@ -64,10 +64,17 @@ class LockCodeManagerCodeSlotEventEntity(
     _attr_translation_key = EVENT_PIN_USED
 
     def __init__(
-        self, config_entry: ConfigEntry, lock: BaseLock, slot_num: int, key: str
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        lock: BaseLock,
+        slot_num: int,
+        key: str,
     ) -> None:
         """Initialize entity."""
-        super().__init__(config_entry, lock, slot_num, key)
+        BaseLockCodeManagerCodeSlotEntity.__init__(
+            self, hass, config_entry, lock, slot_num, key
+        )
         self._attr_name = f"Code slot {slot_num}"
 
     @callback

@@ -23,7 +23,7 @@ from homeassistant.helpers import (
 
 from .const import CONF_CALENDAR, CONF_LOCKS, CONF_NUMBER_OF_USES, DOMAIN
 from .exceptions import ConfigEntryNotFoundError
-from .providers import INTEGRATIONS, BaseLock
+from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,10 +72,10 @@ def async_create_lock_instance(
         # the only lock in the config, we must start a reauth flow so the user can
         # pick new lock(s).
         if len(config_entry.data[CONF_LOCKS]) > 1:
-            locks = copy.deepcopy(config_entry.data[CONF_LOCKS])
+            locks = copy.deepcopy(config_entry.options[CONF_LOCKS])
             locks.pop(lock_entity_id)
             hass.config_entries.async_update_entry(
-                config_entry, data={**config_entry.data, CONF_LOCKS: locks}
+                config_entry, options={**config_entry.options, CONF_LOCKS: locks}
             )
             async_create(
                 hass,
@@ -99,7 +99,7 @@ def async_create_lock_instance(
         raise HomeAssistantError(f"Lock with entity ID {lock_entity_id} not found.")
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
     assert lock_config_entry
-    lock = INTEGRATIONS[lock_entry.platform](
+    lock = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
         hass, dev_reg, ent_reg, config_entry, lock_config_entry, lock_entry
     )
     _LOGGER.debug(
@@ -113,8 +113,14 @@ def async_create_lock_instance(
 
 def get_lock_from_entity_id(hass: HomeAssistant, entity_id: str) -> BaseLock:
     """Get lock from entity ID."""
-    for data in hass.data[DOMAIN].values():
-        lock: BaseLock = data[CONF_LOCKS]
-        if entity_id == lock.lock.entity_id:
-            return lock
-    raise ConfigEntryNotFoundError(f"Lock with entity ID {entity_id} not found.")
+    try:
+        return next(
+            lock
+            for data in hass.data[DOMAIN].values()
+            for lock in data[CONF_LOCKS].values()
+            if entity_id == lock.lock.entity_id
+        )
+    except StopIteration:
+        raise ConfigEntryNotFoundError(
+            f"Lock with entity ID {entity_id} not found."
+        ) from None

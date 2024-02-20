@@ -44,6 +44,15 @@ class BaseLock:
     config_entry: ConfigEntry = field(repr=False)
     lock_config_entry: ConfigEntry = field(repr=False)
     lock: er.RegistryEntry
+    device_entry: dr.DeviceEntry | None = field(default=None, init=False)
+
+    @final
+    @callback
+    def __post_init__(self) -> None:
+        """Post initialization."""
+        if not (device_id := self.lock.device_id):
+            return
+        self.device_entry = self.dev_reg.async_get(device_id)
 
     @final
     def __repr__(self) -> str:
@@ -56,18 +65,9 @@ class BaseLock:
         raise NotImplementedError()
 
     @property
-    def device_entry(self) -> dr.DeviceEntry | None:
-        """Return device registry entry for the lock."""
-        return None
-
-    @property
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=1)
-
-    def __post_init__(self) -> None:
-        """Post initialization."""
-        pass
 
     def setup(self) -> None:
         """Set up lock."""
@@ -159,7 +159,7 @@ class BaseLock:
             'B': '5678',
         }
         """
-        return self.hass.async_add_executor_job(self.get_usercodes)
+        return await self.hass.async_add_executor_job(self.get_usercodes)
 
     @final
     def call_service(

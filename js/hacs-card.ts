@@ -2,9 +2,20 @@ import { LitElement, TemplateResult, html } from 'lit';
 import { until } from 'lit-html/directives/until';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { getHacsRepositoryId } from './helpers';
 
-// hass.callWS({type: "hacs/repositories/list"})).filter((repo) => repo.full_name == "thomasloven/lovelace-fold-entity-row")
+async function downloadHacsRepository(hass: HomeAssistant, repository: string): Promise<void> {
+  await hass.callWS<void>({ repository, type: 'hacs/repository/download' });
+}
+
+async function getHacsRepositoryId(
+  hass: HomeAssistant,
+  repoName: string
+): Promise<string | undefined> {
+  const repo = await hass
+    .callWS<{ full_name: string; id: string }[]>({ type: 'hacs/repositories/list' })
+    .then((repos) => repos.find((_repo) => _repo.full_name === repoName));
+  return repo.id;
+}
 
 interface hacsCardConfig {
   repository_name: string;

@@ -9,7 +9,7 @@ from typing import Any, KeysView, final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE
-from homeassistant.core import CALLBACK_TYPE, State, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
@@ -18,8 +18,14 @@ from homeassistant.helpers.dispatcher import (
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import async_track_state_change
 
-from . import ATTR_ENTITIES_ADDED_TRACKER, ATTR_ENTITIES_REMOVED_TRACKER
-from .const import ATTR_CODE_SLOT, CONF_SLOTS, DOMAIN
+from .const import (
+    ATTR_CODE_SLOT,
+    ATTR_ENTITIES_ADDED_TRACKER,
+    ATTR_ENTITIES_REMOVED_TRACKER,
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+)
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,12 +39,15 @@ class BaseLockCodeManagerEntity(Entity):
     _attr_should_poll = False
 
     def __init__(
-        self, config_entry: ConfigEntry, locks: list[BaseLock], slot_num: int, key: str
+        self, hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int, key: str
     ) -> None:
         """Initialize base entity."""
+        self._hass = hass
         self.config_entry = config_entry
         self.entry_id = self.base_unique_id = config_entry.entry_id
-        self.locks = locks
+        self.locks: list[BaseLock] = list(
+            hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS].values()
+        )
         self.slot_num = slot_num
         self.key = key
         self.ent_reg: er.EntityRegistry | None = None
@@ -77,9 +86,7 @@ class BaseLockCodeManagerEntity(Entity):
         )
         data = copy.deepcopy(dict(self.config_entry.data))
         data[CONF_SLOTS][self.slot_num][self.key] = value
-        self.hass.config_entries.async_update_entry(
-            self.config_entry, data=data, options={}
-        )
+        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
         self.async_write_ha_state()
 
     async def _internal_async_remove(self) -> None:
@@ -96,7 +103,8 @@ class BaseLockCodeManagerEntity(Entity):
         )
         await self._async_remove()
         await self.async_remove(force_remove=True)
-        self.ent_reg.async_remove(self.entity_id)
+        if self.ent_reg.async_get(self.entity_id):
+            self.ent_reg.async_remove(self.entity_id)
 
         # Figure out whether we were waiting for ourself to be removed before
         # reporting it.
@@ -108,7 +116,7 @@ class BaseLockCodeManagerEntity(Entity):
             return
         slot_dict[self.key] = False
         if not any(slot_dict.values()):
-            tracker_dict.pop(slot_dict)
+            tracker_dict.pop(self.slot_num)
             async_dispatcher_send(
                 self.hass,
                 f"{DOMAIN}_{self.config_entry.entry_id}_remove_tracking_{self.slot_num}",
@@ -130,10 +138,9 @@ class BaseLockCodeManagerEntity(Entity):
 
         Can be overwritten by platforms.
         """
-        lock = next(
-            lock for lock in self.locks if lock.lock.entity_id == lock_entity_id
-        )
-        self.locks.remove(lock)
+        self.locks = [
+            lock for lock in self.locks if lock.lock.entity_id != lock_entity_id
+        ]
 
     @callback
     def _handle_add_locks(self, locks: list[BaseLock]) -> None:
@@ -207,6 +214,8 @@ class BaseLockCodeManagerEntity(Entity):
         if not self.ent_reg:
             self.ent_reg = er.async_get(self.hass)
 
+        self.dispatcher_connect()
+
         _LOGGER.debug(
             "%s (%s): Adding entity %s",
             self.config_entry.entry_id,
@@ -253,13 +262,14 @@ class BaseLockCodeManagerCodeSlotEntity(BaseLockCodeManagerEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         config_entry: ConfigEntry,
         lock: BaseLock,
         slot_num: int,
         key: str,
     ) -> None:
         """Initialize entity."""
-        BaseLockCodeManagerEntity.__init__(self, config_entry, [lock], slot_num, key)
+        BaseLockCodeManagerEntity.__init__(self, hass, config_entry, slot_num, key)
         self.lock = lock
         if lock.device_entry:
             self._attr_device_info = DeviceInfo(
@@ -268,7 +278,7 @@ class BaseLockCodeManagerCodeSlotEntity(BaseLockCodeManagerEntity):
             )
 
         self._attr_unique_id = (
-            f"{self.base_unique_id}|{slot_num}|{self.key}|{self.lock.lock.entity_id}"
+            f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
         )
 
     def _lock_available(self) -> bool:
@@ -283,11 +293,13 @@ class BaseLockCodeManagerCodeSlotEntity(BaseLockCodeManagerEntity):
         return self._lock_available()
 
     @callback
-    def _handle_remove_lock(self, entity_id: str) -> None:
+    def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity is being removed."""
-        if self.lock.lock.entity_id == entity_id:
-            self._internal_async_remove()
+        super()._handle_remove_lock(lock_entity_id)
+        if self.lock.lock.entity_id != lock_entity_id:
+            return
+        self._hass.async_create_task(self._internal_async_remove())
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
-        await super().async_added_to_hass()
+        await BaseLockCodeManagerEntity.async_added_to_hass(self)

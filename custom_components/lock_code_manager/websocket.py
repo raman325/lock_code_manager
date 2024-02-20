@@ -11,6 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import slugify
 
 from .const import CONF_CALENDAR, CONF_LOCKS, CONF_SLOTS, DOMAIN
 
@@ -40,7 +41,7 @@ def async_get_entry(
                 (
                     entry
                     for entry in hass.config_entries.async_entries(DOMAIN)
-                    if entry.title == config_entry_title
+                    if slugify(entry.title) == slugify(config_entry_title)
                 ),
                 None,
             )

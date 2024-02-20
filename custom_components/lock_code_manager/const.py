@@ -12,6 +12,12 @@ FILES_URL_BASE = f"/{DOMAIN}_files"
 STRATEGY_FILENAME = "lock-code-manager-strategy.js"
 STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
 
+SERVICE_HARD_REFRESH_USERCODES = "hard_refresh_usercodes"
+
+ATTR_SETUP_TASKS = "setup_tasks"
+ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
+ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
+
 ATTR_CODE_SLOT = "code_slot"
 ATTR_USERCODE = "usercode"
 ATTR_FROM = "from"

@@ -20,14 +20,12 @@ from .const import (
     ATTR_CODE,
     ATTR_PIN_SYNCED_TO_LOCKS,
     CONF_CALENDAR,
-    CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     DOMAIN,
     EVENT_PIN_USED,
     PLATFORM_MAP,
 )
 from .entity import BaseLockCodeManagerEntity
-from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,11 +40,8 @@ async def async_setup_entry(
     @callback
     def add_pin_enabled_entity(slot_num: int) -> None:
         """Add PIN enabled binary sensor entities for slot."""
-        locks: list[BaseLock] = list(
-            hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS].values()
-        )
         async_add_entities(
-            [LockCodeManagerPINSyncedEntity(config_entry, locks, slot_num)],
+            [LockCodeManagerPINSyncedEntity(hass, config_entry, slot_num)],
             True,
         )
 
@@ -66,13 +61,13 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
 
     def __init__(
         self,
+        hass: HomeAssistant,
         config_entry: ConfigEntry,
-        locks: list[BaseLock],
         slot_num: int,
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerEntity.__init__(
-            self, config_entry, locks, slot_num, ATTR_PIN_SYNCED_TO_LOCKS
+            self, hass, config_entry, slot_num, ATTR_PIN_SYNCED_TO_LOCKS
         )
         self._entity_id_map: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
@@ -178,6 +173,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     self.hass,
                     DOMAIN,
                     issue_id,
+                    is_fixable=False,
                     translation_key="no_state",
                     translation_placeholders={
                         "entity_id": entity_id,

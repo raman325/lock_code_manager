@@ -33,6 +33,14 @@ export interface LovelaceBaseViewConfig {
   visible?: boolean;
 }
 
+export interface LovelaceCardConfig {
+  [key: string]: unknown;
+  index?: number;
+  type: string;
+  view_index?: number;
+  view_layout?: unknown;
+}
+
 export interface LovelaceResource {
   id: string;
   type: 'css' | 'js' | 'module' | 'html';

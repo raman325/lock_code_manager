@@ -9,6 +9,7 @@ import {
 import {
   EntityRegistryEntry,
   HomeAssistant,
+  LovelaceCardConfig,
   LovelaceResource,
   LovelaceViewConfig
 } from './ha_type_stubs';
@@ -108,13 +109,6 @@ function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManag
   };
 }
 
-export async function downloadHacsRepository(
-  hass: HomeAssistant,
-  repository: string
-): Promise<void> {
-  await hass.callWS<void>({ repository, type: 'hacs/repository/download' });
-}
-
 function generateEntityCards(entities: string[]): { entity: string }[] {
   return entities.map((entityId) => {
     return {
@@ -127,7 +121,7 @@ function generateSlotCard(
   slotMapping: SlotMapping,
   useFoldEntityRow: boolean,
   include_code_slot_sensors: boolean
-): LovelaceViewConfig {
+): LovelaceCardConfig {
   return {
     cards: [
       {
@@ -165,16 +159,6 @@ function generateSlotCard(
     ],
     type: 'vertical-stack'
   };
-}
-
-export async function getHacsRepositoryId(
-  hass: HomeAssistant,
-  repoName: string
-): Promise<string | undefined> {
-  const repo = await hass
-    .callWS<{ full_name: string; id: string }[]>({ type: 'hacs/repositories/list' })
-    .then((repos) => repos.find((_repo) => _repo.full_name === repoName));
-  return repo.id;
 }
 
 function getSlotMapping(

@@ -44,7 +44,6 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import Event, callback
-from homeassistant.helpers import device_registry as dr
 
 from ..const import CONF_SLOTS, DOMAIN
 from ..exceptions import LockDisconnected
@@ -80,7 +79,7 @@ class ZWaveJSLock(BaseLock):
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
 
     @property
-    def _node(self) -> Node:
+    def node(self) -> Node:
         """Return ZWave JS node."""
         return async_get_node_from_entity_id(
             self.hass, self.lock.entity_id, self.ent_reg
@@ -91,11 +90,11 @@ class ZWaveJSLock(BaseLock):
         """Filter out events."""
         # Try to find the lock that we are getting an event for, skipping
         # ones that don't match
-        assert self._node.client.driver
+        assert self.node.client.driver
         return (
-            self._node
-            and evt.data[ATTR_HOME_ID] == self._node.client.driver.controller.home_id
-            and evt.data[ATTR_NODE_ID] == self._node.node_id
+            self.node
+            and evt.data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
+            and evt.data[ATTR_NODE_ID] == self.node.node_id
             and evt.data[ATTR_DEVICE_ID] == self.lock.device_id
         )
 
@@ -133,13 +132,6 @@ class ZWaveJSLock(BaseLock):
         """Return integration domain."""
         return ZWAVE_JS_DOMAIN
 
-    @property
-    def device_entry(self) -> dr.DeviceEntry | None:
-        """Return device info."""
-        device_id = self.lock.device_id
-        assert device_id
-        return self.dev_reg.async_get(device_id)
-
     async def async_setup(self) -> None:
         """Set up lock."""
         self._listeners.append(
@@ -175,7 +167,7 @@ class ZWaveJSLock(BaseLock):
         the lock.
         """
         for code_slot in self.config_entry.data[CONF_SLOTS]:
-            await get_usercode_from_node(self._node, code_slot)
+            await get_usercode_from_node(self.node, code_slot)
         return
 
     async def async_set_usercode(
@@ -216,13 +208,13 @@ class ZWaveJSLock(BaseLock):
             raise LockDisconnected
 
         try:
-            for slot in get_usercodes(self._node):
+            for slot in get_usercodes(self.node):
                 code_slot = int(slot[ATTR_CODE_SLOT])
                 usercode: str | None = slot[ATTR_USERCODE]
                 in_use: bool | None = slot[ATTR_IN_USE]
                 # Retrieve code slots that haven't been populated yet
                 if in_use is None and code_slot in code_slots:
-                    usercode_resp = await get_usercode_from_node(self._node, code_slot)
+                    usercode_resp = await get_usercode_from_node(self.node, code_slot)
                     usercode = slot[ATTR_USERCODE] = usercode_resp[ATTR_USERCODE]
                     in_use = slot[ATTR_IN_USE] = usercode_resp[ATTR_IN_USE]
 

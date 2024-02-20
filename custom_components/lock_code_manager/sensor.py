@@ -42,7 +42,7 @@ async def async_setup_entry(
         async_add_entities(
             [
                 LockCodeManagerCodeSlotSensorEntity(
-                    config_entry, lock, coordinator, slot_num
+                    hass, config_entry, lock, coordinator, slot_num
                 )
             ],
             True,
@@ -70,6 +70,7 @@ class LockCodeManagerCodeSlotSensorEntity(
 
     def __init__(
         self,
+        hass: HomeAssistant,
         config_entry: ConfigEntry,
         lock: BaseLock,
         coordinator: LockUsercodeUpdateCoordinator,
@@ -77,7 +78,7 @@ class LockCodeManagerCodeSlotSensorEntity(
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotEntity.__init__(
-            self, config_entry, lock, slot_num, ATTR_CODE
+            self, hass, config_entry, lock, slot_num, ATTR_CODE
         )
         CoordinatorEntity.__init__(self, coordinator)
 

@@ -11,9 +11,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from .const import CONF_SLOTS, DOMAIN
 from .entity import BaseLockCodeManagerEntity
-from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,16 +23,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup config entry."""
-    locks: list[BaseLock] = list(
-        hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS].values()
-    )
 
     @callback
     def add_standard_text_entities(slot_num: int) -> None:
         """Add standard text entities for slot."""
         async_add_entities(
             [
-                LockCodeManagerText(config_entry, locks, slot_num, *props)
+                LockCodeManagerText(hass, config_entry, slot_num, *props)
                 for props in ((CONF_NAME, TextMode.TEXT), (CONF_PIN, TextMode.PASSWORD))
             ],
             True,
@@ -56,14 +52,14 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         config_entry: ConfigEntry,
-        locks: list[BaseLock],
         slot_num: int,
         key: str,
         text_mode: TextMode,
     ) -> None:
         """Initalize Text entity."""
-        super().__init__(config_entry, locks, slot_num, key)
+        BaseLockCodeManagerEntity.__init__(self, hass, config_entry, slot_num, key)
         self._attr_mode = text_mode
 
     @property

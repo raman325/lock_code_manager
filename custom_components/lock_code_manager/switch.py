@@ -12,9 +12,8 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import ToggleEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from .const import CONF_SLOTS, DOMAIN
 from .entity import BaseLockCodeManagerEntity
-from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,15 +24,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Setup config entry."""
-    locks: list[BaseLock] = list(
-        hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS].values()
-    )
 
     @callback
     def add_switch_entities(slot_num: int) -> None:
         """Add switch entities for slot."""
         async_add_entities(
-            [LockCodeManagerSwitch(config_entry, locks, slot_num, CONF_ENABLED)], True
+            [LockCodeManagerSwitch(hass, config_entry, slot_num, CONF_ENABLED)], True
         )
 
     config_entry.async_on_unload(
