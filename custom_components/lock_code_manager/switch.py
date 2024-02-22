@@ -60,8 +60,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, ToggleEntity):
                 Platform.TEXT, DOMAIN, self._get_uid(CONF_PIN)
             )
         if (
-            self.key == CONF_ENABLED
-            and self._pin_entity_id
+            self._pin_entity_id
             and (state := self.hass.states.get(self._pin_entity_id))
             and state.state in (None, "", STATE_UNKNOWN)
         ):

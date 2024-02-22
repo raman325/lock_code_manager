@@ -1,3 +1,4 @@
+homeassistant
 zwave-js-server-python
 
 -r requirements_lint.txt
