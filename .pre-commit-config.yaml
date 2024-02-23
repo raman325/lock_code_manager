@@ -72,6 +72,7 @@ repos:
     rev: 8cd2d4056637e242709fe09f15a36f0b4b682bda # frozen: v1.8.0
     hooks:
       - id: mypy
+        files: ^(custom_components)/.+\.py$
 
   - repo: https://github.com/rhysd/actionlint
     rev: ea8102762106cdca9c88829f1295b39a544706f3 # frozen: v1.6.26
