@@ -10,7 +10,7 @@ from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, CONF_PIN, STATE_ON
 from homeassistant.core import HomeAssistant, State, callback
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -38,10 +38,10 @@ async def async_setup_entry(
     """Set up config entry."""
 
     @callback
-    def add_pin_enabled_entity(slot_num: int) -> None:
+    def add_pin_enabled_entity(slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Add PIN enabled binary sensor entities for slot."""
         async_add_entities(
-            [LockCodeManagerPINSyncedEntity(hass, config_entry, slot_num)],
+            [LockCodeManagerPINSyncedEntity(hass, ent_reg, config_entry, slot_num)],
             True,
         )
 
@@ -62,12 +62,13 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
     def __init__(
         self,
         hass: HomeAssistant,
+        ent_reg: er.EntityRegistry,
         config_entry: ConfigEntry,
         slot_num: int,
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerEntity.__init__(
-            self, hass, config_entry, slot_num, ATTR_PIN_SYNCED_TO_LOCKS
+            self, hass, ent_reg, config_entry, slot_num, ATTR_PIN_SYNCED_TO_LOCKS
         )
         self._entity_id_map: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
