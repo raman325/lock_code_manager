@@ -4,9 +4,9 @@ name: Pytest
 # yamllint disable-line rule:truthy
 on:
   push:
+    branches: [master]
   pull_request:
-  schedule:
-    - cron: "0 7 1-28/7 * *"
+    branches: [master]
 
 jobs:
   build:
@@ -26,10 +26,6 @@ jobs:
           sudo apt-get install libudev-dev
           python -m pip install --upgrade pip
           pip install -r requirements_dev.txt
-      - name: Run formatting
-        run: |
-          python -m isort -v --profile black .
-          python -m black -v .
       - name: Generate coverage report
         run: |
           python -m pytest
