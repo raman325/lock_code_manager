@@ -258,6 +258,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+        """Get options flow."""
         return LockCodeManagerOptionsFlow(config_entry)
 
 

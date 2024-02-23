@@ -168,7 +168,6 @@ class ZWaveJSLock(BaseLock):
         """
         for code_slot in self.config_entry.data[CONF_SLOTS]:
             await get_usercode_from_node(self.node, code_slot)
-        return
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None

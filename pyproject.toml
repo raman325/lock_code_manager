@@ -18,6 +18,8 @@ ignore = [
     "PLW2901", # Outer {outer_kind} variable {name} overwritten by inner {inner_kind} target
     "UP006",   # keep type annotation style as is
     "UP007",   # keep type annotation style as is
+    "I001",
+    "PLE1205",
 ]
 exclude = [
     ".venv",
@@ -32,7 +34,7 @@ exclude = [
 ]
 line-length = 88
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 force-sort-within-sections = true
 section-order = [
     "future",

@@ -23,18 +23,3 @@ repos:
     hooks:
       - id: pydocstyle
         files: ^(custom_components|tests)/.+\.py$
-  - repo: local
-    hooks:
-      - id: mypy
-        name: mypy
-        entry: scripts/run-in-env.sh mypy
-        language: script
-        types: [python]
-        require_serial: true
-        files: ^(custom_components)/.+\.py$
-      - id: pylint
-        name: pylint
-        entry: scripts/run-in-env.sh pylint -j 0
-        language: script
-        types: [python]
-        files: ^custom_components/.+\.py$

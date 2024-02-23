@@ -31,7 +31,7 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
-    """Setup config entry."""
+    """Set up config entry."""
 
     @callback
     def add_code_slot_entities(lock: BaseLock, slot_num: int) -> None:

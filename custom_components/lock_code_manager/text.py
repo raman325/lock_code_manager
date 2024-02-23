@@ -23,7 +23,7 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
-    """Setup config entry."""
+    """Set up config entry."""
 
     @callback
     def add_standard_text_entities(slot_num: int) -> None:
@@ -60,7 +60,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
         key: str,
         text_mode: TextMode,
     ) -> None:
-        """Initalize Text entity."""
+        """Initialize Text entity."""
         BaseLockCodeManagerEntity.__init__(self, hass, config_entry, slot_num, key)
         self._attr_mode = text_mode
 

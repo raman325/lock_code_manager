@@ -41,6 +41,7 @@ def aiohttp_client(event_loop, aiohttp_client, socket_enabled):
 
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
+    """Enable custom integrations."""
     yield
 
 
@@ -94,7 +95,7 @@ class MockLCMLock(BaseLock):
         self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot)
         self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
             "clear_usercode"
-        ].append((code_slot))
+        ].append((code_slot,))
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
