@@ -3,9 +3,9 @@ name: "Validation And Formatting"
 # yamllint disable-line rule:truthy
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   validate_hacs:
