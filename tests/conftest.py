@@ -185,9 +185,7 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
 
 @pytest.fixture(name="lock_code_manager_config_entry")
 async def lock_code_manager_config_entry_fixture(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-    mock_lock_config_entry,
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ):
     """Set up the config entry for lock code manager."""
     monkeypatch.setattr(

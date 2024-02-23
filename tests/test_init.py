@@ -4,6 +4,7 @@ import copy
 import logging
 
 from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
+from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CODE,
@@ -146,3 +147,18 @@ async def test_entry_setup_and_unload(
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 2
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 4
+
+
+async def test_reauth(hass: HomeAssistant, lock_code_manager_config_entry):
+    """Test reauth."""
+    assert (
+        len(
+            [
+                flow
+                for flow in lock_code_manager_config_entry.async_get_active_flows(
+                    hass, {SOURCE_REAUTH, SOURCE_USER}
+                )
+            ]
+        )
+        == 1
+    )
