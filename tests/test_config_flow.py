@@ -1,13 +1,12 @@
 """Config flow tests."""
 
 import copy
-import logging
 from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 
@@ -19,14 +18,19 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 
-from .common import BASE_CONFIG
+from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
 
-@pytest.fixture(name="bypass_entry_setup", autouse=True)
-def bypass_entry_setup_fixture():
+@pytest.fixture(name="bypass_entry_setup_and_unload", autouse=True)
+def bypass_entry_setup_and_unload_fixture():
     """Bypass config entry setup."""
-    with patch(
-        "custom_components.lock_code_manager.async_setup_entry", return_value=True
+    with (
+        patch(
+            "custom_components.lock_code_manager.async_setup_entry", return_value=True
+        ),
+        patch(
+            "custom_components.lock_code_manager.async_unload_entry", return_value=True
+        ),
     ):
         yield
 
@@ -42,7 +46,7 @@ async def _start_config_flow(hass: HomeAssistant):
     flow_id = result["flow_id"]
 
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: ["lock.test"]}
+        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
     )
 
     assert result["type"] == "menu"
@@ -106,7 +110,7 @@ async def test_config_flow_ui(hass: HomeAssistant):
     assert result["type"] == "create_entry"
     assert result["title"] == "test"
     assert result["data"] == {
-        CONF_LOCKS: ["lock.test"],
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
             1: {CONF_ENABLED: True, CONF_PIN: "1234"},
             2: {CONF_ENABLED: True, CONF_PIN: "5678"},
@@ -145,7 +149,7 @@ async def test_config_flow_yaml(hass: HomeAssistant):
     assert result["type"] == "create_entry"
     assert result["title"] == "test"
     assert result["data"] == {
-        CONF_LOCKS: ["lock.test"],
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
             1: {CONF_ENABLED: True, CONF_PIN: "1234"},
             2: {CONF_ENABLED: True, CONF_PIN: "5678"},
@@ -192,8 +196,46 @@ async def test_options_flow(hass: HomeAssistant):
         flow_id, user_input=new_config
     )
 
-    logging.getLogger(__name__).error(new_config)
-    logging.getLogger(__name__).error(result)
-
     assert result["type"] == "create_entry"
     assert result["data"] == new_config
+
+
+async def test_config_flow_reauth(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Test UI based config flow."""
+    lock_code_manager_config_entry.async_start_reauth(
+        hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
+    )
+    await hass.async_block_till_done()
+    flows = [
+        flow
+        for flow in lock_code_manager_config_entry.async_get_active_flows(
+            hass, {SOURCE_REAUTH}
+        )
+    ]
+    assert len(flows) == 1
+    [result] = flows
+
+    result["step_id"] == "reauth"
+    flow_id = result["flow_id"]
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+
+
+async def test_config_flow_slots_already_configured(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Test slots already configured error."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {2: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
+    )
+    assert result["errors"] == {"base": "slots_already_configured"}

@@ -43,6 +43,11 @@ LOCKS_FILTER_CONFIG = [
         if not module.ispkg and module.name not in ("_base", "const")
     ]
 ]
+LOCK_ENTITY_SELECTOR = sel.EntitySelector(
+    sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
+)
+SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
+
 
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
@@ -108,11 +113,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_NAME): cv.string,
-                    vol.Required(CONF_LOCKS): sel.EntitySelector(
-                        sel.EntitySelectorConfig(
-                            filter=LOCKS_FILTER_CONFIG, multiple=True
-                        )
-                    ),
+                    vol.Required(CONF_LOCKS): LOCK_ENTITY_SELECTOR,
                 }
             ),
             last_step=False,
@@ -203,11 +204,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="yaml",
             data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_SLOTS, default={}): sel.ObjectSelector(
-                        sel.ObjectSelectorConfig()
-                    )
-                }
+                {vol.Required(CONF_SLOTS, default={}): SLOTS_YAML_SELECTOR}
             ),
             errors=errors,
             description_placeholders=description_placeholders,
@@ -219,34 +216,41 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
-        if user_input:
-            assert config_entry
-            self.hass.config_entries.async_update_entry(
-                config_entry, data={**config_entry.data, **user_input}
-            )
-            self.hass.async_create_task(
-                self.hass.config_entries.async_reload(config_entry.entry_id),
-                f"Reload config entry {config_entry.entry_id}",
-            )
-            return self.async_abort(reason="locks_updated")
-
+        errors = {}
         description_placeholders = {
             **self.context["title_placeholders"],
             "lock": self.context["lock_entity_id"],
         }
+        if CONF_SLOTS not in user_input:
+            assert config_entry
+            additional_errors, additional_placeholders = _check_common_slots(
+                self.hass,
+                user_input[CONF_LOCKS],
+                config_entry.data[CONF_SLOTS].keys(),
+                config_entry,
+            )
+            errors.update(additional_errors)
+            description_placeholders.update(additional_placeholders)
+            if not errors:
+                self.hass.config_entries.async_update_entry(
+                    config_entry, data={**config_entry.data, **user_input}
+                )
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_reload(config_entry.entry_id),
+                    f"Reload config entry {config_entry.entry_id}",
+                )
+                return self.async_abort(reason="locks_updated")
+
         return self.async_show_form(
             step_id="reauth",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_LOCKS, default=config_entry.data[CONF_LOCKS]
-                    ): sel.EntitySelector(
-                        sel.EntitySelectorConfig(
-                            filter=LOCKS_FILTER_CONFIG, multiple=True
-                        )
-                    )
+                        CONF_LOCKS, default=user_input[CONF_LOCKS]
+                    ): LOCK_ENTITY_SELECTOR
                 }
             ),
+            errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
         )
@@ -302,14 +306,10 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 {
                     vol.Required(
                         CONF_LOCKS, default=_get_default(CONF_LOCKS)
-                    ): sel.EntitySelector(
-                        sel.EntitySelectorConfig(
-                            filter=LOCKS_FILTER_CONFIG, multiple=True
-                        )
-                    ),
+                    ): LOCK_ENTITY_SELECTOR,
                     vol.Required(
                         CONF_SLOTS, default=_get_default(CONF_SLOTS)
-                    ): sel.ObjectSelector(sel.ObjectSelectorConfig()),
+                    ): SLOTS_YAML_SELECTOR,
                 }
             ),
             errors=errors,
