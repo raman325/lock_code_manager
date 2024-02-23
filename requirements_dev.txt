@@ -1,4 +1,4 @@
-zwave-js-server-python
 
 -r requirements_lint.txt
 -r requirements_test.txt
+zwave-js-server-python
