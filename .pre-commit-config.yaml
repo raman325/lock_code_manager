@@ -41,6 +41,7 @@ repos:
     hooks:
       - id: prettier
         stages: [commit]
+        files: ^(js)/.+\.ts$
 
   - repo: https://github.com/adrienverge/yamllint.git
     rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6 # frozen: v1.35.1
