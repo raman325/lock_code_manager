@@ -93,7 +93,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.slots_to_configure: list[int] = []
 
     async def async_step_user(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle a flow initialized by the user."""
         if not self.ent_reg:
@@ -120,12 +120,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_choose_path(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Allow user to choose a path for configuration."""
         return self.async_show_menu(step_id="choose_path", menu_options=["ui", "yaml"])
 
-    async def async_step_ui(self, user_input: dict[str, Any] = None) -> dict[str, Any]:
+    async def async_step_ui(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Handle a UI oriented flow."""
         errors = {}
         description_placeholders = {}
@@ -157,7 +159,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_code_slot(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle code slots step."""
         errors = {}
@@ -180,10 +182,12 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             last_step=len(self.slots_to_configure) == 1,
         )
 
-    async def async_step_yaml(self, user_input: dict[str, Any] = None):
+    async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
         """Handle yaml flow step."""
         errors = {}
         description_placeholders = {}
+        if not user_input:
+            user_input = {}
         if user_input:
             try:
                 slots = CODE_SLOTS_SCHEMA(user_input[CONF_SLOTS])
@@ -204,14 +208,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="yaml",
             data_schema=vol.Schema(
-                {vol.Required(CONF_SLOTS, default={}): SLOTS_YAML_SELECTOR}
+                {vol.Required(CONF_SLOTS, default=user_input): SLOTS_YAML_SELECTOR}
             ),
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
         )
 
-    async def async_step_reauth(self, user_input: dict[str, Any] = None):
+    async def async_step_reauth(self, user_input: dict[str, Any]):
         """Handle import flow step."""
         config_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
@@ -221,6 +225,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             **self.context["title_placeholders"],
             "lock": self.context["lock_entity_id"],
         }
+        if not user_input:
+            user_input = {}
         if CONF_SLOTS not in user_input:
             assert config_entry
             additional_errors, additional_placeholders = _check_common_slots(
@@ -270,7 +276,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
         self.config_entry = config_entry
 
     async def async_step_init(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle a flow initialized by the user."""
         errors = {}
