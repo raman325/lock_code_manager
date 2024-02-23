@@ -1,0 +1,40 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.0.292
+    hooks:
+      - id: ruff
+        files: ^(scripts|tests|custom_components)/.+\.py$
+        args: [--fix, --exit-non-zero-on-fix]
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    rev: 24.1.1
+    hooks:
+      - id: black
+        args:
+          - --quiet
+        files: ^((custom_components|scripts|tests)/.+)?[^/]+\.py$
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: no-commit-to-branch
+        args:
+          - --branch=master
+  - repo: https://github.com/pycqa/pydocstyle
+    rev: 6.3.0
+    hooks:
+      - id: pydocstyle
+        files: ^(custom_components|tests)/.+\.py$
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: scripts/run-in-env.sh mypy
+        language: script
+        types: [python]
+        require_serial: true
+        files: ^(custom_components)/.+\.py$
+      - id: pylint
+        name: pylint
+        entry: scripts/run-in-env.sh pylint -j 0
+        language: script
+        types: [python]
+        files: ^custom_components/.+\.py$
