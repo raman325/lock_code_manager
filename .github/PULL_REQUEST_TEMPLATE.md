@@ -9,7 +9,7 @@
 
 
 ## Proposed change
-<!-- 
+<!--
   Describe the big picture of your changes here to communicate to the
   maintainers why we should accept this pull request. If it fixes a bug
   or resolves a feature request, be sure to link to that issue in the
@@ -20,7 +20,7 @@
 ## Type of change
 <!--
   What type of change does your PR introduce?
-  NOTE: Please, check only 1! box! 
+  NOTE: Please, check only 1! box!
   If your PR requires multiple boxes to be checked, you'll most likely need to
   split it into multiple PRs. This makes things easier and faster to code review.
 -->
@@ -38,4 +38,4 @@
 -->
 
 - This PR fixes or closes issue: fixes #
-- This PR is related to issue: 
+- This PR is related to issue:

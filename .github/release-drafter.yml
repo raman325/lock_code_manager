@@ -1,3 +1,4 @@
+---
 name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
 change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
@@ -25,6 +26,7 @@ categories:
   - title: ":mortar_board: Code Quality :mortar_board:"
     labels:
       - "code-quality"
+# yamllint disable rule:line-length
 template: |
   [![Downloads for this release](https://img.shields.io/github/downloads/raman325/lock_code_manager/v$RESOLVED_VERSION/total.svg)](https://github.com/raman325/lock_code_manager/releases/v$RESOLVED_VERSION)
 

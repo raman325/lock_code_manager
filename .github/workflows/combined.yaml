@@ -1,4 +1,6 @@
+---
 name: "Validation And Formatting"
+# yamllint disable-line rule:truthy
 on:
   push:
   pull_request:
@@ -21,4 +23,3 @@ jobs:
     steps:
       - uses: "actions/checkout@v4"
       - uses: home-assistant/actions/hassfest@master
-  
