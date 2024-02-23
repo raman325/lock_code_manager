@@ -7,11 +7,7 @@ import logging
 from typing import Callable, Iterable
 
 from zwave_js_server.client import Client
-from zwave_js_server.const.command_class.lock import (
-    ATTR_CODE_SLOT,
-    ATTR_IN_USE,
-    ATTR_USERCODE,
-)
+from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
@@ -92,8 +88,7 @@ class ZWaveJSLock(BaseLock):
         # ones that don't match
         assert self.node.client.driver
         return (
-            self.node
-            and evt.data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
+            evt.data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
             and evt.data[ATTR_NODE_ID] == self.node.node_id
             and evt.data[ATTR_DEVICE_ID] == self.lock.device_id
         )
@@ -208,14 +203,14 @@ class ZWaveJSLock(BaseLock):
 
         try:
             for slot in get_usercodes(self.node):
-                code_slot = int(slot[ATTR_CODE_SLOT])
-                usercode: str = slot[ATTR_USERCODE] or ""
-                in_use: bool | None = slot[ATTR_IN_USE]
+                code_slot = int(slot["code_slot"])
+                usercode: str = slot["usercode"] or ""
+                in_use: bool | None = slot["in_use"]
                 # Retrieve code slots that haven't been populated yet
                 if in_use is None and code_slot in code_slots:
                     usercode_resp = await get_usercode_from_node(self.node, code_slot)
-                    usercode = slot[ATTR_USERCODE] = usercode_resp[ATTR_USERCODE] or ""
-                    in_use = slot[ATTR_IN_USE] = usercode_resp[ATTR_IN_USE]
+                    usercode = slot["usercode"] = usercode_resp["usercode"] or ""
+                    in_use = slot["in_use"] = usercode_resp["in_use"]
 
                 if not in_use:
                     if code_slot in code_slots:
