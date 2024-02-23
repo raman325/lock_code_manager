@@ -1,5 +1,7 @@
+---
 name: Release
 
+# yamllint disable-line rule:truthy
 on:
   release:
     types: [published]
@@ -13,12 +15,14 @@ jobs:
         uses: actions/checkout@v4
       - name: Get Version
         id: get_version
-        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_ENV"
       - name: Update versions
+        # yamllint disable rule:line-length
         run: |
           sed -i 's/VERSION = "0.0.0"/VERSION = "${{ steps.get_version.outputs.VERSION }}"/g' ${{ github.workspace }}/custom_components/lock_code_manager/const.py
           sed -i 's/"version": "0.0.0"/"version": "${{ steps.get_version.outputs.VERSION }}"/g' ${{ github.workspace }}/custom_components/lock_code_manager/manifest.json
           sed -i 's/"version": "0.0.0"/"version": "${{ steps.get_version.outputs.VERSION }}"/g' ${{ github.workspace }}/package.json
+        # yamllint enable rule:line-length
       # Pack the lock_code_manager dir as a zip and upload to the release
       - name: ZIP Keymaster Dir
         run: |
