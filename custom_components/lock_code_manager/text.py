@@ -7,7 +7,7 @@ import logging
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, CONF_PIN, CONF_ENABLED, Platform
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback

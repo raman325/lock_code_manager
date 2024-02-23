@@ -10,6 +10,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
@@ -30,7 +31,7 @@ from .const import (
     DEFAULT_START,
     DOMAIN,
 )
-from .helpers import CODE_SLOT_SCHEMA, CODE_SLOTS_SCHEMA
+from .helpers import CODE_SLOT_SCHEMA, CODE_SLOTS_SCHEMA, UI_CODE_SLOT_SCHEMA
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,29 +48,29 @@ POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 
 def _check_common_slots(
-    hass: HomeAssistant, locks: Iterable[str], slots_list: Iterable[int | str]
+    hass: HomeAssistant,
+    locks: Iterable[str],
+    slots_list: Iterable[int | str],
+    config_entry: ConfigEntry | None = None,
 ) -> tuple[dict, dict]:
     """Check if slots are already configured."""
-    if my_tuple := next(
-        (
+    try:
+        lock, common_slots, entry_title = next(
             (lock, common_slots, entry.title)
             for lock in locks
             for entry in hass.config_entries.async_entries(DOMAIN)
             if lock in entry.data[CONF_LOCKS]
             and (common_slots := sorted(set(entry.data[CONF_SLOTS]) & set(slots_list)))
-        ),
-        None,
-    ):
-        lock: str = my_tuple[0]
-        common_slots: list[int, str] = my_tuple[1]
-        entry_title: str = my_tuple[2]
+            and not (config_entry and config_entry == entry)
+        )
+    except StopIteration:
+        return {}, {}
+    else:
         return {"base": "slots_already_configured"}, {
             "common_slots": ", ".join(str(slot) for slot in common_slots),
             "lock": lock,
             "entry_title": entry_title,
         }
-
-    return {}, {}
 
 
 class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -172,7 +173,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="code_slot",
-            data_schema=CODE_SLOT_SCHEMA,
+            data_schema=UI_CODE_SLOT_SCHEMA,
             errors=errors,
             description_placeholders={"slot_num": self.slots_to_configure[0]},
             last_step=len(self.slots_to_configure) == 1,
@@ -215,10 +216,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reauth(self, user_input: dict[str, Any] = None):
         """Handle import flow step."""
+        config_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
         if user_input:
-            config_entry = self.hass.config_entries.async_get_entry(
-                self.context["entry_id"]
-            )
             assert config_entry
             self.hass.config_entries.async_update_entry(
                 config_entry, data={**config_entry.data, **user_input}
@@ -237,7 +238,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reauth",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_LOCKS): sel.EntitySelector(
+                    vol.Required(
+                        CONF_LOCKS, default=config_entry.data[CONF_LOCKS]
+                    ): sel.EntitySelector(
                         sel.EntitySelectorConfig(
                             filter=LOCKS_FILTER_CONFIG, multiple=True
                         )
@@ -278,7 +281,10 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = "invalid_config"
             else:
                 additional_errors, additional_placeholders = _check_common_slots(
-                    self.hass, user_input[CONF_LOCKS], user_input[CONF_SLOTS]
+                    self.hass,
+                    user_input[CONF_LOCKS],
+                    user_input[CONF_SLOTS],
+                    self.config_entry,
                 )
                 errors.update(additional_errors)
                 description_placeholders.update(additional_placeholders)
@@ -286,30 +292,23 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 if not errors:
                     return self.async_create_entry(title="", data=user_input)
 
-        def _get_default(key: str, default: Any) -> Any:
+        def _get_default(key: str) -> Any:
             """Get default value."""
-            return user_input.get(key, default)
+            return user_input.get(key, self.config_entry.data[key])
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_LOCKS,
-                        default=_get_default(
-                            CONF_LOCKS,
-                            self.config_entry.data[CONF_LOCKS],
-                        ),
+                        CONF_LOCKS, default=_get_default(CONF_LOCKS)
                     ): sel.EntitySelector(
                         sel.EntitySelectorConfig(
                             filter=LOCKS_FILTER_CONFIG, multiple=True
                         )
                     ),
                     vol.Required(
-                        CONF_SLOTS,
-                        default=_get_default(
-                            CONF_SLOTS, self.config_entry.data[CONF_SLOTS]
-                        ),
+                        CONF_SLOTS, default=_get_default(CONF_SLOTS)
                     ): sel.ObjectSelector(sel.ObjectSelectorConfig()),
                 }
             ),

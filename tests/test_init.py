@@ -3,16 +3,6 @@
 import copy
 import logging
 
-from custom_components.lock_code_manager.const import (
-    ATTR_PIN_SYNCED_TO_LOCKS,
-    CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
-    CONF_SLOTS,
-    DOMAIN,
-    EVENT_PIN_USED,
-    SERVICE_HARD_REFRESH_USERCODES,
-    STRATEGY_PATH,
-)
 from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -24,6 +14,17 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+
+from custom_components.lock_code_manager.const import (
+    ATTR_PIN_SYNCED_TO_LOCKS,
+    CONF_LOCKS,
+    CONF_NUMBER_OF_USES,
+    CONF_SLOTS,
+    DOMAIN,
+    EVENT_PIN_USED,
+    SERVICE_HARD_REFRESH_USERCODES,
+    STRATEGY_PATH,
+)
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, LOCK_DATA
 
@@ -82,9 +83,9 @@ async def test_entry_setup_and_unload(
     ]
 
     new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS]["1"][CONF_NUMBER_OF_USES] = 5
-    new_config[CONF_SLOTS]["2"].pop(CONF_NUMBER_OF_USES)
-    new_config[CONF_SLOTS]["3"] = {
+    new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
+    new_config[CONF_SLOTS][2].pop(CONF_NUMBER_OF_USES)
+    new_config[CONF_SLOTS][3] = {
         CONF_NAME: "test3",
         CONF_CODE: "4321",
         CONF_ENABLED: True,
@@ -117,7 +118,7 @@ async def test_entry_setup_and_unload(
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 6
 
     new_config = copy.deepcopy(new_config)
-    new_config[CONF_SLOTS].pop("3")
+    new_config[CONF_SLOTS].pop(3)
     new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
 
     assert hass.config_entries.async_update_entry(
@@ -145,9 +146,3 @@ async def test_entry_setup_and_unload(
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 2
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 4
-
-    # remove lock
-    # remove slot
-    # add slot
-    # update slot configuration (remove number of uses)
-    # update slot configuration (add number of uses)

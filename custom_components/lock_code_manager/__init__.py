@@ -55,7 +55,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     resources: ResourceStorageCollection
-    if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
+    if resources := hass.data.get(LOVELACE_DOMAIN, {}).get("resources"):
         # Load resources if needed
         if not resources.loaded:
             await resources.async_load()
@@ -112,14 +112,16 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     """Set up is called when Home Assistant is loading our component."""
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
-    if entity_id := next(
-        (
+    try:
+        entity_id = next(
             entity_id
             for entity_id in config_entry.data.get(CONF_LOCKS, [])
             if not ent_reg.async_get(entity_id)
-        ),
-        None,
-    ):
+        )
+    except StopIteration:
+        pass
+    else:
+        config_entry.async_start_reauth(hass, context={"lock_entity_id": entity_id})
         raise ConfigEntryError(
             f"Unable to start because lock {entity_id} can't be found"
         )

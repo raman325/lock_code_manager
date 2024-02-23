@@ -28,7 +28,7 @@ from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 _LOGGER = logging.getLogger(__name__)
 
 
-CODE_SLOT_SCHEMA = vol.Schema(
+UI_CODE_SLOT_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_NAME): cv.string,
         vol.Optional(CONF_PIN): cv.string,
@@ -42,10 +42,14 @@ CODE_SLOT_SCHEMA = vol.Schema(
     }
 )
 
+CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA.extend(
+    {vol.Optional(CONF_NUMBER_OF_USES): vol.Coerce(int)}
+)
+
 
 def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
     """Validate that if enabled is True, pin is set."""
-    if data.get(CONF_ENABLED) and not data.get(CONF_PIN):
+    if any(val.get(CONF_ENABLED) and not val.get(CONF_PIN) for val in data.values()):
         raise vol.Invalid("PIN must be set if enabled is True")
     return data
 
