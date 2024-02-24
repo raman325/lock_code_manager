@@ -7,6 +7,13 @@ from collections.abc import Generator
 from dataclasses import dataclass
 
 import pytest
+from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
+from homeassistant.components.lock import LockEntity
+from homeassistant.config_entries import ConfigEntry, ConfigFlow
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.setup import async_setup_component
+from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     MockModule,
@@ -15,13 +22,6 @@ from pytest_homeassistant_custom_component.common import (
     mock_integration,
     mock_platform,
 )
-
-from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockEntity
-from homeassistant.config_entries import ConfigEntry, ConfigFlow
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.setup import async_setup_component
-from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.providers import BaseLock
@@ -197,5 +197,6 @@ async def lock_code_manager_config_entry_fixture(
     entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
     await hass.async_block_till_done()
     yield entry

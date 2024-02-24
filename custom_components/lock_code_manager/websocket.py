@@ -6,7 +6,6 @@ from functools import wraps
 from typing import Any, Callable, Coroutine
 
 import voluptuous as vol
-
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -81,7 +80,7 @@ def async_get_entry(
 
 async def async_setup(hass: HomeAssistant) -> bool:
     """Enable the websocket_commands."""
-    websocket_api.async_register_command(hass, get_config_entry_data)
+    websocket_api.async_register_command(hass, get_slot_calendar_data)
     websocket_api.async_register_command(hass, get_config_entry_entities)
     websocket_api.async_register_command(hass, get_config_entries_to_entities)
 
@@ -90,14 +89,14 @@ async def async_setup(hass: HomeAssistant) -> bool:
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/get_config_entry_data",
+        vol.Required("type"): "lock_code_manager/get_slot_calendar_data",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
     }
 )
 @websocket_api.async_response
 @async_get_entry
-async def get_config_entry_data(
+async def get_slot_calendar_data(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],

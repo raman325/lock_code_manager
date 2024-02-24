@@ -20,7 +20,6 @@ module.exports = {
     ],
     rules: {
         camelcase: "off",
-        "quotes": "off",
         "class-methods-use-this": "off",
         "no-undefined": "off",
         "@typescript-eslint/camelcase": "off",

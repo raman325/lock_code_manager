@@ -2,18 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import logging
+from dataclasses import dataclass, field
 from typing import Callable, Iterable
-
-from zwave_js_server.client import Client
-from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
-from zwave_js_server.const.command_class.notification import (
-    AccessControlNotificationEvent,
-    NotificationType,
-)
-from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode_from_node, get_usercodes
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -25,7 +16,9 @@ from homeassistant.components.zwave_js.const import (
     ATTR_PARAMETERS,
     ATTR_TYPE,
     DATA_CLIENT,
-    DOMAIN as ZWAVE_JS_DOMAIN,
+)
+from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
+from homeassistant.components.zwave_js.const import (
     SERVICE_CLEAR_LOCK_USERCODE,
     SERVICE_SET_LOCK_USERCODE,
     ZWAVE_JS_NOTIFICATION_EVENT,
@@ -40,6 +33,14 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import Event, callback
+from zwave_js_server.client import Client
+from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
+from zwave_js_server.const.command_class.notification import (
+    AccessControlNotificationEvent,
+    NotificationType,
+)
+from zwave_js_server.model.node import Node
+from zwave_js_server.util.lock import get_usercode_from_node, get_usercodes
 
 from ..const import CONF_SLOTS, DOMAIN
 from ..exceptions import LockDisconnected
