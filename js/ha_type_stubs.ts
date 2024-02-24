@@ -1,8 +1,4 @@
-import {
-    HassConfig,
-    HassEntities,
-    MessageBase,
-} from "home-assistant-js-websocket";
+import { HassConfig, HassEntities, MessageBase } from 'home-assistant-js-websocket';
 
 export interface ConfigEntry {
     entry_id: string;
@@ -47,7 +43,7 @@ export interface LovelaceCardConfig {
 
 export interface LovelaceResource {
     id: string;
-    type: "css" | "js" | "module" | "html";
+    type: 'css' | 'js' | 'module' | 'html';
     url: string;
 }
 

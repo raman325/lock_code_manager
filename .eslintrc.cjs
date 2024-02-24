@@ -8,7 +8,7 @@ module.exports = {
     env: {
         node: true,
     },
-    plugins: ["@typescript-eslint", "prettier", "import"],
+    plugins: ["@typescript-eslint", "prettier", "import", "@stylistic/eslint-plugin-js"],
     extends: [
         "eslint:recommended",
         "plugin:@typescript-eslint/recommended",
@@ -16,9 +16,11 @@ module.exports = {
         "plugin:import/recommended",
         "plugin:import/typescript",
         "rollup",
+        "prettier",
     ],
     rules: {
         camelcase: "off",
+        "quotes": "off",
         "class-methods-use-this": "off",
         "no-undefined": "off",
         "@typescript-eslint/camelcase": "off",
