@@ -8,6 +8,7 @@ from homeassistant.components.event import EventEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNLOCKED
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -29,15 +30,17 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
-    """Setup config entry."""
+    """Set up config entry."""
 
     @callback
-    def add_code_slot_entities(lock: BaseLock, slot_num: int) -> None:
+    def add_code_slot_entities(
+        lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
+    ) -> None:
         """Add code slot event entities for slot."""
         async_add_entities(
             [
                 LockCodeManagerCodeSlotEventEntity(
-                    hass, config_entry, lock, slot_num, EVENT_PIN_USED
+                    hass, ent_reg, config_entry, lock, slot_num, EVENT_PIN_USED
                 )
             ],
             True,
@@ -66,6 +69,7 @@ class LockCodeManagerCodeSlotEventEntity(
     def __init__(
         self,
         hass: HomeAssistant,
+        ent_reg: er.EntityRegistry,
         config_entry: ConfigEntry,
         lock: BaseLock,
         slot_num: int,
@@ -73,7 +77,7 @@ class LockCodeManagerCodeSlotEventEntity(
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotEntity.__init__(
-            self, hass, config_entry, lock, slot_num, key
+            self, hass, ent_reg, config_entry, lock, slot_num, key
         )
         self._attr_name = f"Code slot {slot_num}"
 

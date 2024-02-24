@@ -18,6 +18,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock) -> None:
+        """Initialize the usercode update coordinator."""
         self._lock = lock
         super().__init__(
             hass,
@@ -29,7 +30,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         self.data: dict[int, int | str] = {}
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
-        """Wrapper to update usercodes."""
+        """Update usercodes."""
         try:
             return await self._lock.async_get_usercodes()
         except LockDisconnected as err:

@@ -11,13 +11,13 @@ A clear and concise description of what the bug is.
 
 **Environment (please complete the following information):**
 
-- OS: [e.g. HassOS/Raspbian/CentOS]
-- Type of system that HA is running on: [e.g. RPi3/NUC/Synology]
-- Home Assistant version: [e.g. 0.105.5]
-- Hassio/Docker/Core?
-- Component version: [e.g. 0.1.2]
-- Lock integration name: [e.g. zwave_js]
-- Lock make and model: [e.g. Schlage BE469]
+-   OS: [e.g. HassOS/Raspbian/CentOS]
+-   Type of system that HA is running on: [e.g. RPi3/NUC/Synology]
+-   Home Assistant version: [e.g. 0.105.5]
+-   Hassio/Docker/Core?
+-   Component version: [e.g. 0.1.2]
+-   Lock integration name: [e.g. zwave_js]
+-   Lock make and model: [e.g. Schlage BE469]
 
 **Logs**
 Paste your error logs here.

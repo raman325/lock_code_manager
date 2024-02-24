@@ -10,6 +10,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
@@ -30,7 +31,7 @@ from .const import (
     DEFAULT_START,
     DOMAIN,
 )
-from .helpers import CODE_SLOT_SCHEMA, CODE_SLOTS_SCHEMA
+from .helpers import CODE_SLOT_SCHEMA, CODE_SLOTS_SCHEMA, UI_CODE_SLOT_SCHEMA
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,34 +43,39 @@ LOCKS_FILTER_CONFIG = [
         if not module.ispkg and module.name not in ("_base", "const")
     ]
 ]
+LOCK_ENTITY_SELECTOR = sel.EntitySelector(
+    sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
+)
+SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
+
 
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
 
 def _check_common_slots(
-    hass: HomeAssistant, locks: Iterable[str], slots_list: Iterable[int | str]
+    hass: HomeAssistant,
+    locks: Iterable[str],
+    slots_list: Iterable[int | str],
+    config_entry: ConfigEntry | None = None,
 ) -> tuple[dict, dict]:
     """Check if slots are already configured."""
-    if my_tuple := next(
-        (
+    try:
+        lock, common_slots, entry_title = next(
             (lock, common_slots, entry.title)
             for lock in locks
             for entry in hass.config_entries.async_entries(DOMAIN)
             if lock in entry.data[CONF_LOCKS]
             and (common_slots := sorted(set(entry.data[CONF_SLOTS]) & set(slots_list)))
-        ),
-        None,
-    ):
-        lock: str = my_tuple[0]
-        common_slots: list[int, str] = my_tuple[1]
-        entry_title: str = my_tuple[2]
+            and not (config_entry and config_entry == entry)
+        )
+    except StopIteration:
+        return {}, {}
+    else:
         return {"base": "slots_already_configured"}, {
             "common_slots": ", ".join(str(slot) for slot in common_slots),
             "lock": lock,
             "entry_title": entry_title,
         }
-
-    return {}, {}
 
 
 class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -87,7 +93,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.slots_to_configure: list[int] = []
 
     async def async_step_user(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle a flow initialized by the user."""
         if not self.ent_reg:
@@ -107,23 +113,21 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_NAME): cv.string,
-                    vol.Required(CONF_LOCKS): sel.EntitySelector(
-                        sel.EntitySelectorConfig(
-                            filter=LOCKS_FILTER_CONFIG, multiple=True
-                        )
-                    ),
+                    vol.Required(CONF_LOCKS): LOCK_ENTITY_SELECTOR,
                 }
             ),
             last_step=False,
         )
 
     async def async_step_choose_path(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Allow user to choose a path for configuration."""
         return self.async_show_menu(step_id="choose_path", menu_options=["ui", "yaml"])
 
-    async def async_step_ui(self, user_input: dict[str, Any] = None) -> dict[str, Any]:
+    async def async_step_ui(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Handle a UI oriented flow."""
         errors = {}
         description_placeholders = {}
@@ -155,7 +159,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_code_slot(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle code slots step."""
         errors = {}
@@ -172,16 +176,18 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="code_slot",
-            data_schema=CODE_SLOT_SCHEMA,
+            data_schema=UI_CODE_SLOT_SCHEMA,
             errors=errors,
             description_placeholders={"slot_num": self.slots_to_configure[0]},
             last_step=len(self.slots_to_configure) == 1,
         )
 
-    async def async_step_yaml(self, user_input: dict[str, Any] = None):
+    async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
         """Handle yaml flow step."""
         errors = {}
         description_placeholders = {}
+        if not user_input:
+            user_input = {}
         if user_input:
             try:
                 slots = CODE_SLOTS_SCHEMA(user_input[CONF_SLOTS])
@@ -202,10 +208,52 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="yaml",
             data_schema=vol.Schema(
+                {vol.Required(CONF_SLOTS, default=user_input): SLOTS_YAML_SELECTOR}
+            ),
+            errors=errors,
+            description_placeholders=description_placeholders,
+            last_step=True,
+        )
+
+    async def async_step_reauth(self, user_input: dict[str, Any]):
+        """Handle import flow step."""
+        config_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        errors = {}
+        description_placeholders = {
+            **self.context["title_placeholders"],
+            "lock": self.context["lock_entity_id"],
+        }
+        if not user_input:
+            user_input = {}
+        if CONF_SLOTS not in user_input:
+            assert config_entry
+            additional_errors, additional_placeholders = _check_common_slots(
+                self.hass,
+                user_input[CONF_LOCKS],
+                config_entry.data[CONF_SLOTS].keys(),
+                config_entry,
+            )
+            errors.update(additional_errors)
+            description_placeholders.update(additional_placeholders)
+            if not errors:
+                self.hass.config_entries.async_update_entry(
+                    config_entry, data={**config_entry.data, **user_input}
+                )
+                self.hass.async_create_task(
+                    self.hass.config_entries.async_reload(config_entry.entry_id),
+                    f"Reload config entry {config_entry.entry_id}",
+                )
+                return self.async_abort(reason="locks_updated")
+
+        return self.async_show_form(
+            step_id="reauth",
+            data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_SLOTS, default={}): sel.ObjectSelector(
-                        sel.ObjectSelectorConfig()
-                    )
+                    vol.Required(
+                        CONF_LOCKS, default=user_input[CONF_LOCKS]
+                    ): LOCK_ENTITY_SELECTOR
                 }
             ),
             errors=errors,
@@ -213,44 +261,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             last_step=True,
         )
 
-    async def async_step_reauth(self, user_input: dict[str, Any] = None):
-        """Handle import flow step."""
-        if user_input:
-            config_entry = self.hass.config_entries.async_get_entry(
-                self.context["entry_id"]
-            )
-            assert config_entry
-            self.hass.config_entries.async_update_entry(
-                config_entry, data={**config_entry.data, **user_input}
-            )
-            self.hass.async_create_task(
-                self.hass.config_entries.async_reload(config_entry.entry_id),
-                f"Reload config entry {config_entry.entry_id}",
-            )
-            return self.async_abort(reason="locks_updated")
-
-        description_placeholders = {
-            **self.context["title_placeholders"],
-            "lock": self.context["lock_entity_id"],
-        }
-        return self.async_show_form(
-            step_id="reauth",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_LOCKS): sel.EntitySelector(
-                        sel.EntitySelectorConfig(
-                            filter=LOCKS_FILTER_CONFIG, multiple=True
-                        )
-                    )
-                }
-            ),
-            description_placeholders=description_placeholders,
-            last_step=True,
-        )
-
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+        """Get options flow."""
         return LockCodeManagerOptionsFlow(config_entry)
 
 
@@ -262,7 +276,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
         self.config_entry = config_entry
 
     async def async_step_init(
-        self, user_input: dict[str, Any] = None
+        self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle a flow initialized by the user."""
         errors = {}
@@ -278,7 +292,10 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = "invalid_config"
             else:
                 additional_errors, additional_placeholders = _check_common_slots(
-                    self.hass, user_input[CONF_LOCKS], user_input[CONF_SLOTS]
+                    self.hass,
+                    user_input[CONF_LOCKS],
+                    user_input[CONF_SLOTS],
+                    self.config_entry,
                 )
                 errors.update(additional_errors)
                 description_placeholders.update(additional_placeholders)
@@ -286,31 +303,20 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 if not errors:
                     return self.async_create_entry(title="", data=user_input)
 
-        def _get_default(key: str, default: Any) -> Any:
+        def _get_default(key: str) -> Any:
             """Get default value."""
-            return user_input.get(key, default)
+            return user_input.get(key, self.config_entry.data[key])
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_LOCKS,
-                        default=_get_default(
-                            CONF_LOCKS,
-                            self.config_entry.data[CONF_LOCKS],
-                        ),
-                    ): sel.EntitySelector(
-                        sel.EntitySelectorConfig(
-                            filter=LOCKS_FILTER_CONFIG, multiple=True
-                        )
-                    ),
+                        CONF_LOCKS, default=_get_default(CONF_LOCKS)
+                    ): LOCK_ENTITY_SELECTOR,
                     vol.Required(
-                        CONF_SLOTS,
-                        default=_get_default(
-                            CONF_SLOTS, self.config_entry.data[CONF_SLOTS]
-                        ),
-                    ): sel.ObjectSelector(sel.ObjectSelectorConfig()),
+                        CONF_SLOTS, default=_get_default(CONF_SLOTS)
+                    ): SLOTS_YAML_SELECTOR,
                 }
             ),
             errors=errors,

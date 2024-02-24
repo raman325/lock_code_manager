@@ -1,7 +1,20 @@
 ---
 repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.0.292
+    hooks:
+      - id: ruff
+        files: ^(scripts|tests|custom_components)/.+\.py$
+        args: [--fix, --exit-non-zero-on-fix]
+
+  - repo: https://github.com/pycqa/pydocstyle
+    rev: 6.3.0
+    hooks:
+      - id: pydocstyle
+        files: ^(custom_components|tests)/.+\.py$
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: c4a0b883114b00d8d76b479c820ce7950211c99b  # frozen: v4.5.0
+    rev: c4a0b883114b00d8d76b479c820ce7950211c99b # frozen: v4.5.0
     hooks:
       - id: trailing-whitespace
       - id: check-added-large-files
@@ -14,7 +27,7 @@ repos:
       - id: end-of-file-fixer
       - id: requirements-txt-fixer
       - id: mixed-line-ending
-        args: ['--fix=lf']
+        args: ["--fix=lf"]
       - id: no-commit-to-branch
         args:
           - --branch=dev
@@ -23,44 +36,45 @@ repos:
           - --branch=rc
           - --branch=production
 
-  ## Ensure all code is as pretty as possible
-  # - repo: https://github.com/pre-commit/mirrors-prettier
-  #   rev: f12edd9c7be1c20cfa42420fd0e6df71e42b51ea  # frozen: v4.0.0-alpha.8
-  #   hooks:
-  #     - id: prettier
-  #       stages: [commit]
+  # Ensure all code is as pretty as possible
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        stages: [commit]
+        files: ^(js)/.+\.ts$
+        additional_dependencies:
+          - 'prettier@4.0.0-alpha.8'
+          - 'prettier-plugin-package@1.4.0'
+          - 'eslint-plugin-prettier@5.1.3'
 
   - repo: https://github.com/adrienverge/yamllint.git
-    rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6  # frozen: v1.35.1
+    rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6 # frozen: v1.35.1
     hooks:
       - id: yamllint
         types: [yaml]
 
-  - repo: https://github.com/PyCQA/isort
-    rev: c235f5e450b4b84e58d114ed4c589cbf454175a3  # frozen: 5.13.2
-    hooks:
-      - id: isort
-
   - repo: https://github.com/psf/black
-    rev: 6fdf8a4af28071ed1d079c01122b34c5d587207a  # frozen: 24.2.0
+    rev: 6fdf8a4af28071ed1d079c01122b34c5d587207a # frozen: 24.2.0
     hooks:
       - id: black
         language_version: python3
 
   - repo: https://github.com/PyCQA/flake8
-    rev: 7d37d9032d0d161634be4554273c30efd4dea0b3  # frozen: 7.0.0
+    rev: 7d37d9032d0d161634be4554273c30efd4dea0b3 # frozen: 7.0.0
     hooks:
       - id: flake8
         args: ["--max-line-length=120"]
         additional_dependencies: [Flake8-pyproject]
 
-  ## Ensure all code is as secure as possible and follows best practices
-  # - repo: https://github.com/pre-commit/mirrors-mypy
-  #   rev: 8cd2d4056637e242709fe09f15a36f0b4b682bda  # frozen: v1.8.0
-  #   hooks:
-  #     - id: mypy
+  # Ensure all code is as secure as possible and follows best practices
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: 8cd2d4056637e242709fe09f15a36f0b4b682bda # frozen: v1.8.0
+    hooks:
+      - id: mypy
+        files: ^(custom_components)/.+\.py$
 
   - repo: https://github.com/rhysd/actionlint
-    rev: ea8102762106cdca9c88829f1295b39a544706f3  # frozen: v1.6.26
+    rev: ea8102762106cdca9c88829f1295b39a544706f3 # frozen: v1.6.26
     hooks:
       - id: actionlint

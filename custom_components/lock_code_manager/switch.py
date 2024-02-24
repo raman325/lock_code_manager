@@ -8,6 +8,7 @@ from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_PIN, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import ToggleEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -23,13 +24,18 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
-    """Setup config entry."""
+    """Set up config entry."""
 
     @callback
-    def add_switch_entities(slot_num: int) -> None:
+    def add_switch_entities(slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Add switch entities for slot."""
         async_add_entities(
-            [LockCodeManagerSwitch(hass, config_entry, slot_num, CONF_ENABLED)], True
+            [
+                LockCodeManagerSwitch(
+                    hass, ent_reg, config_entry, slot_num, CONF_ENABLED
+                )
+            ],
+            True,
         )
 
     config_entry.async_on_unload(
@@ -60,8 +66,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, ToggleEntity):
                 Platform.TEXT, DOMAIN, self._get_uid(CONF_PIN)
             )
         if (
-            self.key == CONF_ENABLED
-            and self._pin_entity_id
+            self._pin_entity_id
             and (state := self.hass.states.get(self._pin_entity_id))
             and state.state in (None, "", STATE_UNKNOWN)
         ):

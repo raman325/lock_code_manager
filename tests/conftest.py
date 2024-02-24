@@ -16,14 +16,15 @@ from pytest_homeassistant_custom_component.common import (
     mock_platform,
 )
 
-from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.providers import BaseLock
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockEntity
 from homeassistant.config_entries import ConfigEntry, ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 from homeassistant.util import slugify
+
+from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import BASE_CONFIG, LOCK_DATA
 
@@ -40,6 +41,7 @@ def aiohttp_client(event_loop, aiohttp_client, socket_enabled):
 
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
+    """Enable custom integrations."""
     yield
 
 
@@ -93,7 +95,7 @@ class MockLCMLock(BaseLock):
         self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot)
         self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
             "clear_usercode"
-        ].append((code_slot))
+        ].append((code_slot,))
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
@@ -130,7 +132,7 @@ class MockFlow(ConfigFlow):
     """Test flow."""
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(name="mock_config_flow")
 def config_flow_fixture(hass: HomeAssistant) -> Generator[None, None, None]:
     """Mock config flow."""
     mock_platform(hass, f"{TEST_DOMAIN}.config_flow")
@@ -140,7 +142,7 @@ def config_flow_fixture(hass: HomeAssistant) -> Generator[None, None, None]:
 
 
 @pytest.fixture(name="mock_lock_config_entry")
-async def mock_lock_config_entry_fixture(hass: HomeAssistant):
+async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
     """Set up lock entities using an entity platform."""
 
     async def async_setup_entry_init(
@@ -183,9 +185,7 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant):
 
 @pytest.fixture(name="lock_code_manager_config_entry")
 async def lock_code_manager_config_entry_fixture(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-    mock_lock_config_entry,
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
 ):
     """Set up the config entry for lock code manager."""
     monkeypatch.setattr(

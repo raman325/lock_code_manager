@@ -231,7 +231,7 @@ class BaseLock:
             from_state = STATE_LOCKED
             to_state = STATE_UNLOCKED
 
-        notification_source: Literal["event", "state"] = None
+        notification_source: Literal["event", "state"] | None = None
         extra_data: dict[str, Any] | None = None
         if isinstance(source_data, Event):
             notification_source = "event"

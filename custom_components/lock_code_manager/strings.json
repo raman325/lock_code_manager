@@ -33,7 +33,7 @@
         "data": {
           "locks": "Locks"
         },
-        "description": "The only lock, {lock}, in the configuration for {name}, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
+        "description": "The lock `{lock}`, in the configuration for `{name}`, is no longer configured in Home Assistant and must be removed from your configuration. Choose new locks that this configuration is for. If you no longer need this configuration, delete the configuration entry.",
         "title": "Update locks for {name}"
       },
       "ui": {

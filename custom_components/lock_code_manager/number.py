@@ -8,6 +8,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNLOCKED
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -29,13 +30,17 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
-    """Setup config entry."""
+    """Set up config entry."""
 
     @callback
-    def add_number_entities(slot_num: int) -> None:
+    def add_number_entities(slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Add number entities for slot."""
         async_add_entities(
-            [LockCodeManagerNumber(hass, config_entry, slot_num, CONF_NUMBER_OF_USES)],
+            [
+                LockCodeManagerNumber(
+                    hass, ent_reg, config_entry, slot_num, CONF_NUMBER_OF_USES
+                )
+            ],
             True,
         )
 
@@ -80,7 +85,9 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
 
     async def _handle_lock_state_changed(self, event: Event):
         """Handle lock state changed."""
-        await self.async_set_native_value(self.native_value - 1)
+        if not (val := self.native_value):
+            val = 1
+        await self.async_set_native_value(val - 1)
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""

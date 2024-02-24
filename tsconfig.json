@@ -4,16 +4,11 @@
     "target": "es2022",
     "baseUrl": ".",
     "paths": {
-      "*": [
-        "./node_modules/*"
-      ]
+      "*": ["./node_modules/*"]
     },
     "module": "ESNext",
     "moduleResolution": "node",
     "resolveJsonModule": true
   },
-  "include": [
-    "js/**/*",
-    ".eslintrc.cjs"
-  ]
+  "include": ["js/**/*", ".eslintrc.cjs"]
 }

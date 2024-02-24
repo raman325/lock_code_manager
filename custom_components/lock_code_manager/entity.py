@@ -39,7 +39,12 @@ class BaseLockCodeManagerEntity(Entity):
     _attr_should_poll = False
 
     def __init__(
-        self, hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int, key: str
+        self,
+        hass: HomeAssistant,
+        ent_reg: er.EntityRegistry,
+        config_entry: ConfigEntry,
+        slot_num: int,
+        key: str,
     ) -> None:
         """Initialize base entity."""
         self._hass = hass
@@ -50,7 +55,7 @@ class BaseLockCodeManagerEntity(Entity):
         )
         self.slot_num = slot_num
         self.key = key
-        self.ent_reg: er.EntityRegistry | None = None
+        self.ent_reg = ent_reg
 
         self._uid_cache: dict[str, str] = {}
         self._entity_id_map: dict[str, str] = {}
@@ -108,10 +113,10 @@ class BaseLockCodeManagerEntity(Entity):
 
         # Figure out whether we were waiting for ourself to be removed before
         # reporting it.
-        tracker_dict: dict[int, dict[str, str]] = self.hass.data[DOMAIN][
+        tracker_dict: dict[int, dict[str, bool]] = self.hass.data[DOMAIN][
             self.config_entry.entry_id
         ][ATTR_ENTITIES_REMOVED_TRACKER]
-        slot_dict: dict[str, str] = tracker_dict[self.slot_num]
+        slot_dict: dict[str, bool] = tracker_dict[self.slot_num]
         if self.key not in slot_dict:
             return
         slot_dict[self.key] = False
@@ -225,10 +230,10 @@ class BaseLockCodeManagerEntity(Entity):
 
         # Figure out whether we were waiting for ourself to be added before
         # reporting it.
-        tracker_dict: dict[int, dict[str, str]] = self.hass.data[DOMAIN][
+        tracker_dict: dict[int, dict[str, bool]] = self.hass.data[DOMAIN][
             self.config_entry.entry_id
         ][ATTR_ENTITIES_ADDED_TRACKER]
-        slot_dict: dict[str, str] = tracker_dict[self.slot_num]
+        slot_dict: dict[str, bool] = tracker_dict[self.slot_num]
         if self.key not in slot_dict:
             return
         slot_dict[self.key] = False
@@ -263,13 +268,16 @@ class BaseLockCodeManagerCodeSlotEntity(BaseLockCodeManagerEntity):
     def __init__(
         self,
         hass: HomeAssistant,
+        ent_reg: er.EntityRegistry,
         config_entry: ConfigEntry,
         lock: BaseLock,
         slot_num: int,
         key: str,
     ) -> None:
         """Initialize entity."""
-        BaseLockCodeManagerEntity.__init__(self, hass, config_entry, slot_num, key)
+        BaseLockCodeManagerEntity.__init__(
+            self, hass, ent_reg, config_entry, slot_num, key
+        )
         self.lock = lock
         if lock.device_entry:
             self._attr_device_info = DeviceInfo(

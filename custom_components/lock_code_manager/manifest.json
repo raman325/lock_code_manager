@@ -3,17 +3,14 @@
   "name": "Lock Code Manager",
   "after_dependencies": [
     "calendar",
+    "frontend",
     "hacs",
+    "lovelace",
     "zwave_js"
   ],
-  "codeowners": [
-    "@raman325"
-  ],
+  "codeowners": ["@raman325"],
   "config_flow": true,
-  "dependencies": [
-    "frontend",
-    "lovelace"
-  ],
+  "dependencies": ["http"],
   "documentation": "https://github.com/raman325/lock_code_manager",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/raman325/lock_code_manager/issues",
