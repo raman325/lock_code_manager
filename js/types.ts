@@ -1,4 +1,4 @@
-import { ConfigEntry, EntityRegistryEntry } from "./ha_type_stubs";
+import { ConfigEntry, EntityRegistryEntry } from './ha_type_stubs';
 
 export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
     key: string;
@@ -10,9 +10,8 @@ export interface LockCodeManagerStrategyConfig {
     include_code_slot_sensors?: boolean;
 }
 
-export interface LockCodeManagerDashboardStrategyConfig
-    extends LockCodeManagerStrategyConfig {
-    type: "custom:lock-code-manager";
+export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {
+    type: 'custom:lock-code-manager';
 }
 
 export interface ConfigEntryToEntities {
@@ -29,18 +28,13 @@ export interface SlotMapping {
     slotNum: number;
 }
 
-export interface LockCodeManagerViewStrategyConfig
-    extends LockCodeManagerStrategyConfig {
+export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrategyConfig {
     config_entry_id?: string;
     config_entry_title?: string;
-    type: "custom:lock-code-manager";
+    type: 'custom:lock-code-manager';
 }
 
-export type LockCodeManagerEntitiesResponse = [
-    string,
-    string,
-    EntityRegistryEntry[],
-];
+export type LockCodeManagerEntitiesResponse = [string, string, EntityRegistryEntry[]];
 
 export interface LockCodeManagerConfigEntryData {
     locks: string[];

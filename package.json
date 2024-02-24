@@ -15,7 +15,7 @@
     "build": "yarn install ; rollup -c",
     "watch": "rollup -c --watch",
     "lint": "eslint --ext .ts ./js",
-    "lint:fix": "yarn lint --fix ; yarn prettier js --write"
+    "lint:fix": "yarn lint --fix"
   },
   "dependencies": {
     "home-assistant-js-websocket": "^9.1.0",
@@ -30,6 +30,7 @@
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^11.1.6",
+    "@stylistic/eslint-plugin-js": "^1.6.2",
     "@tsconfig/node20": "^20.1.2",
     "@types/node": "^20.11.14",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
