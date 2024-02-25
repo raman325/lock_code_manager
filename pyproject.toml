@@ -2,24 +2,6 @@
 target-version = ["py311"]
 exclude = 'generated'
 
-[tool.isort]
-# https://github.com/PyCQA/isort/wiki/isort-Settings
-profile = "black"
-# will group `import x` and `from x import` of the same module.
-force_sort_within_sections = true
-known_first_party = ["lock_code_manager", "tests"]
-known_homeassistant = ["homeassistant"]
-sections = [
-    "FUTURE",
-    "STDLIB",
-    "THIRDPARTY",
-    "HOMEASSISTANT",
-    "FIRSTPARTY",
-    "LOCALFOLDER",
-]
-
-combine_as_imports = true
-
 [tool.ruff]
 lint.select = ["D", "E", "F", "G", "I", "PLC", "PLE", "PLR", "PLW", "UP", "W"]
 lint.ignore = [
@@ -36,7 +18,6 @@ lint.ignore = [
     "PLW2901", # Outer {outer_kind} variable {name} overwritten by inner {inner_kind} target
     "UP006",   # keep type annotation style as is
     "UP007",   # keep type annotation style as is
-    "I001",
     "PLE1205",
 ]
 exclude = [
@@ -62,8 +43,7 @@ section-order = [
     "first-party",
     "local-folder",
 ]
-known-first-party = ["custom_components.lock_code_manager"]
-forced-separate = ["tests"]
+known-first-party = ["custom_components.lock_code_manager", "tests"]
 combine-as-imports = true
 
 [tool.ruff.lint.isort.sections]
