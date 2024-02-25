@@ -10,6 +10,7 @@ from typing import Any, Literal, final
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     ATTR_STATE,
     CONF_NAME,
@@ -26,12 +27,17 @@ from ..const import (
     ATTR_CODE_SLOT_NAME,
     ATTR_EXTRA_DATA,
     ATTR_FROM,
+    ATTR_LCM_CONFIG_ENTRY_ID,
+    ATTR_LOCK_CONFIG_ENTRY_ID,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
+    CONF_LOCKS,
+    CONF_SLOTS,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
 from .const import LOGGER
+from .helpers import get_entry_data
 
 
 @dataclass(repr=False)
@@ -41,7 +47,6 @@ class BaseLock:
     hass: HomeAssistant = field(repr=False)
     dev_reg: dr.DeviceRegistry = field(repr=False)
     ent_reg: er.EntityRegistry = field(repr=False)
-    config_entry: ConfigEntry = field(repr=False)
     lock_config_entry: ConfigEntry = field(repr=False)
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
@@ -217,9 +222,29 @@ class BaseLock:
         """
         name_state: State | None = None
         lock_entity_id = self.lock.entity_id
-        if name_entity_id := self.ent_reg.async_get_entity_id(
-            TEXT_DOMAIN, DOMAIN, f"{self.base_unique_id}|{code_slot}|{CONF_NAME}"
-        ):
+        lock_device_id = self.lock.device_id
+        config_entry_id: str | None = None
+
+        try:
+            config_entry = next(
+                config_entry
+                for config_entry in self.hass.config_entries.async_entries(DOMAIN)
+                if (
+                    self.lock.entity_id in get_entry_data(config_entry, CONF_LOCKS)
+                    and code_slot in get_entry_data(config_entry, CONF_SLOTS)
+                    and (
+                        name_entity_id := self.ent_reg.async_get_entity_id(
+                            TEXT_DOMAIN,
+                            DOMAIN,
+                            f"{config_entry.entry_id}|{code_slot}|{CONF_NAME}",
+                        )
+                    )
+                )
+            )
+        except StopIteration:
+            pass
+        else:
+            config_entry_id = config_entry.entry_id
             name_state = self.hass.states.get(name_entity_id)
 
         from_state: str | None = None
@@ -262,6 +287,9 @@ class BaseLock:
             event_data={
                 ATTR_NOTIFICATION_SOURCE: notification_source,
                 ATTR_ENTITY_ID: lock_entity_id,
+                ATTR_DEVICE_ID: lock_device_id,
+                ATTR_LCM_CONFIG_ENTRY_ID: config_entry_id,
+                ATTR_LOCK_CONFIG_ENTRY_ID: self.lock_config_entry.entry_id,
                 ATTR_STATE: (
                     state.state
                     if (state := self.hass.states.get(lock_entity_id))
@@ -275,9 +303,3 @@ class BaseLock:
                 ATTR_EXTRA_DATA: extra_data,
             },
         )
-
-    @final
-    @property
-    def base_unique_id(self) -> str:
-        """Return unique_id for lock."""
-        return self.config_entry.entry_id

@@ -22,6 +22,8 @@ ATTR_CODE_SLOT = "code_slot"
 ATTR_USERCODE = "usercode"
 ATTR_FROM = "from"
 ATTR_TO = "to"
+ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"
+ATTR_LOCK_CONFIG_ENTRY_ID = "lock_config_entry_id"
 ATTR_EXTRA_DATA = "extra_data"
 
 # hass.data attributes

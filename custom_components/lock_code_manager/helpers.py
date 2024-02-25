@@ -70,7 +70,7 @@ def async_create_lock_instance(
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
     assert lock_config_entry
     lock = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-        hass, dev_reg, ent_reg, config_entry, lock_config_entry, lock_entry
+        hass, dev_reg, ent_reg, lock_config_entry, lock_entry
     )
     _LOGGER.debug(
         "%s (%s): Created lock instance %s",
@@ -86,8 +86,7 @@ def get_lock_from_entity_id(hass: HomeAssistant, entity_id: str) -> BaseLock:
     try:
         return next(
             lock
-            for data in hass.data[DOMAIN].values()
-            for lock in data[CONF_LOCKS].values()
+            for lock in hass.data[DOMAIN][CONF_LOCKS].values()
             if entity_id == lock.lock.entity_id
         )
     except StopIteration:

@@ -34,7 +34,7 @@ async def test_get_slot_calendar_data(
     assert msg["success"]
     assert msg["result"] == {
         CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
-        CONF_SLOTS: {"1": None, "2": None},
+        CONF_SLOTS: {"1": None, "2": "calendar.test"},
     }
 
     # Try API call with entry title
@@ -49,7 +49,7 @@ async def test_get_slot_calendar_data(
     assert msg["success"]
     assert msg["result"] == {
         CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
-        CONF_SLOTS: {"1": None, "2": None},
+        CONF_SLOTS: {"1": None, "2": "calendar.test"},
     }
 
     # Try API call with invalid entry ID

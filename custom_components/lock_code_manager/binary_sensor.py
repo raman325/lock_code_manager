@@ -3,24 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 import logging
+from typing import Callable
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, CONF_PIN, STATE_ON
+from homeassistant.const import CONF_NAME, CONF_PIN, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import MATCH_ALL, async_track_state_change
+from homeassistant.helpers.event import (
+    MATCH_ALL,
+    async_call_later,
+    async_track_state_change,
+)
 
 from .const import (
     ATTR_CODE,
     ATTR_PIN_SYNCED_TO_LOCKS,
     CONF_CALENDAR,
     CONF_NUMBER_OF_USES,
+    CONF_SLOTS,
     COORDINATORS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -28,6 +35,7 @@ from .const import (
 )
 from .coordinator import LockUsercodeUpdateCoordinator
 from .entity import BaseLockCodeManagerEntity
+from .exceptions import EntityNotFoundError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,12 +92,11 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         self._entity_id_map: dict[str, str] = {}
         self._update_usercodes_task: asyncio.Task | None = None
         self._issue_reg: ir.IssueRegistry | None = None
+        self._call_later_unsub: Callable | None = None
 
     async def async_update_usercodes(self) -> None:
         """Update usercodes on locks based on state change."""
-        _LOGGER.error(self.entity_id)
         for lock in self.locks:
-            _LOGGER.error(lock.lock.entity_id)
             lock_slot_sensor_entity_id = self.ent_reg.async_get_entity_id(
                 SENSOR_DOMAIN,
                 DOMAIN,
@@ -97,7 +104,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             )
 
             if not lock_slot_sensor_entity_id:
-                return
+                raise EntityNotFoundError(lock_slot_sensor_entity_id)
 
             if self.is_on:
                 name_entity_id = self._entity_id_map[CONF_NAME]
@@ -132,7 +139,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             else:
                 if (
                     state := self.hass.states.get(lock_slot_sensor_entity_id)
-                ) and state.state == "":
+                ) and state.state in ("", STATE_UNKNOWN):
                     continue
 
                 _LOGGER.info(
@@ -149,8 +156,12 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 *[coordinator.async_refresh() for coordinator in self.coordinators]
             )
 
-    async def _update_state(self) -> None:
+    async def _update_state(self, _: datetime | None = None) -> None:
         """Update binary sensor state by getting dependent states."""
+        if self._call_later_unsub:
+            self._call_later_unsub()
+            self._call_later_unsub = None
+
         _LOGGER.debug(
             "%s (%s): Updating %s",
             self.config_entry.entry_id,
@@ -160,7 +171,9 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         # Switch binary sensor on if at least one state exists and all states are 'on'
         entity_id_map = self._entity_id_map.copy()
         # If there is a calendar entity, we need to check its state as well
-        if calendar_entity_id := self.config_entry.data.get(CONF_CALENDAR):
+        if calendar_entity_id := self.config_entry.data[CONF_SLOTS][self.slot_num].get(
+            CONF_CALENDAR
+        ):
             entity_id_map[CONF_CALENDAR] = calendar_entity_id
 
         states = {}
@@ -193,7 +206,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             states
             and all(
                 (key != CONF_NUMBER_OF_USES and state == STATE_ON)
-                or (key == CONF_NUMBER_OF_USES and int(state) > 0)
+                or (key == CONF_NUMBER_OF_USES and int(float(state)) > 0)
                 for key, state in states.items()
             )
         )
@@ -201,7 +214,14 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         if not (
             state := self.hass.states.get(self.entity_id)
         ) or state.state != self.state:
-            await self.async_update_usercodes()
+            try:
+                await self.async_update_usercodes()
+            except EntityNotFoundError:
+                self._call_later_unsub = async_call_later(
+                    self.hass, timedelta(seconds=2), self._update_state
+                )
+                self.async_on_remove(self._call_later_unsub)
+                return
             self.async_write_ha_state()
 
     async def _remove_keys_to_track(self, keys: list[str]) -> None:
@@ -225,7 +245,11 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
     async def _handle_state_changes(self, entity_id: str, _: State, __: State) -> None:
         """Handle state change."""
         entity_id_map = self._entity_id_map.copy()
-        if calendar_entity_id := self.config_entry.data.get(CONF_CALENDAR):
+        if (
+            calendar_entity_id := self.config_entry.data[CONF_SLOTS]
+            .get(self.slot_num, {})
+            .get(CONF_CALENDAR)
+        ):
             entity_id_map[CONF_CALENDAR] = calendar_entity_id
         if any(
             entity_id == key_entity_id
@@ -233,6 +257,12 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             if key not in (EVENT_PIN_USED, CONF_NAME, CONF_PIN)
         ):
             await self._update_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity will be removed from hass."""
+        if self._call_later_unsub:
+            self._call_later_unsub()
+            self._call_later_unsub = None
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""

@@ -41,9 +41,10 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, callback
 
-from ..const import CONF_SLOTS, DOMAIN
+from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..exceptions import LockDisconnected
 from ._base import BaseLock
+from .helpers import get_entry_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,9 +99,7 @@ class ZWaveJSLock(BaseLock):
         """Handle Z-Wave JS event."""
         if evt.data[ATTR_TYPE] != NotificationType.ACCESS_CONTROL:
             _LOGGER.debug(
-                "%s (%s): Lock %s received non Access Control event: %s",
-                self.config_entry.entry_id,
-                self.config_entry.title,
+                "Lock %s received non Access Control event: %s",
                 self.lock.entity_id,
                 evt.as_dict(),
             )
@@ -161,8 +160,11 @@ class ZWaveJSLock(BaseLock):
         Needed for integrations where usercodes are cached and may get out of sync with
         the lock.
         """
-        for code_slot in self.config_entry.data[CONF_SLOTS]:
-            await get_usercode_from_node(self.node, code_slot)
+        for config_entry in self.hass.config_entries.async_entries(DOMAIN):
+            if self.lock.entity_id not in get_entry_data(config_entry, CONF_LOCKS):
+                continue
+            for code_slot in get_entry_data(config_entry, CONF_SLOTS):
+                await get_usercode_from_node(self.node, code_slot)
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -190,10 +192,11 @@ class ZWaveJSLock(BaseLock):
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
         code_slots: Iterable[int] = (
-            self.config_entry.data.get(
-                CONF_SLOTS, self.config_entry.options.get(CONF_SLOTS)
-            ).keys()
-            or []
+            code_slot
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            for code_slot in entry.data[CONF_SLOTS]
+            if self.lock.entity_id
+            not in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, []))
         )
         data: dict[int, int | str] = {}
         code_slot = 1
@@ -215,9 +218,7 @@ class ZWaveJSLock(BaseLock):
                 if not in_use:
                     if code_slot in code_slots:
                         _LOGGER.debug(
-                            "%s (%s): Lock %s code slot %s not enabled",
-                            self.config_entry.entry_id,
-                            self.config_entry.title,
+                            "Lock %s code slot %s not enabled",
                             self.lock.entity_id,
                             code_slot,
                         )
@@ -225,7 +226,16 @@ class ZWaveJSLock(BaseLock):
                 # Special handling if usercode is all *'s
                 elif usercode and len(str(usercode)) * "*" == str(usercode):
                     # Build data from entities
-                    base_unique_id = f"{self.base_unique_id}|{code_slot}"
+                    config_entry = next(
+                        config_entry
+                        for config_entry in self.hass.config_entries.async_entries(
+                            DOMAIN
+                        )
+                        if self.lock.entity_id
+                        in get_entry_data(config_entry, CONF_LOCKS)
+                        and code_slot in get_entry_data(config_entry, CONF_SLOTS)
+                    )
+                    base_unique_id = f"{config_entry.entry_id}|{code_slot}"
                     active = self.ent_reg.async_get_entity_id(
                         SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
                     )
@@ -241,11 +251,9 @@ class ZWaveJSLock(BaseLock):
                     if code_slot in code_slots:
                         _LOGGER.debug(
                             (
-                                "%s (%s): PIN is masked for lock %s code slot %s so "
+                                "PIN is masked for lock %s code slot %s so "
                                 "assuming value from PIN entity %s"
                             ),
-                            self.config_entry.entry_id,
-                            self.config_entry.title,
                             self.lock.entity_id,
                             code_slot,
                             pin_entity_id,
@@ -257,9 +265,7 @@ class ZWaveJSLock(BaseLock):
                 else:
                     if code_slot in code_slots:
                         _LOGGER.debug(
-                            "%s (%s): Lock %s code slot %s has a PIN",
-                            self.config_entry.entry_id,
-                            self.config_entry.title,
+                            "Lock %s code slot %s has a PIN",
                             self.lock.entity_id,
                             code_slot,
                         )

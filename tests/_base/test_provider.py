@@ -19,7 +19,6 @@ async def test_base(hass: HomeAssistant):
         dr.async_get(hass),
         er.async_get(hass),
         MockConfigEntry(),
-        MockConfigEntry(),
         er.RegistryEntry("lock.test", "blah", "blah"),
     )
     assert await lock.async_setup() is None

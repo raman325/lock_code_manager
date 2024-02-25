@@ -225,8 +225,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             **self.context["title_placeholders"],
             "lock": self.context["lock_entity_id"],
         }
-        if not user_input:
-            user_input = {}
+
         if CONF_SLOTS not in user_input:
             assert config_entry
             additional_errors, additional_placeholders = _check_common_slots(
