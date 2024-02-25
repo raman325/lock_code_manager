@@ -51,19 +51,19 @@ repos:
 
   - repo: local
     hooks:
+      - id: yarn_lint
+        name: Lint js with yarn
+        description: This hook ensures that all Javascript/Typescript files are linted
+        language: system
+        types: ["text", "ts"]
+        entry: yarn lint:fix
       - id: yarn_build
         name: Build with yarn
-        description: This hook ensures that all javascript/Typescript files are linted
+        description: This hook ensures that the JS package is built
         language: system
         types: ["text", "ts"]
         entry: yarn build
         pass_filenames: false
-      - id: yarn_lint
-        name: Lint js with yarn
-        description: This hook ensures that all javascript/Typescript files are linted
-        language: system
-        types: ["text", "ts"]
-        entry: yarn lint:fix
 
   - repo: https://github.com/adrienverge/yamllint.git
     rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6 # frozen: v1.35.1
