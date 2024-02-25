@@ -5,10 +5,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
-from custom_components.lock_code_manager.const import (
-    CONF_LOCKS,
-    CONF_SLOTS,
-)
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
@@ -108,7 +105,7 @@ async def test_get_config_entry_entities(
     [entry_id, title, entities] = msg["result"]
     assert entry_id == lock_code_manager_config_entry.entry_id
     assert title == "Mock Title"
-    assert len(entities) == 17
+    assert len(entities) == 15
 
 
 async def test_get_config_entries_to_entities(
@@ -130,4 +127,4 @@ async def test_get_config_entries_to_entities(
     [[entry_id, title, entities]] = msg["result"]
     assert entry_id == lock_code_manager_config_entry.entry_id
     assert title == "Mock Title"
-    assert len(entities) == 17
+    assert len(entities) == 15

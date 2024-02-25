@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
-from homeassistant.components.persistent_notification import async_create
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -66,38 +63,7 @@ def async_create_lock_instance(
 ) -> BaseLock:
     """Generate lock from config entry."""
     lock_entry = ent_reg.async_get(lock_entity_id)
-    if not lock_entry:
-        # If there are locks in the config other than the one that's invalid,
-        # automatically remove it from the config and let the user know since they
-        # can always go through the options flow to update it. If the invalid lock is
-        # the only lock in the config, we must start a reauth flow so the user can
-        # pick new lock(s).
-        if len(config_entry.data[CONF_LOCKS]) > 1:
-            locks = copy.deepcopy(config_entry.options[CONF_LOCKS])
-            locks.pop(lock_entity_id)
-            hass.config_entries.async_update_entry(
-                config_entry, options={**config_entry.options, CONF_LOCKS: locks}
-            )
-            async_create(
-                hass,
-                (
-                    f"Lock with entity ID {lock_entity_id} not found. This lock has "
-                    f"been removed from the {config_entry.title} Lock Code Manager "
-                    "configuration. To make any additional changes to the locks "
-                    "included in this configuration, you must reconfigure the config "
-                    "entry."
-                ),
-                "Lock not found",
-            )
-            hass.async_create_task(
-                hass.config_entries.async_reload(config_entry.entry_id),
-                f"Reload config entry {config_entry.entry_id}",
-            )
-        else:
-            config_entry.async_start_reauth(
-                hass, context={"reason": "lock_not_found", "lock": lock_entity_id}
-            )
-        raise HomeAssistantError(f"Lock with entity ID {lock_entity_id} not found.")
+    assert lock_entry
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
     assert lock_config_entry
     lock = INTEGRATIONS_CLASS_MAP[lock_entry.platform](

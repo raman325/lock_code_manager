@@ -7,7 +7,7 @@ import logging
 from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -49,7 +49,7 @@ async def async_setup_entry(
 class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
     """Text entity for lock code manager."""
 
-    _attr_native_min = 1
+    _attr_native_min = 0
     _attr_native_max = 9999
     _enabled_entity_id: str = ""
 
@@ -85,7 +85,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
             and not value.strip()
             and self._enabled_entity_id
             and (state := self.hass.states.get(self._enabled_entity_id))
-            and state.state
+            and state.state == STATE_ON
         ):
             async_create(
                 self.hass,
@@ -97,6 +97,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
                 f"{DOMAIN}_{self.config_entry.entry_id}_{self.slot_num}_pin_required",
             )
             return
+
         self._update_config_entry(value)
 
     async def async_added_to_hass(self) -> None:

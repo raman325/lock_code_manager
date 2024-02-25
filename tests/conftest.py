@@ -57,7 +57,8 @@ class MockLCMLock(BaseLock):
     def setup(self) -> None:
         """Set up lock."""
         self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
-            self.lock.entity_id, {"codes": {}, "service_calls": defaultdict(list)}
+            self.lock.entity_id,
+            {"codes": {1: "1234", 2: "5678"}, "service_calls": defaultdict(list)},
         )
 
     def unload(self) -> None:
@@ -92,7 +93,7 @@ class MockLCMLock(BaseLock):
 
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot)
+        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot, None)
         self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
             "clear_usercode"
         ].append((code_slot,))

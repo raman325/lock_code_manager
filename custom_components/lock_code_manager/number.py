@@ -6,20 +6,12 @@ import logging
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNLOCKED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
-    ATTR_CODE_SLOT,
-    ATTR_TO,
-    CONF_NUMBER_OF_USES,
-    CONF_SLOTS,
-    DOMAIN,
-    EVENT_LOCK_STATE_CHANGED,
-)
+from .const import CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN, EVENT_LOCK_STATE_CHANGED
 from .entity import BaseLockCodeManagerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -72,17 +64,6 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
         """Set value of number."""
         self._update_config_entry(value)
 
-    @callback
-    def _zwave_js_event_filter(self, event: Event) -> bool:
-        """Filter zwave_js events."""
-        return (
-            any(
-                event.data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
-            )
-            and event.data[ATTR_CODE_SLOT] == int(self.slot_num)
-            and event.data[ATTR_TO] == STATE_UNLOCKED
-        )
-
     async def _handle_lock_state_changed(self, event: Event):
         """Handle lock state changed."""
         if not (val := self.native_value):
@@ -97,6 +78,6 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
             self.hass.bus.async_listen(
                 EVENT_LOCK_STATE_CHANGED,
                 self._handle_lock_state_changed,
-                self._zwave_js_event_filter,
+                self._event_filter,
             )
         )

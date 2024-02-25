@@ -257,14 +257,14 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         )
         async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add_locks", locks_to_add)
         for lock_entity_id in locks_to_add:
-            lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][lock_entity_id] = (
-                async_create_lock_instance(
-                    hass,
-                    dr.async_get(hass),
-                    ent_reg,
-                    config_entry,
-                    lock_entity_id,
-                )
+            lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][
+                lock_entity_id
+            ] = async_create_lock_instance(
+                hass,
+                dr.async_get(hass),
+                ent_reg,
+                config_entry,
+                lock_entity_id,
             )
             await lock.async_setup()
 
@@ -288,9 +288,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             _LOGGER.debug(
                 "%s (%s): Creating coordinator for lock %s", entry_id, entry_title, lock
             )
-            coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][lock_entity_id] = (
-                LockUsercodeUpdateCoordinator(hass, lock)
-            )
+            coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][
+                lock_entity_id
+            ] = LockUsercodeUpdateCoordinator(hass, lock)
             await coordinator.async_config_entry_first_refresh()
             for slot_num in new_slots:
                 _LOGGER.debug(
@@ -358,6 +358,20 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             )
             async_dispatcher_send(
                 hass, f"{DOMAIN}_{entry_id}_add_{key}", slot_num, ent_reg
+            )
+
+        for lock_entity_id, lock in hass.data[DOMAIN][entry_id][CONF_LOCKS].items():
+            if lock_entity_id in locks_to_add:
+                continue
+            _LOGGER.debug(
+                "%s (%s): Adding lock %s slot %s sensor",
+                entry_id,
+                entry_title,
+                lock_entity_id,
+                slot_num,
+            )
+            async_dispatcher_send(
+                hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num, ent_reg
             )
 
     # For all slots that are in both the old and new config, check if any of the
