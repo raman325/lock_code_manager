@@ -29,7 +29,7 @@ export async function generateView(
     const [configEntryData, lovelaceResources] = await Promise.all([
         hass.callWS<LockCodeManagerConfigEntryData>({
             config_entry_id: configEntryId,
-            type: 'lock_code_manager/get_config_entry_data'
+            type: 'lock_code_manager/get_slot_calendar_data'
         }),
         hass.callWS<LovelaceResource[]>({
             type: 'lovelace/resources'

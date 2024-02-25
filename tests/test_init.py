@@ -43,11 +43,16 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 3):
-        for key in (CONF_CODE, EVENT_PIN_USED):
-            for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
+        for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+            unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{entity_id}")
 
-        for key in (CONF_ENABLED, CONF_NAME, CONF_PIN, ATTR_PIN_SYNCED_TO_LOCKS):
+        for key in (
+            CONF_ENABLED,
+            CONF_NAME,
+            CONF_PIN,
+            ATTR_PIN_SYNCED_TO_LOCKS,
+            EVENT_PIN_USED,
+        ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
     unique_ids.add(f"{lcm_entry_id}|2|{CONF_NUMBER_OF_USES}")
@@ -57,7 +62,7 @@ async def test_entry_setup_and_unload(
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
     }
     assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 2
-    assert len(hass.states.async_entity_ids(Platform.EVENT)) == 4
+    assert len(hass.states.async_entity_ids(Platform.EVENT)) == 2
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 4
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 4
@@ -99,11 +104,16 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 4):
-        for key in (CONF_CODE, EVENT_PIN_USED):
-            for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
+        for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+            unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{entity_id}")
 
-        for key in (CONF_ENABLED, CONF_NAME, CONF_PIN, ATTR_PIN_SYNCED_TO_LOCKS):
+        for key in (
+            CONF_ENABLED,
+            CONF_NAME,
+            CONF_PIN,
+            ATTR_PIN_SYNCED_TO_LOCKS,
+            EVENT_PIN_USED,
+        ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
     unique_ids.add(f"{lcm_entry_id}|1|{CONF_NUMBER_OF_USES}")
@@ -113,7 +123,7 @@ async def test_entry_setup_and_unload(
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
     }
     assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 3
-    assert len(hass.states.async_entity_ids(Platform.EVENT)) == 6
+    assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 6
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 3
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 6
@@ -129,11 +139,15 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 3):
-        for key in (CONF_CODE, EVENT_PIN_USED):
-            for entity_id in (LOCK_1_ENTITY_ID,):
-                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
+        unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{LOCK_1_ENTITY_ID}")
 
-        for key in (CONF_ENABLED, CONF_NAME, CONF_PIN, ATTR_PIN_SYNCED_TO_LOCKS):
+        for key in (
+            CONF_ENABLED,
+            CONF_NAME,
+            CONF_PIN,
+            ATTR_PIN_SYNCED_TO_LOCKS,
+            EVENT_PIN_USED,
+        ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
     unique_ids.add(f"{lcm_entry_id}|1|{CONF_NUMBER_OF_USES}")

@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.persistent_notification import async_create
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_PIN, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import ToggleEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_SLOTS, DOMAIN
@@ -48,7 +48,7 @@ async def async_setup_entry(
     return True
 
 
-class LockCodeManagerSwitch(BaseLockCodeManagerEntity, ToggleEntity):
+class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
     """Switch entity for lock code manager."""
 
     _pin_entity_id: str = ""
@@ -89,4 +89,4 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, ToggleEntity):
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
-        await ToggleEntity.async_added_to_hass(self)
+        await SwitchEntity.async_added_to_hass(self)

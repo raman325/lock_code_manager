@@ -8,8 +8,8 @@ import logging
 from typing import Any, KeysView, final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNLOCKED
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
@@ -22,6 +22,7 @@ from .const import (
     ATTR_CODE_SLOT,
     ATTR_ENTITIES_ADDED_TRACKER,
     ATTR_ENTITIES_REMOVED_TRACKER,
+    ATTR_TO,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
@@ -207,6 +208,17 @@ class BaseLockCodeManagerEntity(Entity):
             self._unsub_initial_state()
             self._unsub_initial_state = None
 
+    @callback
+    def _event_filter(self, event: Event) -> bool:
+        """Filter events."""
+        return (
+            any(
+                event.data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
+            )
+            and event.data[ATTR_CODE_SLOT] == int(self.slot_num)
+            and event.data[ATTR_TO] == STATE_UNLOCKED
+        )
+
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""
         if self._unsub_initial_state:
@@ -216,8 +228,6 @@ class BaseLockCodeManagerEntity(Entity):
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await Entity.async_added_to_hass(self)
-        if not self.ent_reg:
-            self.ent_reg = er.async_get(self.hass)
 
         self.dispatcher_connect()
 
@@ -262,7 +272,7 @@ class BaseLockCodeManagerEntity(Entity):
                 )
 
 
-class BaseLockCodeManagerCodeSlotEntity(BaseLockCodeManagerEntity):
+class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
     """Base LockCode Manager Code Slot Entity."""
 
     def __init__(

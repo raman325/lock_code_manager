@@ -52,7 +52,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {})
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}})
 
     resources: ResourceStorageCollection
     if resources := hass.data.get(LOVELACE_DOMAIN, {}).get("resources"):
@@ -157,24 +157,56 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     return True
 
 
+async def async_unload_lock(
+    hass: HomeAssistant, config_entry: ConfigEntry, lock_entity_id: str | None = None
+):
+    """Unload lock."""
+    hass_data = hass.data[DOMAIN]
+    entry_id = config_entry.entry_id
+    lock_entity_ids = (
+        [lock_entity_id] if lock_entity_id else hass_data[entry_id][CONF_LOCKS].copy()
+    )
+    for lock_entity_id in lock_entity_ids:
+        if not any(
+            entry != config_entry and lock_entity_id in entry.data[CONF_LOCKS]
+            for entry in hass.config_entries.async_entries(DOMAIN)
+        ):
+            lock: BaseLock = hass_data[CONF_LOCKS].pop(lock_entity_id)
+            await lock.async_unload()
+
+        hass_data[entry_id][CONF_LOCKS].pop(lock_entity_id)
+
+    for lock_entity_id in lock_entity_ids:
+        if not any(
+            entry != config_entry and lock_entity_id in entry.data[CONF_LOCKS]
+            for entry in hass.config_entries.async_entries(DOMAIN)
+        ):
+            coordinator: LockUsercodeUpdateCoordinator = hass_data[COORDINATORS].pop(
+                lock_entity_id
+            )
+            await coordinator.async_shutdown()
+
+        hass_data[entry_id][COORDINATORS].pop(lock_entity_id)
+
+
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
     entry_id = config_entry.entry_id
-    locks: list[BaseLock] = hass.data[DOMAIN][entry_id][CONF_LOCKS].values()
-    await asyncio.gather(*[lock.async_unload() for lock in locks])
+    hass_data = hass.data[DOMAIN]
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry,
-        [
+        {
             *PLATFORMS,
-            *hass.data[DOMAIN][entry_id][ATTR_SETUP_TASKS].keys(),
-        ],
+            *hass_data[entry_id][ATTR_SETUP_TASKS].keys(),
+        },
     )
 
     if unload_ok:
-        hass.data[DOMAIN].pop(entry_id, None)
+        await async_unload_lock(hass, config_entry)
+        hass_data.pop(entry_id, None)
 
-    if not hass.data[DOMAIN]:
+    if hass_data == {CONF_LOCKS: {}, COORDINATORS: {}}:
         resources: ResourceStorageCollection
         if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
             try:
@@ -198,13 +230,14 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     if not config_entry.options:
         return
 
+    hass_data = hass.data[DOMAIN]
     ent_reg = er.async_get(hass)
 
     entry_id = config_entry.entry_id
     entry_title = config_entry.title
     _LOGGER.info("%s (%s): Creating and/or updating entities", entry_id, entry_title)
 
-    setup_tasks: dict[str | Platform, asyncio.Task] = hass.data[DOMAIN][entry_id][
+    setup_tasks: dict[str | Platform, asyncio.Task] = hass_data[entry_id][
         ATTR_SETUP_TASKS
     ]
 
@@ -246,8 +279,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             "%s (%s): Removing lock %s entities", entry_id, entry_title, lock_entity_id
         )
         async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_remove_lock", lock_entity_id)
-        hass.data[DOMAIN][entry_id][CONF_LOCKS].pop(lock_entity_id)
-        hass.data[DOMAIN][entry_id][COORDINATORS].pop(lock_entity_id)
+        await async_unload_lock(hass, config_entry, lock_entity_id)
 
     # Notify any existing entities that additional locks have been added then create
     # slot PIN sensors for the new locks
@@ -260,16 +292,33 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         )
         async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add_locks", locks_to_add)
         for lock_entity_id in locks_to_add:
-            lock = hass.data[DOMAIN][entry_id][CONF_LOCKS][lock_entity_id] = (
-                async_create_lock_instance(
+            if lock_entity_id in hass_data[CONF_LOCKS]:
+                _LOGGER.debug(
+                    "%s (%s): Reusing lock instance for lock %s",
+                    entry_id,
+                    entry_title,
+                    hass_data[CONF_LOCKS][lock_entity_id],
+                )
+                lock = hass_data[entry_id][CONF_LOCKS][lock_entity_id] = hass_data[
+                    CONF_LOCKS
+                ][lock_entity_id]
+            else:
+                lock = hass_data[CONF_LOCKS][lock_entity_id] = hass.data[DOMAIN][
+                    entry_id
+                ][CONF_LOCKS][lock_entity_id] = async_create_lock_instance(
                     hass,
                     dr.async_get(hass),
                     ent_reg,
                     config_entry,
                     lock_entity_id,
                 )
-            )
-            await lock.async_setup()
+                _LOGGER.debug(
+                    "%s (%s): Creating lock instance for lock %s",
+                    entry_id,
+                    entry_title,
+                    lock,
+                )
+                await lock.async_setup()
 
             # Make sure lock is up before we proceed
             timeout = 1
@@ -288,13 +337,27 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 await asyncio.sleep(timeout)
                 timeout = min(timeout * 2, 180)
 
-            _LOGGER.debug(
-                "%s (%s): Creating coordinator for lock %s", entry_id, entry_title, lock
-            )
-            coordinator = hass.data[DOMAIN][entry_id][COORDINATORS][lock_entity_id] = (
-                LockUsercodeUpdateCoordinator(hass, lock)
-            )
-            await coordinator.async_config_entry_first_refresh()
+            if lock_entity_id in hass_data[COORDINATORS]:
+                _LOGGER.debug(
+                    "%s (%s): Reusing coordinator for lock %s",
+                    entry_id,
+                    entry_title,
+                    lock,
+                )
+                coordinator = hass_data[entry_id][COORDINATORS][lock_entity_id]
+            else:
+                _LOGGER.debug(
+                    "%s (%s): Creating coordinator for lock %s",
+                    entry_id,
+                    entry_title,
+                    lock,
+                )
+                coordinator = hass_data[COORDINATORS][lock_entity_id] = hass_data[
+                    entry_id
+                ][COORDINATORS][lock_entity_id] = LockUsercodeUpdateCoordinator(
+                    hass, lock
+                )
+                await coordinator.async_config_entry_first_refresh()
             for slot_num in new_slots:
                 _LOGGER.debug(
                     "%s (%s): Adding lock %s slot %s sensor and event entity",
@@ -318,7 +381,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     # add slot sensors for existing locks only since new locks were already set up
     # above.
     for slot_num, slot_config in slots_to_add.items():
-        entities_to_add: dict[str, bool] = hass.data[DOMAIN][entry_id][
+        entities_to_add: dict[str, bool] = hass_data[entry_id][
             ATTR_ENTITIES_ADDED_TRACKER
         ][slot_num]
         # First we store the set of entities we are adding so we can track when they are
@@ -326,7 +389,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         entities_to_add.update(
             {CONF_ENABLED: True, CONF_NAME: True, CONF_PIN: True, EVENT_PIN_USED: True}
         )
-        for lock_entity_id, lock in hass.data[DOMAIN][entry_id][CONF_LOCKS].items():
+        for lock_entity_id, lock in hass_data[entry_id][CONF_LOCKS].items():
             if lock_entity_id in locks_to_add:
                 continue
             _LOGGER.debug(
@@ -363,16 +426,28 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 hass, f"{DOMAIN}_{entry_id}_add_{key}", slot_num, ent_reg
             )
 
+        for lock_entity_id, lock in hass_data[entry_id][CONF_LOCKS].items():
+            if lock_entity_id in locks_to_add:
+                continue
+            _LOGGER.debug(
+                "%s (%s): Adding lock %s slot %s sensor",
+                entry_id,
+                entry_title,
+                lock_entity_id,
+                slot_num,
+            )
+            async_dispatcher_send(
+                hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num, ent_reg
+            )
+
     # For all slots that are in both the old and new config, check if any of the
     # configuration options have changed
     # for slot_num in {slot for slot in curr_slots if slot in new_slots}:
     for slot_num in set(curr_slots).intersection(new_slots):
-        entities_to_remove: dict[str, bool] = hass.data[DOMAIN][entry_id][
+        entities_to_remove: dict[str, bool] = hass_data[entry_id][
             ATTR_ENTITIES_REMOVED_TRACKER
         ][slot_num]
-        entities_to_add = hass.data[DOMAIN][entry_id][ATTR_ENTITIES_ADDED_TRACKER][
-            slot_num
-        ]
+        entities_to_add = hass_data[entry_id][ATTR_ENTITIES_ADDED_TRACKER][slot_num]
         # Check if number of uses has changed
         old_val = curr_slots[slot_num].get(CONF_NUMBER_OF_USES)
         new_val = new_slots[slot_num].get(CONF_NUMBER_OF_USES)

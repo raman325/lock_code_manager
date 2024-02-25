@@ -4,8 +4,9 @@ venv
 *.pyc
 .coverage
 .pytest_cache
+.mypy_cache
+.ruff_cache
 .vscode
 node_modules
 package-lock.json
 yarn.lock
-# **/lock-code-manager-strategy.js

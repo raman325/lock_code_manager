@@ -1,5 +1,5 @@
 [tool.black]
-target-version = ["py310"]
+target-version = ["py311"]
 exclude = 'generated'
 
 [tool.ruff]
@@ -18,7 +18,6 @@ lint.ignore = [
     "PLW2901", # Outer {outer_kind} variable {name} overwritten by inner {inner_kind} target
     "UP006",   # keep type annotation style as is
     "UP007",   # keep type annotation style as is
-    "I001",
     "PLE1205",
 ]
 exclude = [
@@ -44,8 +43,7 @@ section-order = [
     "first-party",
     "local-folder",
 ]
-known-first-party = ["custom_components.lock_code_manager"]
-forced-separate = ["tests"]
+known-first-party = ["custom_components.lock_code_manager", "tests"]
 combine-as-imports = true
 
 [tool.ruff.lint.isort.sections]

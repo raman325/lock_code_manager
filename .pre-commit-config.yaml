@@ -6,6 +6,8 @@ repos:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
         args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        files: ^(scripts|tests|custom_components)/.+\.py$
 
   - repo: https://github.com/pycqa/pydocstyle
     rev: 6.3.0
@@ -52,12 +54,6 @@ repos:
     hooks:
       - id: yamllint
         types: [yaml]
-
-  - repo: https://github.com/psf/black
-    rev: 6fdf8a4af28071ed1d079c01122b34c5d587207a # frozen: 24.2.0
-    hooks:
-      - id: black
-        language_version: python3
 
   - repo: https://github.com/PyCQA/flake8
     rev: 7d37d9032d0d161634be4554273c30efd4dea0b3 # frozen: 7.0.0

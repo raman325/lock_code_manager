@@ -3,6 +3,7 @@
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
 from custom_components.lock_code_manager.const import (
+    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -23,6 +24,7 @@ BASE_CONFIG = {
             CONF_PIN: "5678",
             CONF_ENABLED: True,
             CONF_NUMBER_OF_USES: 5,
+            CONF_CALENDAR: "calendar.test",
         },
     },
 }

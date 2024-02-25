@@ -14,6 +14,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
 from .const import CONF_CALENDAR, CONF_LOCKS, CONF_SLOTS, DOMAIN
+from .providers.helpers import get_entry_data
 
 ERR_NOT_LOADED = "not_loaded"
 
@@ -81,7 +82,7 @@ def async_get_entry(
 
 async def async_setup(hass: HomeAssistant) -> bool:
     """Enable the websocket_commands."""
-    websocket_api.async_register_command(hass, get_config_entry_data)
+    websocket_api.async_register_command(hass, get_slot_calendar_data)
     websocket_api.async_register_command(hass, get_config_entry_entities)
     websocket_api.async_register_command(hass, get_config_entries_to_entities)
 
@@ -90,27 +91,27 @@ async def async_setup(hass: HomeAssistant) -> bool:
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/get_config_entry_data",
+        vol.Required("type"): "lock_code_manager/get_slot_calendar_data",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
     }
 )
 @websocket_api.async_response
 @async_get_entry
-async def get_config_entry_data(
+async def get_slot_calendar_data(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
     """Return lock_code_manager config entry data."""
-    entry_data = config_entry.data if config_entry.data else config_entry.options
     connection.send_result(
         msg["id"],
         {
-            CONF_LOCKS: entry_data[CONF_LOCKS],
+            CONF_LOCKS: get_entry_data(config_entry, CONF_LOCKS),
             CONF_SLOTS: {
-                k: v.get(CONF_CALENDAR) for k, v in entry_data[CONF_SLOTS].items()
+                k: v.get(CONF_CALENDAR)
+                for k, v in get_entry_data(config_entry, CONF_SLOTS).items()
             },
         },
     )
