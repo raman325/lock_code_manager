@@ -43,13 +43,13 @@ repos:
       - id: yarn_lint
         name: Lint js with yarn
         description: This hook ensures that all Javascript/Typescript files are linted
-        language: system
+        language: node
         types: ["text", "ts"]
         entry: yarn lint:fix
       - id: yarn_build
         name: Build with yarn
         description: This hook ensures that the JS package is built
-        language: system
+        language: node
         types: ["text", "ts"]
         entry: yarn build
         pass_filenames: false
