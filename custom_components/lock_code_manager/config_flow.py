@@ -7,15 +7,18 @@ import pkgutil
 from typing import Any, Iterable
 
 import voluptuous as vol
+
 from homeassistant import config_entries
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import selector as sel
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+    selector as sel,
+)
 from homeassistant.util import slugify
 
 from . import providers
@@ -165,9 +168,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             if user_input.get(CONF_ENABLED) and not user_input.get(CONF_PIN):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
             else:
-                self.data[CONF_SLOTS][int(self.slots_to_configure.pop(0))] = (
-                    CODE_SLOT_SCHEMA(user_input)
-                )
+                self.data[CONF_SLOTS][
+                    int(self.slots_to_configure.pop(0))
+                ] = CODE_SLOT_SCHEMA(user_input)
                 if not self.slots_to_configure:
                     return self.async_create_entry(title=self.title, data=self.data)
 

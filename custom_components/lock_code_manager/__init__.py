@@ -3,21 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections import defaultdict
+import logging
 from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+
 from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
 from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (

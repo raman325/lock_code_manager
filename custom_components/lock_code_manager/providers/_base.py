@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass, field
 from datetime import timedelta
+import functools
 from typing import Any, Literal, final
 
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -18,8 +18,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import (
     ATTR_ACTION_TEXT,

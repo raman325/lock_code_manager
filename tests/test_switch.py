@@ -5,11 +5,12 @@ import logging
 from homeassistant.components.persistent_notification import (
     _async_get_or_create_notifications,
 )
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
-from homeassistant.components.switch import SERVICE_TOGGLE
-from homeassistant.components.text import ATTR_VALUE
-from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
-from homeassistant.components.text import SERVICE_SET_VALUE
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TOGGLE
+from homeassistant.components.text import (
+    ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE,
+)
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 

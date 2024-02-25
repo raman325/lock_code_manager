@@ -7,13 +7,6 @@ from collections.abc import Generator
 from dataclasses import dataclass
 
 import pytest
-from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
-from homeassistant.components.lock import LockEntity
-from homeassistant.config_entries import ConfigEntry, ConfigFlow
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.setup import async_setup_component
-from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     MockModule,
@@ -22,6 +15,13 @@ from pytest_homeassistant_custom_component.common import (
     mock_integration,
     mock_platform,
 )
+
+from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockEntity
+from homeassistant.config_entries import ConfigEntry, ConfigFlow
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.setup import async_setup_component
+from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.providers import BaseLock

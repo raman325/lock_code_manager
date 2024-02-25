@@ -1,6 +1,7 @@
 """Test the Z-Wave JS lock platform."""
 
 import pytest
+
 from homeassistant.core import HomeAssistant
 
 SCHLAGE_BE469_LOCK_ENTITY = "lock.touchscreen_deadbolt"

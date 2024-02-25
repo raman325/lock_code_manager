@@ -6,6 +6,7 @@ from functools import wraps
 from typing import Any, Callable, Coroutine
 
 import voluptuous as vol
+
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant

@@ -2,8 +2,9 @@
 
 import logging
 
-from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
+
+from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS
 
