@@ -1,5 +1,4 @@
 Dev:
-- Figure out how to add which keys and corresponding states caused the binary sensor state change in the logs
 - Reevaluate logging
 
 Test:
