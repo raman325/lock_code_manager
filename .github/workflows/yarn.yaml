@@ -31,6 +31,9 @@ jobs:
       - name: Check for changes
         id: changes
         uses: UnicornGlobal/has-changes-action@v1.0.12
-      - name: Create Pull Request
+      - name: Check if clean
         if: steps.changes.outputs.changed == 1
-        run: exit 1
+        uses: actions/github-script@v3
+        with:
+          script: |
+              core.setFailed('Repo is dirty! Run yarn build and yarn lint:fix locally before pushing changes.')
