@@ -3,8 +3,22 @@ name: Yarn lint and build
 on:
   push:
     branches: [main]
+    paths:
+      - "**.ts"
+      - "js/**"
+      - ".eslintrc.cjs"
+      - "package.json"
+      - "rollup.config.js"
+      - "tsconfig.json"
   pull_request:
     branches: [main]
+    paths:
+      - "**.ts"
+      - "js/**"
+      - ".eslintrc.cjs"
+      - "package.json"
+      - "rollup.config.js"
+      - "tsconfig.json"
 
 jobs:
   yarn:
