@@ -10,17 +10,13 @@ from typing import Callable
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, CONF_PIN, STATE_ON, STATE_UNKNOWN
+from homeassistant.const import CONF_NAME, CONF_PIN, MATCH_ALL, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import (
-    MATCH_ALL,
-    async_call_later,
-    async_track_state_change,
-)
+from homeassistant.helpers.event import async_call_later, async_track_state_change
 
 from .const import (
     ATTR_CODE,

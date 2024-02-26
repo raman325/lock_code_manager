@@ -8,7 +8,12 @@ import logging
 from typing import Any, KeysView, final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNLOCKED
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    MATCH_ALL,
+    STATE_UNAVAILABLE,
+    STATE_UNLOCKED,
+)
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import (
@@ -165,28 +170,28 @@ class BaseLockCodeManagerEntity(Entity):
         Can be overwritten by platforms if necessary
         """
         entry = self.config_entry
-        entry.async_on_unload(
+        self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
                 f"{DOMAIN}_{entry.entry_id}_remove_{self.slot_num}_{self.key}",
                 self._internal_async_remove,
             )
         )
-        entry.async_on_unload(
+        self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
                 f"{DOMAIN}_{entry.entry_id}_remove_{self.slot_num}",
                 self._internal_async_remove,
             )
         )
-        entry.async_on_unload(
+        self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
                 f"{DOMAIN}_{entry.entry_id}_remove_lock",
                 self._handle_remove_lock,
             )
         )
-        entry.async_on_unload(
+        self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
                 f"{DOMAIN}_{entry.entry_id}_add_locks",
@@ -225,11 +230,54 @@ class BaseLockCodeManagerEntity(Entity):
             self._unsub_initial_state()
             self._unsub_initial_state = None
 
+    @callback
+    def _is_available(self) -> bool:
+        """Return whether entity should be available."""
+        return any(
+            state.state != STATE_UNAVAILABLE
+            for lock in self.locks
+            if (state := self.hass.states.get(lock.lock.entity_id))
+        )
+
+    @callback
+    def _handle_available_state_update(
+        self,
+        entity_id: str | None = None,
+        _: State | None = None,
+        __: State | None = None,
+    ) -> None:
+        """Handle availability state update."""
+        if (
+            entity_id is not None
+            and entity_id not in (lock.lock.entity_id for lock in self.locks)
+        ):
+            return
+        if (new_available := self._is_available()) != self._attr_available:
+            self._attr_available: bool = new_available
+            self.async_write_ha_state()
+
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await Entity.async_added_to_hass(self)
 
         self.dispatcher_connect()
+        self.async_on_remove(
+            async_track_state_change(
+                self.hass,
+                MATCH_ALL,
+                self._handle_available_state_update,
+                to_state=STATE_UNAVAILABLE,
+            )
+        )
+        self.async_on_remove(
+            async_track_state_change(
+                self.hass,
+                MATCH_ALL,
+                self._handle_available_state_update,
+                from_state=STATE_UNAVAILABLE,
+            )
+        )
+        self._handle_available_state_update()
 
         _LOGGER.debug(
             "%s (%s): Adding entity %s",
@@ -299,17 +347,6 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
             f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
         )
 
-    def _lock_available(self) -> bool:
-        """Return whether lock is available or not."""
-        return (
-            state := self.hass.states.get(self.lock.lock.entity_id)
-        ) and state.state != STATE_UNAVAILABLE
-
-    @property
-    def available(self) -> bool:
-        """Return whether sensor is available or not."""
-        return self._lock_available()
-
     @callback
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity is being removed."""
@@ -317,6 +354,13 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         if self.lock.lock.entity_id != lock_entity_id:
             return
         self._hass.async_create_task(self._internal_async_remove())
+
+    @callback
+    def _is_available(self) -> bool:
+        """Return whether entity is available."""
+        return (
+            state := self.hass.states.get(self.lock.lock.entity_id)
+        ) and state.state != STATE_UNAVAILABLE
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
