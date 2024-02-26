@@ -10,7 +10,14 @@ from typing import Callable
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME, CONF_PIN, MATCH_ALL, STATE_ON, STATE_UNKNOWN
+from homeassistant.const import (
+    CONF_NAME,
+    CONF_PIN,
+    MATCH_ALL,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -90,8 +97,24 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         self._issue_reg: ir.IssueRegistry | None = None
         self._call_later_unsub: Callable | None = None
 
-    async def async_update_usercodes(self) -> None:
+    async def async_update_usercodes(
+        self, states: dict[str, dict[str, str]] | None = None
+    ) -> None:
         """Update usercodes on locks based on state change."""
+        if not states:
+            states = {}
+        disabling_entity_ids = (
+            state["entity_id"]
+            for key, state in states.items()
+            if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
+            or (
+                key == CONF_NUMBER_OF_USES
+                and (
+                    state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                    or int(float(state["state"])) == 0
+                )
+            )
+        )
         for lock in self.locks:
             lock_slot_sensor_entity_id = self.ent_reg.async_get_entity_id(
                 SENSOR_DOMAIN,
@@ -139,11 +162,15 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     continue
 
                 _LOGGER.info(
-                    "%s (%s): Clearing usercode for lock %s slot %s",
+                    (
+                        "%s (%s): Clearing usercode for lock %s slot %s because the "
+                        "following entities indicate the slot is disabled: %s"
+                    ),
                     self.config_entry.entry_id,
                     self.config_entry.title,
                     lock.lock.entity_id,
                     self.slot_num,
+                    ", ".join(disabling_entity_ids),
                 )
 
                 await lock.async_clear_usercode(int(self.slot_num))
@@ -172,7 +199,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         ):
             entity_id_map[CONF_CALENDAR] = calendar_entity_id
 
-        states = {}
+        states: dict[str, dict[str, str]] = {}
         for key, entity_id in entity_id_map.items():
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN):
                 continue
@@ -194,15 +221,19 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 continue
             else:
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
-            states[key] = state.state
+            states[key] = {"entity_id": entity_id, "state": state.state}
 
         # For the binary sensor to be on, all states must be 'on', or for the number
         # of uses, greater than 0
         self._attr_is_on = bool(
             states
             and all(
-                (key != CONF_NUMBER_OF_USES and state == STATE_ON)
-                or (key == CONF_NUMBER_OF_USES and int(float(state)) > 0)
+                (key != CONF_NUMBER_OF_USES and state["state"] == STATE_ON)
+                or (
+                    key == CONF_NUMBER_OF_USES
+                    and state["state"] not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                    and int(float(state["state"])) > 0
+                )
                 for key, state in states.items()
             )
         )
@@ -211,7 +242,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             state := self.hass.states.get(self.entity_id)
         ) or state.state != self.state:
             try:
-                await self.async_update_usercodes()
+                await self.async_update_usercodes(states)
             except EntityNotFoundError:
                 self._call_later_unsub = async_call_later(
                     self.hass, timedelta(seconds=2), self._update_state
