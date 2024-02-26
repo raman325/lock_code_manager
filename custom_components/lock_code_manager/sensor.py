@@ -90,7 +90,7 @@ class LockCodeManagerCodeSlotSensorEntity(
     @property
     def available(self) -> bool:
         """Return whether sensor is available or not."""
-        return BaseLockCodeManagerCodeSlotPerLockEntity._lock_available(self) and (
+        return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
             int(self.slot_num) in self.coordinator.data
         )
 
