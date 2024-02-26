@@ -1,4 +1,6 @@
 ---
+ci:
+  skip: [yarn-build, yarn-lint]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.0.292
@@ -40,19 +42,21 @@ repos:
 
   - repo: local
     hooks:
-      - id: yarn_lint
+      - id: yarn-lint
         name: Lint js with yarn
         description: This hook ensures that all Javascript/Typescript files are linted
         language: node
         types: ["text", "ts"]
-        entry: npm run lint:fix
-      - id: yarn_build
+        entry: yarn lint:fix
+        additional_dependencies: ['yarn@1.22.21']
+      - id: yarn-build
         name: Build with yarn
         description: This hook ensures that the JS package is built
         language: node
         types: ["text", "ts"]
-        entry: npm install
+        entry: yarn build
         pass_filenames: false
+        additional_dependencies: ['yarn@1.22.21']
 
   - repo: https://github.com/adrienverge/yamllint.git
     rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6 # frozen: v1.35.1
