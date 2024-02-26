@@ -2,7 +2,6 @@ Dev:
 - Track state updates to locks in event and sensor entities to update availability
 - Figure out how to add which keys and corresponding states caused the binary sensor state change in the logs
 - Reevaluate logging
-- Add yarn lint and build to release CI
 
 Test:
 - Test strategy
