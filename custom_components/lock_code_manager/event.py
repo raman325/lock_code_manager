@@ -11,7 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, EVENT_LOCK_USERCODE_USED, EVENT_PIN_USED
+from .const import DOMAIN, EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
 from .entity import BaseLockCodeManagerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         self.async_on_remove(
             self.hass.bus.async_listen(
-                EVENT_LOCK_USERCODE_USED,
+                EVENT_LOCK_STATE_CHANGED,
                 self._handle_event,
                 self._event_filter,
             )

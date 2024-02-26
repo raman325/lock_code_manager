@@ -11,7 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN, EVENT_LOCK_USERCODE_USED
+from .const import CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN, EVENT_LOCK_STATE_CHANGED
 from .entity import BaseLockCodeManagerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         self.async_on_remove(
             self.hass.bus.async_listen(
-                EVENT_LOCK_USERCODE_USED,
+                EVENT_LOCK_STATE_CHANGED,
                 self._handle_lock_state_changed,
                 self._event_filter,
             )

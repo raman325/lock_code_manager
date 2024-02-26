@@ -18,7 +18,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_FROM,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
-    EVENT_LOCK_USERCODE_USED,
+    EVENT_LOCK_STATE_CHANGED,
 )
 
 from .common import LOCK_1_ENTITY_ID
@@ -47,7 +47,7 @@ async def test_event_entity(
         ATTR_TO: STATE_UNLOCKED,
     }
 
-    hass.bus.async_fire(EVENT_LOCK_USERCODE_USED, event_data)
+    hass.bus.async_fire(EVENT_LOCK_STATE_CHANGED, event_data)
 
     await hass.async_block_till_done()
 
