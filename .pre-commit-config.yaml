@@ -45,14 +45,14 @@ repos:
         description: This hook ensures that all Javascript/Typescript files are linted
         language: node
         types: ["text", "ts"]
-        entry: yarn lint:fix
+        entry: yarn lint:fix --offline
         additional_dependencies: ['yarn@1.22.21']
       - id: yarn_build
         name: Build with yarn
         description: This hook ensures that the JS package is built
         language: node
         types: ["text", "ts"]
-        entry: yarn build
+        entry: yarn build --offline
         pass_filenames: false
         additional_dependencies: ['yarn@1.22.21']
 
