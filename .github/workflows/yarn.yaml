@@ -48,7 +48,7 @@ jobs:
         run: echo "changed=$(git status --porcelain | wc -l)" >> $GITHUB_OUTPUT
       - name: Check if clean
         if: steps.changes.outputs.changed != 0
-        uses: actions/github-script@v3
+        uses: actions/github-script@v7
         with:
           script: |
               core.setFailed('Repo is dirty! Run yarn build and yarn lint:fix locally before pushing changes.')
