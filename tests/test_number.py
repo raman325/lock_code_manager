@@ -12,7 +12,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_FROM,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
-    EVENT_LOCK_USERCODE_USED,
+    EVENT_LOCK_STATE_CHANGED,
 )
 
 from .common import LOCK_1_ENTITY_ID
@@ -31,7 +31,7 @@ async def test_number_entity(
     assert state.state == "5"
 
     hass.bus.async_fire(
-        EVENT_LOCK_USERCODE_USED,
+        EVENT_LOCK_STATE_CHANGED,
         {
             ATTR_NOTIFICATION_SOURCE: "event",
             ATTR_ENTITY_ID: LOCK_1_ENTITY_ID,

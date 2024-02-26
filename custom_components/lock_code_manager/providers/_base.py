@@ -34,7 +34,7 @@ from ..const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_LOCK_USERCODE_USED,
+    EVENT_LOCK_STATE_CHANGED,
 )
 from .const import LOGGER
 from .helpers import get_entry_data
@@ -283,7 +283,7 @@ class BaseLock:
             extra_data = source_data
 
         self.hass.bus.async_fire(
-            EVENT_LOCK_USERCODE_USED,
+            EVENT_LOCK_STATE_CHANGED,
             event_data={
                 ATTR_NOTIFICATION_SOURCE: notification_source,
                 ATTR_ENTITY_ID: lock_entity_id,

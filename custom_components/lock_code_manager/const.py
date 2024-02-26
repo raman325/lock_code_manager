@@ -30,7 +30,7 @@ ATTR_EXTRA_DATA = "extra_data"
 COORDINATORS = "coordinators"
 
 # Events
-EVENT_LOCK_USERCODE_USED = f"{DOMAIN}_usercode_used"
+EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 
 # Event data constants
 ATTR_ACTION_TEXT = "action_text"
