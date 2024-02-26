@@ -33,39 +33,7 @@ The [Wiki](https://github.com/raman325/lock_code_manager/wiki) is a WIP but has 
 
 `Lock Code Manager` makes it easy for you to generate a UI for managing and monitoring your PINs.
 
-### Dashboard
-
-To have a dedicated dashboard in the left side panel that has all of your `Lock Code Manager` config entries:
-
-1. Create a new Dashboard from scratch
-2. Give your Dashboard a name and an icon
-3. The YAML config for your new dashboard is as follows:
-
-```yaml
-strategy:
-    type: custom:lock-code-manager
-```
-
-The Dashboard will now expose all of your lock configurations across multiple views.
-
-### View
-
-To create a view for a specific `Lock Code Manager` config entry, your view definition should be as follows:
-
-```yaml
-strategy:
-    type: custom:lock-code-manager
-    config_entry_title: <Title of your config entry>  // Case sensitive!
-```
-
-Example minimal dashboard configuration using the view configuration:
-
-```yaml
-views:
-    - strategy:
-          type: custom:lock-code-manager
-          config_entry_title: House Locks
-```
+See [this wiki article](https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management#dashboard) for more details
 
 ## Inspiration
 
