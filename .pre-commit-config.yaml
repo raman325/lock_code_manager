@@ -45,16 +45,14 @@ repos:
         description: This hook ensures that all Javascript/Typescript files are linted
         language: node
         types: ["text", "ts"]
-        entry: yarn lint:fix --offline
-        additional_dependencies: ['yarn@1.22.21']
+        entry: npm run lint:fix
       - id: yarn_build
         name: Build with yarn
         description: This hook ensures that the JS package is built
         language: node
         types: ["text", "ts"]
-        entry: yarn build --offline
+        entry: npm install
         pass_filenames: false
-        additional_dependencies: ['yarn@1.22.21']
 
   - repo: https://github.com/adrienverge/yamllint.git
     rev: 81e9f98ffd059efe8aa9c1b1a42e5cce61b640c6 # frozen: v1.35.1
