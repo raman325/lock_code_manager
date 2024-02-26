@@ -30,9 +30,10 @@ jobs:
           yarn lint:fix
       - name: Check for changes
         id: changes
-        uses: UnicornGlobal/has-changes-action@v1.0.12
+        # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#environment-files
+        run: echo "changed=$(git status --porcelain | wc -l)" >> $GITHUB_OUTPUT
       - name: Check if clean
-        if: steps.changes.outputs.changed == 1
+        if: steps.changes.outputs.changed != 0
         uses: actions/github-script@v3
         with:
           script: |
