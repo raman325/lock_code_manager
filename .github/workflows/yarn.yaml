@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "**.ts"
+      - "js/**"
       - ".eslintrc.cjs"
       - "package.json"
       - "rollup.config.js"
@@ -13,6 +14,7 @@ on:
     branches: [main]
     paths:
       - "**.ts"
+      - "js/**"
       - ".eslintrc.cjs"
       - "package.json"
       - "rollup.config.js"
