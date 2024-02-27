@@ -19,9 +19,8 @@ jobs:
       - name: Update versions
         # yamllint disable rule:line-length
         run: |
-          sed -i 's/VERSION = "0.0.0"/VERSION = "${{ steps.get_version.outputs.VERSION }}"/g' ${{ github.workspace }}/custom_components/lock_code_manager/const.py
-          sed -i 's/"version": "0.0.0"/"version": "${{ steps.get_version.outputs.VERSION }}"/g' ${{ github.workspace }}/custom_components/lock_code_manager/manifest.json
-          sed -i 's/"version": "0.0.0"/"version": "${{ steps.get_version.outputs.VERSION }}"/g' ${{ github.workspace }}/package.json
+          sed -i '/VERSION = /c\VERSION = \"${{ steps.get_version.outputs.VERSION }}\"' ${{ github.workspace }}/custom_components/lock_code_manager/const.py
+          sed -i '/version/c\  \"version\": \"${{ steps.get_version.outputs.VERSION }}\"' ${{ github.workspace }}/custom_components/lock_code_manager/manifest.json
         # yamllint enable rule:line-length
       # Pack the lock_code_manager dir as a zip and upload to the release
       - name: ZIP Lock Code Manager Dir
