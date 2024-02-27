@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Get Version
         id: get_version
-        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_ENV"
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_OUTPUT"
       - name: Update versions
         # yamllint disable rule:line-length
         run: |
