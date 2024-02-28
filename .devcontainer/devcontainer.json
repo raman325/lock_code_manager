@@ -1,0 +1,20 @@
+{
+    "name": "lock_code_manager Dev",
+    "image": "mcr.microsoft.com/devcontainers/universal",
+    "postCreateCommand": "scripts/setup",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "christian-kohler.path-intellisense",
+                "esbenp.prettier-vscode",
+                "ms-python.black-formatter",
+                "ms-python.debugpy",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "redhat.vscode-yaml",
+                "visualstudioexptteam.vscodeintellicode",
+                "GitHub.vscode-pull-request-github"
+            ]
+        }
+    }
+}

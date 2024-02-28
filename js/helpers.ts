@@ -185,7 +185,7 @@ function getSlotMapping(
             }
         });
     const pinShouldBeEnabledEntity = lockCodeManagerEntities.find(
-        (entity) => entity.key === PIN_SYNCED_TO_LOCKS_KEY
+        (entity) => entity.slotNum === slotNum && entity.key === PIN_SYNCED_TO_LOCKS_KEY
     );
     const calendarEntityId = configEntryData.slots[slotNum];
     if (calendarEntityId) conditionEntityIds.unshift(calendarEntityId);
