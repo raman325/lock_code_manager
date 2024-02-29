@@ -66,17 +66,6 @@ export async function generateView(
     const cards = slotMappings.map((slotMapping) =>
         generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
     );
-    if (!useFoldEntityRow && hass.config.components.includes('hacs')) {
-        // cards.push({});
-    }
-
-    console.log({
-        badges,
-        cards,
-        panel: false,
-        path: slugify(configEntryTitle),
-        title: configEntryTitle
-    });
 
     return {
         badges,
