@@ -20,7 +20,7 @@ export interface ConfigEntryToEntities {
 }
 
 export interface SlotMapping {
-    codeEventEntityIds: string[];
+    codeEventEntityId: string;
     codeSensorEntityIds: string[];
     conditionEntityIds: string[];
     mainEntityIds: string[];

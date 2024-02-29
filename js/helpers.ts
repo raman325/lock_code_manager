@@ -135,11 +135,9 @@ function generateSlotCard(
                     {
                         entity: slotMapping.pinShouldBeEnabledEntity.entity_id
                     },
-                    ...maybeGenerateFoldEntityRowCard(
-                        slotMapping.codeEventEntityIds,
-                        'Unlock Events for this Slot',
-                        useFoldEntityRow
-                    ),
+                    {
+                        entity: slotMapping.codeEventEntityId
+                    },
                     ...maybeGenerateFoldEntityRowCard(
                         slotMapping.conditionEntityIds,
                         'Conditions',
@@ -170,14 +168,14 @@ function getSlotMapping(
     const mainEntityIds: string[] = [];
     const conditionEntityIds: string[] = [];
     const codeSensorEntityIds: string[] = [];
-    const codeEventEntityIds: string[] = [];
+    let codeEventEntityId: string;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntityIds.push(entity.entity_id);
             } else if (entity.key === CODE_EVENT_KEY) {
-                codeEventEntityIds.push(entity.entity_id);
+                codeEventEntityId = entity.entity_id;
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntityIds.push(entity.entity_id);
             } else if (entity.key !== PIN_SYNCED_TO_LOCKS_KEY) {
@@ -190,7 +188,7 @@ function getSlotMapping(
     const calendarEntityId = configEntryData.slots[slotNum];
     if (calendarEntityId) conditionEntityIds.unshift(calendarEntityId);
     return {
-        codeEventEntityIds,
+        codeEventEntityId,
         codeSensorEntityIds,
         conditionEntityIds,
         mainEntityIds,
