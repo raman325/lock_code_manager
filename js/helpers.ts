@@ -70,6 +70,14 @@ export async function generateView(
         // cards.push({});
     }
 
+    console.log({
+        badges,
+        cards,
+        panel: false,
+        path: slugify(configEntryTitle),
+        title: configEntryTitle
+    });
+
     return {
         badges,
         cards,
@@ -135,11 +143,10 @@ function generateSlotCard(
                     {
                         entity: slotMapping.pinShouldBeEnabledEntity.entity_id
                     },
-                    ...maybeGenerateFoldEntityRowCard(
-                        slotMapping.codeEventEntityIds,
-                        'Unlock Events for this Slot',
-                        useFoldEntityRow
-                    ),
+                    {
+                        entity: slotMapping.codeEventEntityId,
+                        name: 'PIN Last Used'
+                    },
                     ...maybeGenerateFoldEntityRowCard(
                         slotMapping.conditionEntityIds,
                         'Conditions',
@@ -170,14 +177,14 @@ function getSlotMapping(
     const mainEntityIds: string[] = [];
     const conditionEntityIds: string[] = [];
     const codeSensorEntityIds: string[] = [];
-    const codeEventEntityIds: string[] = [];
+    let codeEventEntityId: string;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntityIds.push(entity.entity_id);
             } else if (entity.key === CODE_EVENT_KEY) {
-                codeEventEntityIds.push(entity.entity_id);
+                codeEventEntityId = entity.entity_id;
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntityIds.push(entity.entity_id);
             } else if (entity.key !== PIN_SYNCED_TO_LOCKS_KEY) {
@@ -190,7 +197,7 @@ function getSlotMapping(
     const calendarEntityId = configEntryData.slots[slotNum];
     if (calendarEntityId) conditionEntityIds.unshift(calendarEntityId);
     return {
-        codeEventEntityIds,
+        codeEventEntityId,
         codeSensorEntityIds,
         conditionEntityIds,
         mainEntityIds,
@@ -228,7 +235,7 @@ function maybeGenerateFoldEntityRowCard(
 }
 
 // https://gist.github.com/hagemann/382adfc57adbd5af078dc93feef01fe1
-function slugify(value: string, delimiter = '-'): string {
+export function slugify(value: string, delimiter = '-'): string {
     const a = 'àáâäæãåāăąçćčđďèéêëēėęěğǵḧîïíīįìıİłḿñńǹňôöòóœøōõőṕŕřßśšşșťțûüùúūǘůűųẃẍÿýžźż·';
     const b = `aaaaaaaaaacccddeeeeeeeegghiiiiiiiilmnnnnoooooooooprrsssssttuuuuuuuuuwxyyzzz${delimiter}`;
     const p = new RegExp(a.split('').join('|'), 'g');

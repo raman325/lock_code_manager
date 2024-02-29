@@ -2,16 +2,17 @@ import { ReactiveElement } from 'lit';
 
 import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS } from './const';
 import { HomeAssistant } from './ha_type_stubs';
-import { generateView } from './helpers';
-import { LockCodeManagerDashboardStrategyConfig, LockCodeManagerEntitiesResponse } from './types';
+import { generateView, slugify } from './helpers';
+import { GetConfigEntriesResponse, LockCodeManagerDashboardStrategyConfig } from './types';
 
 export class LockCodeManagerDashboardStrategy extends ReactiveElement {
     static async generate(config: LockCodeManagerDashboardStrategyConfig, hass: HomeAssistant) {
-        const configEntriesAndEntities = await hass.callWS<LockCodeManagerEntitiesResponse[]>({
-            type: 'lock_code_manager/get_config_entries_to_entities'
+        const configEntries = await hass.callWS<GetConfigEntriesResponse>({
+            domain: 'lock_code_manager',
+            type: 'config_entries/get'
         });
 
-        if (configEntriesAndEntities.length === 0) {
+        if (configEntries.length === 0) {
             return {
                 title: 'Lock Code Manager',
                 views: [
@@ -29,16 +30,19 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
             };
         }
 
-        const views = await Promise.all(
-            configEntriesAndEntities.map(([configEntryId, configEntryTitle, entities]) =>
-                generateView(
-                    hass,
-                    configEntryId,
-                    configEntryTitle,
-                    entities,
-                    config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS
-                )
-            )
+        const views: object[] = await Promise.all(
+            configEntries.map((configEntry) => {
+                return {
+                    path: slugify(configEntry.title),
+                    strategy: {
+                        config_entry_id: configEntry.entry_id,
+                        include_code_slot_sensors:
+                            config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS,
+                        type: 'custom:lock-code-manager'
+                    },
+                    title: configEntry.title
+                };
+            })
         );
 
         if (views.length === 1) {

@@ -107,25 +107,3 @@ async def test_get_config_entry_entities(
     assert entry_id == lock_code_manager_config_entry.entry_id
     assert title == "Mock Title"
     assert len(entities) == 15
-
-
-async def test_get_config_entries_to_entities(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test get_config_entries_to_entities WS API."""
-    ws_client = await hass_ws_client(hass)
-
-    # Try API call with entry ID
-    await ws_client.send_json(
-        {"id": 1, "type": "lock_code_manager/get_config_entries_to_entities"}
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-    assert len(msg["result"]) == 1
-    [[entry_id, title, entities]] = msg["result"]
-    assert entry_id == lock_code_manager_config_entry.entry_id
-    assert title == "Mock Title"
-    assert len(entities) == 15
