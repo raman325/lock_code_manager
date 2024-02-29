@@ -64,7 +64,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         BaseLockCodeManagerEntity.__init__(
             self, hass, ent_reg, config_entry, slot_num, key
         )
-        self._attr_name = f"Code slot {slot_num} last event"
+        self._attr_name = f"Code slot {slot_num}"
 
     @callback
     def _handle_event(self, event: Event) -> None:

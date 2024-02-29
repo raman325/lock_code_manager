@@ -61,6 +61,11 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             await resources.async_load()
             resources.loaded = True
 
+        # Expose strategy javascript
+        hass.http.register_static_path(
+            STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
+        )
+
         try:
             res_id = next(
                 id
@@ -68,11 +73,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 if data["url"] == STRATEGY_PATH
             )
         except StopIteration:
-            # Expose strategy javascript
-            hass.http.register_static_path(
-                STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
-            )
-
             # Register strategy module
             data = await resources.async_create_item(
                 {"res_type": "module", "url": STRATEGY_PATH}

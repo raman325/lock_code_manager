@@ -84,7 +84,6 @@ async def async_setup(hass: HomeAssistant) -> bool:
     """Enable the websocket_commands."""
     websocket_api.async_register_command(hass, get_slot_calendar_data)
     websocket_api.async_register_command(hass, get_config_entry_entities)
-    websocket_api.async_register_command(hass, get_config_entries_to_entities)
 
     return True
 
@@ -144,33 +143,5 @@ async def get_config_entry_entities(
                     er.async_get(hass), config_entry.entry_id
                 )
             ],
-        ],
-    )
-
-
-@websocket_api.websocket_command(
-    {vol.Required("type"): "lock_code_manager/get_config_entries_to_entities"}
-)
-@websocket_api.async_response
-async def get_config_entries_to_entities(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """Return entities for multiple lock_code_manager config entries."""
-    connection.send_result(
-        msg["id"],
-        [
-            [
-                config_entry.entry_id,
-                config_entry.title,
-                [
-                    entity.as_partial_dict
-                    for entity in er.async_entries_for_config_entry(
-                        er.async_get(hass), config_entry.entry_id
-                    )
-                ],
-            ]
-            for config_entry in hass.config_entries.async_entries(DOMAIN)
         ],
     )

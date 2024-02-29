@@ -70,6 +70,14 @@ export async function generateView(
         // cards.push({});
     }
 
+    console.log({
+        badges,
+        cards,
+        panel: false,
+        path: slugify(configEntryTitle),
+        title: configEntryTitle
+    });
+
     return {
         badges,
         cards,
@@ -136,7 +144,8 @@ function generateSlotCard(
                         entity: slotMapping.pinShouldBeEnabledEntity.entity_id
                     },
                     {
-                        entity: slotMapping.codeEventEntityId
+                        entity: slotMapping.codeEventEntityId,
+                        name: 'PIN Last Used'
                     },
                     ...maybeGenerateFoldEntityRowCard(
                         slotMapping.conditionEntityIds,
@@ -226,7 +235,7 @@ function maybeGenerateFoldEntityRowCard(
 }
 
 // https://gist.github.com/hagemann/382adfc57adbd5af078dc93feef01fe1
-function slugify(value: string, delimiter = '-'): string {
+export function slugify(value: string, delimiter = '-'): string {
     const a = 'àáâäæãåāăąçćčđďèéêëēėęěğǵḧîïíīįìıİłḿñńǹňôöòóœøōõőṕŕřßśšşșťțûüùúūǘůűųẃẍÿýžźż·';
     const b = `aaaaaaaaaacccddeeeeeeeegghiiiiiiiilmnnnnoooooooooprrsssssttuuuuuuuuuwxyyzzz${delimiter}`;
     const p = new RegExp(a.split('').join('|'), 'g');
