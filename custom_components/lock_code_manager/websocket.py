@@ -134,14 +134,13 @@ async def get_config_entry_entities(
     """Return lock_code_manager config entry data."""
     connection.send_result(
         msg["id"],
-        [
-            config_entry.entry_id,
-            config_entry.title,
-            [
+        {
+            "config_entry": config_entry.as_json_fragment,
+            "entities": [
                 entity.as_partial_dict
                 for entity in er.async_entries_for_config_entry(
                     er.async_get(hass), config_entry.entry_id
                 )
             ],
-        ],
+        },
     )

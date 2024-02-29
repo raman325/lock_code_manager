@@ -103,7 +103,9 @@ async def test_get_config_entry_entities(
     )
     msg = await ws_client.receive_json()
     assert msg["success"]
-    [entry_id, title, entities] = msg["result"]
-    assert entry_id == lock_code_manager_config_entry.entry_id
-    assert title == "Mock Title"
-    assert len(entities) == 19
+
+    result = msg["result"]
+    config_entry = result["config_entry"]
+    assert config_entry["entry_id"] == lock_code_manager_config_entry.entry_id
+    assert config_entry["title"] == "Mock Title"
+    assert len(result["entities"]) == 19
