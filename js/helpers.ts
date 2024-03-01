@@ -130,7 +130,8 @@ function generateSlotCard(
                     ...generateEntityCards(slotMapping.mainEntityIds),
                     DIVIDER_CARD,
                     {
-                        entity: slotMapping.pinShouldBeEnabledEntity.entity_id
+                        entity: slotMapping.pinShouldBeEnabledEntity.entity_id,
+                        name: 'PIN synced to locks'
                     },
                     {
                         entity: slotMapping.codeEventEntityId,
