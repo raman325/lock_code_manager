@@ -12,6 +12,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     MATCH_ALL,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
     STATE_UNLOCKED,
 )
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
@@ -33,7 +34,7 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from .helpers import get_slot_data
+from .data import get_slot_data
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -320,7 +321,12 @@ class BaseLockCodeManagerEntity(Entity):
                 self.entity_id,
                 self.slot_num,
             )
-            if not self.hass.states.get(self.entity_id):
+            if (
+                not (state := self.hass.states.get(self.entity_id))
+                or state.state == STATE_UNKNOWN
+                or (state.state == STATE_UNAVAILABLE and self._is_available)
+                or self._state is None
+            ):
                 self._unsub_initial_state = async_track_state_change(
                     self.hass,
                     [self.entity_id],

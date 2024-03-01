@@ -41,7 +41,8 @@ from .const import (
     Platform,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .helpers import async_create_lock_instance, get_entry_data, get_lock_from_entity_id
+from .data import get_entry_data
+from .helpers import async_create_lock_instance, get_lock_from_entity_id
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 

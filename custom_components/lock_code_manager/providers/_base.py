@@ -36,7 +36,7 @@ from ..const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from ..helpers import get_entry_data
+from ..data import get_entry_data
 from .const import LOGGER
 
 

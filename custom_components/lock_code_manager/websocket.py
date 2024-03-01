@@ -14,7 +14,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
 from .const import CONF_CALENDAR, CONF_LOCKS, CONF_SLOTS, DOMAIN
-from .helpers import get_entry_data
+from .data import get_entry_data
 
 ERR_NOT_LOADED = "not_loaded"
 
