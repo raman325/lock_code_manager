@@ -14,7 +14,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
 from .const import CONF_CALENDAR, CONF_LOCKS, CONF_SLOTS, DOMAIN
-from .providers.helpers import get_entry_data
+from .data import get_entry_data
 
 ERR_NOT_LOADED = "not_loaded"
 
@@ -107,10 +107,10 @@ async def get_slot_calendar_data(
     connection.send_result(
         msg["id"],
         {
-            CONF_LOCKS: get_entry_data(config_entry, CONF_LOCKS),
+            CONF_LOCKS: get_entry_data(config_entry, CONF_LOCKS, []),
             CONF_SLOTS: {
                 k: v.get(CONF_CALENDAR)
-                for k, v in get_entry_data(config_entry, CONF_SLOTS).items()
+                for k, v in get_entry_data(config_entry, CONF_SLOTS, {}).items()
             },
         },
     )

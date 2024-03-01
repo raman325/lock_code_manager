@@ -30,7 +30,6 @@ from .const import (
     ATTR_PIN_SYNCED_TO_LOCKS,
     CONF_CALENDAR,
     CONF_NUMBER_OF_USES,
-    CONF_SLOTS,
     COORDINATORS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -194,10 +193,8 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         # Switch binary sensor on if at least one state exists and all states are 'on'
         entity_id_map = self._entity_id_map.copy()
         # If there is a calendar entity, we need to check its state as well
-        if calendar_entity_id := self.config_entry.data[CONF_SLOTS][self.slot_num].get(
-            CONF_CALENDAR
-        ):
-            entity_id_map[CONF_CALENDAR] = calendar_entity_id
+        if self._calendar_entity_id:
+            entity_id_map[CONF_CALENDAR] = self._calendar_entity_id
 
         states: dict[str, dict[str, str]] = {}
         for key, entity_id in entity_id_map.items():
@@ -272,12 +269,8 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
     async def _handle_state_changes(self, entity_id: str, _: State, __: State) -> None:
         """Handle state change."""
         entity_id_map = self._entity_id_map.copy()
-        if (
-            calendar_entity_id := self.config_entry.data[CONF_SLOTS]
-            .get(self.slot_num, {})
-            .get(CONF_CALENDAR)
-        ):
-            entity_id_map[CONF_CALENDAR] = calendar_entity_id
+        if self._calendar_entity_id:
+            entity_id_map[CONF_CALENDAR] = self._calendar_entity_id
         if any(
             entity_id == key_entity_id
             for key, key_entity_id in entity_id_map.items()

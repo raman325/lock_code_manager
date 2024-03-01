@@ -41,6 +41,7 @@ from .const import (
     Platform,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
+from .data import get_entry_data
 from .helpers import async_create_lock_instance, get_lock_from_entity_id
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
@@ -115,7 +116,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     try:
         entity_id = next(
             entity_id
-            for entity_id in config_entry.data.get(CONF_LOCKS, [])
+            for entity_id in get_entry_data(config_entry, CONF_LOCKS, [])
             if not ent_reg.async_get(entity_id)
         )
     except StopIteration:

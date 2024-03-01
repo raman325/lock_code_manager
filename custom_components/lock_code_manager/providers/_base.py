@@ -36,8 +36,8 @@ from ..const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from ..data import get_entry_data
 from .const import LOGGER
-from .helpers import get_entry_data
 
 
 @dataclass(repr=False)
@@ -230,8 +230,8 @@ class BaseLock:
                 config_entry
                 for config_entry in self.hass.config_entries.async_entries(DOMAIN)
                 if (
-                    self.lock.entity_id in get_entry_data(config_entry, CONF_LOCKS)
-                    and code_slot in get_entry_data(config_entry, CONF_SLOTS)
+                    self.lock.entity_id in get_entry_data(config_entry, CONF_LOCKS, [])
+                    and code_slot in get_entry_data(config_entry, CONF_SLOTS, {})
                     and (
                         name_entity_id := self.ent_reg.async_get_entity_id(
                             TEXT_DOMAIN,
