@@ -11,7 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN, EVENT_LOCK_STATE_CHANGED
+from .const import CONF_NUMBER_OF_USES, DOMAIN, EVENT_LOCK_STATE_CHANGED
 from .entity import BaseLockCodeManagerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,8 +57,7 @@ class LockCodeManagerNumber(BaseLockCodeManagerEntity, NumberEntity):
     @property
     def native_value(self) -> int | None:
         """Return native value."""
-        entry = self.config_entry
-        return entry.data[CONF_SLOTS][self.slot_num].get(self.key)
+        return self._state
 
     async def async_set_native_value(self, value: int) -> None:
         """Set value of number."""

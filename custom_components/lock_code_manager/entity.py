@@ -28,10 +28,12 @@ from .const import (
     ATTR_ENTITIES_ADDED_TRACKER,
     ATTR_ENTITIES_REMOVED_TRACKER,
     ATTR_TO,
+    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
 )
+from .helpers import get_slot_data
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -76,6 +78,18 @@ class BaseLockCodeManagerEntity(Entity):
         self._attr_name = f"Code slot {slot_num} {' '.join(key_parts)}"
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
         self._attr_extra_state_attributes = {ATTR_CODE_SLOT: int(slot_num)}
+
+    @final
+    @property
+    def _state(self) -> Any:
+        """Return state of entity."""
+        return get_slot_data(self.config_entry, self.slot_num).get(self.key)
+
+    @final
+    @property
+    def _calendar_entity_id(self) -> str | None:
+        """Return calendar entity ID for this slot."""
+        return get_slot_data(self.config_entry, self.slot_num).get(CONF_CALENDAR)
 
     @final
     def _get_uid(self, key: str) -> str:

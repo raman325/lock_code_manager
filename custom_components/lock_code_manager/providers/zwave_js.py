@@ -43,8 +43,8 @@ from homeassistant.core import Event, callback
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..exceptions import LockDisconnected
+from ..helpers import get_entry_data
 from ._base import BaseLock
-from .helpers import get_entry_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -161,9 +161,9 @@ class ZWaveJSLock(BaseLock):
         the lock.
         """
         for config_entry in self.hass.config_entries.async_entries(DOMAIN):
-            if self.lock.entity_id not in get_entry_data(config_entry, CONF_LOCKS):
+            if self.lock.entity_id not in get_entry_data(config_entry, CONF_LOCKS, []):
                 continue
-            for code_slot in get_entry_data(config_entry, CONF_SLOTS):
+            for code_slot in get_entry_data(config_entry, CONF_SLOTS, {}):
                 await get_usercode_from_node(self.node, code_slot)
 
     async def async_set_usercode(
@@ -194,9 +194,8 @@ class ZWaveJSLock(BaseLock):
         code_slots: Iterable[int] = (
             code_slot
             for entry in self.hass.config_entries.async_entries(DOMAIN)
-            for code_slot in entry.data[CONF_SLOTS]
-            if self.lock.entity_id
-            not in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, []))
+            for code_slot in get_entry_data(entry, CONF_SLOTS, {})
+            if self.lock.entity_id not in get_entry_data(entry, CONF_LOCKS, [])
         )
         data: dict[int, int | str] = {}
         code_slot = 1
@@ -232,8 +231,8 @@ class ZWaveJSLock(BaseLock):
                             DOMAIN
                         )
                         if self.lock.entity_id
-                        in get_entry_data(config_entry, CONF_LOCKS)
-                        and code_slot in get_entry_data(config_entry, CONF_SLOTS)
+                        in get_entry_data(config_entry, CONF_LOCKS, [])
+                        and code_slot in get_entry_data(config_entry, CONF_SLOTS, {})
                     )
                     base_unique_id = f"{config_entry.entry_id}|{code_slot}"
                     active = self.ent_reg.async_get_entity_id(

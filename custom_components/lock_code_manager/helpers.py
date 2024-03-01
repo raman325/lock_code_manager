@@ -18,7 +18,7 @@ from homeassistant.helpers import (
     selector as sel,
 )
 
-from .const import CONF_CALENDAR, CONF_LOCKS, CONF_NUMBER_OF_USES, DOMAIN
+from .const import CONF_CALENDAR, CONF_LOCKS, CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN
 from .exceptions import ConfigEntryNotFoundError
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
@@ -93,3 +93,13 @@ def get_lock_from_entity_id(hass: HomeAssistant, entity_id: str) -> BaseLock:
         raise ConfigEntryNotFoundError(
             f"Lock with entity ID {entity_id} not found."
         ) from None
+
+
+def get_entry_data(config_entry: ConfigEntry, key: str, default: Any = {}) -> Any:
+    """Get data from config entry."""
+    return config_entry.data.get(key, config_entry.options.get(key, default))
+
+
+def get_slot_data(config_entry, slot_num: int) -> dict[str, Any]:
+    """Get data for slot."""
+    return get_entry_data(config_entry, CONF_SLOTS, {}).get(slot_num, {})

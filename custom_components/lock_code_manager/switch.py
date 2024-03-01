@@ -13,7 +13,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_SLOTS, DOMAIN
+from .const import DOMAIN
 from .entity import BaseLockCodeManagerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,8 +56,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return native value."""
-        entry = self.config_entry
-        return entry.data[CONF_SLOTS][self.slot_num].get(self.key)
+        return self._state
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
