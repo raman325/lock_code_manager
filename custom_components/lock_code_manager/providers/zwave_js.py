@@ -69,7 +69,7 @@ ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
 }
 
 
-@dataclass(repr=False)
+@dataclass(repr=False, eq=False)
 class ZWaveJSLock(BaseLock):
     """Class to represent ZWave JS lock."""
 

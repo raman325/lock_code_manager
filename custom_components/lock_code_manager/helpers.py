@@ -8,8 +8,16 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
+from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    ATTR_AREA_ID,
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
@@ -19,7 +27,6 @@ from homeassistant.helpers import (
 )
 
 from .const import CONF_CALENDAR, CONF_LOCKS, CONF_NUMBER_OF_USES, DOMAIN
-from .exceptions import ConfigEntryNotFoundError
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,15 +88,52 @@ def async_create_lock_instance(
     return lock
 
 
-def get_lock_from_entity_id(hass: HomeAssistant, entity_id: str) -> BaseLock:
-    """Get lock from entity ID."""
-    try:
-        return next(
-            lock
-            for lock in hass.data[DOMAIN][CONF_LOCKS].values()
-            if entity_id == lock.lock.entity_id
+def get_locks_from_targets(
+    hass: HomeAssistant, target_data: dict[str, Any]
+) -> set[BaseLock]:
+    """Get lock(s) from target IDs."""
+    area_ids: list[str] = target_data.get(ATTR_AREA_ID, [])
+    device_ids: list[str] = target_data.get(ATTR_DEVICE_ID, [])
+    entity_ids: list[str] = target_data.get(ATTR_ENTITY_ID, [])
+    locks: set[BaseLock] = set()
+    lock_entity_ids: set[str] = set()
+    ent_reg = er.async_get(hass)
+    for area_id in area_ids:
+        lock_entity_ids.update(
+            ent.entity_id
+            for ent in er.async_entries_for_area(ent_reg, area_id)
+            if ent.domain == LOCK_DOMAIN
         )
-    except StopIteration:
-        raise ConfigEntryNotFoundError(
-            f"Lock with entity ID {entity_id} not found."
-        ) from None
+    for device_id in device_ids:
+        lock_entity_ids.update(
+            ent.entity_id
+            for ent in er.async_entries_for_device(ent_reg, device_id)
+            if ent.domain == LOCK_DOMAIN
+        )
+    for entity_id in entity_ids:
+        if not entity_id.startswith(LOCK_DOMAIN):
+            _LOGGER.warning(
+                "Entity ID %s is not a lock entity, skipping",
+                entity_id,
+            )
+            continue
+        lock_entity_ids.add(entity_id)
+    for lock_entity_id in lock_entity_ids:
+        try:
+            locks.add(
+                next(
+                    lock
+                    for lock in hass.data[DOMAIN][CONF_LOCKS].values()
+                    if lock_entity_id == lock.lock.entity_id
+                )
+            )
+        except StopIteration:
+            _LOGGER.warning(
+                (
+                    "Lock with entity ID %s does not have a Lock Code Manager entry, "
+                    "skipping"
+                ),
+                entity_id,
+            )
+
+    return locks

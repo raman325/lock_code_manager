@@ -13,7 +13,14 @@ import voluptuous as vol
 from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
 from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    ATTR_AREA_ID,
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+)
 from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
@@ -42,7 +49,7 @@ from .const import (
 )
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import get_entry_data
-from .helpers import async_create_lock_instance, get_lock_from_entity_id
+from .helpers import async_create_lock_instance, get_locks_from_targets
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -92,18 +99,33 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
         """Hard refresh all usercodes."""
         _LOGGER.debug("Hard refresh usercodes service called: %s", service.data)
-        lock = get_lock_from_entity_id(hass, service.data[ATTR_ENTITY_ID])
-        try:
-            await lock.async_hard_refresh_codes()
-        except Exception as err:
-            if not isinstance(err, HomeAssistantError):
-                raise HomeAssistantError from err
+        locks = get_locks_from_targets(hass, service.data)
+        results = await asyncio.gather(
+            *(lock.async_hard_refresh_codes() for lock in locks), return_exceptions=True
+        )
+        errors = [err for err in results if isinstance(err, Exception)]
+        if errors:
+            errors_str = "\n".join(str(errors))
+            raise HomeAssistantError(
+                "The following errors occurred while processing this service "
+                f"request:\n{errors_str}"
+            )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_HARD_REFRESH_USERCODES,
         _hard_refresh_usercodes,
-        schema=vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id}),
+        schema=vol.All(
+            vol.Schema(
+                {
+                    vol.Optional(ATTR_AREA_ID): vol.All(cv.ensure_list, [cv.string]),
+                    vol.Optional(ATTR_DEVICE_ID): vol.All(cv.ensure_list, [cv.string]),
+                    vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
+                }
+            ),
+            cv.has_at_least_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
+            cv.has_at_most_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
+        ),
     )
 
     return True

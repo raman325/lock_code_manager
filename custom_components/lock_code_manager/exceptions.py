@@ -5,11 +5,11 @@ from __future__ import annotations
 from homeassistant.exceptions import HomeAssistantError
 
 
-class ConfigEntryNotFoundError(HomeAssistantError):
-    """Raise when a config entry for a given entity ID is not found."""
+class LockCodeManagerError(HomeAssistantError):
+    """Base class for lock_code_manager exceptions."""
 
 
-class EntityNotFoundError(HomeAssistantError):
+class EntityNotFoundError(LockCodeManagerError):
     """Raise when en entity is not found."""
 
     def __init__(self, entity_id: str):
@@ -18,5 +18,5 @@ class EntityNotFoundError(HomeAssistantError):
         super().__init__(f"Entity not found: {entity_id}")
 
 
-class LockDisconnected(HomeAssistantError):
+class LockDisconnected(LockCodeManagerError):
     """Raised when lock can't be communicated with."""
