@@ -49,7 +49,7 @@
           "locks": "Locks",
           "name": "Name"
         },
-        "description": "Select the locks you would like to manage with this configuration.",
+        "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it.",
         "title": "Lock Code Manager"
       },
       "yaml": {
