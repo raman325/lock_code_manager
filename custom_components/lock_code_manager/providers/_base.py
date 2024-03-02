@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
@@ -204,13 +203,6 @@ class BaseLock:
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
             raise err
-
-    @final
-    def fire_code_slot_event(self, *args, **kwargs) -> None:
-        """Fire a code slot event."""
-        return asyncio.run_coroutine_threadsafe(
-            self.async_fire_code_slot_event(*args, **kwargs), self.hass.loop
-        ).result()
 
     @final
     @callback
