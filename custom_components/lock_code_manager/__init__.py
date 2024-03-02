@@ -105,9 +105,10 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         )
         errors = [err for err in results if isinstance(err, Exception)]
         if errors:
+            errors_str = "\n".join(str(errors))
             raise HomeAssistantError(
                 "The following errors occurred while processing this service "
-                f"request:\n {'\n'.join(str(errors))}"
+                f"request:\n{errors_str}"
             )
 
     hass.services.async_register(
