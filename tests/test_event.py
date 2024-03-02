@@ -55,6 +55,6 @@ async def test_event_entity(
     assert state.attributes[ATTR_STATE] == STATE_UNLOCKED
     assert state.attributes[ATTR_ACTION_TEXT] == "test"
     assert state.attributes[ATTR_CODE_SLOT] == 2
-    assert state.attributes[ATTR_CODE_SLOT_NAME] == "name2"
+    assert state.attributes[ATTR_CODE_SLOT_NAME] == "test2"
     assert state.attributes[ATTR_FROM] == STATE_LOCKED
     assert state.attributes[ATTR_TO] == STATE_UNLOCKED
