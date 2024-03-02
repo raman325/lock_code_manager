@@ -31,6 +31,7 @@ from .const import (
     DEFAULT_START,
     DOMAIN,
 )
+from .data import get_entry_data
 from .helpers import CODE_SLOT_SCHEMA, CODE_SLOTS_SCHEMA, UI_CODE_SLOT_SCHEMA
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,8 +65,12 @@ def _check_common_slots(
             (lock, common_slots, entry.title)
             for lock in locks
             for entry in hass.config_entries.async_entries(DOMAIN)
-            if lock in entry.data[CONF_LOCKS]
-            and (common_slots := sorted(set(entry.data[CONF_SLOTS]) & set(slots_list)))
+            if lock in get_entry_data(entry, CONF_LOCKS, {})
+            and (
+                common_slots := sorted(
+                    set(get_entry_data(entry, CONF_SLOTS, {})) & set(slots_list)
+                )
+            )
             and not (config_entry and config_entry == entry)
         )
     except StopIteration:
@@ -231,7 +236,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
                 user_input[CONF_LOCKS],
-                config_entry.data[CONF_SLOTS].keys(),
+                get_entry_data(config_entry, CONF_SLOTS, {}).keys(),
                 config_entry,
             )
             errors.update(additional_errors)
@@ -304,7 +309,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
 
         def _get_default(key: str) -> Any:
             """Get default value."""
-            return user_input.get(key, self.config_entry.data[key])
+            return user_input.get(key, get_entry_data(self.config_entry.data, key, {}))
 
         return self.async_show_form(
             step_id="init",
