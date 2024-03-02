@@ -52,7 +52,7 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
-@dataclass(repr=False)
+@dataclass(repr=False, eq=False)
 class MockLCMLock(BaseLock):
     """Mock Lock Code Manager lock instance."""
 

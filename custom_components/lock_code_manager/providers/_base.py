@@ -40,7 +40,7 @@ from ..data import get_entry_data
 from .const import LOGGER
 
 
-@dataclass(repr=False)
+@dataclass(repr=False, eq=False)
 class BaseLock:
     """Base for lock instance."""
 
@@ -63,6 +63,18 @@ class BaseLock:
     def __repr__(self) -> str:
         """Return string representation of self."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
+
+    @final
+    def __hash__(self) -> int:
+        """Return hash of self."""
+        return hash(self.lock.entity_id)
+
+    @final
+    def __eq__(self, other: Any) -> bool:
+        """Return whether self is equal to other."""
+        if not isinstance(other, BaseLock):
+            return False
+        return self.lock.entity_id == other.lock.entity_id
 
     @property
     def domain(self) -> str:
