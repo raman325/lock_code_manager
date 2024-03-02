@@ -76,8 +76,6 @@ class BaseLockCodeManagerEntity(Entity):
         except ValueError:
             pass
 
-        _LOGGER.error(type(self.slot_num))
-
         self._attr_name = f"Code slot {slot_num} {' '.join(key_parts)}"
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
         self._attr_extra_state_attributes = {ATTR_CODE_SLOT: int(slot_num)}
