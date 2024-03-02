@@ -135,6 +135,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         ATTR_ENTITIES_REMOVED_TRACKER: defaultdict(dict),
     }
 
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, entry_id)},
+        manufacturer="Lock Code Manager",
+        name=config_entry.title,
+        serial_number=entry_id,
+    )
+
     config_entry.async_create_task(
         hass,
         hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS),
