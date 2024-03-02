@@ -23,7 +23,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
-from .common import LOCK_1_ENTITY_ID
+from .common import EVENT_ENTITY, LOCK_1_ENTITY_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ async def test_event_entity(
     lock_code_manager_config_entry,
 ):
     """Test event entity."""
-    state = hass.states.get("event.code_slot_2")
+    state = hass.states.get(EVENT_ENTITY)
     assert state
     assert state.state == STATE_UNKNOWN
 
@@ -46,7 +46,7 @@ async def test_event_entity(
 
     await hass.async_block_till_done()
 
-    state = hass.states.get("event.code_slot_2")
+    state = hass.states.get(EVENT_ENTITY)
     assert state
     assert state.state != STATE_UNKNOWN
 
