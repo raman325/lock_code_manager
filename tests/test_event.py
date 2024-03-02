@@ -9,7 +9,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     STATE_UNLOCKED,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTION_TEXT,
@@ -18,8 +18,10 @@ from custom_components.lock_code_manager.const import (
     ATTR_FROM,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
-    EVENT_LOCK_STATE_CHANGED,
+    CONF_LOCKS,
+    DOMAIN,
 )
+from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import EVENT_ENTITY, LOCK_1_ENTITY_ID
 
@@ -36,18 +38,11 @@ async def test_event_entity(
     assert state
     assert state.state == STATE_UNKNOWN
 
-    event_data = {
-        ATTR_NOTIFICATION_SOURCE: "event",
-        ATTR_ENTITY_ID: LOCK_1_ENTITY_ID,
-        ATTR_STATE: STATE_UNLOCKED,
-        ATTR_ACTION_TEXT: "test",
-        ATTR_CODE_SLOT: 2,
-        ATTR_CODE_SLOT_NAME: "test2",
-        ATTR_FROM: STATE_LOCKED,
-        ATTR_TO: STATE_UNLOCKED,
-    }
+    lock: BaseLock = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
+        CONF_LOCKS
+    ][LOCK_1_ENTITY_ID]
 
-    hass.bus.async_fire(EVENT_LOCK_STATE_CHANGED, event_data)
+    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
 
     await hass.async_block_till_done()
 
@@ -55,4 +50,11 @@ async def test_event_entity(
     assert state
     assert state.state != STATE_UNKNOWN
 
-    assert all(state.attributes[key] == val for key, val in event_data.items())
+    assert state.attributes[ATTR_NOTIFICATION_SOURCE] == "event"
+    assert state.attributes[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+    assert state.attributes[ATTR_STATE] == STATE_UNLOCKED
+    assert state.attributes[ATTR_ACTION_TEXT] == "test"
+    assert state.attributes[ATTR_CODE_SLOT] == 2
+    assert state.attributes[ATTR_CODE_SLOT_NAME] == "test2"
+    assert state.attributes[ATTR_FROM] == STATE_LOCKED
+    assert state.attributes[ATTR_TO] == STATE_UNLOCKED

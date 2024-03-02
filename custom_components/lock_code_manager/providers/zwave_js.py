@@ -107,7 +107,7 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
-        self.fire_code_slot_event(
+        self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=next(
                 (
@@ -232,8 +232,11 @@ class ZWaveJSLock(BaseLock):
                         )
                         if self.lock.entity_id
                         in get_entry_data(config_entry, CONF_LOCKS, [])
-                        and str(code_slot)
-                        in get_entry_data(config_entry, CONF_SLOTS, {})
+                        and int(code_slot)
+                        in (
+                            int(slot)
+                            for slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                        )
                     )
                     base_unique_id = f"{config_entry.entry_id}|{code_slot}"
                     active = self.ent_reg.async_get_entity_id(

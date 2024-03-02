@@ -206,7 +206,7 @@ class BaseLock:
 
     @final
     @callback
-    def fire_code_slot_event(
+    def async_fire_code_slot_event(
         self,
         code_slot: int | None = None,
         to_locked: bool | None = None,
@@ -231,7 +231,12 @@ class BaseLock:
                 for config_entry in self.hass.config_entries.async_entries(DOMAIN)
                 if (
                     self.lock.entity_id in get_entry_data(config_entry, CONF_LOCKS, [])
-                    and str(code_slot) in get_entry_data(config_entry, CONF_SLOTS, {})
+                    and code_slot is not None
+                    and int(code_slot)
+                    in (
+                        int(slot)
+                        for slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                    )
                     and (
                         name_entity_id := self.ent_reg.async_get_entity_id(
                             TEXT_DOMAIN,

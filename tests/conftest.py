@@ -133,6 +133,7 @@ class MockLockEntity(LockEntity):
         """Initialize the lock."""
         self._attr_name = name
         self._attr_unique_id = slugify(name)
+        self._attr_is_locked = False
         super().__init__()
 
 
