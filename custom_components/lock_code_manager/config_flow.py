@@ -309,7 +309,7 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
 
         def _get_default(key: str) -> Any:
             """Get default value."""
-            return user_input.get(key, get_entry_data(self.config_entry.data, key, {}))
+            return user_input.get(key, get_entry_data(self.config_entry, key, {}))
 
         return self.async_show_form(
             step_id="init",
