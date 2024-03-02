@@ -76,7 +76,15 @@ class BaseLockCodeManagerEntity(Entity):
         except ValueError:
             pass
 
-        self._attr_name = f"Code slot {slot_num} {' '.join(key_parts)}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{self.entry_id}|{slot_num}")},
+            name=f"{config_entry.title} code slot {slot_num}",
+            manufacturer="Lock Code Manager",
+            model="Code Slot",
+            via_device=(DOMAIN, self.entry_id),
+        )
+
+        self._attr_name: str | None = " ".join(key_parts)
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
         self._attr_extra_state_attributes = {ATTR_CODE_SLOT: int(slot_num)}
 

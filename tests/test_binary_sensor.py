@@ -17,6 +17,8 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .common import ENABLED_ENTITY, NUMBER_OF_USES_ENTITY, PIN_SYNCED_ENTITY
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -30,7 +32,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_OFF
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -43,14 +45,14 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_ON
 
     hass.data["lock_code_manager_calendar"].delete_event(cal_event.uid)
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -59,7 +61,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -67,12 +69,12 @@ async def test_binary_sensor_entity(
         NUMBER_DOMAIN,
         SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: "0"},
-        target={ATTR_ENTITY_ID: "number.code_slot_2_number_of_uses"},
+        target={ATTR_ENTITY_ID: NUMBER_OF_USES_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -80,35 +82,35 @@ async def test_binary_sensor_entity(
         NUMBER_DOMAIN,
         SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: "5"},
-        target={ATTR_ENTITY_ID: "number.code_slot_2_number_of_uses"},
+        target={ATTR_ENTITY_ID: NUMBER_OF_USES_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_ON
 
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_OFF,
-        target={ATTR_ENTITY_ID: "switch.code_slot_2_enabled"},
+        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_ON,
-        target={ATTR_ENTITY_ID: "switch.code_slot_2_enabled"},
+        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("binary_sensor.code_slot_2_pin_synced_to_locks")
+    state = hass.states.get(PIN_SYNCED_ENTITY)
     assert state
     assert state.state == STATE_ON

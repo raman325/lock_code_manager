@@ -14,6 +14,8 @@ from homeassistant.components.text import (
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 
+from .common import ENABLED_ENTITY, PIN_ENTITY
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -23,7 +25,7 @@ async def test_switch_entity(
     lock_code_manager_config_entry,
 ):
     """Test switch entity."""
-    state = hass.states.get("switch.code_slot_1_enabled")
+    state = hass.states.get(ENABLED_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -31,11 +33,11 @@ async def test_switch_entity(
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TOGGLE,
-        target={ATTR_ENTITY_ID: "switch.code_slot_1_enabled"},
+        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
         blocking=True,
     )
 
-    state = hass.states.get("switch.code_slot_1_enabled")
+    state = hass.states.get(ENABLED_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -43,7 +45,7 @@ async def test_switch_entity(
         TEXT_DOMAIN,
         SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: ""},
-        target={ATTR_ENTITY_ID: "text.code_slot_1_pin"},
+        target={ATTR_ENTITY_ID: PIN_ENTITY},
         blocking=True,
     )
 
@@ -51,13 +53,13 @@ async def test_switch_entity(
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TOGGLE,
-        target={ATTR_ENTITY_ID: "switch.code_slot_1_enabled"},
+        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
         blocking=True,
     )
 
     assert len(_async_get_or_create_notifications(hass)) == 1
 
-    state = hass.states.get("switch.code_slot_1_enabled")
+    state = hass.states.get(ENABLED_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -66,16 +68,16 @@ async def test_switch_entity(
         TEXT_DOMAIN,
         SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: "1234"},
-        target={ATTR_ENTITY_ID: "text.code_slot_1_pin"},
+        target={ATTR_ENTITY_ID: PIN_ENTITY},
         blocking=True,
     )
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TOGGLE,
-        target={ATTR_ENTITY_ID: "switch.code_slot_1_enabled"},
+        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
         blocking=True,
     )
 
-    state = hass.states.get("switch.code_slot_1_enabled")
+    state = hass.states.get(ENABLED_ENTITY)
     assert state
     assert state.state == STATE_ON

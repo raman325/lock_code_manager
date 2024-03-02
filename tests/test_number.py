@@ -15,7 +15,7 @@ from custom_components.lock_code_manager.const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 
-from .common import LOCK_1_ENTITY_ID
+from .common import LOCK_1_ENTITY_ID, NUMBER_OF_USES_ENTITY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ async def test_number_entity(
     lock_code_manager_config_entry,
 ):
     """Test number entity."""
-    state = hass.states.get("number.code_slot_2_number_of_uses")
+    state = hass.states.get(NUMBER_OF_USES_ENTITY)
     assert state
     assert state.state == "5"
 
@@ -46,6 +46,6 @@ async def test_number_entity(
 
     await hass.async_block_till_done()
 
-    state = hass.states.get("number.code_slot_2_number_of_uses")
+    state = hass.states.get(NUMBER_OF_USES_ENTITY)
     assert state
     assert state.state == "4"
