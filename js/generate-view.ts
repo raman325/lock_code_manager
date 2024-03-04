@@ -49,9 +49,7 @@ export async function generateView(
             .map((entity) => {
                 return {
                     entity: entity.entity_id,
-                    name: (entity.name ? entity.name : entity.original_name)
-                        .replace('PIN synced to locks', 'synced')
-                        .replace('Code slot', 'Slot'),
+                    name: `Slot ${entity.slotNum.toString()} synced`,
                     type: 'state-label'
                 };
             })
