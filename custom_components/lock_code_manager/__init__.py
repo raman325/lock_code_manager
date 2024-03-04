@@ -10,16 +10,24 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
-from homeassistant.components.lovelace.resources import ResourceStorageCollection
+from homeassistant.components.lovelace.const import (
+    CONF_RESOURCE_TYPE_WS,
+    DOMAIN as LL_DOMAIN,
+)
+from homeassistant.components.lovelace.resources import (
+    ResourceStorageCollection,
+    ResourceYAMLCollection,
+)
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     CONF_ENABLED,
+    CONF_ID,
     CONF_NAME,
     CONF_PIN,
+    CONF_URL,
 )
 from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
@@ -60,32 +68,35 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}})
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
 
-    resources: ResourceStorageCollection
-    if resources := hass.data.get(LOVELACE_DOMAIN, {}).get("resources"):
-        # Load resources if needed
-        if not resources.loaded:
-            await resources.async_load()
-            resources.loaded = True
-
+    resources: ResourceStorageCollection | ResourceYAMLCollection
+    if resources := hass.data.get(LL_DOMAIN, {}).get("resources"):
         # Expose strategy javascript
         hass.http.register_static_path(
             STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
         )
+        _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
+
+        # Load resources if needed
+        if not resources.loaded:
+            await resources.async_load()
+            _LOGGER.debug("Manually loaded resources")
+            resources.loaded = True
 
         try:
             res_id = next(
-                id
-                for id, data in resources.data.items()
-                if data["url"] == STRATEGY_PATH
+                data[CONF_ID]
+                for data in resources.async_items()
+                if data[CONF_URL] == STRATEGY_PATH
             )
         except StopIteration:
             # Register strategy module
             data = await resources.async_create_item(
-                {"res_type": "module", "url": STRATEGY_PATH}
+                {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
             )
-            _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
+            _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
+            hass.data[DOMAIN]["resources"] = True
         else:
             _LOGGER.debug(
                 "Strategy module already registered with resource ID %s", res_id
@@ -238,20 +249,32 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         await async_unload_lock(hass, config_entry)
         hass_data.pop(entry_id, None)
 
-    if hass_data == {CONF_LOCKS: {}, COORDINATORS: {}}:
+    if {k: v for k, v in hass_data.items() if k != "resources"} == {
+        CONF_LOCKS: {},
+        COORDINATORS: {},
+    }:
         resources: ResourceStorageCollection
-        if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
-            try:
-                resource_id = next(
-                    id
-                    for id, data in resources.data.items()
-                    if data["url"] == STRATEGY_PATH
-                )
-            except StopIteration:
-                pass
+        if resources := hass.data[LL_DOMAIN].get("resources"):
+            if hass_data["resources"]:
+                try:
+                    resource_id = next(
+                        data[CONF_ID]
+                        for data in resources.async_items()
+                        if data[CONF_URL] == STRATEGY_PATH
+                    )
+                except StopIteration:
+                    pass
+                else:
+                    await resources.async_delete_item(resource_id)
+                    _LOGGER.debug(
+                        "Removed strategy module (resource ID %s)", resource_id
+                    )
             else:
-                await resources.async_delete_item(resource_id)
-                _LOGGER.debug("Removed strategy module (resource ID %s)", resource_id)
+                _LOGGER.debug(
+                    "Strategy module not automatically registered, skipping removal"
+                )
+
+        hass.data.pop(DOMAIN)
 
     return unload_ok
 
