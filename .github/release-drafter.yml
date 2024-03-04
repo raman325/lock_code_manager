@@ -6,8 +6,8 @@ sort-direction: ascending
 autolabeler:
   - label: 'javascript'
     files:
-      - '**.ts'
-      - '**.js'
+      - '*.ts'
+      - '*.js'
       - 'package.json'
       - 'package-lock.json'
       - 'yarn.lock'
@@ -22,10 +22,10 @@ autolabeler:
       - 'setup.py'
       - 'pyproject.toml'
       - 'tox.ini'
-      - '**.py'
+      - '*.py'
   - label: 'github_actions'
     files:
-      - '.github/**'
+      - '.github/*'
 version-resolver:
   major:
     labels:
