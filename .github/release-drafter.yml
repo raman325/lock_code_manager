@@ -3,6 +3,29 @@ name-template: "$RESOLVED_VERSION"
 tag-template: "$RESOLVED_VERSION"
 change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
 sort-direction: ascending
+autolabeler:
+  - label: 'javascript'
+    files:
+      - '*.ts'
+      - '*.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'yarn.lock'
+      - '.eslintrc.cjs'
+      - 'tsconfig.json'
+      - 'rollup.config.js'
+  - label: 'python'
+    files:
+      - 'requirements_*.txt'
+      - 'Pipfile'
+      - 'Pipfile.lock'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'tox.ini'
+      - '*.py'
+  - label: 'github_actions'
+    files:
+      - '.github/*'
 version-resolver:
   major:
     labels:
