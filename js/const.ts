@@ -2,6 +2,9 @@ export const CODE_SENSOR_KEY = 'code';
 export const CODE_EVENT_KEY = 'pin_used';
 export const PIN_SYNCED_TO_LOCKS_KEY = 'pin_synced_to_locks';
 export const CONDITION_KEYS = ['number_of_uses'];
+export const DIVIDER_CARD = {
+    type: 'divider'
+};
 export const KEY_ORDER = [
     'name',
     'enabled',
