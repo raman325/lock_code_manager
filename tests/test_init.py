@@ -8,7 +8,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
-from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
+from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CODE,
@@ -181,7 +181,7 @@ async def test_reauth(hass: HomeAssistant, lock_code_manager_config_entry):
             [
                 flow
                 for flow in lock_code_manager_config_entry.async_get_active_flows(
-                    hass, {SOURCE_REAUTH, SOURCE_USER}
+                    hass, {SOURCE_REAUTH}
                 )
             ]
         )
