@@ -3,7 +3,11 @@
 import copy
 import logging
 
-from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
+from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -11,6 +15,7 @@ from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
+    CONF_URL,
     Platform,
 )
 from homeassistant.core import HomeAssistant
@@ -27,7 +32,13 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
 )
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, LOCK_DATA
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    LOCK_DATA,
+    MockLCMLock,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,10 +78,10 @@ async def test_entry_setup_and_unload(
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 4
 
-    resources = hass.data[LOVELACE_DOMAIN].get("resources")
+    resources = hass.data[LL_DOMAIN].get("resources")
     assert resources
     assert resources.loaded
-    assert any(data["url"] == STRATEGY_PATH for data in resources.data.values())
+    assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
 
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert not hass.data[LOCK_DATA][lock_entity_id]["service_calls"][
@@ -176,3 +187,34 @@ async def test_reauth(hass: HomeAssistant, lock_code_manager_config_entry):
         )
         == 1
     )
+
+
+async def test_resource_already_loaded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Test when strategy resource is already loaded."""
+    resources = hass.data[LL_DOMAIN].get("resources")
+    assert resources
+    await resources.async_load()
+
+    await resources.async_create_item(
+        {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
+    )
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "already registered" in caplog.text
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
