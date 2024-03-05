@@ -19,7 +19,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_PIN_SYNCED_TO_LOCKS,
@@ -49,8 +49,15 @@ async def test_entry_setup_and_unload(
     lock_code_manager_config_entry,
 ):
     """Test entry setup and unload."""
+    mock_lock_entry_id = mock_lock_config_entry.entry_id
     lcm_entry_id = lock_code_manager_config_entry.entry_id
+    dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
+
+    for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        device = dev_reg.async_get_device({(DOMAIN, entity_id)})
+        assert device
+        assert device.config_entries == {mock_lock_entry_id, lcm_entry_id}
 
     unique_ids = set()
     for slot in range(1, 3):
@@ -147,6 +154,12 @@ async def test_entry_setup_and_unload(
         lock_code_manager_config_entry, options=new_config
     )
     await hass.async_block_till_done()
+
+    # Validate that the config entry is removed from the device associated with the
+    # lock that was removed from the config entry
+    device = dev_reg.async_get_device({(DOMAIN, LOCK_2_ENTITY_ID)})
+    assert device
+    assert device.config_entries == {mock_lock_entry_id}
 
     unique_ids = set()
     for slot in range(1, 3):

@@ -334,6 +334,12 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             "%s (%s): Removing lock %s entities", entry_id, entry_title, lock_entity_id
         )
         async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_remove_lock", lock_entity_id)
+        lock: BaseLock = hass.data[DOMAIN][CONF_LOCKS][lock_entity_id]
+        if lock.device_entry:
+            dev_reg = dr.async_get(hass)
+            dev_reg.async_update_device(
+                lock.device_entry.id, remove_config_entry_id=entry_id
+            )
         await async_unload_lock(hass, config_entry, lock_entity_id)
 
     # Notify any existing entities that additional locks have been added then create

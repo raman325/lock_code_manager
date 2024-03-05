@@ -370,6 +370,7 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
                 connections=lock.device_entry.connections,
                 identifiers=lock.device_entry.identifiers,
             )
+            self._attr_name = f"Code slot {slot_num}"
 
         self._attr_unique_id = (
             f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
