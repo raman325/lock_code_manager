@@ -144,7 +144,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     continue
 
                 if not (
-                    disabling_entity_ids := (
+                    disabling_entity_ids := list(
                         state["entity_id"]
                         for key, state in states.items()
                         if (
@@ -165,8 +165,6 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     )
                 ):
                     return
-
-                _LOGGER.error(list(disabling_entity_ids))
 
                 await lock.async_clear_usercode(int(self.slot_num))
 
