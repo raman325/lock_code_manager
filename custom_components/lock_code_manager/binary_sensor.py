@@ -292,16 +292,11 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             )
         await self._update_state()
 
-    async def _handle_state_changes(self, entity_id: str, _: State, __: State) -> None:
-        """Handle state change."""
-        entity_id_map = self._entity_id_map.copy()
-        if self._calendar_entity_id:
-            entity_id_map[CONF_CALENDAR] = self._calendar_entity_id
-        if any(
-            entity_id == key_entity_id
-            for key, key_entity_id in entity_id_map.items()
-            if key not in (EVENT_PIN_USED, CONF_NAME, CONF_PIN)
-        ):
+    async def _handle_calendar_state_changes(
+        self, entity_id: str, _: State, __: State
+    ) -> None:
+        """Handle calendar state changes."""
+        if entity_id == self._calendar_entity_id:
             await self._update_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -343,7 +338,9 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         )
 
         self.async_on_remove(
-            async_track_state_change(self.hass, MATCH_ALL, self._handle_state_changes)
+            async_track_state_change(
+                self.hass, MATCH_ALL, self._handle_calendar_state_changes
+            )
         )
 
         self.async_on_remove(
