@@ -183,6 +183,15 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
             self._call_later_unsub()
             self._call_later_unsub = None
 
+        if any(
+            self._lock_slot_sensor_state(lock) == STATE_UNKNOWN for lock in self.locks
+        ):
+            self._call_later_unsub = async_call_later(
+                self.hass, timedelta(seconds=2), self._update_state
+            )
+            self.async_on_remove(self._call_later_unsub)
+            return
+
         _LOGGER.debug(
             "%s (%s): Updating %s",
             self.config_entry.entry_id,
