@@ -10,6 +10,7 @@ from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import (
@@ -130,6 +131,10 @@ class MockLockEntity(LockEntity):
         self._attr_name = name
         self._attr_unique_id = slugify(name)
         self._attr_is_locked = False
+        self._attr_has_entity_name = False
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"lock.{slugify(name)}")}, name=name
+        )
         super().__init__()
 
 
