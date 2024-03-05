@@ -143,23 +143,26 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 ):
                     continue
 
-                disabling_entity_ids = (
-                    state["entity_id"]
-                    for key, state in states.items()
-                    if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
-                    or (
-                        key == CONF_NUMBER_OF_USES
-                        and (
-                            state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-                            or int(float(state["state"])) == 0
+                if not (
+                    disabling_entity_ids := (
+                        state["entity_id"]
+                        for key, state in states.items()
+                        if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
+                        or (
+                            key == CONF_NUMBER_OF_USES
+                            and (
+                                state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                                or int(float(state["state"])) == 0
+                            )
+                        )
+                        or (
+                            key == CONF_PIN
+                            and states[CONF_PIN]["state"]
+                            != self._lock_slot_sensor_state(lock)
                         )
                     )
-                    or (
-                        key == CONF_PIN
-                        and states[CONF_PIN]["state"]
-                        != self._lock_slot_sensor_state(lock)
-                    )
-                )
+                ):
+                    return
 
                 await lock.async_clear_usercode(int(self.slot_num))
 
