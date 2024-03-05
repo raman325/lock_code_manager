@@ -105,18 +105,6 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         """Update usercodes on locks based on state change."""
         if not states:
             states = {}
-        disabling_entity_ids = (
-            state["entity_id"]
-            for key, state in states.items()
-            if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
-            or (
-                key == CONF_NUMBER_OF_USES
-                and (
-                    state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-                    or int(float(state["state"])) == 0
-                )
-            )
-        )
         coordinators: list[LockUsercodeUpdateCoordinator] = []
         for lock in self.locks:
             lock_slot_sensor_state = self._lock_slot_sensor_state(lock)
@@ -137,16 +125,16 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 if lock_slot_sensor_state == pin_state.state:
                     continue
 
+                await lock.async_set_usercode(
+                    int(self.slot_num), pin_state.state, name_state.state
+                )
+
                 _LOGGER.info(
-                    "%s (%s): Setting usercode for %s slot %s",
+                    "%s (%s): Set usercode for %s slot %s",
                     self.config_entry.entry_id,
                     self.config_entry.title,
                     lock.lock.entity_id,
                     self.slot_num,
-                )
-
-                await lock.async_set_usercode(
-                    int(self.slot_num), pin_state.state, name_state.state
                 )
             else:
                 if lock_slot_sensor_state in (
@@ -155,9 +143,30 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 ):
                     continue
 
+                disabling_entity_ids = (
+                    state["entity_id"]
+                    for key, state in states.items()
+                    if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
+                    or (
+                        key == CONF_NUMBER_OF_USES
+                        and (
+                            state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                            or int(float(state["state"])) == 0
+                        )
+                    )
+                    or any(
+                        key == CONF_PIN
+                        and states[CONF_PIN]["state"]
+                        != self._lock_slot_sensor_state(lock)
+                        for lock in self.locks
+                    )
+                )
+
+                await lock.async_clear_usercode(int(self.slot_num))
+
                 _LOGGER.info(
                     (
-                        "%s (%s): Clearing usercode for lock %s slot %s because the "
+                        "%s (%s): Cleared usercode for lock %s slot %s because the "
                         "following entities indicate the slot is disabled: %s"
                     ),
                     self.config_entry.entry_id,
@@ -166,8 +175,6 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     self.slot_num,
                     ", ".join(disabling_entity_ids),
                 )
-
-                await lock.async_clear_usercode(int(self.slot_num))
 
             coordinators.append(
                 self.hass.data[DOMAIN][COORDINATORS][lock.lock.entity_id]
@@ -182,15 +189,6 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         if self._call_later_unsub:
             self._call_later_unsub()
             self._call_later_unsub = None
-
-        if any(
-            self._lock_slot_sensor_state(lock) == STATE_UNKNOWN for lock in self.locks
-        ):
-            self._call_later_unsub = async_call_later(
-                self.hass, timedelta(seconds=2), self._update_state
-            )
-            self.async_on_remove(self._call_later_unsub)
-            return
 
         _LOGGER.debug(
             "%s (%s): Updating %s",
