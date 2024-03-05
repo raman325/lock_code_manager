@@ -160,8 +160,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                         )
                         or (
                             key == CONF_PIN
-                            and states[CONF_PIN]["state"]
-                            != self._lock_slot_sensor_state(lock)
+                            and state["state"] != self._lock_slot_sensor_state(lock)
                         )
                     )
                 ):
