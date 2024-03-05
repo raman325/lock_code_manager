@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from homeassistant.exceptions import HomeAssistantError
 
-from .providers import BaseLock
+if TYPE_CHECKING:
+    from .providers import BaseLock
 
 
 class LockCodeManagerError(HomeAssistantError):
