@@ -150,3 +150,4 @@ async def lock_code_manager_config_entry_fixture(
     yield config_entry
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()

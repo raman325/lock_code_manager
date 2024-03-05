@@ -93,7 +93,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         )
         self.coordinators = coordinators
         self._entity_id_map: dict[str, str] = {}
-        self._update_usercodes_task: asyncio.Task | None = None
+        self._update_state_task: asyncio.Task | None = None
         self._issue_reg: ir.IssueRegistry | None = None
         self._call_later_unsub: Callable | None = None
 
@@ -301,6 +301,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed from hass."""
+        await asyncio.sleep(0)
         if self._call_later_unsub:
             self._call_later_unsub()
             self._call_later_unsub = None
