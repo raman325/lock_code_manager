@@ -67,7 +67,6 @@ class BaseLockCodeManagerEntity(Entity):
         self.ent_reg = ent_reg
 
         self._uid_cache: dict[str, str] = {}
-        self._entity_id_map: dict[str, str] = {}
         self._unsub_initial_state: CALLBACK_TYPE | None = None
 
         key_parts = key.lower().split("_")

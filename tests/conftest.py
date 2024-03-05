@@ -103,7 +103,10 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
         MockPlatform(async_setup_entry=async_setup_entry_lock_platform),
     )
 
-    calendar = hass.data["lock_code_manager_calendar"] = MockCalendarEntity("test")
+    calendars = hass.data["lock_code_manager_calendars"] = [
+        MockCalendarEntity("test_1"),
+        MockCalendarEntity("test_2"),
+    ]
 
     async def async_setup_entry_calendar_platform(
         hass: HomeAssistant,
@@ -111,7 +114,7 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
         async_add_entities: AddEntitiesCallback,
     ) -> None:
         """Set up test calendar platform via config entry."""
-        async_add_entities([calendar])
+        async_add_entities(calendars)
 
     mock_platform(
         hass,
