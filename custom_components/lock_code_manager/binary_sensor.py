@@ -166,7 +166,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 ):
                     return
 
-                _LOGGER.error(disabling_entity_ids)
+                _LOGGER.error(list(disabling_entity_ids))
 
                 await lock.async_clear_usercode(int(self.slot_num))
 
