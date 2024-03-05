@@ -147,7 +147,10 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     disabling_entity_ids := (
                         state["entity_id"]
                         for key, state in states.items()
-                        if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
+                        if (
+                            key not in (CONF_NUMBER_OF_USES, CONF_PIN)
+                            and state["state"] != STATE_ON
+                        )
                         or (
                             key == CONF_NUMBER_OF_USES
                             and (
