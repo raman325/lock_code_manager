@@ -22,6 +22,7 @@ on:
 
 jobs:
   yarn:
+    name: Yarn lint and build
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -36,12 +37,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Build
-        run: |
-          yarn build
+      - name: Install
+        run: yarn install
       - name: Lint
         run: |
           yarn lint:fix
+      - name: Build
+        run: |
+          yarn build
       - name: Check for changes
         id: changes
         # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions#environment-files

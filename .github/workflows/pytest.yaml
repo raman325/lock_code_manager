@@ -13,7 +13,8 @@ on:
       - "**.py"
 
 jobs:
-  build:
+  test:
+    name: Python ${{ matrix.python-version }} Test
     runs-on: ubuntu-latest
     strategy:
       matrix:
