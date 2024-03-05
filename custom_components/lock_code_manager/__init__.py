@@ -10,10 +10,25 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components.lovelace.const import DOMAIN as LOVELACE_DOMAIN
-from homeassistant.components.lovelace.resources import ResourceStorageCollection
+from homeassistant.components.lovelace.const import (
+    CONF_RESOURCE_TYPE_WS,
+    DOMAIN as LL_DOMAIN,
+)
+from homeassistant.components.lovelace.resources import (
+    ResourceStorageCollection,
+    ResourceYAMLCollection,
+)
 from homeassistant.config_entries import ConfigEntry, ConfigEntryError
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    ATTR_AREA_ID,
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_ID,
+    CONF_NAME,
+    CONF_PIN,
+    CONF_URL,
+)
 from homeassistant.core import Config, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
@@ -42,7 +57,7 @@ from .const import (
 )
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import get_entry_data
-from .helpers import async_create_lock_instance, get_lock_from_entity_id
+from .helpers import async_create_lock_instance, get_locks_from_targets
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -53,32 +68,35 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}})
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
 
-    resources: ResourceStorageCollection
-    if resources := hass.data.get(LOVELACE_DOMAIN, {}).get("resources"):
-        # Load resources if needed
-        if not resources.loaded:
-            await resources.async_load()
-            resources.loaded = True
-
+    resources: ResourceStorageCollection | ResourceYAMLCollection
+    if resources := hass.data.get(LL_DOMAIN, {}).get("resources"):
         # Expose strategy javascript
         hass.http.register_static_path(
             STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
         )
+        _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
+
+        # Load resources if needed
+        if not resources.loaded:
+            await resources.async_load()
+            _LOGGER.debug("Manually loaded resources")
+            resources.loaded = True
 
         try:
             res_id = next(
-                id
-                for id, data in resources.data.items()
-                if data["url"] == STRATEGY_PATH
+                data[CONF_ID]
+                for data in resources.async_items()
+                if data[CONF_URL] == STRATEGY_PATH
             )
         except StopIteration:
             # Register strategy module
             data = await resources.async_create_item(
-                {"res_type": "module", "url": STRATEGY_PATH}
+                {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
             )
-            _LOGGER.debug("Registered strategy module (resource ID %s)", data["id"])
+            _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
+            hass.data[DOMAIN]["resources"] = True
         else:
             _LOGGER.debug(
                 "Strategy module already registered with resource ID %s", res_id
@@ -92,18 +110,33 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
         """Hard refresh all usercodes."""
         _LOGGER.debug("Hard refresh usercodes service called: %s", service.data)
-        lock = get_lock_from_entity_id(hass, service.data[ATTR_ENTITY_ID])
-        try:
-            await lock.async_hard_refresh_codes()
-        except Exception as err:
-            if not isinstance(err, HomeAssistantError):
-                raise HomeAssistantError from err
+        locks = get_locks_from_targets(hass, service.data)
+        results = await asyncio.gather(
+            *(lock.async_hard_refresh_codes() for lock in locks), return_exceptions=True
+        )
+        errors = [err for err in results if isinstance(err, Exception)]
+        if errors:
+            errors_str = "\n".join(str(errors))
+            raise HomeAssistantError(
+                "The following errors occurred while processing this service "
+                f"request:\n{errors_str}"
+            )
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_HARD_REFRESH_USERCODES,
         _hard_refresh_usercodes,
-        schema=vol.Schema({vol.Required(ATTR_ENTITY_ID): cv.entity_id}),
+        schema=vol.All(
+            vol.Schema(
+                {
+                    vol.Optional(ATTR_AREA_ID): vol.All(cv.ensure_list, [cv.string]),
+                    vol.Optional(ATTR_DEVICE_ID): vol.All(cv.ensure_list, [cv.string]),
+                    vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
+                }
+            ),
+            cv.has_at_least_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
+            cv.has_at_most_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
+        ),
     )
 
     return True
@@ -134,6 +167,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         ATTR_ENTITIES_ADDED_TRACKER: defaultdict(dict),
         ATTR_ENTITIES_REMOVED_TRACKER: defaultdict(dict),
     }
+
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, entry_id)},
+        manufacturer="Lock Code Manager",
+        name=config_entry.title,
+        serial_number=entry_id,
+    )
 
     config_entry.async_create_task(
         hass,
@@ -207,27 +249,40 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         await async_unload_lock(hass, config_entry)
         hass_data.pop(entry_id, None)
 
-    if hass_data == {CONF_LOCKS: {}, COORDINATORS: {}}:
+    if {k: v for k, v in hass_data.items() if k != "resources"} == {
+        CONF_LOCKS: {},
+        COORDINATORS: {},
+    }:
         resources: ResourceStorageCollection
-        if resources := hass.data[LOVELACE_DOMAIN].get("resources"):
-            try:
-                resource_id = next(
-                    id
-                    for id, data in resources.data.items()
-                    if data["url"] == STRATEGY_PATH
-                )
-            except StopIteration:
-                pass
+        if resources := hass.data[LL_DOMAIN].get("resources"):
+            if hass_data["resources"]:
+                try:
+                    resource_id = next(
+                        data[CONF_ID]
+                        for data in resources.async_items()
+                        if data[CONF_URL] == STRATEGY_PATH
+                    )
+                except StopIteration:
+                    pass
+                else:
+                    await resources.async_delete_item(resource_id)
+                    _LOGGER.debug(
+                        "Removed strategy module (resource ID %s)", resource_id
+                    )
             else:
-                await resources.async_delete_item(resource_id)
-                _LOGGER.debug("Removed strategy module (resource ID %s)", resource_id)
+                _LOGGER.debug(
+                    "Strategy module not automatically registered, skipping removal"
+                )
+
+        hass.data.pop(DOMAIN)
 
     return unload_ok
 
 
 async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Update listener."""
-    # No need to update if the options match the data
+    # No need to update if there are no options because that only happens at the end
+    # of this function
     if not config_entry.options:
         return
 
@@ -280,6 +335,12 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             "%s (%s): Removing lock %s entities", entry_id, entry_title, lock_entity_id
         )
         async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_remove_lock", lock_entity_id)
+        lock: BaseLock = hass.data[DOMAIN][CONF_LOCKS][lock_entity_id]
+        if lock.device_entry:
+            dev_reg = dr.async_get(hass)
+            dev_reg.async_update_device(
+                lock.device_entry.id, remove_config_entry_id=entry_id
+            )
         await async_unload_lock(hass, config_entry, lock_entity_id)
 
     # Notify any existing entities that additional locks have been added then create

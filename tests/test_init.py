@@ -3,18 +3,23 @@
 import copy
 import logging
 
-from homeassistant.components.lovelace import DOMAIN as LOVELACE_DOMAIN
-from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
+from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
+from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CODE,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
+    CONF_URL,
     Platform,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_PIN_SYNCED_TO_LOCKS,
@@ -27,7 +32,13 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
 )
 
-from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID, LOCK_DATA
+from .common import (
+    BASE_CONFIG,
+    LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    LOCK_DATA,
+    MockLCMLock,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,8 +49,15 @@ async def test_entry_setup_and_unload(
     lock_code_manager_config_entry,
 ):
     """Test entry setup and unload."""
+    mock_lock_entry_id = mock_lock_config_entry.entry_id
     lcm_entry_id = lock_code_manager_config_entry.entry_id
+    dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
+
+    for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        device = dev_reg.async_get_device({(DOMAIN, entity_id)})
+        assert device
+        assert device.config_entries == {mock_lock_entry_id, lcm_entry_id}
 
     unique_ids = set()
     for slot in range(1, 3):
@@ -67,10 +85,10 @@ async def test_entry_setup_and_unload(
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 4
 
-    resources = hass.data[LOVELACE_DOMAIN].get("resources")
+    resources = hass.data[LL_DOMAIN].get("resources")
     assert resources
     assert resources.loaded
-    assert any(data["url"] == STRATEGY_PATH for data in resources.data.values())
+    assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
 
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert not hass.data[LOCK_DATA][lock_entity_id]["service_calls"][
@@ -137,6 +155,12 @@ async def test_entry_setup_and_unload(
     )
     await hass.async_block_till_done()
 
+    # Validate that the config entry is removed from the device associated with the
+    # lock that was removed from the config entry
+    device = dev_reg.async_get_device({(DOMAIN, LOCK_2_ENTITY_ID)})
+    assert device
+    assert device.config_entries == {mock_lock_entry_id}
+
     unique_ids = set()
     for slot in range(1, 3):
         unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{LOCK_1_ENTITY_ID}")
@@ -170,9 +194,40 @@ async def test_reauth(hass: HomeAssistant, lock_code_manager_config_entry):
             [
                 flow
                 for flow in lock_code_manager_config_entry.async_get_active_flows(
-                    hass, {SOURCE_REAUTH, SOURCE_USER}
+                    hass, {SOURCE_REAUTH}
                 )
             ]
         )
         == 1
     )
+
+
+async def test_resource_already_loaded(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Test when strategy resource is already loaded."""
+    resources = hass.data[LL_DOMAIN].get("resources")
+    assert resources
+    await resources.async_load()
+
+    await resources.async_create_item(
+        {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
+    )
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "already registered" in caplog.text
+
+    await hass.config_entries.async_unload(config_entry.entry_id)

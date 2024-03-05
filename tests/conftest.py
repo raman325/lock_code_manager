@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Generator
-from dataclasses import dataclass
-from datetime import datetime
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -17,23 +14,18 @@ from pytest_homeassistant_custom_component.common import (
     mock_platform,
 )
 
-from homeassistant.components.calendar import (
-    DOMAIN as CALENDAR_DOMAIN,
-    CalendarEntity,
-    CalendarEvent,
-)
-from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN, LockEntity
+from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
+from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
+from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigFlow
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
-from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.providers import BaseLock
 
-from .common import BASE_CONFIG, LOCK_DATA
+from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
 
@@ -50,150 +42,6 @@ def aiohttp_client(event_loop, aiohttp_client, socket_enabled):
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable custom integrations."""
     yield
-
-
-@dataclass(repr=False)
-class MockLCMLock(BaseLock):
-    """Mock Lock Code Manager lock instance."""
-
-    @property
-    def domain(self) -> str:
-        """Return integration domain."""
-        return "test"
-
-    def setup(self) -> None:
-        """Set up lock."""
-        self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
-            self.lock.entity_id,
-            {"codes": {1: "1234", 2: "5678"}, "service_calls": defaultdict(list)},
-        )
-
-    def unload(self) -> None:
-        """Unload lock."""
-        self.hass.data[LOCK_DATA].pop(self.lock.entity_id)
-        if not self.hass.data[LOCK_DATA]:
-            self.hass.data.pop(LOCK_DATA)
-
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
-        return True
-
-    def hard_refresh_codes(self) -> None:
-        """
-        Perform hard refresh all codes.
-
-        Needed for integraitons where usercodes are cached and may get out of sync with
-        the lock.
-        """
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "hard_refresh_codes"
-        ].append(())
-
-    def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> None:
-        """Set a usercode on a code slot."""
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"][code_slot] = usercode
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "set_usercode"
-        ].append((code_slot, usercode, name))
-
-    def clear_usercode(self, code_slot: int) -> None:
-        """Clear a usercode on a code slot."""
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot, None)
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "clear_usercode"
-        ].append((code_slot,))
-
-    def get_usercodes(self) -> dict[int, int | str]:
-        """
-        Get dictionary of code slots and usercodes.
-
-        Called by data coordinator to get data for code slot sensors.
-
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
-        """
-        codes = self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"]
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "get_usercodes"
-        ].append(codes)
-        return codes
-
-
-class MockLockEntity(LockEntity):
-    """Mocked lock entity."""
-
-    _attr_has_entity_name = True
-
-    def __init__(self, name: str) -> None:
-        """Initialize the lock."""
-        self._attr_name = name
-        self._attr_unique_id = slugify(name)
-        super().__init__()
-
-
-class MockCalendarEntity(CalendarEntity):
-    """Test Calendar entity."""
-
-    _attr_has_entity_name = True
-
-    def __init__(self, name: str, events: list[CalendarEvent] | None = None) -> None:
-        """Initialize entity."""
-        self._attr_name = name.capitalize()
-        self._events = events or []
-
-        self._attr_unique_id = slugify(name)
-
-    @property
-    def event(self) -> CalendarEvent | None:
-        """Return the next upcoming event."""
-        return self._events[0] if self._events else None
-
-    @callback
-    def create_event(self, **kwargs) -> CalendarEvent:
-        """Create a new fake event, used by tests."""
-        event = CalendarEvent(
-            start=kwargs["dtstart"], end=kwargs["dtend"], summary=kwargs["summary"]
-        )
-        self._events.append(event)
-        self.async_write_ha_state()
-        return event
-
-    @callback
-    def delete_event(
-        self,
-        uid: str,
-        recurrence_id: str | None = None,
-        recurrence_range: str | None = None,
-    ) -> None:
-        """Delete an event on the calendar."""
-        for event in self._events:
-            if event.uid == uid:
-                self._events.remove(event)
-                self.async_write_ha_state()
-                return
-
-    @callback
-    def get_events(
-        self,
-        hass: HomeAssistant,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> list[CalendarEvent]:
-        """Return calendar events within a datetime range."""
-        assert start_date < end_date
-        events = []
-        for event in self._events:
-            if event.start_datetime_local >= end_date:
-                continue
-            if event.end_datetime_local < start_date:
-                continue
-            events.append(event)
-        return events
 
 
 class MockFlow(ConfigFlow):
@@ -255,7 +103,10 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
         MockPlatform(async_setup_entry=async_setup_entry_lock_platform),
     )
 
-    calendar = hass.data["lock_code_manager_calendar"] = MockCalendarEntity("test")
+    calendars = hass.data["lock_code_manager_calendars"] = [
+        MockCalendarEntity("test_1"),
+        MockCalendarEntity("test_2"),
+    ]
 
     async def async_setup_entry_calendar_platform(
         hass: HomeAssistant,
@@ -263,7 +114,7 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
         async_add_entities: AddEntitiesCallback,
     ) -> None:
         """Set up test calendar platform via config entry."""
-        async_add_entities([calendar])
+        async_add_entities(calendars)
 
     mock_platform(
         hass,
@@ -274,6 +125,8 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+
+    assert await async_setup_component(hass, LL_DOMAIN, {})
 
     yield config_entry
 
@@ -290,7 +143,6 @@ async def lock_code_manager_config_entry_fixture(
         {"test": MockLCMLock},
     )
 
-    assert await async_setup_component(hass, "lovelace", {})
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )

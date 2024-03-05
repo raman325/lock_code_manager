@@ -69,7 +69,7 @@ ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
 }
 
 
-@dataclass(repr=False)
+@dataclass(repr=False, eq=False)
 class ZWaveJSLock(BaseLock):
     """Class to represent ZWave JS lock."""
 
@@ -107,7 +107,7 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
-        self.fire_code_slot_event(
+        self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=next(
                 (
@@ -164,7 +164,7 @@ class ZWaveJSLock(BaseLock):
             if self.lock.entity_id not in get_entry_data(config_entry, CONF_LOCKS, []):
                 continue
             for code_slot in get_entry_data(config_entry, CONF_SLOTS, {}):
-                await get_usercode_from_node(self.node, code_slot)
+                await get_usercode_from_node(self.node, int(code_slot))
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -192,7 +192,7 @@ class ZWaveJSLock(BaseLock):
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
         code_slots: Iterable[int] = (
-            code_slot
+            int(code_slot)
             for entry in self.hass.config_entries.async_entries(DOMAIN)
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id not in get_entry_data(entry, CONF_LOCKS, [])
@@ -232,7 +232,11 @@ class ZWaveJSLock(BaseLock):
                         )
                         if self.lock.entity_id
                         in get_entry_data(config_entry, CONF_LOCKS, [])
-                        and code_slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                        and int(code_slot)
+                        in (
+                            int(slot)
+                            for slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                        )
                     )
                     base_unique_id = f"{config_entry.entry_id}|{code_slot}"
                     active = self.ent_reg.async_get_entity_id(

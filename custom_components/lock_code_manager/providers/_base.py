@@ -40,7 +40,7 @@ from ..data import get_entry_data
 from .const import LOGGER
 
 
-@dataclass(repr=False)
+@dataclass(repr=False, eq=False)
 class BaseLock:
     """Base for lock instance."""
 
@@ -63,6 +63,18 @@ class BaseLock:
     def __repr__(self) -> str:
         """Return string representation of self."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
+
+    @final
+    def __hash__(self) -> int:
+        """Return hash of self."""
+        return hash(self.lock.entity_id)
+
+    @final
+    def __eq__(self, other: Any) -> bool:
+        """Return whether self is equal to other."""
+        if not isinstance(other, BaseLock):
+            return False
+        return self.lock.entity_id == other.lock.entity_id
 
     @property
     def domain(self) -> str:
@@ -206,7 +218,7 @@ class BaseLock:
 
     @final
     @callback
-    def fire_code_slot_event(
+    def async_fire_code_slot_event(
         self,
         code_slot: int | None = None,
         to_locked: bool | None = None,
@@ -231,7 +243,12 @@ class BaseLock:
                 for config_entry in self.hass.config_entries.async_entries(DOMAIN)
                 if (
                     self.lock.entity_id in get_entry_data(config_entry, CONF_LOCKS, [])
-                    and code_slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                    and code_slot is not None
+                    and int(code_slot)
+                    in (
+                        int(slot)
+                        for slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                    )
                     and (
                         name_entity_id := self.ent_reg.async_get_entity_id(
                             TEXT_DOMAIN,
