@@ -36,7 +36,7 @@ BASE_CONFIG = {
             CONF_PIN: "5678",
             CONF_ENABLED: True,
             CONF_NUMBER_OF_USES: 5,
-            CONF_CALENDAR: "calendar.test",
+            CONF_CALENDAR: "calendar.test_1",
         },
     },
 }
