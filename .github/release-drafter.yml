@@ -26,6 +26,22 @@ autolabeler:
   - label: 'github_actions'
     files:
       - '.github/*'
+  - label: 'dependencies'
+    body:
+      - '/\[x\] dependency/i'
+  - label: 'bug'
+    body:
+      - '/\[x\] bugfix/i'
+  - label: 'enhancement'
+    body:
+      - '/\[x\] new feature/i'
+  - label: 'breaking-change'
+    body:
+      - '/\[x\] breaking change/i'
+  - label: 'code-quality'
+    body:
+      - '/\[x\] code quality/i'
+
 version-resolver:
   major:
     labels:
