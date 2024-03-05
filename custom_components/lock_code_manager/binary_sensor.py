@@ -49,19 +49,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Set up config entry."""
-    coordinators: list[LockUsercodeUpdateCoordinator] = list(
-        hass.data[DOMAIN][config_entry.entry_id][COORDINATORS].values()
-    )
 
     @callback
     def add_pin_enabled_entity(slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Add PIN enabled binary sensor entities for slot."""
         async_add_entities(
-            [
-                LockCodeManagerPINSyncedEntity(
-                    hass, ent_reg, config_entry, coordinators, slot_num
-                )
-            ],
+            [LockCodeManagerPINSyncedEntity(hass, ent_reg, config_entry, slot_num)],
             True,
         )
 
@@ -84,14 +77,12 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         hass: HomeAssistant,
         ent_reg: er.EntityRegistry,
         config_entry: ConfigEntry,
-        coordinators: list[LockUsercodeUpdateCoordinator],
         slot_num: int,
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerEntity.__init__(
             self, hass, ent_reg, config_entry, slot_num, ATTR_PIN_SYNCED_TO_LOCKS
         )
-        self.coordinators = coordinators
         self._entity_id_map: dict[str, str] = {}
         self._issue_reg: ir.IssueRegistry | None = None
         self._call_later_unsub: Callable | None = None
@@ -114,18 +105,7 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         """Update usercodes on locks based on state change."""
         if not states:
             states = {}
-        disabling_entity_ids = (
-            state["entity_id"]
-            for key, state in states.items()
-            if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
-            or (
-                key == CONF_NUMBER_OF_USES
-                and (
-                    state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-                    or int(float(state["state"])) == 0
-                )
-            )
-        )
+        coordinators: list[LockUsercodeUpdateCoordinator] = []
         for lock in self.locks:
             lock_slot_sensor_state = self._lock_slot_sensor_state(lock)
             if self.is_on:
@@ -145,16 +125,16 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 if lock_slot_sensor_state == pin_state.state:
                     continue
 
+                await lock.async_set_usercode(
+                    int(self.slot_num), pin_state.state, name_state.state
+                )
+
                 _LOGGER.info(
-                    "%s (%s): Setting usercode for %s slot %s",
+                    "%s (%s): Set usercode for %s slot %s",
                     self.config_entry.entry_id,
                     self.config_entry.title,
                     lock.lock.entity_id,
                     self.slot_num,
-                )
-
-                await lock.async_set_usercode(
-                    int(self.slot_num), pin_state.state, name_state.state
                 )
             else:
                 if lock_slot_sensor_state in (
@@ -163,9 +143,34 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                 ):
                     continue
 
+                if not (
+                    disabling_entity_ids := list(
+                        state["entity_id"]
+                        for key, state in states.items()
+                        if (
+                            key not in (CONF_NUMBER_OF_USES, CONF_PIN)
+                            and state["state"] != STATE_ON
+                        )
+                        or (
+                            key == CONF_NUMBER_OF_USES
+                            and (
+                                state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                                or int(float(state["state"])) == 0
+                            )
+                        )
+                        or (
+                            key == CONF_PIN
+                            and state["state"] != self._lock_slot_sensor_state(lock)
+                        )
+                    )
+                ):
+                    return
+
+                await lock.async_clear_usercode(int(self.slot_num))
+
                 _LOGGER.info(
                     (
-                        "%s (%s): Clearing usercode for lock %s slot %s because the "
+                        "%s (%s): Cleared usercode for lock %s slot %s because the "
                         "following entities indicate the slot is disabled: %s"
                     ),
                     self.config_entry.entry_id,
@@ -175,11 +180,13 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
                     ", ".join(disabling_entity_ids),
                 )
 
-                await lock.async_clear_usercode(int(self.slot_num))
-
-            await asyncio.gather(
-                *[coordinator.async_refresh() for coordinator in self.coordinators]
+            coordinators.append(
+                self.hass.data[DOMAIN][COORDINATORS][lock.lock.entity_id]
             )
+
+        await asyncio.gather(
+            *[coordinator.async_refresh() for coordinator in coordinators]
+        )
 
     async def _update_state(self, _: datetime | None = None) -> None:
         """Update binary sensor state by getting dependent states."""

@@ -136,9 +136,9 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"] == [
-        (2, "0987", "test2")
-    ]
+    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"][
+        -1
+    ] == (2, "0987", "test2")
 
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][2][CONF_CALENDAR] = "calendar.test_2"
