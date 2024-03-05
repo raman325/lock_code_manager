@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "**.js"
       - "**.ts"
       - "js/**"
       - ".eslintrc.cjs"
@@ -13,6 +14,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "**.js"
       - "**.ts"
       - "js/**"
       - ".eslintrc.cjs"
