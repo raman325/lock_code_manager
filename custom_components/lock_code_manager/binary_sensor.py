@@ -93,7 +93,6 @@ class LockCodeManagerPINSyncedEntity(BaseLockCodeManagerEntity, BinarySensorEnti
         )
         self.coordinators = coordinators
         self._entity_id_map: dict[str, str] = {}
-        self._update_state_task: asyncio.Task | None = None
         self._issue_reg: ir.IssueRegistry | None = None
         self._call_later_unsub: Callable | None = None
 
