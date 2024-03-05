@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from homeassistant.exceptions import HomeAssistantError
 
+from .providers import BaseLock
+
 
 class LockCodeManagerError(HomeAssistantError):
     """Base class for lock_code_manager exceptions."""
@@ -12,10 +14,12 @@ class LockCodeManagerError(HomeAssistantError):
 class EntityNotFoundError(LockCodeManagerError):
     """Raise when en entity is not found."""
 
-    def __init__(self, entity_id: str):
+    def __init__(self, lock: BaseLock, slot_num: int, key: str):
         """Initialize the error."""
-        self.entity_id = entity_id
-        super().__init__(f"Entity not found: {entity_id}")
+        self.lock = lock
+        self.key = key
+        self.slot_num = slot_num
+        super().__init__(f"Entity not found for lock {lock} slot {slot_num} key {key}")
 
 
 class LockDisconnected(LockCodeManagerError):

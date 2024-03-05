@@ -281,7 +281,8 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
 
 async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Update listener."""
-    # No need to update if the options match the data
+    # No need to update if there are no options because that only happens at the end
+    # of this function
     if not config_entry.options:
         return
 
