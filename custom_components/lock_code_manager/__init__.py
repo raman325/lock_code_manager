@@ -406,7 +406,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                     entry_title,
                     lock,
                 )
-                coordinator = hass_data[entry_id][COORDINATORS][lock_entity_id]
+                coordinator = hass_data[entry_id][COORDINATORS][
+                    lock_entity_id
+                ] = hass_data[COORDINATORS][lock_entity_id]
             else:
                 _LOGGER.debug(
                     "%s (%s): Creating coordinator for lock %s",
