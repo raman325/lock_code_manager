@@ -239,3 +239,16 @@ async def test_config_flow_slots_already_configured(
         {CONF_SLOTS: {2: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
     )
     assert result["errors"] == {"base": "slots_already_configured"}
+
+
+async def test_config_flow_two_entries_same_locks(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Test two entries that use same locks but different slots set up successfully."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {3: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
+    )
+    assert result["type"] == "create_entry"
