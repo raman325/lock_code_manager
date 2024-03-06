@@ -91,12 +91,24 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 if data[CONF_URL] == STRATEGY_PATH
             )
         except StopIteration:
-            # Register strategy module
-            data = await resources.async_create_item(
-                {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
-            )
-            _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
-            hass.data[DOMAIN]["resources"] = True
+            if isinstance(resources, ResourceYAMLCollection):
+                _LOGGER.warning(
+                    "Strategy module can't automatically be registered because this "
+                    "Home Assistant instance is running in YAML mode for resources. "
+                    "Please add a new entry in the list under the resources key in "
+                    "the lovelace section of your config as follows:\n  - url: %s"
+                    "\n    type: module",
+                    STRATEGY_PATH,
+                )
+            else:
+                # Register strategy module
+                data = await resources.async_create_item(
+                    {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
+                )
+                _LOGGER.debug(
+                    "Registered strategy module (resource ID %s)", data[CONF_ID]
+                )
+                hass.data[DOMAIN]["resources"] = True
         else:
             _LOGGER.debug(
                 "Strategy module already registered with resource ID %s", res_id
