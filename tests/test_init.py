@@ -239,7 +239,7 @@ async def test_resource_already_loaded_ui(
 
 @pytest.mark.parametrize(
     "config",
-    [{"mode": "yaml", "resources": [{"type": "module", "url": STRATEGY_PATH}]}],
+    [{"mode": "yaml", "resources": [{"type": "module", CONF_URL: STRATEGY_PATH}]}],
 )
 async def test_resource_already_loaded_yaml(
     hass: HomeAssistant,
@@ -268,7 +268,7 @@ async def test_resource_already_loaded_yaml(
 
 @pytest.mark.parametrize(
     "config",
-    [{"mode": "yaml", "resources": [{"type": "module", "url": "fake_module.js"}]}],
+    [{"mode": "yaml", "resources": [{"type": "module", CONF_URL: "fake_module.js"}]}],
 )
 async def test_resource_not_loaded_yaml(
     hass: HomeAssistant,
@@ -293,3 +293,62 @@ async def test_resource_not_loaded_yaml(
     assert "module can't automatically be registered" in caplog.text
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_two_entries_same_locks(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """Test two entries that use same locks but different slots set up successfully."""
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS] = {3: {CONF_ENABLED: False, CONF_PIN: "0123"}}
+    new_entry = MockConfigEntry(
+        domain=DOMAIN, data=new_config, unique_id="Mock Title 2", title="Mock Title 2"
+    )
+    new_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(new_entry.entry_id)
+    await hass.async_block_till_done()
+    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 3
+    assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3
+    assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 6
+    assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 3
+    assert len(hass.states.async_entity_ids(Platform.TEXT)) == 6
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_resource_not_loaded_on_unload(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Test when strategy resource is not loaded when unloading config entry."""
+    resources = hass.data[LL_DOMAIN].get("resources")
+    assert resources
+    await resources.async_load()
+
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "Registered strategy module" in caplog.text
+
+    await resources.async_delete_item(
+        next(
+            item["id"]
+            for item in resources.async_items()
+            if item[CONF_URL] == STRATEGY_PATH
+        )
+    )
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+    assert "Strategy module not found so there is nothing to remove" in caplog.text

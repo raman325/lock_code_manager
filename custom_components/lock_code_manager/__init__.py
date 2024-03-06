@@ -264,7 +264,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         CONF_LOCKS: {},
         COORDINATORS: {},
     }:
-        resources: ResourceStorageCollection
+        resources: ResourceStorageCollection | ResourceYAMLCollection
         if resources := hass.data.get(LL_DOMAIN, {}).get("resources"):
             if hass_data["resources"]:
                 try:
@@ -274,7 +274,9 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
                         if data[CONF_URL] == STRATEGY_PATH
                     )
                 except StopIteration:
-                    pass
+                    _LOGGER.debug(
+                        "Strategy module not found so there is nothing to remove"
+                    )
                 else:
                     await resources.async_delete_item(resource_id)
                     _LOGGER.debug(
