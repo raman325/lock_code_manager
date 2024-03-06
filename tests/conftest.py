@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from typing import Any
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -55,6 +56,20 @@ def config_flow_fixture(hass: HomeAssistant) -> Generator[None, None, None]:
 
     with mock_config_flow(TEST_DOMAIN, MockFlow):
         yield
+
+
+# @pytest.fixture(name="setup_lovelace_ui")
+# async def setup_lovelace_ui_fixture(hass: HomeAssistant):
+#     """Set up Lovelace in UI mode."""
+#     assert await async_setup_component(hass, LL_DOMAIN, {})
+#     yield
+
+
+@pytest.fixture(name="setup_lovelace_ui")
+async def setup_lovelace_ui_fixture(hass: HomeAssistant, config: dict[str, Any]):
+    """Set up Lovelace in UI mode."""
+    assert await async_setup_component(hass, LL_DOMAIN, {"lovelace": config})
+    yield
 
 
 @pytest.fixture(name="mock_lock_config_entry")
@@ -125,8 +140,6 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-
-    assert await async_setup_component(hass, LL_DOMAIN, {})
 
     yield config_entry
 
