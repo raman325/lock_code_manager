@@ -96,7 +96,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                     "Strategy module can't automatically be registered because this "
                     "Home Assistant instance is running in YAML mode for resources. "
                     "Please add a new entry in the list under the resources key in "
-                    "the lovelace section of your config as follows:\n  - url: %s"
+                    'the lovelace section of your config as follows:\n  - url: "%s"'
                     "\n    type: module",
                     STRATEGY_PATH,
                 )
