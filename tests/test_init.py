@@ -43,8 +43,10 @@ from .common import (
 _LOGGER = logging.getLogger(__name__)
 
 
+@pytest.mark.parametrize("config", [{}])
 async def test_entry_setup_and_unload(
     hass: HomeAssistant,
+    setup_lovelace_ui,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
@@ -202,13 +204,15 @@ async def test_reauth(hass: HomeAssistant, lock_code_manager_config_entry):
     )
 
 
-async def test_resource_already_loaded(
+@pytest.mark.parametrize("config", [{}])
+async def test_resource_already_loaded_ui(
     hass: HomeAssistant,
+    setup_lovelace_ui,
     mock_lock_config_entry,
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Test when strategy resource is already loaded."""
+    """Test when strategy resource is already loaded in UI mode."""
     resources = hass.data[LL_DOMAIN].get("resources")
     assert resources
     await resources.async_load()
@@ -229,5 +233,63 @@ async def test_resource_already_loaded(
     await hass.async_block_till_done()
 
     assert "already registered" in caplog.text
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"mode": "yaml", "resources": [{"type": "module", "url": STRATEGY_PATH}]}],
+)
+async def test_resource_already_loaded_yaml(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Test when strategy resource is already loaded in YAML mode."""
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "already registered" in caplog.text
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"mode": "yaml", "resources": [{"type": "module", "url": "fake_module.js"}]}],
+)
+async def test_resource_not_loaded_yaml(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Test when strategy resource is not loaded in YAML mode."""
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "module can't automatically be registered" in caplog.text
 
     await hass.config_entries.async_unload(config_entry.entry_id)

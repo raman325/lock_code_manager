@@ -69,15 +69,14 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
+    # Expose strategy javascript
+    hass.http.register_static_path(
+        STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
+    )
+    _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
 
     resources: ResourceStorageCollection | ResourceYAMLCollection
     if resources := hass.data.get(LL_DOMAIN, {}).get("resources"):
-        # Expose strategy javascript
-        hass.http.register_static_path(
-            STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
-        )
-        _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
-
         # Load resources if needed
         if not resources.loaded:
             await resources.async_load()
@@ -86,7 +85,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
         try:
             res_id = next(
-                data[CONF_ID]
+                data.get(CONF_ID)
                 for data in resources.async_items()
                 if data[CONF_URL] == STRATEGY_PATH
             )
@@ -114,9 +113,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 "Strategy module already registered with resource ID %s", res_id
             )
 
-        # Set up websocket API
-        await async_websocket_setup(hass)
-        _LOGGER.debug("Finished setting up websocket API")
+    # Set up websocket API
+    await async_websocket_setup(hass)
+    _LOGGER.debug("Finished setting up websocket API")
 
     # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
@@ -266,7 +265,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         COORDINATORS: {},
     }:
         resources: ResourceStorageCollection
-        if resources := hass.data[LL_DOMAIN].get("resources"):
+        if resources := hass.data.get(LL_DOMAIN, {}).get("resources"):
             if hass_data["resources"]:
                 try:
                     resource_id = next(
