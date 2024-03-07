@@ -1,4 +1,2 @@
-black
-isort
-pre-commit
-ruff
+pre-commit==3.6.2
+ruff==0.3.1

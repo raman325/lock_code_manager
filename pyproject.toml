@@ -1,7 +1,3 @@
-[tool.black]
-target-version = ["py311"]
-exclude = 'generated'
-
 [tool.ruff]
 lint.select = ["D", "E", "F", "G", "I", "PLC", "PLE", "PLR", "PLW", "UP", "W"]
 lint.ignore = [

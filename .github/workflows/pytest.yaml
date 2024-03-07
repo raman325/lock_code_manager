@@ -11,6 +11,8 @@ on:
     branches: [main]
     paths:
       - "**.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
 
 jobs:
   test:
