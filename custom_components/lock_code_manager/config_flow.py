@@ -9,6 +9,7 @@ from typing import Any, Iterable
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
@@ -23,8 +24,10 @@ from homeassistant.util import slugify
 
 from . import providers
 from .const import (
+    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUM_SLOTS,
+    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     CONF_START_SLOT,
     DEFAULT_NUM_SLOTS,
@@ -32,9 +35,38 @@ from .const import (
     DOMAIN,
 )
 from .data import get_entry_data
-from .helpers import CODE_SLOT_SCHEMA, CODE_SLOTS_SCHEMA, UI_CODE_SLOT_SCHEMA
 
 _LOGGER = logging.getLogger(__name__)
+
+UI_CODE_SLOT_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_NAME): cv.string,
+        vol.Optional(CONF_PIN): cv.string,
+        vol.Required(CONF_ENABLED, default=True): cv.boolean,
+        vol.Optional(CONF_CALENDAR): sel.EntitySelector(
+            sel.EntitySelectorConfig(domain=CALENDAR_DOMAIN)
+        ),
+        vol.Optional(CONF_NUMBER_OF_USES): sel.TextSelector(
+            sel.TextSelectorConfig(type=sel.TextSelectorType.NUMBER)
+        ),
+    }
+)
+
+CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA.extend(
+    {vol.Optional(CONF_NUMBER_OF_USES): vol.Coerce(int)}
+)
+
+
+def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
+    """Validate that if enabled is True, pin is set."""
+    if any(val.get(CONF_ENABLED) and not val.get(CONF_PIN) for val in data.values()):
+        raise vol.Invalid("PIN must be set if enabled is True")
+    return data
+
+
+CODE_SLOTS_SCHEMA = vol.All(
+    vol.Schema({vol.Coerce(int): CODE_SLOT_SCHEMA}), enabled_requires_pin
+)
 
 LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=integration, domain=LOCK_DOMAIN)
