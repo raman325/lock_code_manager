@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - "**.py"
+      - "requirements*.txt"
 
 jobs:
   test:
