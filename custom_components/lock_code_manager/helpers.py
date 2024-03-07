@@ -5,62 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import voluptuous as vol
-
-from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    ATTR_AREA_ID,
-    ATTR_DEVICE_ID,
-    ATTR_ENTITY_ID,
-    CONF_ENABLED,
-    CONF_NAME,
-    CONF_PIN,
-)
+from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import (
-    config_validation as cv,
-    device_registry as dr,
-    entity_registry as er,
-    selector as sel,
-)
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import CONF_CALENDAR, CONF_LOCKS, CONF_NUMBER_OF_USES, DOMAIN
+from .const import CONF_LOCKS, DOMAIN
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
 _LOGGER = logging.getLogger(__name__)
-
-
-UI_CODE_SLOT_SCHEMA = vol.Schema(
-    {
-        vol.Optional(CONF_NAME): cv.string,
-        vol.Optional(CONF_PIN): cv.string,
-        vol.Required(CONF_ENABLED, default=True): cv.boolean,
-        vol.Optional(CONF_CALENDAR): sel.EntitySelector(
-            sel.EntitySelectorConfig(domain=CALENDAR_DOMAIN)
-        ),
-        vol.Optional(CONF_NUMBER_OF_USES): sel.TextSelector(
-            sel.TextSelectorConfig(type=sel.TextSelectorType.NUMBER)
-        ),
-    }
-)
-
-CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA.extend(
-    {vol.Optional(CONF_NUMBER_OF_USES): vol.Coerce(int)}
-)
-
-
-def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
-    """Validate that if enabled is True, pin is set."""
-    if any(val.get(CONF_ENABLED) and not val.get(CONF_PIN) for val in data.values()):
-        raise vol.Invalid("PIN must be set if enabled is True")
-    return data
-
-
-CODE_SLOTS_SCHEMA = vol.All(
-    vol.Schema({vol.Coerce(int): CODE_SLOT_SCHEMA}), enabled_requires_pin
-)
 
 
 @callback
