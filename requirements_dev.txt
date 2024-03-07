@@ -1,4 +1,6 @@
 -r requirements_lint.txt
 -r requirements_test.txt
-homeassistant
-zwave-js-server-python
+pyserial==3.5
+pyudev==0.24.1
+zeroconf==0.131.0
+zwave-js-server-python==0.55.3

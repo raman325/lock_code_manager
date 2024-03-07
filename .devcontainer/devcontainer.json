@@ -5,9 +5,9 @@
     "customizations": {
         "vscode": {
             "extensions": [
+                "charliermarsh.ruff",
                 "christian-kohler.path-intellisense",
                 "esbenp.prettier-vscode",
-                "ms-python.black-formatter",
                 "ms-python.debugpy",
                 "ms-python.python",
                 "ms-python.vscode-pylance",

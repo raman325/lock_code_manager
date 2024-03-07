@@ -1,5 +1,2 @@
-pyserial
-pytest
-pytest-homeassistant-custom-component
-pyudev
-zeroconf
+pytest==8.0.2
+pytest-homeassistant-custom-component==0.13.106
