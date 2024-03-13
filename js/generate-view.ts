@@ -5,6 +5,7 @@ import {
     CONDITION_KEYS,
     DIVIDER_CARD,
     FOLD_ENTITY_ROW_SEARCH_STRING,
+    IN_SYNC_KEY,
     KEY_ORDER
 } from './const';
 import {
@@ -126,8 +127,8 @@ function generateSlotCard(
                     ...generateEntityCards(slotMapping.mainEntityIds),
                     DIVIDER_CARD,
                     {
-                        entity: slotMapping.pinShouldBeEnabledEntity.entity_id,
-                        name: 'PIN synced to locks'
+                        entity: slotMapping.pinActiveEntity.entity_id,
+                        name: 'PIN active'
                     },
                     {
                         entity: slotMapping.codeEventEntityId,
@@ -167,17 +168,17 @@ function getSlotMapping(
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
-            if (entity.key === CODE_SENSOR_KEY) {
+            if ([CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entity.key)) {
                 codeSensorEntityIds.push(entity.entity_id);
             } else if (entity.key === CODE_EVENT_KEY) {
                 codeEventEntityId = entity.entity_id;
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntityIds.push(entity.entity_id);
-            } else if (entity.key !== ACTIVE_KEY) {
+            } else if (![ACTIVE_KEY, IN_SYNC_KEY].includes(entity.key)) {
                 mainEntityIds.push(entity.entity_id);
             }
         });
-    const pinShouldBeEnabledEntity = lockCodeManagerEntities.find(
+    const pinActiveEntity = lockCodeManagerEntities.find(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
     const calendarEntityId = configEntryData.slots[slotNum];
@@ -187,7 +188,7 @@ function getSlotMapping(
         codeSensorEntityIds,
         conditionEntityIds,
         mainEntityIds,
-        pinShouldBeEnabledEntity,
+        pinActiveEntity,
         slotNum
     };
 }

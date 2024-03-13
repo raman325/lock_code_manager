@@ -23,7 +23,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
-    ATTR_CONFIGURED,
+    ATTR_IN_SYNC,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -65,7 +65,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 3):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (CONF_CODE, ATTR_CONFIGURED):
+            for key in (CONF_CODE, ATTR_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -127,7 +127,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 4):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (CONF_CODE, ATTR_CONFIGURED):
+            for key in (CONF_CODE, ATTR_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -168,7 +168,7 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 3):
-        for key in (CONF_CODE, ATTR_CONFIGURED):
+        for key in (CONF_CODE, ATTR_IN_SYNC):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{LOCK_1_ENTITY_ID}")
 
         for key in (

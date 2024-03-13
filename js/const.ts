@@ -1,6 +1,7 @@
 export const CODE_SENSOR_KEY = 'code';
 export const CODE_EVENT_KEY = 'pin_used';
 export const ACTIVE_KEY = 'active';
+export const IN_SYNC_KEY = 'in_sync';
 export const CONDITION_KEYS = ['number_of_uses'];
 export const DIVIDER_CARD = {
     type: 'divider'
@@ -12,6 +13,7 @@ export const KEY_ORDER = [
     ACTIVE_KEY,
     ...CONDITION_KEYS,
     CODE_SENSOR_KEY,
+    IN_SYNC_KEY,
     CODE_EVENT_KEY
 ];
 export const DOMAIN = 'lock_code_manager';
