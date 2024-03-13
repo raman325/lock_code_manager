@@ -31,7 +31,7 @@ from homeassistant.helpers.event import async_track_state_change
 from .const import (
     ATTR_ACTIVE,
     ATTR_CODE,
-    ATTR_PIN_SYNCED,
+    ATTR_CONFIGURED,
     CONF_CALENDAR,
     CONF_NUMBER_OF_USES,
     COORDINATORS,
@@ -127,7 +127,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
 
         states: dict[str, dict[str, str]] = {}
         for key, entity_id in entity_id_map.items():
-            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_PIN_SYNCED):
+            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_CONFIGURED):
                 continue
             if not (state := self.hass.states.get(entity_id)):
                 return
@@ -239,7 +239,7 @@ class LockCodeManagerCodeSlotSyncedEntity(
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
-            self, hass, ent_reg, config_entry, lock, slot_num, ATTR_PIN_SYNCED
+            self, hass, ent_reg, config_entry, lock, slot_num, ATTR_CONFIGURED
         )
         self.coordinator = coordinator
         self._entity_id_map: dict[str, str] = {}
@@ -251,7 +251,7 @@ class LockCodeManagerCodeSlotSyncedEntity(
             f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
         )
 
-        self._attr_name: str | None = f"{super()._attr_name} PIN synced"
+        self._attr_name: str | None = f"{super()._attr_name} {ATTR_CONFIGURED}"
 
     def _get_entity_state(self, key: str) -> str | None:
         """Get entity state."""
