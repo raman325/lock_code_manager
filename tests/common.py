@@ -43,10 +43,11 @@ BASE_CONFIG = {
 
 ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
 NUMBER_OF_USES_ENTITY = "number.mock_title_code_slot_2_number_of_uses"
-PIN_SYNCED_ENTITY = "binary_sensor.mock_title_code_slot_2_pin_synced_to_locks"
+ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
 EVENT_ENTITY = "event.mock_title_code_slot_2"
 PIN_ENTITY = "text.mock_title_code_slot_2_pin"
 NAME_ENTITY = "text.mock_title_code_slot_2_name"
+PIN_SYNCED_ENTITY = "binary_sensor.test_1_code_slot_2_pin_synced"
 
 
 @dataclass(repr=False, eq=False)

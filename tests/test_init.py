@@ -22,7 +22,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
-    ATTR_PIN_SYNCED_TO_LOCKS,
+    ATTR_ACTIVE,
+    ATTR_PIN_SYNCED,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -64,13 +65,14 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 3):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{entity_id}")
+            for key in (CONF_CODE, ATTR_PIN_SYNCED):
+                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
             CONF_ENABLED,
             CONF_NAME,
             CONF_PIN,
-            ATTR_PIN_SYNCED_TO_LOCKS,
+            ATTR_ACTIVE,
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
@@ -81,7 +83,7 @@ async def test_entry_setup_and_unload(
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
     }
-    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 2
+    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 6
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 2
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 4
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
@@ -125,13 +127,14 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 4):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{entity_id}")
+            for key in (CONF_CODE, ATTR_PIN_SYNCED):
+                unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
             CONF_ENABLED,
             CONF_NAME,
             CONF_PIN,
-            ATTR_PIN_SYNCED_TO_LOCKS,
+            ATTR_ACTIVE,
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
@@ -142,7 +145,7 @@ async def test_entry_setup_and_unload(
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
     }
-    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 3
+    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 9
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 6
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 3
@@ -165,13 +168,14 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 3):
-        unique_ids.add(f"{lcm_entry_id}|{slot}|{CONF_CODE}|{LOCK_1_ENTITY_ID}")
+        for key in (CONF_CODE, ATTR_PIN_SYNCED):
+            unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{LOCK_1_ENTITY_ID}")
 
         for key in (
             CONF_ENABLED,
             CONF_NAME,
             CONF_PIN,
-            ATTR_PIN_SYNCED_TO_LOCKS,
+            ATTR_ACTIVE,
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
@@ -182,7 +186,7 @@ async def test_entry_setup_and_unload(
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
     }
-    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 2
+    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 4
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 2
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 2
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
@@ -307,7 +311,7 @@ async def test_two_entries_same_locks(
     new_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(new_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 3
+    assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 9
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3
     assert len(hass.states.async_entity_ids(Platform.SENSOR)) == 6
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 3

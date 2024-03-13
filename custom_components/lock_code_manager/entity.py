@@ -85,7 +85,9 @@ class BaseLockCodeManagerEntity(Entity):
 
         self._attr_name: str | None = " ".join(key_parts)
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
-        self._attr_extra_state_attributes = {ATTR_CODE_SLOT: int(slot_num)}
+        self._attr_extra_state_attributes: dict[str, Any] = {
+            ATTR_CODE_SLOT: int(slot_num)
+        }
 
     @final
     @property

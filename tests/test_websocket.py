@@ -106,4 +106,4 @@ async def test_get_config_entry_entities(
     [entry_id, title, entities] = msg["result"]
     assert entry_id == lock_code_manager_config_entry.entry_id
     assert title == "Mock Title"
-    assert len(entities) == 15
+    assert len(entities) == 19

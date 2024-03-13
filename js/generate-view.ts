@@ -1,11 +1,11 @@
 import {
+    ACTIVE_KEY,
     CODE_EVENT_KEY,
     CODE_SENSOR_KEY,
     CONDITION_KEYS,
     DIVIDER_CARD,
     FOLD_ENTITY_ROW_SEARCH_STRING,
-    KEY_ORDER,
-    PIN_SYNCED_TO_LOCKS_KEY
+    KEY_ORDER
 } from './const';
 import {
     EntityRegistryEntry,
@@ -45,11 +45,11 @@ export async function generateView(
     const badges = [
         ...configEntryData.locks.sort((a, b) => a.localeCompare(b)),
         ...sortedEntities
-            .filter((entity) => entity.key === 'pin_synced_to_locks')
+            .filter((entity) => entity.key === 'active')
             .map((entity) => {
                 return {
                     entity: entity.entity_id,
-                    name: `Slot ${entity.slotNum.toString()} synced`,
+                    name: `Slot ${entity.slotNum.toString()} active`,
                     type: 'state-label'
                 };
             })
@@ -173,12 +173,12 @@ function getSlotMapping(
                 codeEventEntityId = entity.entity_id;
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntityIds.push(entity.entity_id);
-            } else if (entity.key !== PIN_SYNCED_TO_LOCKS_KEY) {
+            } else if (entity.key !== ACTIVE_KEY) {
                 mainEntityIds.push(entity.entity_id);
             }
         });
     const pinShouldBeEnabledEntity = lockCodeManagerEntities.find(
-        (entity) => entity.slotNum === slotNum && entity.key === PIN_SYNCED_TO_LOCKS_KEY
+        (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
     const calendarEntityId = configEntryData.slots[slotNum];
     if (calendarEntityId) conditionEntityIds.unshift(calendarEntityId);

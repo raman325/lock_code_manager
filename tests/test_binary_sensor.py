@@ -25,13 +25,13 @@ from homeassistant.util import dt as dt_util
 from custom_components.lock_code_manager.const import CONF_CALENDAR, CONF_SLOTS
 
 from .common import (
+    ACTIVE_ENTITY,
     BASE_CONFIG,
     ENABLED_ENTITY,
     LOCK_1_ENTITY_ID,
     LOCK_DATA,
     NUMBER_OF_USES_ENTITY,
     PIN_ENTITY,
-    PIN_SYNCED_ENTITY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_OFF
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -59,21 +59,21 @@ async def test_binary_sensor_entity(
     cal_event = calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
     calendar_1.delete_event(cal_event.uid)
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -86,7 +86,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -99,7 +99,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -111,7 +111,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -123,7 +123,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -148,6 +148,6 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(PIN_SYNCED_ENTITY)
+    state = hass.states.get(ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
