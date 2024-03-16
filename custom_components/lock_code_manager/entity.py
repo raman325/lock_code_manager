@@ -269,9 +269,8 @@ class BaseLockCodeManagerEntity(Entity):
         __: State | None = None,
     ) -> None:
         """Handle availability state update."""
-        if (
-            entity_id is not None
-            and entity_id not in (lock.lock.entity_id for lock in self.locks)
+        if entity_id is not None and entity_id not in (
+            lock.lock.entity_id for lock in self.locks
         ):
             return
         if (new_available := self._is_available()) != self._attr_available:

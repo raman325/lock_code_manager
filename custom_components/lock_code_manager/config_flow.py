@@ -205,9 +205,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             if user_input.get(CONF_ENABLED) and not user_input.get(CONF_PIN):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
             else:
-                self.data[CONF_SLOTS][
-                    int(self.slots_to_configure.pop(0))
-                ] = CODE_SLOT_SCHEMA(user_input)
+                self.data[CONF_SLOTS][int(self.slots_to_configure.pop(0))] = (
+                    CODE_SLOT_SCHEMA(user_input)
+                )
                 if not self.slots_to_configure:
                     return self.async_create_entry(title=self.title, data=self.data)
 
