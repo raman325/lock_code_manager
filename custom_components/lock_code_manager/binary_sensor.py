@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 import logging
 
@@ -27,6 +28,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     ATTR_ACTIVE,
@@ -71,7 +73,7 @@ async def async_setup_entry(
         ][COORDINATORS][lock.lock.entity_id]
         async_add_entities(
             [
-                LockCodeManagerCodeSlotSyncedEntity(
+                LockCodeManagerCodeSlotInSyncEntity(
                     hass, ent_reg, config_entry, coordinator, lock, slot_num
                 )
             ],
@@ -221,8 +223,10 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         )
 
 
-class LockCodeManagerCodeSlotSyncedEntity(
-    BaseLockCodeManagerCodeSlotPerLockEntity, BinarySensorEntity
+class LockCodeManagerCodeSlotInSyncEntity(
+    BaseLockCodeManagerCodeSlotPerLockEntity,
+    CoordinatorEntity[LockUsercodeUpdateCoordinator],
+    BinarySensorEntity,
 ):
     """PIN synced binary sensor entity for lock code manager."""
 
@@ -241,7 +245,7 @@ class LockCodeManagerCodeSlotSyncedEntity(
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
             self, hass, ent_reg, config_entry, lock, slot_num, ATTR_IN_SYNC
         )
-        self.coordinator = coordinator
+        CoordinatorEntity.__init__(self, coordinator)
         self._entity_id_map: dict[str, str] = {}
         self._active_unique_id = self._get_uid(ATTR_ACTIVE)
         self._name_text_unique_id = self._get_uid(CONF_NAME)
@@ -250,21 +254,28 @@ class LockCodeManagerCodeSlotSyncedEntity(
         self._lock_slot_sensor_unique_id = (
             f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
         )
+        self._lock = asyncio.Lock()
 
-        self._attr_name: (
-            str | None
-        ) = f"{super()._attr_name} {ATTR_IN_SYNC.replace('_', ' ')}"
+        key_name = ATTR_IN_SYNC.replace("_", " ")
+        self._attr_name: str | None = f"{super()._attr_name} {key_name}"
 
     @property
     def icon(self) -> str | None:
         """Return icon."""
         if self.is_on:
             return "mdi:sync"
-        return "mdi:sync-off"
+        return "mdi:sync-"
+
+    @property
+    def available(self) -> bool:
+        """Return whether binary sensor is available or not."""
+        return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
+            int(self.slot_num) in self.coordinator.data
+        )
 
     def _get_entity_state(self, key: str) -> str | None:
         """Get entity state."""
-        if not (state := self.hass.states.get(self._entity_id_map[key])):
+        if (state := self.hass.states.get(self._entity_id_map[key])) is None:
             return None
         return state.state
 
@@ -275,81 +286,85 @@ class LockCodeManagerCodeSlotSyncedEntity(
         to_state: State | None = None,
     ) -> None:
         """Update binary sensor state by getting dependent states."""
-        if (
-            entity_id is not None
-            and (
-                not (ent_entry := self.ent_reg.async_get(entity_id))
-                or ent_entry.platform != DOMAIN
-                or ent_entry.domain != BINARY_SENSOR_DOMAIN
-                or ent_entry.unique_id != self._active_unique_id
+        if entity_id is not None and (
+            not (ent_entry := self.ent_reg.async_get(entity_id))
+            or ent_entry.platform != DOMAIN
+            or (ent_entry.domain, ent_entry.unique_id)
+            not in (
+                (BINARY_SENSOR_DOMAIN, self._active_unique_id),
+                (TEXT_DOMAIN, self._name_text_unique_id),
+                (TEXT_DOMAIN, self._pin_text_unique_id),
+                (SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
             )
-            and to_state is not None
-            and to_state.state in (STATE_ON, STATE_OFF)
+            or (
+                to_state is not None
+                and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            )
         ):
             return
 
-        for key, domain, unique_id in (
-            (CONF_PIN, TEXT_DOMAIN, self._pin_text_unique_id),
-            (CONF_NAME, TEXT_DOMAIN, self._name_text_unique_id),
-            (ATTR_ACTIVE, BINARY_SENSOR_DOMAIN, self._active_unique_id),
-            (ATTR_CODE, SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
-        ):
-            if key not in self._entity_id_map:
-                if not (
-                    ent_id := self.ent_reg.async_get_entity_id(
-                        domain, DOMAIN, unique_id
-                    )
-                ):
+        async with self._lock:
+            for key, domain, unique_id in (
+                (CONF_PIN, TEXT_DOMAIN, self._pin_text_unique_id),
+                (CONF_NAME, TEXT_DOMAIN, self._name_text_unique_id),
+                (ATTR_ACTIVE, BINARY_SENSOR_DOMAIN, self._active_unique_id),
+                (ATTR_CODE, SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
+            ):
+                if key not in self._entity_id_map:
+                    if not (
+                        ent_id := self.ent_reg.async_get_entity_id(
+                            domain, DOMAIN, unique_id
+                        )
+                    ):
+                        return
+                    self._entity_id_map[key] = ent_id
+
+                if self._get_entity_state(key) is None:
                     return
-                self._entity_id_map[key] = ent_id
 
-            if not self._get_entity_state(key):
-                return
+            if self._get_entity_state(ATTR_ACTIVE) == STATE_ON:
+                if (
+                    pin_state := self._get_entity_state(CONF_PIN)
+                ) is not None and pin_state != self._get_entity_state(ATTR_CODE):
+                    self._attr_is_on = False
+                    self.async_write_ha_state()
+                    await self.lock.async_set_usercode(
+                        int(self.slot_num), pin_state, self._get_entity_state(CONF_NAME)
+                    )
+                    _LOGGER.info(
+                        "%s (%s): Set usercode for %s slot %s",
+                        self.config_entry.entry_id,
+                        self.config_entry.title,
+                        self.lock.lock.entity_id,
+                        self.slot_num,
+                    )
+                else:
+                    self._attr_is_on = True
+            elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
+                if self._get_entity_state(ATTR_CODE) != "":
+                    self._attr_is_on = False
+                    self.async_write_ha_state()
+                    await self.lock.async_clear_usercode(int(self.slot_num))
+                    _LOGGER.info(
+                        "%s (%s): Cleared usercode for lock %s slot %s",
+                        self.config_entry.entry_id,
+                        self.config_entry.title,
+                        self.lock.lock.entity_id,
+                        self.slot_num,
+                    )
+                else:
+                    self._attr_is_on = True
 
-        if self._get_entity_state(ATTR_ACTIVE) == STATE_ON:
-            if (
-                pin_state := self._get_entity_state(CONF_PIN)
-            ) is not None and pin_state != self._get_entity_state(ATTR_CODE):
-                self._attr_is_on = False
-                self.async_write_ha_state()
-                await self.lock.async_set_usercode(
-                    int(self.slot_num), pin_state, self._get_entity_state(CONF_NAME)
-                )
-                _LOGGER.info(
-                    "%s (%s): Set usercode for %s slot %s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                )
+            if self._attr_is_on is False:
+                await self.coordinator.async_refresh()
             else:
-                self._attr_is_on = True
-        elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
-            if self._get_entity_state(ATTR_CODE) != "":
-                self._attr_is_on = False
                 self.async_write_ha_state()
-                await self.lock.async_clear_usercode(int(self.slot_num))
-                _LOGGER.info(
-                    "%s (%s): Cleared usercode for lock %s slot %s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                )
-            else:
-                self._attr_is_on = True
-
-        if self._attr_is_on is False:
-            self.config_entry.async_create_task(
-                self.hass, self.coordinator.async_refresh()
-            )
-        else:
-            self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
+        # await CoordinatorEntity.async_added_to_hass(self)
 
         self.async_on_remove(
             async_track_state_change(self.hass, MATCH_ALL, self._update_state)

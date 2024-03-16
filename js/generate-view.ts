@@ -86,7 +86,7 @@ function compareAndSortEntities(
     // sort code sensors alphabetically based on the lock entity_id
     if (
         entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY].includes(entityA.key) &&
+        [CODE_EVENT_KEY, CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entityA.key) &&
         entityA.lockEntityId < entityB.lockEntityId
     )
         return -1;
@@ -132,17 +132,22 @@ function generateSlotCard(
                     },
                     {
                         entity: slotMapping.codeEventEntityId,
-                        name: 'PIN Last Used'
+                        name: 'PIN last used'
                     },
                     ...maybeGenerateFoldEntityRowCard(
                         slotMapping.conditionEntityIds,
                         'Conditions',
                         useFoldEntityRow
                     ),
+                    ...maybeGenerateFoldEntityRowCard(
+                        slotMapping.inSyncEntityIds,
+                        'Locks in sync',
+                        useFoldEntityRow
+                    ),
                     ...(include_code_slot_sensors
                         ? maybeGenerateFoldEntityRowCard(
                               slotMapping.codeSensorEntityIds,
-                              'Code Slot Sensors',
+                              'Code slot sensors',
                               useFoldEntityRow
                           )
                         : [])
@@ -164,12 +169,15 @@ function getSlotMapping(
     const mainEntityIds: string[] = [];
     const conditionEntityIds: string[] = [];
     const codeSensorEntityIds: string[] = [];
+    const inSyncEntityIds: string[] = [];
     let codeEventEntityId: string;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
-            if ([CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entity.key)) {
+            if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntityIds.push(entity.entity_id);
+            } else if (entity.key === IN_SYNC_KEY) {
+                inSyncEntityIds.push(entity.entity_id);
             } else if (entity.key === CODE_EVENT_KEY) {
                 codeEventEntityId = entity.entity_id;
             } else if (CONDITION_KEYS.includes(entity.key)) {
@@ -187,6 +195,7 @@ function getSlotMapping(
         codeEventEntityId,
         codeSensorEntityIds,
         conditionEntityIds,
+        inSyncEntityIds,
         mainEntityIds,
         pinActiveEntity,
         slotNum

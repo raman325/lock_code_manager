@@ -12,8 +12,8 @@ export const KEY_ORDER = [
     'pin',
     ACTIVE_KEY,
     ...CONDITION_KEYS,
-    CODE_SENSOR_KEY,
     IN_SYNC_KEY,
+    CODE_SENSOR_KEY,
     CODE_EVENT_KEY
 ];
 export const DOMAIN = 'lock_code_manager';
