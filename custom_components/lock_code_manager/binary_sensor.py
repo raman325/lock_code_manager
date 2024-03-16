@@ -151,9 +151,9 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         ]
         self._attr_is_on = bool(states and not inactive_because_of)
         if inactive_because_of:
-            self._attr_extra_state_attributes[
-                "inactive_because_of"
-            ] = inactive_because_of
+            self._attr_extra_state_attributes["inactive_because_of"] = (
+                inactive_because_of
+            )
         else:
             self._attr_extra_state_attributes.pop("inactive_because_of", None)
         self.async_write_ha_state()
