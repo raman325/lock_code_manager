@@ -47,8 +47,9 @@ CONF_NUM_SLOTS = "num_slots"
 CONF_START_SLOT = "start_slot"
 
 # Additional entity keys
+ATTR_ACTIVE = "active"
 ATTR_CODE = "code"
-ATTR_PIN_SYNCED_TO_LOCKS = "pin_synced_to_locks"
+ATTR_IN_SYNC = "in_sync"
 
 # Code slot properties
 CONF_NUMBER_OF_USES = "number_of_uses"

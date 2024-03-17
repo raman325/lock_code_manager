@@ -1,11 +1,12 @@
 import {
+    ACTIVE_KEY,
     CODE_EVENT_KEY,
     CODE_SENSOR_KEY,
     CONDITION_KEYS,
     DIVIDER_CARD,
     FOLD_ENTITY_ROW_SEARCH_STRING,
-    KEY_ORDER,
-    PIN_SYNCED_TO_LOCKS_KEY
+    IN_SYNC_KEY,
+    KEY_ORDER
 } from './const';
 import {
     EntityRegistryEntry,
@@ -45,11 +46,11 @@ export async function generateView(
     const badges = [
         ...configEntryData.locks.sort((a, b) => a.localeCompare(b)),
         ...sortedEntities
-            .filter((entity) => entity.key === 'pin_synced_to_locks')
+            .filter((entity) => entity.key === 'active')
             .map((entity) => {
                 return {
                     entity: entity.entity_id,
-                    name: `Slot ${entity.slotNum.toString()} synced`,
+                    name: `Slot ${entity.slotNum.toString()} active`,
                     type: 'state-label'
                 };
             })
@@ -85,7 +86,7 @@ function compareAndSortEntities(
     // sort code sensors alphabetically based on the lock entity_id
     if (
         entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY].includes(entityA.key) &&
+        [CODE_EVENT_KEY, CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entityA.key) &&
         entityA.lockEntityId < entityB.lockEntityId
     )
         return -1;
@@ -126,22 +127,27 @@ function generateSlotCard(
                     ...generateEntityCards(slotMapping.mainEntityIds),
                     DIVIDER_CARD,
                     {
-                        entity: slotMapping.pinShouldBeEnabledEntity.entity_id,
-                        name: 'PIN synced to locks'
+                        entity: slotMapping.pinActiveEntity.entity_id,
+                        name: 'PIN active'
                     },
                     {
                         entity: slotMapping.codeEventEntityId,
-                        name: 'PIN Last Used'
+                        name: 'PIN last used'
                     },
                     ...maybeGenerateFoldEntityRowCard(
                         slotMapping.conditionEntityIds,
                         'Conditions',
                         useFoldEntityRow
                     ),
+                    ...maybeGenerateFoldEntityRowCard(
+                        slotMapping.inSyncEntityIds,
+                        'Locks in sync',
+                        useFoldEntityRow
+                    ),
                     ...(include_code_slot_sensors
                         ? maybeGenerateFoldEntityRowCard(
                               slotMapping.codeSensorEntityIds,
-                              'Code Slot Sensors',
+                              'Code slot sensors',
                               useFoldEntityRow
                           )
                         : [])
@@ -163,22 +169,25 @@ function getSlotMapping(
     const mainEntityIds: string[] = [];
     const conditionEntityIds: string[] = [];
     const codeSensorEntityIds: string[] = [];
+    const inSyncEntityIds: string[] = [];
     let codeEventEntityId: string;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
                 codeSensorEntityIds.push(entity.entity_id);
+            } else if (entity.key === IN_SYNC_KEY) {
+                inSyncEntityIds.push(entity.entity_id);
             } else if (entity.key === CODE_EVENT_KEY) {
                 codeEventEntityId = entity.entity_id;
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntityIds.push(entity.entity_id);
-            } else if (entity.key !== PIN_SYNCED_TO_LOCKS_KEY) {
+            } else if (![ACTIVE_KEY, IN_SYNC_KEY].includes(entity.key)) {
                 mainEntityIds.push(entity.entity_id);
             }
         });
-    const pinShouldBeEnabledEntity = lockCodeManagerEntities.find(
-        (entity) => entity.slotNum === slotNum && entity.key === PIN_SYNCED_TO_LOCKS_KEY
+    const pinActiveEntity = lockCodeManagerEntities.find(
+        (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
     const calendarEntityId = configEntryData.slots[slotNum];
     if (calendarEntityId) conditionEntityIds.unshift(calendarEntityId);
@@ -186,8 +195,9 @@ function getSlotMapping(
         codeEventEntityId,
         codeSensorEntityIds,
         conditionEntityIds,
+        inSyncEntityIds,
         mainEntityIds,
-        pinShouldBeEnabledEntity,
+        pinActiveEntity,
         slotNum
     };
 }

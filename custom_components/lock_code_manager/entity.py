@@ -77,7 +77,7 @@ class BaseLockCodeManagerEntity(Entity):
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{self.entry_id}|{slot_num}")},
-            name=f"{config_entry.title} code slot {slot_num}",
+            name=f"{config_entry.title} Code slot {slot_num}",
             manufacturer="Lock Code Manager",
             model="Code Slot",
             via_device=(DOMAIN, self.entry_id),
@@ -85,7 +85,9 @@ class BaseLockCodeManagerEntity(Entity):
 
         self._attr_name: str | None = " ".join(key_parts)
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
-        self._attr_extra_state_attributes = {ATTR_CODE_SLOT: int(slot_num)}
+        self._attr_extra_state_attributes: dict[str, int | list[str]] = {
+            ATTR_CODE_SLOT: int(slot_num)
+        }
 
     @final
     @property
@@ -380,7 +382,7 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         super()._handle_remove_lock(lock_entity_id)
         if self.lock.lock.entity_id != lock_entity_id:
             return
-        self._hass.async_create_task(self._internal_async_remove())
+        self.config_entry.async_create_task(self.hass, self._internal_async_remove())
 
     @callback
     def _is_available(self) -> bool:

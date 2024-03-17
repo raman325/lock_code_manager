@@ -18,8 +18,9 @@ export interface SlotMapping {
     codeEventEntityId: string;
     codeSensorEntityIds: string[];
     conditionEntityIds: string[];
+    inSyncEntityIds: string[];
     mainEntityIds: string[];
-    pinShouldBeEnabledEntity: LockCodeManagerEntityEntry;
+    pinActiveEntity: LockCodeManagerEntityEntry;
     slotNum: number;
 }
 
