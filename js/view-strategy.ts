@@ -26,16 +26,15 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
             };
         }
         try {
-            const [configEntryId, configEntryTitle, entities] =
-                await hass.callWS<LockCodeManagerEntitiesResponse>({
-                    config_entry_id,
-                    config_entry_title,
-                    type: 'lock_code_manager/get_config_entry_entities'
-                });
+            const { config_entry, entities } = await hass.callWS<LockCodeManagerEntitiesResponse>({
+                config_entry_id,
+                config_entry_title,
+                type: 'lock_code_manager/get_config_entry_entities'
+            });
             return generateView(
                 hass,
-                configEntryId,
-                configEntryTitle,
+                config_entry.entry_id,
+                config_entry.title,
                 entities,
                 config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS
             );

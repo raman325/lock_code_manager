@@ -30,7 +30,10 @@ export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrate
     type: 'custom:lock-code-manager';
 }
 
-export type LockCodeManagerEntitiesResponse = [string, string, EntityRegistryEntry[]];
+export interface LockCodeManagerEntitiesResponse {
+    config_entry: ConfigEntryJSONFragment;
+    entities: EntityRegistryEntry[];
+}
 
 export interface LockCodeManagerConfigEntryData {
     locks: string[];
