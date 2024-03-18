@@ -8,7 +8,13 @@ module.exports = {
     env: {
         node: true,
     },
-    plugins: ["@typescript-eslint", "prettier", "import", "@stylistic/eslint-plugin-js"],
+    plugins: [
+        "@stylistic/eslint-plugin-js",
+        "@typescript-eslint",
+        "import",
+        "prettier",
+        "unused-imports",
+    ],
     extends: [
         "eslint:recommended",
         "plugin:@typescript-eslint/recommended",
@@ -19,21 +25,10 @@ module.exports = {
         "prettier",
     ],
     rules: {
-        camelcase: "off",
-        "class-methods-use-this": "off",
-        "no-undefined": "off",
         "@typescript-eslint/camelcase": "off",
         "@typescript-eslint/no-unused-vars": "off",
-        "sort-imports": [
-            "error",
-            {
-                ignoreCase: false,
-                ignoreDeclarationSort: true,
-                ignoreMemberSort: false,
-                memberSyntaxSortOrder: ["none", "all", "multiple", "single"],
-                allowSeparatedGroups: true,
-            },
-        ],
+        camelcase: "off",
+        "class-methods-use-this": "off",
         "import/no-unresolved": "error",
         "import/order": [
             "error",
@@ -51,6 +46,27 @@ module.exports = {
                     order: "asc",
                     caseInsensitive: true,
                 },
+            },
+        ],
+        "no-undefined": "off",
+        "sort-imports": [
+            "error",
+            {
+                ignoreCase: false,
+                ignoreDeclarationSort: true,
+                ignoreMemberSort: false,
+                memberSyntaxSortOrder: ["none", "all", "multiple", "single"],
+                allowSeparatedGroups: true,
+            },
+        ],
+        "unused-imports/no-unused-imports": "error",
+        "unused-imports/no-unused-vars": [
+            "warn",
+            {
+                "vars": "all",
+                "varsIgnorePattern": "^_",
+                "args": "after-used",
+                "argsIgnorePattern": "^_",
             },
         ],
     },
