@@ -31,8 +31,6 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                 config_entry_title,
                 type: 'lock_code_manager/get_config_entry_entities'
             });
-            console.log(config_entry);
-            console.log(entities);
             return generateView(
                 hass,
                 config_entry.entry_id,
