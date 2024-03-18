@@ -1,4 +1,4 @@
-import { ConfigEntry, EntityRegistryEntry } from './ha_type_stubs';
+import { EntityRegistryEntry } from './ha_type_stubs';
 
 export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
     key: string;
@@ -8,6 +8,7 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 
 export interface LockCodeManagerStrategyConfig {
     include_code_slot_sensors?: boolean;
+    include_in_sync_sensors?: boolean;
 }
 
 export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {

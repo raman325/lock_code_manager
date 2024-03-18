@@ -1,6 +1,6 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS } from './const';
+import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS, DEFAULT_INCLUDE_IN_SYNC_SENSORS } from './const';
 import { generateView } from './generate-view';
 import { HomeAssistant } from './ha_type_stubs';
 import { LockCodeManagerEntitiesResponse, LockCodeManagerViewStrategyConfig } from './types';
@@ -36,7 +36,8 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                 config_entry.entry_id,
                 config_entry.title,
                 entities,
-                config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS
+                config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS,
+                config.include_in_sync_sensors ?? DEFAULT_INCLUDE_IN_SYNC_SENSORS
             );
         } catch (err) {
             const content =
