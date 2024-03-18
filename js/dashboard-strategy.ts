@@ -1,7 +1,5 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS, DEFAULT_INCLUDE_IN_SYNC_SENSORS } from './const';
-import { generateView } from './generate-view';
 import { HomeAssistant } from './ha_type_stubs';
 import { slugify } from './slugify';
 import { GetConfigEntriesResponse, LockCodeManagerDashboardStrategyConfig } from './types';
