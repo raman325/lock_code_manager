@@ -1,14 +1,14 @@
 {
   "compilerOptions": {
-    "rootDir": ".",
-    "target": "es2022",
     "baseUrl": ".",
+    "module": "ESNext",
+    "moduleResolution": "node",
     "paths": {
       "*": ["./node_modules/*"]
     },
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "rootDir": ".",
+    "target": "es2022"
   },
-  "include": ["js/**/*", ".eslintrc.cjs"]
+  "include": ["js/**/*", ".eslintrc.cjs", "tsconfig.json", "rollup.config.js"]
 }

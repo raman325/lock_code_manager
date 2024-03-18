@@ -1,4 +1,4 @@
-import { ConfigEntry, EntityRegistryEntry } from './ha_type_stubs';
+import { EntityRegistryEntry } from './ha_type_stubs';
 
 export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
     key: string;
