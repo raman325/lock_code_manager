@@ -1,6 +1,6 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS } from './const';
+import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS, DEFAULT_INCLUDE_IN_SYNC_SENSORS } from './const';
 import { generateView } from './generate-view';
 import { HomeAssistant } from './ha_type_stubs';
 import { slugify } from './slugify';
@@ -37,8 +37,8 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                     path: slugify(configEntry.title),
                     strategy: {
                         config_entry_id: configEntry.entry_id,
-                        include_code_slot_sensors:
-                            config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS,
+                        include_code_slot_sensors: config.include_code_slot_sensors,
+                        include_in_sync_sensors: config.include_in_sync_sensors,
                         type: 'custom:lock-code-manager'
                     },
                     title: configEntry.title

@@ -8,6 +8,7 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 
 export interface LockCodeManagerStrategyConfig {
     include_code_slot_sensors?: boolean;
+    include_in_sync_sensors?: boolean;
 }
 
 export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {

@@ -23,7 +23,8 @@ export async function generateView(
     configEntryId: string,
     configEntryTitle: string,
     entities: EntityRegistryEntry[],
-    include_code_slot_sensors: boolean
+    include_code_slot_sensors: boolean,
+    include_in_sync_sensors: boolean
 ): Promise<LovelaceViewConfig> {
     const [configEntryData, lovelaceResources] = await Promise.all([
         hass.callWS<LockCodeManagerConfigEntryData>({
@@ -61,7 +62,12 @@ export async function generateView(
             .length > 0;
 
     const cards = slotMappings.map((slotMapping) =>
-        generateSlotCard(slotMapping, useFoldEntityRow, include_code_slot_sensors)
+        generateSlotCard(
+            slotMapping,
+            useFoldEntityRow,
+            include_code_slot_sensors,
+            include_in_sync_sensors
+        )
     );
 
     return {
@@ -114,7 +120,8 @@ function generateEntityCards(entities: string[]): { entity: string }[] {
 function generateSlotCard(
     slotMapping: SlotMapping,
     useFoldEntityRow: boolean,
-    include_code_slot_sensors: boolean
+    include_code_slot_sensors: boolean,
+    include_in_sync_sensors: boolean
 ): LovelaceCardConfig {
     return {
         cards: [
@@ -139,11 +146,13 @@ function generateSlotCard(
                         'Conditions',
                         useFoldEntityRow
                     ),
-                    ...maybeGenerateFoldEntityRowCard(
-                        slotMapping.inSyncEntityIds,
-                        'Locks in sync',
-                        useFoldEntityRow
-                    ),
+                    ...(include_in_sync_sensors
+                        ? maybeGenerateFoldEntityRowCard(
+                              slotMapping.inSyncEntityIds,
+                              'Locks in sync',
+                              useFoldEntityRow
+                          )
+                        : []),
                     ...(include_code_slot_sensors
                         ? maybeGenerateFoldEntityRowCard(
                               slotMapping.codeSensorEntityIds,
