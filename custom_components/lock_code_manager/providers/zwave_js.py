@@ -149,7 +149,6 @@ class ZWaveJSLock(BaseLock):
             .get(DATA_CLIENT)
         ) is None:
             return False
-        _LOGGER.error(client)
         return (
             self.lock_config_entry.state == ConfigEntryState.LOADED
             and client.connected
