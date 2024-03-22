@@ -171,6 +171,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
             f"Unable to start because lock {entity_id} can't be found"
         )
 
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
     hass.data[DOMAIN][entry_id] = {
         CONF_LOCKS: {},
         COORDINATORS: {},
