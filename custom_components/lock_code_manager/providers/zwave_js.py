@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 import logging
 from typing import Callable, Iterable
 
-from zwave_js_server.client import Client
 from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
@@ -144,9 +143,12 @@ class ZWaveJSLock(BaseLock):
 
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        client: Client = self.hass.data[ZWAVE_JS_DOMAIN][
-            self.lock_config_entry.entry_id
-        ][DATA_CLIENT]
+        if (
+            client := self.hass.data.get(ZWAVE_JS_DOMAIN, {})
+            .get(self.lock_config_entry.entry_id, {})
+            .get(DATA_CLIENT)
+        ) is None:
+            return False
         return (
             self.lock_config_entry.state == ConfigEntryState.LOADED
             and client.connected
