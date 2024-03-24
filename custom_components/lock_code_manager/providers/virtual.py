@@ -26,8 +26,8 @@ class CodeSlotData(TypedDict):
 class VirtualLock(BaseLock):
     """Class to represent Virtual lock."""
 
-    _store: Store[dict[int, CodeSlotData]] = field(init=False, repr=False)
-    _data: dict[int, CodeSlotData] = field(default_factory=dict, init=False, repr=False)
+    _store: Store[dict[str, CodeSlotData]] = field(init=False, repr=False)
+    _data: dict[str, CodeSlotData] = field(default_factory=dict, init=False, repr=False)
 
     @property
     def domain(self) -> str:
@@ -65,14 +65,17 @@ class VirtualLock(BaseLock):
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        self._data[code_slot] = CodeSlotData(code=usercode, name=name)
+        self._data[str(code_slot)] = CodeSlotData(code=usercode, name=name)
 
     async def async_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        if code_slot not in self._data:
+        if str(code_slot) not in self._data:
             raise HomeAssistantError(f"Code slot {code_slot} not found")
-        self._data.pop(code_slot)
+        self._data.pop(str(code_slot))
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
-        return {key: code_slot["code"] for key, code_slot in self._data.items()}
+        return {
+            int(slot_num): code_slot["code"]
+            for slot_num, code_slot in self._data.items()
+        }
