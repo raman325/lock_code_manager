@@ -135,7 +135,7 @@ class ZWaveJSLock(BaseLock):
             )
         )
 
-    async def async_unload(self) -> None:
+    async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         for listener in self._listeners:
             listener()

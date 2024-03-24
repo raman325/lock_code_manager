@@ -94,13 +94,13 @@ class BaseLock:
         """Set up lock."""
         await self.hass.async_add_executor_job(self.setup)
 
-    def unload(self) -> None:
+    def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         pass
 
-    async def async_unload(self) -> None:
+    async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
-        await self.hass.async_add_executor_job(self.unload)
+        await self.hass.async_add_executor_job(self.unload, remove_permanently)
 
     def is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
