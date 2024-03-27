@@ -22,7 +22,7 @@ async def test_base(hass: HomeAssistant):
         er.RegistryEntry("lock.test", "blah", "blah"),
     )
     assert await lock.async_setup() is None
-    assert await lock.async_unload() is None
+    assert await lock.async_unload(False) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     with pytest.raises(NotImplementedError):
         lock.domain

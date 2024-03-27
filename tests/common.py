@@ -66,7 +66,7 @@ class MockLCMLock(BaseLock):
             {"codes": {1: "1234", 2: "5678"}, "service_calls": defaultdict(list)},
         )
 
-    def unload(self) -> None:
+    def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         self.hass.data[LOCK_DATA].pop(self.lock.entity_id)
         if not self.hass.data[LOCK_DATA]:

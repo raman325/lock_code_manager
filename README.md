@@ -12,7 +12,8 @@ Features:
 
 Locks from the following integrations are currently supported:
 
--   Z-Wave JS
+-   Z-Wave
+-   [Virtual](https://github.com/twrecked/hass-virtual) custom integration. See the [Wiki page on this integration](https://github.com/raman325/lock_code_manager/wiki/Virtual-integration) for more details on why it was built and how it works.
 
 The code was written to make it (I think) easy to add support for locks in other integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you want to learn more about that and take a stab at it. Contributors welcome!
 
@@ -20,10 +21,11 @@ The code was written to make it (I think) easy to add support for locks in other
 
 The best way to install this integration is via HACS.
 
-1. Add this repository as a custom integration repository in HACS
-2. Go to Settings > Devices & Services > Add Integration
-3. Select Lock Code Manager
-4. Follow the prompts - additional information about the configuration options is available in the Wiki
+1. Set up your locks as entities to your Home Assistant instance through the corresponding integration (e.g. Z-Wave)
+2. Add this repository as a custom integration repository in HACS
+3. Go to Settings > Devices & Services > Add Integration
+4. Select Lock Code Manager
+5. Follow the prompts - additional information about the configuration options are available in the Wiki
 
 ## Learn More
 
