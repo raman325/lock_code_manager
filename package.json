@@ -34,7 +34,7 @@
     "@tsconfig/node20": "^20.1.4",
     "@types/node": "^20.11.30",
     "@typescript-eslint/eslint-plugin": "^7.4.0",
-    "@typescript-eslint/parser": "^7.3.1",
+    "@typescript-eslint/parser": "^7.4.0",
     "eslint": "^8.56.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-config-rollup": "^3.0.1",
@@ -45,7 +45,7 @@
     "eslint-plugin-unused-imports": "^3.1.0",
     "prettier": "^4.0.0-alpha.8",
     "prettier-plugin-package": "^1.4.0",
-    "rollup": "^4.9.6",
+    "rollup": "^4.13.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.3"
   }
