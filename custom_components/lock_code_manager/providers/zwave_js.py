@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
 from zwave_js_server.const.command_class.notification import (
@@ -36,6 +36,8 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
     CONF_PIN,
+    MAJOR_VERSION,
+    MINOR_VERSION,
     STATE_ON,
 )
 from homeassistant.core import Event, callback
@@ -44,6 +46,10 @@ from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
 from ._base import BaseLock
+
+EVENT_DATA_PASSED_IN = MAJOR_VERSION > 2024 or (
+    MAJOR_VERSION == 2024 and MINOR_VERSION >= 4
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,15 +88,16 @@ class ZWaveJSLock(BaseLock):
         )
 
     @callback
-    def _zwave_js_event_filter(self, evt: Event) -> bool:
+    def _zwave_js_event_filter(self, evt: Event | dict[str, Any]) -> bool:
         """Filter out events."""
         # Try to find the lock that we are getting an event for, skipping
         # ones that don't match
+        data: dict[str, Any] = evt if EVENT_DATA_PASSED_IN else evt.data  # type: ignore[union-attr]
         assert self.node.client.driver
         return (
-            evt.data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
-            and evt.data[ATTR_NODE_ID] == self.node.node_id
-            and evt.data[ATTR_DEVICE_ID] == self.lock.device_id
+            data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
+            and data[ATTR_NODE_ID] == self.node.node_id
+            and data[ATTR_DEVICE_ID] == self.lock.device_id
         )
 
     @callback
