@@ -16,19 +16,27 @@ import {
     LovelaceViewConfig
 } from './ha_type_stubs';
 import { slugify } from './slugify';
-import { LockCodeManagerConfigEntryData, LockCodeManagerEntityEntry, SlotMapping } from './types';
+import {
+    ConfigEntryJSONFragment,
+    LockCodeManagerConfigEntryData,
+    LockCodeManagerEntityEntry,
+    SlotMapping
+} from './types';
+import { capitalize } from './util';
 
 export async function generateView(
     hass: HomeAssistant,
-    configEntryId: string,
-    configEntryTitle: string,
+    configEntry: ConfigEntryJSONFragment,
     entities: EntityRegistryEntry[],
     include_code_slot_sensors: boolean,
     include_in_sync_sensors: boolean
 ): Promise<LovelaceViewConfig> {
+    const callData = {
+        type: 'lock_code_manager/get_config_entry_entities'
+    };
     const [configEntryData, lovelaceResources] = await Promise.all([
         hass.callWS<LockCodeManagerConfigEntryData>({
-            config_entry_id: configEntryId,
+            config_entry_id: configEntry.entry_id,
             type: 'lock_code_manager/get_slot_calendar_data'
         }),
         hass.callWS<LovelaceResource[]>({
@@ -63,6 +71,7 @@ export async function generateView(
 
     const cards = slotMappings.map((slotMapping) =>
         generateSlotCard(
+            configEntry,
             slotMapping,
             useFoldEntityRow,
             include_code_slot_sensors,
@@ -74,8 +83,8 @@ export async function generateView(
         badges,
         cards,
         panel: false,
-        path: slugify(configEntryTitle),
-        title: configEntryTitle
+        path: slugify(configEntry.title),
+        title: configEntry.title
     };
 }
 
@@ -109,15 +118,34 @@ function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManag
     };
 }
 
-function generateEntityCards(entities: string[]): { entity: string }[] {
-    return entities.map((entityId) => {
+function generateEntityCards(
+    configEntry: ConfigEntryJSONFragment,
+    entities: LockCodeManagerEntityEntry[]
+): { entity: string }[] {
+    return entities.map((entity) => {
+        if ([IN_SYNC_KEY, CODE_SENSOR_KEY].includes(entity.key)) {
+            return {
+                entity: entity.entity_id
+            };
+        }
+        const name = (entity.name || entity.original_name)
+            .replace(`Code slot ${entity.slotNum}`, '')
+            .replace('  ', ' ')
+            .replace('  ', ' ')
+            .trim()
+            .replace(configEntry.title, '')
+            .replace('  ', ' ')
+            .replace('  ', ' ')
+            .trim();
         return {
-            entity: entityId
+            entity: entity.entity_id,
+            name: capitalize(name)
         };
     });
 }
 
 function generateSlotCard(
+    configEntry: ConfigEntryJSONFragment,
     slotMapping: SlotMapping,
     useFoldEntityRow: boolean,
     include_code_slot_sensors: boolean,
@@ -131,31 +159,35 @@ function generateSlotCard(
             },
             {
                 entities: [
-                    ...generateEntityCards(slotMapping.mainEntityIds),
+                    ...generateEntityCards(configEntry, slotMapping.mainEntities),
                     DIVIDER_CARD,
                     {
                         entity: slotMapping.pinActiveEntity.entity_id,
                         name: 'PIN active'
                     },
                     {
-                        entity: slotMapping.codeEventEntityId,
+                        entity: slotMapping.codeEventEntity.entity_id,
                         name: 'PIN last used'
                     },
-                    ...maybeGenerateFoldEntityRowCard(
-                        slotMapping.conditionEntityIds,
+                    ...maybeGenerateFoldEntityRowConditionCard(
+                        configEntry,
+                        slotMapping.conditionEntities,
+                        slotMapping.calendarEntityId,
                         'Conditions',
                         useFoldEntityRow
                     ),
                     ...(include_in_sync_sensors
                         ? maybeGenerateFoldEntityRowCard(
-                              slotMapping.inSyncEntityIds,
+                              configEntry,
+                              slotMapping.inSyncEntities,
                               'Locks in sync',
                               useFoldEntityRow
                           )
                         : []),
                     ...(include_code_slot_sensors
                         ? maybeGenerateFoldEntityRowCard(
-                              slotMapping.codeSensorEntityIds,
+                              configEntry,
+                              slotMapping.codeSensorEntities,
                               'Code slot sensors',
                               useFoldEntityRow
                           )
@@ -175,49 +207,86 @@ function getSlotMapping(
     lockCodeManagerEntities: LockCodeManagerEntityEntry[],
     configEntryData: LockCodeManagerConfigEntryData
 ): SlotMapping {
-    const mainEntityIds: string[] = [];
-    const conditionEntityIds: string[] = [];
-    const codeSensorEntityIds: string[] = [];
-    const inSyncEntityIds: string[] = [];
-    let codeEventEntityId: string;
+    const mainEntities: LockCodeManagerEntityEntry[] = [];
+    const conditionEntities: LockCodeManagerEntityEntry[] = [];
+    const codeSensorEntities: LockCodeManagerEntityEntry[] = [];
+    const inSyncEntities: LockCodeManagerEntityEntry[] = [];
+    let codeEventEntity: LockCodeManagerEntityEntry;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
             if (entity.key === CODE_SENSOR_KEY) {
-                codeSensorEntityIds.push(entity.entity_id);
+                codeSensorEntities.push(entity);
             } else if (entity.key === IN_SYNC_KEY) {
-                inSyncEntityIds.push(entity.entity_id);
+                inSyncEntities.push(entity);
             } else if (entity.key === CODE_EVENT_KEY) {
-                codeEventEntityId = entity.entity_id;
+                codeEventEntity = entity;
             } else if (CONDITION_KEYS.includes(entity.key)) {
-                conditionEntityIds.push(entity.entity_id);
+                conditionEntities.push(entity);
             } else if (![ACTIVE_KEY, IN_SYNC_KEY].includes(entity.key)) {
-                mainEntityIds.push(entity.entity_id);
+                mainEntities.push(entity);
             }
         });
     const pinActiveEntity = lockCodeManagerEntities.find(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
-    const calendarEntityId = configEntryData.slots[slotNum];
-    if (calendarEntityId) conditionEntityIds.unshift(calendarEntityId);
+    const calendarEntityId: string | null | undefined = configEntryData.slots[slotNum];
     return {
-        codeEventEntityId,
-        codeSensorEntityIds,
-        conditionEntityIds,
-        inSyncEntityIds,
-        mainEntityIds,
+        calendarEntityId,
+        codeEventEntity,
+        codeSensorEntities,
+        conditionEntities,
+        inSyncEntities,
+        mainEntities,
         pinActiveEntity,
         slotNum
     };
 }
 
 function maybeGenerateFoldEntityRowCard(
-    entities: string[],
+    configEntry: ConfigEntryJSONFragment,
+    entities: LockCodeManagerEntityEntry[],
     label: string,
     useFoldEntityRow: boolean
 ) {
     if (entities.length === 0) return [];
-    const entityCards = generateEntityCards(entities);
+    const entityCards = generateEntityCards(configEntry, entities);
+    return useFoldEntityRow
+        ? [
+              DIVIDER_CARD,
+              {
+                  entities: entityCards,
+                  head: {
+                      label,
+                      type: 'section'
+                  },
+                  type: 'custom:fold-entity-row'
+              }
+          ]
+        : [
+              {
+                  label,
+                  type: 'section'
+              },
+              ...entityCards
+          ];
+}
+
+function maybeGenerateFoldEntityRowConditionCard(
+    configEntry: ConfigEntryJSONFragment,
+    conditionEntities: LockCodeManagerEntityEntry[],
+    calendarEntityId: string | null | undefined,
+    label: string,
+    useFoldEntityRow: boolean
+) {
+    if (conditionEntities.length === 0 && calendarEntityId == null) return [];
+    const entityCards = generateEntityCards(configEntry, conditionEntities);
+    if (calendarEntityId != null) {
+        entityCards.unshift({
+            entity: calendarEntityId
+        });
+    }
+
     return useFoldEntityRow
         ? [
               DIVIDER_CARD,

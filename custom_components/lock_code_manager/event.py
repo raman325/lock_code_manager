@@ -49,7 +49,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
     _attr_entity_category = None
     _attr_event_types = [EVENT_PIN_USED]
-    _attr_icon = "mdi:gesture-tap"
     _attr_translation_key = EVENT_PIN_USED
 
     def __init__(
@@ -64,7 +63,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         BaseLockCodeManagerEntity.__init__(
             self, hass, ent_reg, config_entry, slot_num, key
         )
-        self._attr_name = None
 
     @callback
     def _handle_event(self, event: Event) -> None:

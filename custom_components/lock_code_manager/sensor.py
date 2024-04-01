@@ -63,7 +63,6 @@ class LockCodeManagerCodeSlotSensorEntity(
     """Code slot sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_icon = "mdi:lock-smart"
 
     def __init__(
         self,

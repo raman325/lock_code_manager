@@ -256,17 +256,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
         )
         self._lock = asyncio.Lock()
-
-        key_name = ATTR_IN_SYNC.replace("_", " ")
-        self._attr_name: str | None = f"{super()._attr_name} {key_name}"
         self._attr_should_poll = True
-
-    @property
-    def icon(self) -> str | None:
-        """Return icon."""
-        if self.is_on:
-            return "mdi:sync"
-        return "mdi:sync-off"
 
     @property
     def available(self) -> bool:
@@ -356,6 +346,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
+                elif self._attr_is_on:
+                    return
                 else:
                     self._attr_is_on = True
             elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
@@ -370,6 +362,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
+                elif self._attr_is_on:
+                    return
                 else:
                     self._attr_is_on = True
 
