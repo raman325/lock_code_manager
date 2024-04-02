@@ -64,7 +64,7 @@
   "entity": {
     "binary_sensor": {
       "active": {
-        "name": "Code slot {slot_num} active"
+        "name": "active"
       },
       "in_sync": {
         "name": "Code slot {slot_num} in sync"
@@ -72,7 +72,6 @@
     },
     "event": {
       "pin_used": {
-        "name": "PIN last used",
         "state_attributes": {
           "event_type": {
             "state": {
@@ -90,7 +89,7 @@
     },
     "sensor": {
       "code": {
-        "name": "Code slot {slot_num} code"
+        "name": "Code slot {slot_num}"
 
       }
     },

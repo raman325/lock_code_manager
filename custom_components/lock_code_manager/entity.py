@@ -70,6 +70,7 @@ class BaseLockCodeManagerEntity(Entity):
         self._unsub_initial_state: CALLBACK_TYPE | None = None
 
         self._attr_translation_key = key
+        self._attr_translation_placeholders = {"slot_num": slot_num}
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{self.entry_id}|{slot_num}")},
@@ -366,7 +367,6 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
                 identifiers=lock.device_entry.identifiers,
             )
 
-        self._attr_translation_placeholders = {"slot_num": slot_num}
         self._attr_unique_id = (
             f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
         )
