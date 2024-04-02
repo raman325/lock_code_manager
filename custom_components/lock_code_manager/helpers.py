@@ -8,10 +8,10 @@ from typing import Any
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import CONF_LOCKS, DOMAIN
+from .const import CONF_LOCKS, DOMAIN, EVENT_DATA_PASSED_IN
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -91,3 +91,8 @@ def get_locks_from_targets(
             )
 
     return locks
+
+
+def get_event_data_for_filter(self, evt: Event | dict[str, Any]) -> dict[str, Any]:
+    """Get event data for filter."""
+    return evt if EVENT_DATA_PASSED_IN else evt.data  # type: ignore[union-attr]
