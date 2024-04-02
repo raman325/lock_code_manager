@@ -1,9 +1,9 @@
-"""Sensor for lock_code_manager."""
+"""Binary sensor for lock_code_manager."""
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.components.binary_sensor import (
@@ -46,6 +46,7 @@ from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManage
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
+SCAN_INTERVAL = timedelta(seconds=30)
 
 
 async def async_setup_entry(
@@ -256,15 +257,10 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
         self._lock = asyncio.Lock()
 
-        key_name = ATTR_IN_SYNC.replace("_", " ")
-        self._attr_name: str | None = f"{super()._attr_name} {key_name}"
-
     @property
-    def icon(self) -> str | None:
-        """Return icon."""
-        if self.is_on:
-            return "mdi:sync"
-        return "mdi:sync-"
+    def should_poll(self) -> bool:
+        """Return whether entity should poll."""
+        return True
 
     @property
     def available(self) -> bool:
@@ -272,6 +268,22 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
             int(self.slot_num) in self.coordinator.data
         )
+
+    async def async_update(self) -> None:
+        """Update entity."""
+        if (
+            self._lock
+            and not self._lock.locked()
+            and self.is_on is False
+            and (state := self.hass.states.get(self.lock.lock.entity_id))
+            and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        ):
+            _LOGGER.error(
+                "Updating %s code slot %s because it is out of sync",
+                self.lock.lock.entity_id,
+                self.slot_num,
+            )
+            await self._update_state()
 
     def _get_entity_state(self, key: str) -> str | None:
         """Get entity state."""
@@ -338,6 +350,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
+                elif self._attr_is_on:
+                    return
                 else:
                     self._attr_is_on = True
             elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
@@ -352,6 +366,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
+                elif self._attr_is_on:
+                    return
                 else:
                     self._attr_is_on = True
 
