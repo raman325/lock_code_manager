@@ -40,10 +40,10 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, callback
 
+from ..backports import get_event_data_for_filter
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
-from ..helpers import get_event_data_for_filter
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

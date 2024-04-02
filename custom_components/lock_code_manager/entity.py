@@ -24,6 +24,7 @@ from homeassistant.helpers.dispatcher import (
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import async_track_state_change
 
+from .backports import get_event_data_for_filter
 from .const import (
     ATTR_CODE_SLOT,
     ATTR_ENTITIES_ADDED_TRACKER,
@@ -35,7 +36,6 @@ from .const import (
     DOMAIN,
 )
 from .data import get_slot_data
-from .helpers import get_event_data_for_filter
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
