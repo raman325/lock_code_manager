@@ -2,14 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.const import (
-    CONF_ENABLED,
-    CONF_NAME,
-    CONF_PIN,
-    MAJOR_VERSION,
-    MINOR_VERSION,
-    Platform,
-)
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
@@ -75,7 +68,3 @@ PLATFORM_MAP = {
     CONF_PIN: Platform.TEXT,
     EVENT_PIN_USED: Platform.EVENT,
 }
-
-EVENT_DATA_PASSED_IN = MAJOR_VERSION > 2024 or (
-    MAJOR_VERSION == 2024 and MINOR_VERSION >= 4
-)
