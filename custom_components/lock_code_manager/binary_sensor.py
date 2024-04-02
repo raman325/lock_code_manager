@@ -256,7 +256,11 @@ class LockCodeManagerCodeSlotInSyncEntity(
             f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
         )
         self._lock = asyncio.Lock()
-        self._attr_should_poll = True
+
+    @property
+    def should_poll(self) -> bool:
+        """Return whether entity should poll."""
+        return True
 
     @property
     def available(self) -> bool:
