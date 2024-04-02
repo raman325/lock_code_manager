@@ -114,7 +114,8 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         )
         self._entity_id_map: dict[str, str] = {}
 
-    async def _update_state(self, _: datetime | None = None) -> None:
+    @callback
+    def _update_state(self, _: datetime | None = None) -> None:
         """Update binary sensor state by getting dependent states."""
         _LOGGER.debug(
             "%s (%s): Updating %s",
@@ -165,17 +166,19 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         """Update listener."""
         if config_entry.options:
             return
-        await self._update_state()
+        self._update_state()
 
-    async def _remove_keys_to_track(self, keys: list[str]) -> None:
+    @callback
+    def _remove_keys_to_track(self, keys: list[str]) -> None:
         """Remove keys to track."""
         for key in keys:
             if key not in PLATFORM_MAP:
                 continue
             self._entity_id_map.pop(key, None)
-        await self._update_state()
+        self._update_state()
 
-    async def _add_keys_to_track(self, keys: list[str]) -> None:
+    @callback
+    def _add_keys_to_track(self, keys: list[str]) -> None:
         """Add keys to track."""
         for key in keys:
             if not (platform := PLATFORM_MAP.get(key)):
@@ -183,14 +186,15 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             self._entity_id_map[key] = self.ent_reg.async_get_entity_id(
                 platform, DOMAIN, self._get_uid(key)
             )
-        await self._update_state()
+        self._update_state()
 
-    async def _handle_calendar_state_changes(
+    @callback
+    def _handle_calendar_state_changes(
         self, entity_id: str, _: State, __: State
     ) -> None:
         """Handle calendar state changes."""
         if entity_id == self._calendar_entity_id:
-            await self._update_state()
+            self._update_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -222,6 +226,8 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self.async_on_remove(
             self.config_entry.add_update_listener(self._config_entry_update_listener)
         )
+
+        self._update_state()
 
 
 class LockCodeManagerCodeSlotInSyncEntity(
@@ -283,7 +289,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self.lock.lock.entity_id,
                 self.slot_num,
             )
-            await self._update_state()
+            await self._async_update_state()
 
     def _get_entity_state(self, key: str) -> str | None:
         """Get entity state."""
@@ -291,7 +297,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return None
         return state.state
 
-    async def _update_state(
+    async def _async_update_state(
         self,
         entity_id: str | None = None,
         from_state: State | None = None,
@@ -371,10 +377,10 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 else:
                     self._attr_is_on = True
 
-            if self._attr_is_on is False:
-                await self.coordinator.async_refresh()
-            else:
+            if self._attr_is_on:
                 self.async_write_ha_state()
+            else:
+                await self.coordinator.async_refresh()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -383,6 +389,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
         # await CoordinatorEntity.async_added_to_hass(self)
 
         self.async_on_remove(
-            async_track_state_change(self.hass, MATCH_ALL, self._update_state)
+            async_track_state_change(self.hass, MATCH_ALL, self._async_update_state)
         )
-        await self._update_state()
+        await self._async_update_state()
