@@ -47,7 +47,7 @@ class BaseLock:
     hass: HomeAssistant = field(repr=False)
     dev_reg: dr.DeviceRegistry = field(repr=False)
     ent_reg: er.EntityRegistry = field(repr=False)
-    lock_config_entry: ConfigEntry = field(repr=False)
+    lock_config_entry: ConfigEntry | None = field(repr=False)
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
 
@@ -297,24 +297,23 @@ class BaseLock:
         elif isinstance(source_data, dict):
             extra_data = source_data
 
-        self.hass.bus.async_fire(
-            EVENT_LOCK_STATE_CHANGED,
-            event_data={
-                ATTR_NOTIFICATION_SOURCE: notification_source,
-                ATTR_ENTITY_ID: lock_entity_id,
-                ATTR_DEVICE_ID: lock_device_id,
-                ATTR_LCM_CONFIG_ENTRY_ID: config_entry_id,
-                ATTR_LOCK_CONFIG_ENTRY_ID: self.lock_config_entry.entry_id,
-                ATTR_STATE: (
-                    state.state
-                    if (state := self.hass.states.get(lock_entity_id))
-                    else ""
-                ),
-                ATTR_ACTION_TEXT: action_text,
-                ATTR_CODE_SLOT: code_slot or 0,
-                ATTR_CODE_SLOT_NAME: name_state.state if name_state else "",
-                ATTR_FROM: from_state,
-                ATTR_TO: to_state,
-                ATTR_EXTRA_DATA: extra_data,
-            },
-        )
+        event_data = {
+            ATTR_NOTIFICATION_SOURCE: notification_source,
+            ATTR_ENTITY_ID: lock_entity_id,
+            ATTR_DEVICE_ID: lock_device_id,
+            ATTR_LCM_CONFIG_ENTRY_ID: config_entry_id,
+            ATTR_STATE: (
+                state.state if (state := self.hass.states.get(lock_entity_id)) else ""
+            ),
+            ATTR_ACTION_TEXT: action_text,
+            ATTR_CODE_SLOT: code_slot or 0,
+            ATTR_CODE_SLOT_NAME: name_state.state if name_state else "",
+            ATTR_FROM: from_state,
+            ATTR_TO: to_state,
+            ATTR_EXTRA_DATA: extra_data,
+        }
+
+        if self.lock_config_entry:
+            event_data[ATTR_LOCK_CONFIG_ENTRY_ID] = self.lock_config_entry.entry_id
+
+        self.hass.bus.async_fire(EVENT_LOCK_STATE_CHANGED, event_data=event_data)
