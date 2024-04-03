@@ -195,7 +195,6 @@ class BaseLock:
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
-            raise err
 
     @final
     async def async_call_service(
@@ -214,7 +213,6 @@ class BaseLock:
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
-            raise err
 
     @final
     @callback

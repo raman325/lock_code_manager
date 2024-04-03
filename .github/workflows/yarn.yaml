@@ -7,7 +7,7 @@ on:
     paths:
       - "**.js"
       - "**.ts"
-      - "js/**"
+      - "ts/**"
       - ".eslintrc.cjs"
       - "package.json"
       - "rollup.config.js"
@@ -17,7 +17,7 @@ on:
     paths:
       - "**.js"
       - "**.ts"
-      - "js/**"
+      - "ts/**"
       - ".eslintrc.cjs"
       - "package.json"
       - "rollup.config.js"

@@ -33,8 +33,7 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
             });
             return generateView(
                 hass,
-                config_entry.entry_id,
-                config_entry.title,
+                config_entry,
                 entities,
                 config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS,
                 config.include_in_sync_sensors ?? DEFAULT_INCLUDE_IN_SYNC_SENSORS

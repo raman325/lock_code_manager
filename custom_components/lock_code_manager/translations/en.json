@@ -62,6 +62,14 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "active": {
+        "name": "active"
+      },
+      "in_sync": {
+        "name": "Code slot {slot_num} in sync"
+      }
+    },
     "event": {
       "pin_used": {
         "state_attributes": {
@@ -71,6 +79,32 @@
             }
           }
         }
+      }
+    },
+    "number": {
+      "number_of_uses": {
+        "name": "number of uses"
+
+      }
+    },
+    "sensor": {
+      "code": {
+        "name": "Code slot {slot_num}"
+
+      }
+    },
+    "switch": {
+      "enabled": {
+        "name": "enabled"
+
+      }
+    },
+    "text": {
+      "name": {
+        "name": "name"
+      },
+      "pin": {
+        "name": "PIN"
       }
     }
   },

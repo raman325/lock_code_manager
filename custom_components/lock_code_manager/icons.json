@@ -1,0 +1,34 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "in_sync": {
+        "default": "mdi:sync-alert",
+        "state": {
+          "off": "mdi:sync-off",
+          "on": "mdi:sync"
+        }
+      }
+    },
+    "event": {
+      "pin_used": {
+        "default": "mdi:gesture-tap"
+      }
+    },
+    "sensor": {
+      "code": {
+        "default": "mdi:lock-smart"
+      }
+    },
+    "text": {
+      "name": {
+        "default": "mdi:rename"
+      },
+      "pin": {
+        "default": "mdi:form-textbox-password"
+      }
+    }
+  },
+  "services": {
+    "hard_refresh_usercodes": "mdi:refresh"
+  }
+}

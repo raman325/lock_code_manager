@@ -1,2 +1,2 @@
-pre-commit==3.6.2
-ruff==0.3.4
+pre-commit==3.7.0
+ruff==0.3.5

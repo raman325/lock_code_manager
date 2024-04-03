@@ -24,6 +24,7 @@ from homeassistant.helpers.dispatcher import (
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import async_track_state_change
 
+from .backports import get_event_data_for_filter
 from .const import (
     ATTR_CODE_SLOT,
     ATTR_ENTITIES_ADDED_TRACKER,
@@ -69,11 +70,8 @@ class BaseLockCodeManagerEntity(Entity):
         self._uid_cache: dict[str, str] = {}
         self._unsub_initial_state: CALLBACK_TYPE | None = None
 
-        key_parts = key.lower().split("_")
-        try:
-            key_parts[key_parts.index("pin")] = "PIN"
-        except ValueError:
-            pass
+        self._attr_translation_key = key
+        self._attr_translation_placeholders = {"slot_num": slot_num}
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{self.entry_id}|{slot_num}")},
@@ -83,7 +81,6 @@ class BaseLockCodeManagerEntity(Entity):
             via_device=(DOMAIN, self.entry_id),
         )
 
-        self._attr_name: str | None = " ".join(key_parts)
         self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
         self._attr_extra_state_attributes: dict[str, int | list[str]] = {
             ATTR_CODE_SLOT: int(slot_num)
@@ -238,14 +235,13 @@ class BaseLockCodeManagerEntity(Entity):
             self._unsub_initial_state = None
 
     @callback
-    def _event_filter(self, event: Event) -> bool:
+    def _event_filter(self, event: Event | dict[str, Any]) -> bool:
         """Filter events."""
+        data = get_event_data_for_filter(event)
         return (
-            any(
-                event.data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
-            )
-            and event.data[ATTR_CODE_SLOT] == int(self.slot_num)
-            and event.data[ATTR_TO] == STATE_UNLOCKED
+            any(data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks)
+            and data[ATTR_CODE_SLOT] == int(self.slot_num)
+            and data[ATTR_TO] == STATE_UNLOCKED
         )
 
     async def async_will_remove_from_hass(self) -> None:
@@ -370,7 +366,6 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
                 connections=lock.device_entry.connections,
                 identifiers=lock.device_entry.identifiers,
             )
-            self._attr_name = f"Code slot {slot_num}"
 
         self._attr_unique_id = (
             f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
