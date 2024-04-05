@@ -1,3 +1,4 @@
+import { STATE_NOT_RUNNING } from 'home-assistant-js-websocket';
 import { ReactiveElement } from 'lit';
 
 import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS, DEFAULT_INCLUDE_IN_SYNC_SENSORS } from './const';
@@ -8,12 +9,16 @@ import { LockCodeManagerEntitiesResponse, LockCodeManagerViewStrategyConfig } fr
 export class LockCodeManagerViewStrategy extends ReactiveElement {
     static async generate(config: LockCodeManagerViewStrategyConfig, hass: HomeAssistant) {
         const { config_entry_id, config_entry_title } = config;
+        if (hass.config.state === STATE_NOT_RUNNING) {
+            return {
+                cards: [{ type: 'starting' }]
+            };
+        }
         if (
             (config_entry_id === undefined && config_entry_title === undefined) ||
             (config_entry_id !== undefined && config_entry_title !== undefined)
         ) {
             return {
-                badges: [],
                 cards: [
                     {
                         content:
@@ -44,7 +49,6 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                     ? `with ID \`${config_entry_id}\``
                     : `called \`${config_entry_title}\``;
             return {
-                badges: [],
                 cards: [
                     {
                         content: `## ERROR: No Lock Code Manager configuration ${content} found!`,
