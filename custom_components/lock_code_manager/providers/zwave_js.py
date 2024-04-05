@@ -30,7 +30,7 @@ from homeassistant.components.zwave_js.const import (
     ZWAVE_JS_NOTIFICATION_EVENT,
 )
 from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
@@ -72,6 +72,7 @@ ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
 class ZWaveJSLock(BaseLock):
     """Class to represent ZWave JS lock."""
 
+    lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
 
     @property
@@ -135,7 +136,7 @@ class ZWaveJSLock(BaseLock):
             )
         )
 
-    async def async_unload(self) -> None:
+    async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         for listener in self._listeners:
             listener()

@@ -213,7 +213,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
 
 async def async_unload_lock(
-    hass: HomeAssistant, config_entry: ConfigEntry, lock_entity_id: str | None = None
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    lock_entity_id: str | None = None,
+    remove_permanently: bool = False,
 ):
     """Unload lock."""
     hass_data = hass.data[DOMAIN]
@@ -227,7 +230,7 @@ async def async_unload_lock(
             for entry in hass.config_entries.async_entries(DOMAIN)
         ):
             lock: BaseLock = hass_data[CONF_LOCKS].pop(lock_entity_id)
-            await lock.async_unload()
+            await lock.async_unload(remove_permanently)
 
         hass_data[entry_id][CONF_LOCKS].pop(lock_entity_id)
 
@@ -355,7 +358,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             dev_reg.async_update_device(
                 lock.device_entry.id, remove_config_entry_id=entry_id
             )
-        await async_unload_lock(hass, config_entry, lock_entity_id)
+        await async_unload_lock(
+            hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
+        )
 
     # Notify any existing entities that additional locks have been added then create
     # slot PIN sensors for the new locks

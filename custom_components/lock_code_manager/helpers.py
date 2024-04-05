@@ -29,7 +29,6 @@ def async_create_lock_instance(
     lock_entry = ent_reg.async_get(lock_entity_id)
     assert lock_entry
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
-    assert lock_config_entry
     lock = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
         hass, dev_reg, ent_reg, lock_config_entry, lock_entry
     )
