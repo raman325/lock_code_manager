@@ -40,7 +40,6 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, callback
 
-from ..backports import get_event_data_for_filter
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
@@ -83,16 +82,15 @@ class ZWaveJSLock(BaseLock):
         )
 
     @callback
-    def _zwave_js_event_filter(self, event: Event | dict[str, Any]) -> bool:
+    def _zwave_js_event_filter(self, event_data: dict[str, Any]) -> bool:
         """Filter out events."""
         # Try to find the lock that we are getting an event for, skipping
         # ones that don't match
-        data = get_event_data_for_filter(event)
         assert self.node.client.driver
         return (
-            data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
-            and data[ATTR_NODE_ID] == self.node.node_id
-            and data[ATTR_DEVICE_ID] == self.lock.device_id
+            event_data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
+            and event_data[ATTR_NODE_ID] == self.node.node_id
+            and event_data[ATTR_DEVICE_ID] == self.lock.device_id
         )
 
     @callback
