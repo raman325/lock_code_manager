@@ -15,7 +15,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     STATE_UNLOCKED,
 )
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
@@ -24,7 +24,6 @@ from homeassistant.helpers.dispatcher import (
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import async_track_state_change
 
-from .backports import get_event_data_for_filter
 from .const import (
     ATTR_CODE_SLOT,
     ATTR_ENTITIES_ADDED_TRACKER,
@@ -235,13 +234,14 @@ class BaseLockCodeManagerEntity(Entity):
             self._unsub_initial_state = None
 
     @callback
-    def _event_filter(self, event: Event | dict[str, Any]) -> bool:
+    def _event_filter(self, event_data: dict[str, Any]) -> bool:
         """Filter events."""
-        data = get_event_data_for_filter(event)
         return (
-            any(data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks)
-            and data[ATTR_CODE_SLOT] == int(self.slot_num)
-            and data[ATTR_TO] == STATE_UNLOCKED
+            any(
+                event_data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
+            )
+            and event_data[ATTR_CODE_SLOT] == int(self.slot_num)
+            and event_data[ATTR_TO] == STATE_UNLOCKED
         )
 
     async def async_will_remove_from_hass(self) -> None:
