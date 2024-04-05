@@ -23,15 +23,10 @@
     "@babel/highlight" "^7.24.2"
     picocolors "^1.0.0"
 
-"@babel/compat-data@^7.22.6", "@babel/compat-data@^7.23.5":
-  version "7.23.5"
-  resolved "https://registry.yarnpkg.com/@babel/compat-data/-/compat-data-7.23.5.tgz#ffb878728bb6bdcb6f4510aa51b1be9afb8cfd98"
-  integrity sha512-uU27kfDRlhfKl+w1U6vp16IuvSLtjAxdArVXPa9BvLkrr7CYIsxH5adpHObeAGY/41+syctUWOZ140a2Rvkgjw==
-
-"@babel/compat-data@^7.24.1":
-  version "7.24.1"
-  resolved "https://registry.yarnpkg.com/@babel/compat-data/-/compat-data-7.24.1.tgz#31c1f66435f2a9c329bb5716a6d6186c516c3742"
-  integrity sha512-Pc65opHDliVpRHuKfzI+gSA4zcgr65O4cl64fFJIWEEh8JoHIHh0Oez1Eo8Arz8zq/JhgKodQaxEwUPRtZylVA==
+"@babel/compat-data@^7.22.6", "@babel/compat-data@^7.23.5", "@babel/compat-data@^7.24.4":
+  version "7.24.4"
+  resolved "https://registry.yarnpkg.com/@babel/compat-data/-/compat-data-7.24.4.tgz#6f102372e9094f25d908ca0d34fc74c74606059a"
+  integrity sha512-vg8Gih2MLK+kOkHJp4gBEIkyaIi00jgWot2D9QOmmfLC8jINSOzmCLta6Bvz/JSBCqnegV0L80jhxkol5GWNfQ==
 
 "@babel/core@^7.24.4":
   version "7.24.4"
@@ -93,6 +88,21 @@
   version "7.24.1"
   resolved "https://registry.yarnpkg.com/@babel/helper-create-class-features-plugin/-/helper-create-class-features-plugin-7.24.1.tgz#db58bf57137b623b916e24874ab7188d93d7f68f"
   integrity sha512-1yJa9dX9g//V6fDebXoEfEsxkZHk3Hcbm+zLhyu6qVgYFLvmTALTeV+jNU9e5RnYtioBrGEOdoI2joMSNQ/+aA==
+  dependencies:
+    "@babel/helper-annotate-as-pure" "^7.22.5"
+    "@babel/helper-environment-visitor" "^7.22.20"
+    "@babel/helper-function-name" "^7.23.0"
+    "@babel/helper-member-expression-to-functions" "^7.23.0"
+    "@babel/helper-optimise-call-expression" "^7.22.5"
+    "@babel/helper-replace-supers" "^7.24.1"
+    "@babel/helper-skip-transparent-expression-wrappers" "^7.22.5"
+    "@babel/helper-split-export-declaration" "^7.22.6"
+    semver "^6.3.1"
+
+"@babel/helper-create-class-features-plugin@^7.24.4":
+  version "7.24.4"
+  resolved "https://registry.yarnpkg.com/@babel/helper-create-class-features-plugin/-/helper-create-class-features-plugin-7.24.4.tgz#c806f73788a6800a5cfbbc04d2df7ee4d927cce3"
+  integrity sha512-lG75yeuUSVu0pIcbhiYMXBXANHrpUPaOfu7ryAzskCgKUHuAxRQI5ssrtmF0X9UXldPlvT0XM/A4F44OXRt6iQ==
   dependencies:
     "@babel/helper-annotate-as-pure" "^7.22.5"
     "@babel/helper-environment-visitor" "^7.22.20"
@@ -274,6 +284,14 @@
   version "7.24.4"
   resolved "https://registry.yarnpkg.com/@babel/parser/-/parser-7.24.4.tgz#234487a110d89ad5a3ed4a8a566c36b9453e8c88"
   integrity sha512-zTvEBcghmeBma9QIGunWevvBAp4/Qu9Bdq+2k0Ot4fVMD6v3dsC9WOcRSKk7tRRyBM/53yKMJko9xOatGQAwSg==
+
+"@babel/plugin-bugfix-firefox-class-in-computed-class-key@^7.24.4":
+  version "7.24.4"
+  resolved "https://registry.yarnpkg.com/@babel/plugin-bugfix-firefox-class-in-computed-class-key/-/plugin-bugfix-firefox-class-in-computed-class-key-7.24.4.tgz#6125f0158543fb4edf1c22f322f3db67f21cb3e1"
+  integrity sha512-qpl6vOOEEzTLLcsuqYYo8yDtrTocmu2xkGvgNebvPjT9DTtfFYGmgDqY+rBYXNlqL4s9qLDn6xkrJv4RxAPiTA==
+  dependencies:
+    "@babel/helper-environment-visitor" "^7.22.20"
+    "@babel/helper-plugin-utils" "^7.24.0"
 
 "@babel/plugin-bugfix-safari-id-destructuring-collision-in-function-expression@^7.24.1":
   version "7.24.1"
@@ -464,10 +482,10 @@
   dependencies:
     "@babel/helper-plugin-utils" "^7.24.0"
 
-"@babel/plugin-transform-block-scoping@^7.24.1":
-  version "7.24.1"
-  resolved "https://registry.yarnpkg.com/@babel/plugin-transform-block-scoping/-/plugin-transform-block-scoping-7.24.1.tgz#27af183d7f6dad890531256c7a45019df768ac1f"
-  integrity sha512-h71T2QQvDgM2SmT29UYU6ozjMlAt7s7CSs5Hvy8f8cf/GM/Z4a2zMfN+fjVGaieeCrXR3EdQl6C4gQG+OgmbKw==
+"@babel/plugin-transform-block-scoping@^7.24.4":
+  version "7.24.4"
+  resolved "https://registry.yarnpkg.com/@babel/plugin-transform-block-scoping/-/plugin-transform-block-scoping-7.24.4.tgz#28f5c010b66fbb8ccdeef853bef1935c434d7012"
+  integrity sha512-nIFUZIpGKDf9O9ttyRXpHFpKC+X3Y5mtshZONuEUYBomAKoM4y029Jr+uB1bHGPhNmK8YXHevDtKDOLmtRrp6g==
   dependencies:
     "@babel/helper-plugin-utils" "^7.24.0"
 
@@ -479,12 +497,12 @@
     "@babel/helper-create-class-features-plugin" "^7.24.1"
     "@babel/helper-plugin-utils" "^7.24.0"
 
-"@babel/plugin-transform-class-static-block@^7.24.1":
-  version "7.24.1"
-  resolved "https://registry.yarnpkg.com/@babel/plugin-transform-class-static-block/-/plugin-transform-class-static-block-7.24.1.tgz#4e37efcca1d9f2fcb908d1bae8b56b4b6e9e1cb6"
-  integrity sha512-FUHlKCn6J3ERiu8Dv+4eoz7w8+kFLSyeVG4vDAikwADGjUCoHw/JHokyGtr8OR4UjpwPVivyF+h8Q5iv/JmrtA==
+"@babel/plugin-transform-class-static-block@^7.24.4":
+  version "7.24.4"
+  resolved "https://registry.yarnpkg.com/@babel/plugin-transform-class-static-block/-/plugin-transform-class-static-block-7.24.4.tgz#1a4653c0cf8ac46441ec406dece6e9bc590356a4"
+  integrity sha512-B8q7Pz870Hz/q9UgP8InNpY01CSLDSCyqX7zcRuv3FcPl87A2G17lASroHWaCtbdIcbYzOZ7kWmXFKbijMSmFg==
   dependencies:
-    "@babel/helper-create-class-features-plugin" "^7.24.1"
+    "@babel/helper-create-class-features-plugin" "^7.24.4"
     "@babel/helper-plugin-utils" "^7.24.0"
     "@babel/plugin-syntax-class-static-block" "^7.14.5"
 
@@ -818,15 +836,16 @@
     "@babel/helper-create-regexp-features-plugin" "^7.22.15"
     "@babel/helper-plugin-utils" "^7.24.0"
 
-"@babel/preset-env@^7.24.3":
-  version "7.24.3"
-  resolved "https://registry.yarnpkg.com/@babel/preset-env/-/preset-env-7.24.3.tgz#f3f138c844ffeeac372597b29c51b5259e8323a3"
-  integrity sha512-fSk430k5c2ff8536JcPvPWK4tZDwehWLGlBp0wrsBUjZVdeQV6lePbwKWZaZfK2vnh/1kQX1PzAJWsnBmVgGJA==
+"@babel/preset-env@^7.24.4":
+  version "7.24.4"
+  resolved "https://registry.yarnpkg.com/@babel/preset-env/-/preset-env-7.24.4.tgz#46dbbcd608771373b88f956ffb67d471dce0d23b"
+  integrity sha512-7Kl6cSmYkak0FK/FXjSEnLJ1N9T/WA2RkMhu17gZ/dsxKJUuTYNIylahPTzqpLyJN4WhDif8X0XK1R8Wsguo/A==
   dependencies:
-    "@babel/compat-data" "^7.24.1"
+    "@babel/compat-data" "^7.24.4"
     "@babel/helper-compilation-targets" "^7.23.6"
     "@babel/helper-plugin-utils" "^7.24.0"
     "@babel/helper-validator-option" "^7.23.5"
+    "@babel/plugin-bugfix-firefox-class-in-computed-class-key" "^7.24.4"
     "@babel/plugin-bugfix-safari-id-destructuring-collision-in-function-expression" "^7.24.1"
     "@babel/plugin-bugfix-v8-spread-parameters-in-optional-chaining" "^7.24.1"
     "@babel/plugin-bugfix-v8-static-class-fields-redefine-readonly" "^7.24.1"
@@ -853,9 +872,9 @@
     "@babel/plugin-transform-async-generator-functions" "^7.24.3"
     "@babel/plugin-transform-async-to-generator" "^7.24.1"
     "@babel/plugin-transform-block-scoped-functions" "^7.24.1"
-    "@babel/plugin-transform-block-scoping" "^7.24.1"
+    "@babel/plugin-transform-block-scoping" "^7.24.4"
     "@babel/plugin-transform-class-properties" "^7.24.1"
-    "@babel/plugin-transform-class-static-block" "^7.24.1"
+    "@babel/plugin-transform-class-static-block" "^7.24.4"
     "@babel/plugin-transform-classes" "^7.24.1"
     "@babel/plugin-transform-computed-properties" "^7.24.1"
     "@babel/plugin-transform-destructuring" "^7.24.1"
@@ -1802,7 +1821,7 @@ braces@^3.0.2:
   dependencies:
     fill-range "^7.0.1"
 
-browserslist@^4.22.2, browserslist@^4.22.3, browserslist@^4.23.0:
+browserslist@^4.22.2, browserslist@^4.23.0:
   version "4.23.0"
   resolved "https://registry.yarnpkg.com/browserslist/-/browserslist-4.23.0.tgz#8f3acc2bbe73af7213399430890f86c63a5674ab"
   integrity sha512-QW8HiM1shhT2GuzkvklfjcKDiWFXHOeFCIA/huJPwHsslwcydgk7X+z2zXpEijP98UCY7HbubZt5J2Zgvf0CaQ==
@@ -1899,14 +1918,7 @@ convert-source-map@^2.0.0:
   resolved "https://registry.yarnpkg.com/convert-source-map/-/convert-source-map-2.0.0.tgz#4b560f649fc4e918dd0ab75cf4961e8bc882d82a"
   integrity sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==
 
-core-js-compat@^3.31.0:
-  version "3.36.0"
-  resolved "https://registry.yarnpkg.com/core-js-compat/-/core-js-compat-3.36.0.tgz#087679119bc2fdbdefad0d45d8e5d307d45ba190"
-  integrity sha512-iV9Pd/PsgjNWBXeq8XRtWVSgz2tKAfhfvBs7qxYty+RlRd+OCksaWmOnc4JKrTc1cToXL1N0s3l/vwlxPtdElw==
-  dependencies:
-    browserslist "^4.22.3"
-
-core-js-compat@^3.36.1:
+core-js-compat@^3.31.0, core-js-compat@^3.36.1:
   version "3.36.1"
   resolved "https://registry.yarnpkg.com/core-js-compat/-/core-js-compat-3.36.1.tgz#1818695d72c99c25d621dca94e6883e190cea3c8"
   integrity sha512-Dk997v9ZCt3X/npqzyGdTlq6t7lDBhZwGvV94PKzDArjp7BTRm7WlDAXYd/OWdeFHO8OChQYRJNJvUCqCbrtKA==
