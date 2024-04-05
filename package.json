@@ -47,6 +47,6 @@
     "prettier-plugin-package": "^1.4.0",
     "rollup": "^4.14.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.3"
+    "typescript": "^5.4.4"
   }
 }
