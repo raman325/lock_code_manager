@@ -346,7 +346,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 ) is not None and pin_state != self._get_entity_state(ATTR_CODE):
                     self._attr_is_on = False
                     self.async_write_ha_state()
-                    await self.lock.async_set_usercode(
+                    await self.lock.async_internal_set_usercode(
                         int(self.slot_num), pin_state, self._get_entity_state(CONF_NAME)
                     )
                     _LOGGER.info(
@@ -364,7 +364,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 if self._get_entity_state(ATTR_CODE) != "":
                     self._attr_is_on = False
                     self.async_write_ha_state()
-                    await self.lock.async_clear_usercode(int(self.slot_num))
+                    await self.lock.async_internal_clear_usercode(int(self.slot_num))
                     _LOGGER.info(
                         "%s (%s): Cleared usercode for lock %s slot %s",
                         self.config_entry.entry_id,

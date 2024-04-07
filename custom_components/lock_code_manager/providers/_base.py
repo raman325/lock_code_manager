@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
@@ -50,6 +51,7 @@ class BaseLock:
     lock_config_entry: ConfigEntry | None = field(repr=False)
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
+    _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     @final
     @callback
@@ -110,6 +112,11 @@ class BaseLock:
         """Return whether connection to lock is up."""
         return await self.hass.async_add_executor_job(self.is_connection_up)
 
+    @final
+    async def async_internal_is_connection_up(self) -> bool:
+        """Return whether connection to lock is up."""
+        return await self.async_is_connection_up()
+
     def hard_refresh_codes(self) -> None:
         """
         Perform hard refresh all codes.
@@ -128,6 +135,17 @@ class BaseLock:
         """
         await self.hass.async_add_executor_job(self.hard_refresh_codes)
 
+    @final
+    async def async_internal_hard_refresh_codes(self) -> None:
+        """
+        Perform hard refresh of all codes.
+
+        Needed for integrations where usercodes are cached and may get out of sync with
+        the lock.
+        """
+        async with self._aio_lock:
+            await self.async_hard_refresh_codes()
+
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
@@ -142,6 +160,14 @@ class BaseLock:
             functools.partial(self.set_usercode, code_slot, usercode, name=name)
         )
 
+    @final
+    async def async_internal_set_usercode(
+        self, code_slot: int, usercode: int | str, name: str | None = None
+    ) -> None:
+        """Set a usercode on a code slot."""
+        async with self._aio_lock:
+            await self.async_set_usercode(code_slot, usercode, name=name)
+
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
         raise HomeAssistantError from NotImplementedError()
@@ -149,6 +175,12 @@ class BaseLock:
     async def async_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
         await self.hass.async_add_executor_job(self.clear_usercode, code_slot)
+
+    @final
+    async def async_internal_clear_usercode(self, code_slot: int) -> None:
+        """Clear a usercode on a code slot."""
+        async with self._aio_lock:
+            await self.async_clear_usercode(code_slot)
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
@@ -177,6 +209,22 @@ class BaseLock:
         }
         """
         return await self.hass.async_add_executor_job(self.get_usercodes)
+
+    @final
+    async def async_internal_get_usercodes(self) -> dict[int, int | str]:
+        """
+        Get dictionary of code slots and usercodes.
+
+        Called by data coordinator to get data for code slot sensors.
+
+        Key is code slot, value is usercode, e.g.:
+        {
+            1: '1234',
+            'B': '5678',
+        }
+        """
+        async with self._aio_lock:
+            return await self.async_get_usercodes()
 
     @final
     def call_service(
