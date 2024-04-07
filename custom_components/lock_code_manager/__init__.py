@@ -123,7 +123,8 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         _LOGGER.debug("Hard refresh usercodes service called: %s", service.data)
         locks = get_locks_from_targets(hass, service.data)
         results = await asyncio.gather(
-            *(lock.async_hard_refresh_codes() for lock in locks), return_exceptions=True
+            *(lock.async_internal_hard_refresh_codes() for lock in locks),
+            return_exceptions=True,
         )
         errors = [err for err in results if isinstance(err, Exception)]
         if errors:
@@ -404,7 +405,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             # Make sure lock is up before we proceed
             timeout = 1
 
-            while not await lock.async_is_connection_up():
+            while not await lock.async_internal_is_connection_up():
                 _LOGGER.debug(
                     (
                         "%s (%s): Lock %s is not connected to Home Assistant yet, waiting %s "

@@ -27,12 +27,12 @@ async def test_base(hass: HomeAssistant):
     with pytest.raises(NotImplementedError):
         lock.domain
     with pytest.raises(NotImplementedError):
-        await lock.async_is_connection_up()
+        await lock.async_internal_is_connection_up()
     with pytest.raises(HomeAssistantError):
-        await lock.async_hard_refresh_codes()
+        await lock.async_internal_hard_refresh_codes()
     with pytest.raises(HomeAssistantError):
-        await lock.async_clear_usercode(1)
+        await lock.async_internal_clear_usercode(1)
     with pytest.raises(HomeAssistantError):
-        await lock.async_set_usercode(1, 1)
+        await lock.async_internal_set_usercode(1, 1)
     with pytest.raises(NotImplementedError):
-        await lock.async_get_usercodes()
+        await lock.async_internal_get_usercodes()

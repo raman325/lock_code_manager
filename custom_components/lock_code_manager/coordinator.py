@@ -32,7 +32,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Update usercodes."""
         try:
-            return await self._lock.async_get_usercodes()
+            return await self._lock.async_internal_get_usercodes()
         except LockDisconnected as err:
             # We can silently fail if we've never been able to retrieve data
             if not self.data:
