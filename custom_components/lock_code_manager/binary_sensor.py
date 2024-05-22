@@ -22,7 +22,13 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
@@ -297,10 +303,15 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return None
         return state.state
 
-    async def _async_update_state(self, event: Event[EventStateChangedData]) -> None:
+    async def _async_update_state(
+        self, event: Event[EventStateChangedData] | None = None
+    ) -> None:
         """Update binary sensor state by getting dependent states."""
-        entity_id = event.data["entity_id"]
-        to_state = event.data["new_state"]
+        entity_id: str | None = None
+        to_state: State | None = None
+        if event:
+            entity_id = event.data["entity_id"]
+            to_state = event.data["new_state"]
         if entity_id is not None and (
             not (ent_entry := self.ent_reg.async_get(entity_id))
             or ent_entry.platform != DOMAIN
