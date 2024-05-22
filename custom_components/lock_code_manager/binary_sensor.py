@@ -22,12 +22,12 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -190,10 +190,10 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
 
     @callback
     def _handle_calendar_state_changes(
-        self, entity_id: str, _: State, __: State
+        self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle calendar state changes."""
-        if entity_id == self._calendar_entity_id:
+        if event.data["entity_id"] == self._calendar_entity_id:
             self._update_state()
 
     async def async_added_to_hass(self) -> None:
@@ -218,7 +218,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         )
 
         self.async_on_remove(
-            async_track_state_change(
+            async_track_state_change_event(
                 self.hass, MATCH_ALL, self._handle_calendar_state_changes
             )
         )
@@ -297,13 +297,10 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return None
         return state.state
 
-    async def _async_update_state(
-        self,
-        entity_id: str | None = None,
-        from_state: State | None = None,
-        to_state: State | None = None,
-    ) -> None:
+    async def _async_update_state(self, event: Event[EventStateChangedData]) -> None:
         """Update binary sensor state by getting dependent states."""
+        entity_id = event.data["entity_id"]
+        to_state = event.data["new_state"]
         if entity_id is not None and (
             not (ent_entry := self.ent_reg.async_get(entity_id))
             or ent_entry.platform != DOMAIN
@@ -389,6 +386,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
         # await CoordinatorEntity.async_added_to_hass(self)
 
         self.async_on_remove(
-            async_track_state_change(self.hass, MATCH_ALL, self._async_update_state)
+            async_track_state_change_event(
+                self.hass, MATCH_ALL, self._async_update_state
+            )
         )
         await self._async_update_state()
