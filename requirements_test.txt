@@ -1,2 +1,2 @@
 pytest>=8.0.2
-pytest-homeassistant-custom-component==0.13.114
+pytest-homeassistant-custom-component==0.13.132
