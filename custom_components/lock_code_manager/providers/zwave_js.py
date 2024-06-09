@@ -145,7 +145,11 @@ class ZWaveJSLock(BaseLock):
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
         if (
-            client := self.hass.data.get(ZWAVE_JS_DOMAIN, {})
+            client := (
+                self.lock_config_entry.runtime_data
+                if hasattr(self.lock_config_entry, "runtime_data")
+                else self.hass.data.get(ZWAVE_JS_DOMAIN, {})
+            )
             .get(self.lock_config_entry.entry_id, {})
             .get(DATA_CLIENT)
         ) is None:
