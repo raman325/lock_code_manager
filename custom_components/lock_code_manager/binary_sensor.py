@@ -120,7 +120,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             self.entity_id,
         )
 
-        _LOGGER.error(get_slot_data(self.config_entry, self.slot_num))
         states: dict[str, bool] = {}
         for key, state in get_slot_data(self.config_entry, self.slot_num).items():
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
@@ -133,7 +132,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
                 continue
             states[key] = state
 
-        _LOGGER.error("States: %s", states)
         # For the binary sensor to be on, all states must be 'on', or for the number
         # of uses, greater than 0
         inactive_because_of = [key for key, state in states.items() if not state]
@@ -159,11 +157,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle calendar state changes."""
-        _LOGGER.error("MOM")
-        _LOGGER.error(self._calendar_entity_id)
-        _LOGGER.error(event.data)
         if event.data["entity_id"] == self._calendar_entity_id:
-            _LOGGER.error(event.data)
             self._update_state()
 
     async def async_added_to_hass(self) -> None:
@@ -183,7 +177,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         )
 
         self._update_state()
-        _LOGGER.error("TEST %s", self.entity_id)
 
 
 class LockCodeManagerCodeSlotInSyncEntity(

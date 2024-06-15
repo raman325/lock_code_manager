@@ -127,11 +127,8 @@ class BaseLockCodeManagerEntity(Entity):
         )
         await self._async_remove()
         await self.async_remove(force_remove=True)
-        _LOGGER.error("tes†")
-        _LOGGER.error(self.entity_id)
         if self.ent_reg.async_get(self.entity_id):
             self.ent_reg.async_remove(self.entity_id)
-        _LOGGER.error(self.hass.states.get(self.entity_id))
 
     async def _async_remove(self) -> None:
         """
