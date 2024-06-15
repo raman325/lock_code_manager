@@ -7,17 +7,18 @@ import logging
 from typing import Any, final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    MATCH_ALL,
-    STATE_UNAVAILABLE,
-    STATE_UNLOCKED,
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNLOCKED
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
 )
-from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 
 from .const import (
     ATTR_CODE_SLOT,
@@ -126,11 +127,8 @@ class BaseLockCodeManagerEntity(Entity):
         )
         await self._async_remove()
         await self.async_remove(force_remove=True)
-        _LOGGER.error("tes†")
-        _LOGGER.error(self.entity_id)
         if self.ent_reg.async_get(self.entity_id):
             self.ent_reg.async_remove(self.entity_id)
-        _LOGGER.error(self.hass.states.get(self.entity_id))
 
     async def _async_remove(self) -> None:
         """
@@ -219,16 +217,27 @@ class BaseLockCodeManagerEntity(Entity):
 
     @callback
     def _handle_available_state_update(
-        self,
-        entity_id: str | None = None,
-        _: State | None = None,
-        __: State | None = None,
+        self, event: Event[EventStateChangedData] | None = None
     ) -> None:
-        """Handle availability state update."""
+        """Update binary sensor state by getting dependent states."""
+        entity_id: str | None = None
+        from_state: State | None = None
+        to_state: State | None = None
+        if event:
+            entity_id = event.data["entity_id"]
+            from_state = event.data["old_state"]
+            to_state = event.data["new_state"]
+
         if entity_id is not None and entity_id not in (
             lock.lock.entity_id for lock in self.locks
         ):
             return
+
+        if (from_state and STATE_UNAVAILABLE != from_state.state) and (
+            to_state and STATE_UNAVAILABLE != to_state.state
+        ):
+            return
+
         if (new_available := self._is_available()) != self._attr_available:
             self._attr_available: bool = new_available
             self.async_write_ha_state()
@@ -239,20 +248,11 @@ class BaseLockCodeManagerEntity(Entity):
 
         self.dispatcher_connect()
         self.async_on_remove(
-            async_track_state_change(
+            async_track_state_change_filtered(
                 self.hass,
-                MATCH_ALL,
+                TrackStates(True, set(), set()),
                 self._handle_available_state_update,
-                to_state=STATE_UNAVAILABLE,
-            )
-        )
-        self.async_on_remove(
-            async_track_state_change(
-                self.hass,
-                MATCH_ALL,
-                self._handle_available_state_update,
-                from_state=STATE_UNAVAILABLE,
-            )
+            ).async_remove
         )
         self._handle_available_state_update()
 

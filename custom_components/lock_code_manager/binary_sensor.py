@@ -16,18 +16,23 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
-    MATCH_ALL,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -60,7 +65,11 @@ async def async_setup_entry(
     def add_pin_active_entity(slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Add active binary sensor entities for slot."""
         async_add_entities(
-            [LockCodeManagerActiveEntity(hass, ent_reg, config_entry, slot_num)],
+            [
+                LockCodeManagerActiveEntity(
+                    hass, ent_reg, config_entry, slot_num, ATTR_ACTIVE
+                )
+            ],
             True,
         )
 
@@ -100,19 +109,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
     """Active binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        ent_reg: er.EntityRegistry,
-        config_entry: ConfigEntry,
-        slot_num: int,
-    ) -> None:
-        """Initialize entity."""
-        BaseLockCodeManagerEntity.__init__(
-            self, hass, ent_reg, config_entry, slot_num, ATTR_ACTIVE
-        )
-        self._entity_id_map: dict[str, str] = {}
 
     @callback
     def _update_state(self, _: datetime | None = None) -> None:
@@ -158,10 +154,10 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
 
     @callback
     def _handle_calendar_state_changes(
-        self, entity_id: str, _: State, __: State
+        self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle calendar state changes."""
-        if entity_id == self._calendar_entity_id:
+        if event.data["entity_id"] == self._calendar_entity_id:
             self._update_state()
 
     async def async_added_to_hass(self) -> None:
@@ -170,9 +166,11 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
         self.async_on_remove(
-            async_track_state_change(
-                self.hass, MATCH_ALL, self._handle_calendar_state_changes
-            )
+            async_track_state_change_filtered(
+                self.hass,
+                TrackStates(True, set(), set()),
+                self._handle_calendar_state_changes,
+            ).async_remove
         )
 
         self.async_on_remove(
@@ -250,12 +248,14 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return state.state
 
     async def _async_update_state(
-        self,
-        entity_id: str | None = None,
-        from_state: State | None = None,
-        to_state: State | None = None,
+        self, event: Event[EventStateChangedData] | None = None
     ) -> None:
         """Update binary sensor state by getting dependent states."""
+        entity_id: str | None = None
+        to_state: State | None = None
+        if event:
+            entity_id = event.data["entity_id"]
+            to_state = event.data["new_state"]
         if entity_id is not None and (
             not (ent_entry := self.ent_reg.async_get(entity_id))
             or ent_entry.platform != DOMAIN
@@ -341,6 +341,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
         # await CoordinatorEntity.async_added_to_hass(self)
 
         self.async_on_remove(
-            async_track_state_change(self.hass, MATCH_ALL, self._async_update_state)
+            async_track_state_change_filtered(
+                self.hass, TrackStates(True, set(), set()), self._async_update_state
+            ).async_remove
         )
         await self._async_update_state()
