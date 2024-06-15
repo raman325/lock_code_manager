@@ -7,12 +7,7 @@ import logging
 from typing import Any, final
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    MATCH_ALL,
-    STATE_UNAVAILABLE,
-    STATE_UNLOCKED,
-)
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNLOCKED
 from homeassistant.core import (
     Event,
     EventStateChangedData,
@@ -23,7 +18,7 @@ from homeassistant.core import (
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 
 from .const import (
     ATTR_CODE_SLOT,
@@ -255,13 +250,12 @@ class BaseLockCodeManagerEntity(Entity):
         await Entity.async_added_to_hass(self)
 
         self.dispatcher_connect()
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass,
-                MATCH_ALL,
-                self._handle_available_state_update,
-            )
+        filtered_states = async_track_state_change_filtered(
+            self.hass,
+            TrackStates(True, set(), set()),
+            self._handle_available_state_update,
         )
+        self.async_on_remove(filtered_states.async_remove)
         self._handle_available_state_update()
 
         _LOGGER.debug(

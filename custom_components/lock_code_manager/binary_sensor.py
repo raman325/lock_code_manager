@@ -16,7 +16,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
-    MATCH_ALL,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
@@ -33,7 +32,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
@@ -160,6 +159,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle calendar state changes."""
+        _LOGGER.error("MOM")
         _LOGGER.error(self._calendar_entity_id)
         _LOGGER.error(event.data)
         if event.data["entity_id"] == self._calendar_entity_id:
@@ -171,17 +171,19 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass, MATCH_ALL, self._handle_calendar_state_changes
-            )
+        filtered_states = async_track_state_change_filtered(
+            self.hass,
+            TrackStates(True, set(), set()),
+            self._handle_calendar_state_changes,
         )
+        self.async_on_remove(filtered_states.async_remove)
 
         self.async_on_remove(
             self.config_entry.add_update_listener(self._config_entry_update_listener)
         )
 
         self._update_state()
+        _LOGGER.error("TEST %s", self.entity_id)
 
 
 class LockCodeManagerCodeSlotInSyncEntity(
@@ -344,9 +346,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         # await CoordinatorEntity.async_added_to_hass(self)
 
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass, MATCH_ALL, self._async_update_state
-            )
+        filtered_states = async_track_state_change_filtered(
+            self.hass, TrackStates(True, set(), set()), self._async_update_state
         )
+        self.async_on_remove(filtered_states.async_remove)
         await self._async_update_state()
