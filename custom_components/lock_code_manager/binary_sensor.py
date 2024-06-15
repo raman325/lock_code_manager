@@ -66,7 +66,11 @@ async def async_setup_entry(
     def add_pin_active_entity(slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Add active binary sensor entities for slot."""
         async_add_entities(
-            [LockCodeManagerActiveEntity(hass, ent_reg, config_entry, slot_num)],
+            [
+                LockCodeManagerActiveEntity(
+                    hass, ent_reg, config_entry, slot_num, ATTR_ACTIVE
+                )
+            ],
             True,
         )
 
@@ -107,19 +111,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        ent_reg: er.EntityRegistry,
-        config_entry: ConfigEntry,
-        slot_num: int,
-    ) -> None:
-        """Initialize entity."""
-        BaseLockCodeManagerEntity.__init__(
-            self, hass, ent_reg, config_entry, slot_num, ATTR_ACTIVE
-        )
-        self._entity_id_map: dict[str, str] = {}
-
     @callback
     def _update_state(self, _: datetime | None = None) -> None:
         """Update binary sensor state by getting dependent states."""
@@ -130,6 +121,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             self.entity_id,
         )
 
+        _LOGGER.error(get_slot_data(self.config_entry, self.slot_num))
         states: dict[str, bool] = {}
         for key, state in get_slot_data(self.config_entry, self.slot_num).items():
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
@@ -142,6 +134,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
                 continue
             states[key] = state
 
+        _LOGGER.error("States: %s", states)
         # For the binary sensor to be on, all states must be 'on', or for the number
         # of uses, greater than 0
         inactive_because_of = [key for key, state in states.items() if not state]
@@ -167,7 +160,10 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle calendar state changes."""
+        _LOGGER.error(self._calendar_entity_id)
+        _LOGGER.error(event.data)
         if event.data["entity_id"] == self._calendar_entity_id:
+            _LOGGER.error(event.data)
             self._update_state()
 
     async def async_added_to_hass(self) -> None:

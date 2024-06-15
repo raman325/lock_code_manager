@@ -56,8 +56,10 @@ async def test_binary_sensor_entity(
     start = now - timedelta(hours=1)
     end = now + timedelta(hours=1)
 
+    _LOGGER.error("before")
     cal_event = calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
+    _LOGGER.error("after")
 
     state = hass.states.get(ACTIVE_ENTITY)
     assert state

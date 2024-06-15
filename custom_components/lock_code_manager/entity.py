@@ -13,11 +13,17 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNLOCKED,
 )
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     ATTR_CODE_SLOT,
@@ -219,16 +225,27 @@ class BaseLockCodeManagerEntity(Entity):
 
     @callback
     def _handle_available_state_update(
-        self,
-        entity_id: str | None = None,
-        _: State | None = None,
-        __: State | None = None,
+        self, event: Event[EventStateChangedData] | None = None
     ) -> None:
-        """Handle availability state update."""
+        """Update binary sensor state by getting dependent states."""
+        entity_id: str | None = None
+        from_state: State | None = None
+        to_state: State | None = None
+        if event:
+            entity_id = event.data["entity_id"]
+            from_state = event.data["old_state"]
+            to_state = event.data["new_state"]
+
         if entity_id is not None and entity_id not in (
             lock.lock.entity_id for lock in self.locks
         ):
             return
+
+        if (from_state and STATE_UNAVAILABLE != from_state.state) and (
+            to_state and STATE_UNAVAILABLE != to_state.state
+        ):
+            return
+
         if (new_available := self._is_available()) != self._attr_available:
             self._attr_available: bool = new_available
             self.async_write_ha_state()
@@ -239,19 +256,10 @@ class BaseLockCodeManagerEntity(Entity):
 
         self.dispatcher_connect()
         self.async_on_remove(
-            async_track_state_change(
+            async_track_state_change_event(
                 self.hass,
                 MATCH_ALL,
                 self._handle_available_state_update,
-                to_state=STATE_UNAVAILABLE,
-            )
-        )
-        self.async_on_remove(
-            async_track_state_change(
-                self.hass,
-                MATCH_ALL,
-                self._handle_available_state_update,
-                from_state=STATE_UNAVAILABLE,
             )
         )
         self._handle_available_state_update()
