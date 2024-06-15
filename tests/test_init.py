@@ -10,8 +10,8 @@ from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
 from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import (
+    ATTR_CODE,
     ATTR_ENTITY_ID,
-    CONF_CODE,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
@@ -65,7 +65,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 3):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (CONF_CODE, ATTR_IN_SYNC):
+            for key in (ATTR_CODE, ATTR_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -115,7 +115,7 @@ async def test_entry_setup_and_unload(
     new_config[CONF_SLOTS][2].pop(CONF_NUMBER_OF_USES)
     new_config[CONF_SLOTS][3] = {
         CONF_NAME: "test3",
-        CONF_CODE: "4321",
+        ATTR_CODE: "4321",
         CONF_ENABLED: True,
     }
 
@@ -127,7 +127,7 @@ async def test_entry_setup_and_unload(
     unique_ids = set()
     for slot in range(1, 4):
         for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-            for key in (CONF_CODE, ATTR_IN_SYNC):
+            for key in (ATTR_CODE, ATTR_IN_SYNC):
                 unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{entity_id}")
 
         for key in (
@@ -144,6 +144,7 @@ async def test_entry_setup_and_unload(
     assert unique_ids == {
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
+        if hass.states.get(entity.entity_id)
     }
     assert len(hass.states.async_entity_ids(Platform.BINARY_SENSOR)) == 9
     assert len(hass.states.async_entity_ids(Platform.EVENT)) == 3
@@ -168,7 +169,7 @@ async def test_entry_setup_and_unload(
 
     unique_ids = set()
     for slot in range(1, 3):
-        for key in (CONF_CODE, ATTR_IN_SYNC):
+        for key in (ATTR_CODE, ATTR_IN_SYNC):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}|{LOCK_1_ENTITY_ID}")
 
         for key in (

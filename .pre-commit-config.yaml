@@ -3,7 +3,7 @@ ci:
   skip: [yarn-build, yarn-lint]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.4
+    rev: v0.4.8
     hooks:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -79,6 +79,6 @@ repos:
         files: ^(custom_components)/.+\.py$
 
   - repo: https://github.com/rhysd/actionlint
-    rev: f970a14472c1b4d576f8456884a3238aa353a288  # frozen: v1.7.0
+    rev: 62dc61a45fc95efe8c800af7a557ab0b9165d63b  # frozen: v1.7.1
     hooks:
       - id: actionlint

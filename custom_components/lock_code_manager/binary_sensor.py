@@ -45,9 +45,9 @@ from .const import (
     COORDINATORS,
     DOMAIN,
     EVENT_PIN_USED,
-    PLATFORM_MAP,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
+from .data import get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .providers import BaseLock
 
@@ -129,35 +129,23 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             self.config_entry.title,
             self.entity_id,
         )
-        # Switch binary sensor on if at least one state exists and all states are 'on'
-        entity_id_map = self._entity_id_map.copy()
-        # If there is a calendar entity, we need to check its state as well
-        if self._calendar_entity_id:
-            entity_id_map[CONF_CALENDAR] = self._calendar_entity_id
 
-        states: dict[str, dict[str, str]] = {}
-        for key, entity_id in entity_id_map.items():
+        states: dict[str, bool] = {}
+        for key, state in get_slot_data(self.config_entry, self.slot_num).items():
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
-            if not (state := self.hass.states.get(entity_id)):
-                return
-            states[key] = {"entity_id": entity_id, "state": state.state}
+            if key == CONF_CALENDAR and (hass_state := self.hass.states.get(state)):
+                states[key] = hass_state.state == STATE_ON
+                continue
+            if key == CONF_NUMBER_OF_USES:
+                states[key] = bool(int(float(state)))
+                continue
+            states[key] = state
 
         # For the binary sensor to be on, all states must be 'on', or for the number
         # of uses, greater than 0
-        inactive_because_of = [
-            key
-            for key, state in states.items()
-            if (key != CONF_NUMBER_OF_USES and state["state"] != STATE_ON)
-            or (
-                key == CONF_NUMBER_OF_USES
-                and (
-                    state["state"] in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-                    or int(float(state["state"])) == 0
-                )
-            )
-        ]
-        self._attr_is_on = bool(states and not inactive_because_of)
+        inactive_because_of = [key for key, state in states.items() if not state]
+        self._attr_is_on = bool(not inactive_because_of)
         if inactive_because_of:
             self._attr_extra_state_attributes["inactive_because_of"] = (
                 inactive_because_of
@@ -175,26 +163,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self._update_state()
 
     @callback
-    def _remove_keys_to_track(self, keys: list[str]) -> None:
-        """Remove keys to track."""
-        for key in keys:
-            if key not in PLATFORM_MAP:
-                continue
-            self._entity_id_map.pop(key, None)
-        self._update_state()
-
-    @callback
-    def _add_keys_to_track(self, keys: list[str]) -> None:
-        """Add keys to track."""
-        for key in keys:
-            if not (platform := PLATFORM_MAP.get(key)):
-                continue
-            self._entity_id_map[key] = self.ent_reg.async_get_entity_id(
-                platform, DOMAIN, self._get_uid(key)
-            )
-        self._update_state()
-
-    @callback
     def _handle_calendar_state_changes(
         self, event: Event[EventStateChangedData]
     ) -> None:
@@ -206,22 +174,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{self.entry_id}_add_tracking_{self.slot_num}",
-                self._add_keys_to_track,
-            )
-        )
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{self.entry_id}_remove_tracking_{self.slot_num}",
-                self._remove_keys_to_track,
-            )
-        )
 
         self.async_on_remove(
             async_track_state_change_event(
