@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 import logging
 from pathlib import Path
 from typing import Any
@@ -39,8 +38,6 @@ from homeassistant.helpers import (
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
-    ATTR_ENTITIES_ADDED_TRACKER,
-    ATTR_ENTITIES_REMOVED_TRACKER,
     ATTR_SETUP_TASKS,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
@@ -177,8 +174,6 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         CONF_LOCKS: {},
         COORDINATORS: {},
         ATTR_SETUP_TASKS: {},
-        ATTR_ENTITIES_ADDED_TRACKER: defaultdict(dict),
-        ATTR_ENTITIES_REMOVED_TRACKER: defaultdict(dict),
     }
 
     dev_reg = dr.async_get(hass)
@@ -306,6 +301,8 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
 
     hass_data = hass.data[DOMAIN]
     ent_reg = er.async_get(hass)
+    entities_to_remove: dict[str, bool] = {}
+    entities_to_add: dict[str, bool] = {}
 
     entry_id = config_entry.entry_id
     entry_title = config_entry.title
@@ -465,14 +462,15 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     # add slot sensors for existing locks only since new locks were already set up
     # above.
     for slot_num, slot_config in slots_to_add.items():
-        entities_to_add: dict[str, bool] = hass_data[entry_id][
-            ATTR_ENTITIES_ADDED_TRACKER
-        ][slot_num]
+        entities_to_remove.clear()
         # First we store the set of entities we are adding so we can track when they are
         # done
-        entities_to_add.update(
-            {CONF_ENABLED: True, CONF_NAME: True, CONF_PIN: True, EVENT_PIN_USED: True}
-        )
+        entities_to_add = {
+            CONF_ENABLED: True,
+            CONF_NAME: True,
+            CONF_PIN: True,
+            EVENT_PIN_USED: True,
+        }
         for lock_entity_id, lock in hass_data[entry_id][CONF_LOCKS].items():
             if lock_entity_id in locks_to_add:
                 continue
@@ -526,12 +524,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
 
     # For all slots that are in both the old and new config, check if any of the
     # configuration options have changed
-    # for slot_num in {slot for slot in curr_slots if slot in new_slots}:
     for slot_num in set(curr_slots).intersection(new_slots):
-        entities_to_remove: dict[str, bool] = hass_data[entry_id][
-            ATTR_ENTITIES_REMOVED_TRACKER
-        ][slot_num]
-        entities_to_add = hass_data[entry_id][ATTR_ENTITIES_ADDED_TRACKER][slot_num]
+        entities_to_remove.clear()
+        entities_to_add.clear()
         # Check if number of uses has changed
         old_val = curr_slots[slot_num].get(CONF_NUMBER_OF_USES)
         new_val = new_slots[slot_num].get(CONF_NUMBER_OF_USES)
@@ -539,9 +534,10 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         # If number of uses value hasn't changed, skip
         if old_val == new_val:
             continue
+
         # If number of uses value has been removed, fire a signal to remove
         # corresponding entity
-        elif old_val not in (None, "") and new_val in (None, ""):
+        if old_val not in (None, "") and new_val in (None, ""):
             entities_to_remove[CONF_NUMBER_OF_USES] = True
         # If number of uses value has been added, fire a signal to add
         # corresponding entity

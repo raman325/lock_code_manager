@@ -80,7 +80,7 @@ async def test_binary_sensor_entity(
     await hass.services.async_call(
         NUMBER_DOMAIN,
         NUMBER_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "0"},
+        service_data={ATTR_VALUE: 0},
         target={ATTR_ENTITY_ID: NUMBER_OF_USES_ENTITY},
         blocking=True,
     )
@@ -93,7 +93,7 @@ async def test_binary_sensor_entity(
     await hass.services.async_call(
         NUMBER_DOMAIN,
         NUMBER_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "5"},
+        service_data={ATTR_VALUE: 5},
         target={ATTR_ENTITY_ID: NUMBER_OF_USES_ENTITY},
         blocking=True,
     )
