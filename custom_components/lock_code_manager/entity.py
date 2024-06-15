@@ -3,31 +3,24 @@
 from __future__ import annotations
 
 import copy
-import functools
 import logging
-from typing import Any, KeysView, final
+from typing import Any, final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     MATCH_ALL,
     STATE_UNAVAILABLE,
-    STATE_UNKNOWN,
     STATE_UNLOCKED,
 )
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, State, callback
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.dispatcher import (
-    async_dispatcher_connect,
-    async_dispatcher_send,
-)
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import async_track_state_change
 
 from .const import (
     ATTR_CODE_SLOT,
-    ATTR_ENTITIES_ADDED_TRACKER,
-    ATTR_ENTITIES_REMOVED_TRACKER,
     ATTR_TO,
     CONF_CALENDAR,
     CONF_LOCKS,
@@ -67,7 +60,6 @@ class BaseLockCodeManagerEntity(Entity):
         self.ent_reg = ent_reg
 
         self._uid_cache: dict[str, str] = {}
-        self._unsub_initial_state: CALLBACK_TYPE | None = None
 
         self._attr_translation_key = key
         self._attr_translation_placeholders = {"slot_num": slot_num}
@@ -134,25 +126,11 @@ class BaseLockCodeManagerEntity(Entity):
         )
         await self._async_remove()
         await self.async_remove(force_remove=True)
+        _LOGGER.error("tes†")
+        _LOGGER.error(self.entity_id)
         if self.ent_reg.async_get(self.entity_id):
             self.ent_reg.async_remove(self.entity_id)
-
-        # Figure out whether we were waiting for ourself to be removed before
-        # reporting it.
-        tracker_dict: dict[int, dict[str, bool]] = self.hass.data[DOMAIN][
-            self.config_entry.entry_id
-        ][ATTR_ENTITIES_REMOVED_TRACKER]
-        slot_dict: dict[str, bool] = tracker_dict[self.slot_num]
-        if self.key not in slot_dict:
-            return
-        slot_dict[self.key] = False
-        if not any(slot_dict.values()):
-            tracker_dict.pop(self.slot_num)
-            async_dispatcher_send(
-                self.hass,
-                f"{DOMAIN}_{self.config_entry.entry_id}_remove_tracking_{self.slot_num}",
-                slot_dict.keys(),
-            )
+        _LOGGER.error(self.hass.states.get(self.entity_id))
 
     async def _async_remove(self) -> None:
         """
@@ -220,20 +198,6 @@ class BaseLockCodeManagerEntity(Entity):
         )
 
     @callback
-    def _listen_for_initial_state(
-        self, keys: KeysView, _: str, __: State, ___: State
-    ) -> None:
-        """Handle state change."""
-        async_dispatcher_send(
-            self.hass,
-            f"{DOMAIN}_{self.entry_id}_add_tracking_{self.slot_num}",
-            keys,
-        )
-        if self._unsub_initial_state:
-            self._unsub_initial_state()
-            self._unsub_initial_state = None
-
-    @callback
     def _event_filter(self, event_data: dict[str, Any]) -> bool:
         """Filter events."""
         return (
@@ -243,12 +207,6 @@ class BaseLockCodeManagerEntity(Entity):
             and event_data[ATTR_CODE_SLOT] == int(self.slot_num)
             and event_data[ATTR_TO] == STATE_UNLOCKED
         )
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Run when entity will be removed from hass."""
-        if self._unsub_initial_state:
-            self._unsub_initial_state()
-            self._unsub_initial_state = None
 
     @callback
     def _is_available(self) -> bool:
@@ -304,44 +262,6 @@ class BaseLockCodeManagerEntity(Entity):
             self.config_entry.title,
             self.entity_id,
         )
-
-        # Figure out whether we were waiting for ourself to be added before
-        # reporting it.
-        tracker_dict: dict[int, dict[str, bool]] = self.hass.data[DOMAIN][
-            self.config_entry.entry_id
-        ][ATTR_ENTITIES_ADDED_TRACKER]
-        slot_dict: dict[str, bool] = tracker_dict[self.slot_num]
-        if self.key not in slot_dict:
-            return
-        slot_dict[self.key] = False
-        # Once my entity is the last entity that's being tracked and is loaded
-        # send a signal so the binary sensor can do its thing.
-        if not any(slot_dict.values()):
-            tracker_dict.pop(self.slot_num)
-            _LOGGER.debug(
-                "%s (%s): Sending signal from %s to binary sensor that slot %s is ready",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                self.entity_id,
-                self.slot_num,
-            )
-            if (
-                not (state := self.hass.states.get(self.entity_id))
-                or state.state == STATE_UNKNOWN
-                or (state.state == STATE_UNAVAILABLE and self._is_available)
-                or self._state is None
-            ):
-                self._unsub_initial_state = async_track_state_change(
-                    self.hass,
-                    [self.entity_id],
-                    functools.partial(self._listen_for_initial_state, slot_dict),
-                )
-            else:
-                async_dispatcher_send(
-                    self.hass,
-                    f"{DOMAIN}_{self.entry_id}_add_tracking_{self.slot_num}",
-                    slot_dict.keys(),
-                )
 
 
 class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
