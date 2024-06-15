@@ -247,12 +247,13 @@ class BaseLockCodeManagerEntity(Entity):
         await Entity.async_added_to_hass(self)
 
         self.dispatcher_connect()
-        filtered_states = async_track_state_change_filtered(
-            self.hass,
-            TrackStates(True, set(), set()),
-            self._handle_available_state_update,
+        self.async_on_remove(
+            async_track_state_change_filtered(
+                self.hass,
+                TrackStates(True, set(), set()),
+                self._handle_available_state_update,
+            ).async_remove
         )
-        self.async_on_remove(filtered_states.async_remove)
         self._handle_available_state_update()
 
         _LOGGER.debug(

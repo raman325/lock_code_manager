@@ -165,12 +165,13 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
-        filtered_states = async_track_state_change_filtered(
-            self.hass,
-            TrackStates(True, set(), set()),
-            self._handle_calendar_state_changes,
+        self.async_on_remove(
+            async_track_state_change_filtered(
+                self.hass,
+                TrackStates(True, set(), set()),
+                self._handle_calendar_state_changes,
+            ).async_remove
         )
-        self.async_on_remove(filtered_states.async_remove)
 
         self.async_on_remove(
             self.config_entry.add_update_listener(self._config_entry_update_listener)
@@ -339,8 +340,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         # await CoordinatorEntity.async_added_to_hass(self)
 
-        filtered_states = async_track_state_change_filtered(
-            self.hass, TrackStates(True, set(), set()), self._async_update_state
+        self.async_on_remove(
+            async_track_state_change_filtered(
+                self.hass, TrackStates(True, set(), set()), self._async_update_state
+            ).async_remove
         )
-        self.async_on_remove(filtered_states.async_remove)
         await self._async_update_state()
