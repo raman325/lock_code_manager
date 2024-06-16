@@ -20,6 +20,7 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    Platform,
 )
 from homeassistant.core import (
     Event,
@@ -168,7 +169,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self.async_on_remove(
             async_track_state_change_filtered(
                 self.hass,
-                TrackStates(True, set(), set()),
+                TrackStates(False, set(), {Platform.CALENDAR}),
                 self._handle_calendar_state_changes,
             ).async_remove
         )
@@ -228,18 +229,20 @@ class LockCodeManagerCodeSlotInSyncEntity(
     async def async_update(self) -> None:
         """Update entity."""
         if (
-            self._lock
-            and not self._lock.locked()
-            and self.is_on is False
-            and (state := self.hass.states.get(self.lock.lock.entity_id))
-            and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            self._lock.locked()
+            or self.is_on
+            or not (state := self.hass.states.get(self.lock.lock.entity_id))
+            or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            or not self.coordinator.last_update_success
         ):
-            _LOGGER.error(
-                "Updating %s code slot %s because it is out of sync",
-                self.lock.lock.entity_id,
-                self.slot_num,
-            )
-            await self._async_update_state()
+            return
+
+        _LOGGER.error(
+            "Updating %s code slot %s because it is out of sync",
+            self.lock.lock.entity_id,
+            self.slot_num,
+        )
+        await self._async_update_state()
 
     def _get_entity_state(self, key: str) -> str | None:
         """Get entity state."""
@@ -256,19 +259,23 @@ class LockCodeManagerCodeSlotInSyncEntity(
         if event:
             entity_id = event.data["entity_id"]
             to_state = event.data["new_state"]
-        if entity_id is not None and (
-            not (ent_entry := self.ent_reg.async_get(entity_id))
-            or ent_entry.platform != DOMAIN
-            or (ent_entry.domain, ent_entry.unique_id)
-            not in (
-                (BINARY_SENSOR_DOMAIN, self._active_unique_id),
-                (TEXT_DOMAIN, self._name_text_unique_id),
-                (TEXT_DOMAIN, self._pin_text_unique_id),
-                (SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
-            )
-            or (
-                to_state is not None
-                and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+
+        if not self.coordinator.last_update_success or (
+            entity_id is not None
+            and (
+                not (ent_entry := self.ent_reg.async_get(entity_id))
+                or ent_entry.platform != DOMAIN
+                or (ent_entry.domain, ent_entry.unique_id)
+                not in (
+                    (BINARY_SENSOR_DOMAIN, self._active_unique_id),
+                    (TEXT_DOMAIN, self._name_text_unique_id),
+                    (TEXT_DOMAIN, self._pin_text_unique_id),
+                    (SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
+                )
+                or (
+                    to_state is not None
+                    and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+                )
             )
         ):
             return
@@ -338,7 +345,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
-        # await CoordinatorEntity.async_added_to_hass(self)
+        await CoordinatorEntity.async_added_to_hass(self)
 
         self.async_on_remove(
             async_track_state_change_filtered(

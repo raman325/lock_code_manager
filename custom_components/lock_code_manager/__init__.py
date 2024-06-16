@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,16 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
     CONF_URL,
+    EVENT_HOMEASSISTANT_STARTED,
 )
-from homeassistant.core import Config, HomeAssistant, ServiceCall
+from homeassistant.core import (
+    Config,
+    CoreState,
+    Event,
+    HomeAssistant,
+    ServiceCall,
+    callback,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
@@ -151,6 +160,31 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     return True
 
 
+@callback
+def _setup_entry_after_start(
+    hass: HomeAssistant, config_entry: ConfigEntry, event: Event | None = None
+) -> None:
+    """
+    Set up config entry.
+
+    Should only be run once Home Assistant has started.
+    """
+    config_entry.async_on_unload(
+        config_entry.add_update_listener(async_update_listener)
+    )
+
+    if config_entry.data:
+        # Move data from data to options so update listener can work
+        hass.config_entries.async_update_entry(
+            config_entry, data={}, options={**config_entry.data}
+        )
+    else:
+        hass.async_create_task(
+            async_update_listener(hass, config_entry),
+            f"Initial setup for entities for {config_entry.entry_id}",
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up is called when Home Assistant is loading our component."""
     ent_reg = er.async_get(hass)
@@ -190,19 +224,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS),
         "setup_platforms",
     )
-    config_entry.async_on_unload(
-        config_entry.add_update_listener(async_update_listener)
-    )
 
-    if config_entry.data:
-        # Move data from data to options so update listener can work
-        hass.config_entries.async_update_entry(
-            config_entry, data={}, options={**config_entry.data}
-        )
+    if hass.state == CoreState.running:
+        _setup_entry_after_start(hass, config_entry)
     else:
-        hass.async_create_task(
-            async_update_listener(hass, config_entry),
-            f"Initial setup for entities for {entry_id}",
+        config_entry.async_on_unload(
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED,
+                functools.partial(_setup_entry_after_start, hass, config_entry),
+            )
         )
 
     return True
