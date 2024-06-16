@@ -222,8 +222,12 @@ async def async_unload_lock(
     )
     for lock_entity_id in lock_entity_ids:
         if not any(
-            entry != config_entry and lock_entity_id in entry.data[CONF_LOCKS]
-            for entry in hass.config_entries.async_entries(DOMAIN)
+            entry != config_entry
+            and lock_entity_id
+            in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
+            for entry in hass.config_entries.async_entries(
+                DOMAIN, include_disabled=False, include_ignore=False
+            )
         ):
             lock: BaseLock = hass_data[CONF_LOCKS].pop(lock_entity_id)
             await lock.async_unload(remove_permanently)
@@ -232,8 +236,12 @@ async def async_unload_lock(
 
     for lock_entity_id in lock_entity_ids:
         if not any(
-            entry != config_entry and lock_entity_id in entry.data[CONF_LOCKS]
-            for entry in hass.config_entries.async_entries(DOMAIN)
+            entry != config_entry
+            and lock_entity_id
+            in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
+            for entry in hass.config_entries.async_entries(
+                DOMAIN, include_disabled=False, include_ignore=False
+            )
         ):
             coordinator: LockUsercodeUpdateCoordinator = hass_data[COORDINATORS].pop(
                 lock_entity_id
