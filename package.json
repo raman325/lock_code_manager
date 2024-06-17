@@ -18,7 +18,7 @@
     "lint:fix": "yarn lint --fix"
   },
   "dependencies": {
-    "home-assistant-js-websocket": "^9.3.0",
+    "home-assistant-js-websocket": "^9.4.0",
     "lit": "^3.1.4",
     "lit-html": "^3.1.4"
   },
