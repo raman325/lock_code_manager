@@ -3,4 +3,4 @@
 pyserial==3.5
 pyudev==0.24.3
 zeroconf==0.132.2
-zwave-js-server-python==0.56.0
+zwave-js-server-python==0.57.0
