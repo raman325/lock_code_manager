@@ -3,7 +3,7 @@ ci:
   skip: [yarn-build, yarn-lint]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.8
+    rev: v0.4.9
     hooks:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -65,7 +65,7 @@ repos:
         types: [yaml]
 
   - repo: https://github.com/PyCQA/flake8
-    rev: 7d37d9032d0d161634be4554273c30efd4dea0b3 # frozen: 7.0.0
+    rev: 1978e2b0de6efa0cb2a2b6f3f7986aa6569dd2be  # frozen: 7.1.0
     hooks:
       - id: flake8
         args: ["--max-line-length=120"]
