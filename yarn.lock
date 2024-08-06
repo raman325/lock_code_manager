@@ -3171,10 +3171,10 @@ lit-element@^4.0.4:
     "@lit/reactive-element" "^2.0.4"
     lit-html "^3.1.2"
 
-lit-html@^3.1.2, lit-html@^3.1.4:
-  version "3.1.4"
-  resolved "https://registry.yarnpkg.com/lit-html/-/lit-html-3.1.4.tgz#30ad4f11467a61e2f08856de170e343184e9034e"
-  integrity sha512-yKKO2uVv7zYFHlWMfZmqc+4hkmSbFp8jgjdZY9vvR9jr4J8fH6FUMXhr+ljfELgmjpvlF7Z1SJ5n5/Jeqtc9YA==
+lit-html@^3.1.2, lit-html@^3.2.0:
+  version "3.2.0"
+  resolved "https://registry.yarnpkg.com/lit-html/-/lit-html-3.2.0.tgz#cb09071a8a1f5f0850873f9143f18f0260be1fda"
+  integrity sha512-pwT/HwoxqI9FggTrYVarkBKFN9MlTUpLrDHubTmW4SrkL3kkqW5gxwbxMMUnbbRHBC0WTZnYHcjDSCM559VyfA==
   dependencies:
     "@types/trusted-types" "^2.0.2"
 
