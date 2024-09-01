@@ -250,35 +250,35 @@ async def async_unload_lock(
     lock_entity_ids = (
         [lock_entity_id] if lock_entity_id else hass_data[entry_id][CONF_LOCKS].copy()
     )
-    for lock_entity_id in lock_entity_ids:
+    for _lock_entity_id in lock_entity_ids:
         if not any(
             entry != config_entry
-            and lock_entity_id
+            and _lock_entity_id
             in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
             for entry in hass.config_entries.async_entries(
                 DOMAIN, include_disabled=False, include_ignore=False
             )
         ):
-            lock: BaseLock = hass_data[CONF_LOCKS].pop(lock_entity_id)
+            lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
 
-        hass_data[entry_id][CONF_LOCKS].pop(lock_entity_id)
+        hass_data[entry_id][CONF_LOCKS].pop(_lock_entity_id)
 
-    for lock_entity_id in lock_entity_ids:
+    for _lock_entity_id in lock_entity_ids:
         if not any(
             entry != config_entry
-            and lock_entity_id
+            and _lock_entity_id
             in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
             for entry in hass.config_entries.async_entries(
                 DOMAIN, include_disabled=False, include_ignore=False
             )
         ):
             coordinator: LockUsercodeUpdateCoordinator = hass_data[COORDINATORS].pop(
-                lock_entity_id
+                _lock_entity_id
             )
             await coordinator.async_shutdown()
 
-        hass_data[entry_id][COORDINATORS].pop(lock_entity_id)
+        hass_data[entry_id][COORDINATORS].pop(_lock_entity_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
@@ -395,7 +395,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 lock.device_entry.id, remove_config_entry_id=entry_id
             )
         await async_unload_lock(
-            hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
+            hass, config_entry, _lock_entity_id=lock_entity_id, remove_permanently=True
         )
 
     # Notify any existing entities that additional locks have been added then create

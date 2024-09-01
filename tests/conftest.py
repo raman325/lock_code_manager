@@ -58,13 +58,6 @@ def config_flow_fixture(hass: HomeAssistant) -> Generator[None, None, None]:
         yield
 
 
-# @pytest.fixture(name="setup_lovelace_ui")
-# async def setup_lovelace_ui_fixture(hass: HomeAssistant):
-#     """Set up Lovelace in UI mode."""
-#     assert await async_setup_component(hass, LL_DOMAIN, {})
-#     yield
-
-
 @pytest.fixture(name="setup_lovelace_ui")
 async def setup_lovelace_ui_fixture(hass: HomeAssistant, config: dict[str, Any]):
     """Set up Lovelace in UI mode."""
@@ -92,7 +85,7 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
             await hass.config_entries.async_forward_entry_unload(config_entry, platform)
         return True
 
-    MockPlatform(hass, f"{TEST_DOMAIN}.config_flow")
+    mock_platform(hass, f"{TEST_DOMAIN}.config_flow")
     mock_integration(
         hass,
         MockModule(
