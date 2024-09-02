@@ -3,7 +3,7 @@ ci:
   skip: [yarn-build, yarn-lint]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.2
+    rev: v0.6.3
     hooks:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
