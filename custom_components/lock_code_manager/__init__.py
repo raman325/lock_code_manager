@@ -395,7 +395,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 lock.device_entry.id, remove_config_entry_id=entry_id
             )
         await async_unload_lock(
-            hass, config_entry, _lock_entity_id=lock_entity_id, remove_permanently=True
+            hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
         )
 
     # Notify any existing entities that additional locks have been added then create
