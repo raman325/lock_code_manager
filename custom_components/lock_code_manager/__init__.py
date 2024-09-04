@@ -219,11 +219,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         serial_number=entry_id,
     )
 
-    config_entry.async_create_task(
-        hass,
-        hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS),
-        "setup_platforms",
-    )
+    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
