@@ -3,7 +3,7 @@ ci:
   skip: [yarn-build, yarn-lint]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.3
+    rev: v0.6.9
     hooks:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -18,7 +18,7 @@ repos:
         files: ^(custom_components|tests)/.+\.py$
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: 2c9f875913ee60ca25ce70243dc24d5b6415598c  # frozen: v4.6.0
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # frozen: v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: check-added-large-files
@@ -79,6 +79,6 @@ repos:
         files: ^(custom_components)/.+\.py$
 
   - repo: https://github.com/rhysd/actionlint
-    rev: 62dc61a45fc95efe8c800af7a557ab0b9165d63b  # frozen: v1.7.1
+    rev: 4e683ab8014a63fafa117492a0c6053758e6d593  # frozen: v1.7.3
     hooks:
       - id: actionlint
