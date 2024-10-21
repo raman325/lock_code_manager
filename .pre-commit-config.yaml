@@ -3,7 +3,7 @@ ci:
   skip: [yarn-build, yarn-lint]
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.7.0
     hooks:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -73,7 +73,7 @@ repos:
 
   # Ensure all code is as secure as possible and follows best practices
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: d4911cfb7f1010759fde68da196036feeb25b99d  # frozen: v1.11.2
+    rev: 102bbee94061ff02fd361ec29c27b7cb26582f5f  # frozen: v1.12.1
     hooks:
       - id: mypy
         files: ^(custom_components)/.+\.py$
