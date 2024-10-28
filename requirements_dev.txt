@@ -2,5 +2,5 @@
 -r requirements_test.txt
 pyserial==3.5
 pyudev==0.24.3
-zeroconf==0.135.0
+zeroconf==0.136.0
 zwave-js-server-python==0.58.1
