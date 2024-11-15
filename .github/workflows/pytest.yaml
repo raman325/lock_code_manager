@@ -39,6 +39,6 @@ jobs:
           pip install pytest-cov
           pytest ./tests/ --cov=custom_components/lock_code_manager/ --cov-report=xml
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
