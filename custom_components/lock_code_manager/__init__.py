@@ -78,13 +78,15 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     # Expose strategy javascript
     from homeassistant.components.http import StaticPathConfig
 
-    await hass.http.async_register_static_paths([
-        StaticPathConfig(
-            STRATEGY_PATH,
-            str(Path(__file__).parent / "www" / STRATEGY_FILENAME),
-            True
-        )
-    ])
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                STRATEGY_PATH,
+                str(Path(__file__).parent / "www" / STRATEGY_FILENAME),
+                True,
+            )
+        ]
+    )
 
     _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
 
