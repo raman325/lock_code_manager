@@ -76,9 +76,16 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
     # Expose strategy javascript
-    hass.http.register_static_path(
-        STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
-    )
+    from homeassistant.components.http import StaticPathConfig
+
+    await hass.http.async_register_static_paths([
+        StaticPathConfig(
+            STRATEGY_PATH,
+            str(Path(__file__).parent / "www" / STRATEGY_FILENAME),
+            True
+        )
+    ])
+
     _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
 
     resources: ResourceStorageCollection | ResourceYAMLCollection
@@ -219,7 +226,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         serial_number=entry_id,
     )
 
-    await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+    config_entry.async_create_task(
+        hass,
+        hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS),
+        "setup_platforms",
+    )
 
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
@@ -246,35 +257,35 @@ async def async_unload_lock(
     lock_entity_ids = (
         [lock_entity_id] if lock_entity_id else hass_data[entry_id][CONF_LOCKS].copy()
     )
-    for _lock_entity_id in lock_entity_ids:
+    for lock_entity_id in lock_entity_ids:
         if not any(
             entry != config_entry
-            and _lock_entity_id
+            and lock_entity_id
             in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
             for entry in hass.config_entries.async_entries(
                 DOMAIN, include_disabled=False, include_ignore=False
             )
         ):
-            lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
+            lock: BaseLock = hass_data[CONF_LOCKS].pop(lock_entity_id)
             await lock.async_unload(remove_permanently)
 
-        hass_data[entry_id][CONF_LOCKS].pop(_lock_entity_id)
+        hass_data[entry_id][CONF_LOCKS].pop(lock_entity_id)
 
-    for _lock_entity_id in lock_entity_ids:
+    for lock_entity_id in lock_entity_ids:
         if not any(
             entry != config_entry
-            and _lock_entity_id
+            and lock_entity_id
             in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
             for entry in hass.config_entries.async_entries(
                 DOMAIN, include_disabled=False, include_ignore=False
             )
         ):
             coordinator: LockUsercodeUpdateCoordinator = hass_data[COORDINATORS].pop(
-                _lock_entity_id
+                lock_entity_id
             )
             await coordinator.async_shutdown()
 
-        hass_data[entry_id][COORDINATORS].pop(_lock_entity_id)
+        hass_data[entry_id][COORDINATORS].pop(lock_entity_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
