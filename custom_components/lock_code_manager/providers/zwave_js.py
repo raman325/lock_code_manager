@@ -23,7 +23,6 @@ from homeassistant.components.zwave_js.const import (
     ATTR_NODE_ID,
     ATTR_PARAMETERS,
     ATTR_TYPE,
-    DATA_CLIENT,
     DOMAIN as ZWAVE_JS_DOMAIN,
     SERVICE_CLEAR_LOCK_USERCODE,
     SERVICE_SET_LOCK_USERCODE,
@@ -152,7 +151,7 @@ class ZWaveJSLock(BaseLock):
                 else self.hass.data.get(ZWAVE_JS_DOMAIN, {})
             )
             .get(self.lock_config_entry.entry_id, {})
-            .get(DATA_CLIENT)
+            .get("client")
         ) is None:
             return False
         return (
