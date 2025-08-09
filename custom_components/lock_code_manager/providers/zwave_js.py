@@ -148,7 +148,9 @@ class ZWaveJSLock(BaseLock):
         if not zwave_data:
             return False
 
-        client_entry = getattr(zwave_data, "_client_driver_map", {}).get(self.lock_config_entry.entry_id)
+        client_entry = getattr(zwave_data, "_client_driver_map", {}).get(
+            self.lock_config_entry.entry_id
+        )
 
         if client_entry is None or client_entry.client is None:
             return False
@@ -158,7 +160,6 @@ class ZWaveJSLock(BaseLock):
             and client_entry.client.connected
             and client_entry.client.driver is not None
         )
-
 
     async def async_hard_refresh_codes(self) -> None:
         """
