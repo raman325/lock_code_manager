@@ -376,7 +376,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     }:
         setup_tasks[platform] = config_entry.async_create_task(
             hass,
-            hass.config_entries.async_forward_entry_setup(config_entry, platform),
+            hass.config_entries.async_forward_entry_setups(config_entry, [platform]),
             "setup_new_platforms",
         )
     await asyncio.gather(*setup_tasks.values())
