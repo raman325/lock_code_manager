@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import logging
 import pkgutil
-from typing import Any, Iterable
+from typing import Any
 
 import voluptuous as vol
 
