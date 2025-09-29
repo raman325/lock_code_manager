@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Coroutine
 from functools import wraps
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable
 
 import voluptuous as vol
 
