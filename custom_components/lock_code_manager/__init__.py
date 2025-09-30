@@ -10,6 +10,7 @@ from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.lovelace.const import (
     CONF_RESOURCE_TYPE_WS,
     DOMAIN as LL_DOMAIN,
@@ -76,8 +77,12 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
     # Expose strategy javascript
-    hass.http.register_static_path(
-        STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME
+    await hass.http.async_register_static_paths(
+        [
+            StaticPathConfig(
+                STRATEGY_PATH, Path(__file__).parent / "www" / STRATEGY_FILENAME, False
+            )
+        ]
     )
     _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
 
