@@ -121,13 +121,19 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             self.entity_id,
         )
 
-        states: dict[str, bool] = {}
+        states: dict[str, bool | None] = {}
         for key, state in get_slot_data(self.config_entry, self.slot_num).items():
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
+
             if key == CONF_CALENDAR and (hass_state := self.hass.states.get(state)):
-                states[key] = hass_state.state == STATE_ON
+                states[key] = None
+                if hass_state.state == STATE_ON:
+                    states[key] = True
+                elif hass_state.state == STATE_OFF:
+                    states[key] = False
                 continue
+
             if key == CONF_NUMBER_OF_USES:
                 states[key] = bool(int(float(state)))
                 continue
@@ -213,6 +219,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
         )
         self._lock = asyncio.Lock()
+        self._initial_state_loaded = False
 
     @property
     def should_poll(self) -> bool:
@@ -281,6 +288,18 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return
 
         async with self._lock:
+            # Skip sync checks until we've loaded the initial state and verified
+            # all entities are available to prevent startup flapping
+            if not self._initial_state_loaded:
+                # Verify coordinator has valid data for this slot
+                if int(self.slot_num) not in self.coordinator.data:
+                    _LOGGER.debug(
+                        "%s (%s): Slot %s not yet in coordinator data, skipping initial sync check",
+                        self.config_entry.entry_id,
+                        self.config_entry.title,
+                        self.slot_num,
+                    )
+                    return
             for key, domain, unique_id in (
                 (CONF_PIN, TEXT_DOMAIN, self._pin_text_unique_id),
                 (CONF_NAME, TEXT_DOMAIN, self._name_text_unique_id),
@@ -299,6 +318,31 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 if self._get_entity_state(key) is None:
                     return
 
+            # On initial load, just set the state without triggering sync operations
+            # to prevent flapping when Z-Wave JS is still loading
+            if not self._initial_state_loaded:
+                self._initial_state_loaded = True
+
+                # Check if we're in sync or out of sync
+                if self._get_entity_state(ATTR_ACTIVE) == STATE_ON:
+                    pin_state = self._get_entity_state(CONF_PIN)
+                    code_state = self._get_entity_state(ATTR_CODE)
+                    self._attr_is_on = pin_state == code_state
+                elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
+                    self._attr_is_on = self._get_entity_state(ATTR_CODE) == ""
+
+                _LOGGER.debug(
+                    "%s (%s): Initial state loaded for %s slot %s, in_sync=%s",
+                    self.config_entry.entry_id,
+                    self.config_entry.title,
+                    self.lock.lock.entity_id,
+                    self.slot_num,
+                    self._attr_is_on,
+                )
+                self.async_write_ha_state()
+                return
+
+            # Normal operation after initial load
             if self._get_entity_state(ATTR_ACTIVE) == STATE_ON:
                 if (
                     pin_state := self._get_entity_state(CONF_PIN)

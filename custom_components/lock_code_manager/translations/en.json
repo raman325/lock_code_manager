@@ -84,13 +84,11 @@
     "number": {
       "number_of_uses": {
         "name": "number of uses"
-
       }
     },
     "sensor": {
       "code": {
         "name": "Code slot {slot_num}"
-
       }
     },
     "switch": {
