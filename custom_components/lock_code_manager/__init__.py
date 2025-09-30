@@ -31,13 +31,13 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STARTED,
 )
 from homeassistant.core import (
-    Config,
     CoreState,
     Event,
     HomeAssistant,
     ServiceCall,
     callback,
 )
+from homeassistant.core_config import Config
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
