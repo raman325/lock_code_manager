@@ -161,14 +161,22 @@ function generateSlotCard(
                 entities: [
                     ...generateEntityCards(configEntry, slotMapping.mainEntities),
                     DIVIDER_CARD,
-                    {
-                        entity: slotMapping.pinActiveEntity.entity_id,
-                        name: 'PIN active'
-                    },
-                    {
-                        entity: slotMapping.codeEventEntity.entity_id,
-                        name: 'PIN last used'
-                    },
+                    ...(slotMapping.pinActiveEntity
+                        ? [
+                              {
+                                  entity: slotMapping.pinActiveEntity.entity_id,
+                                  name: 'PIN active'
+                              }
+                          ]
+                        : []),
+                    ...(slotMapping.codeEventEntity
+                        ? [
+                              {
+                                  entity: slotMapping.codeEventEntity.entity_id,
+                                  name: 'PIN last used'
+                              }
+                          ]
+                        : []),
                     ...maybeGenerateFoldEntityRowConditionCard(
                         configEntry,
                         slotMapping.conditionEntities,
@@ -211,7 +219,7 @@ function getSlotMapping(
     const conditionEntities: LockCodeManagerEntityEntry[] = [];
     const codeSensorEntities: LockCodeManagerEntityEntry[] = [];
     const inSyncEntities: LockCodeManagerEntityEntry[] = [];
-    let codeEventEntity: LockCodeManagerEntityEntry;
+    let codeEventEntity: LockCodeManagerEntityEntry | undefined;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
