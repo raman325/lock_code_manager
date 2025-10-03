@@ -51,7 +51,7 @@ jobs:
         run: echo "changed=$(git status --porcelain | wc -l)" >> $GITHUB_OUTPUT
       - name: Check if clean from lint
         if: steps.change_lint.outputs.changed != 0
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
               core.setFailed('Repo is dirty after lint! Run yarn lint:fix locally before pushing changes.')
@@ -64,7 +64,7 @@ jobs:
         run: echo "changed=$(git status --porcelain | wc -l)" >> $GITHUB_OUTPUT
       - name: Check if clean from build
         if: steps.change_build.outputs.changed != 0
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
               core.setFailed('Repo is dirty after build! Run yarn build locally before pushing changes.')
