@@ -228,3 +228,61 @@ yarn watch                     # Watch mode for development
 **Commit:** `39ff8cf`
 
 **Result:** Dashboard UI now gracefully handles missing entities without throwing errors, allowing the view strategy to load correctly even during initial setup or with disabled entities.
+
+### Home Assistant Compatibility Fixes (2025-10-02)
+
+Three critical compatibility issues were identified and fixed to ensure the integration works with Home Assistant Core 2025.7, 2025.8, and 2025.11+.
+
+#### Issue #531: Deprecated Config Import (HA Core 2025.11)
+
+**Problem:** Integration was using deprecated `Config` import from `homeassistant.core`, which will be removed in HA Core 2025.11. Users were seeing deprecation warnings asking them to report the issue.
+
+**Root Cause:** The core config class was moved from `homeassistant/core.py` to `homeassistant/core_config.py` to improve code organization. The old import path was deprecated with a grace period until 2025.11.
+
+**Solution:** Updated import statement:
+- Changed from: `from homeassistant.core import Config`
+- Changed to: `from homeassistant.core_config import Config`
+
+**Files Changed:**
+- `custom_components/lock_code_manager/__init__.py`: Updated Config import to use new location
+
+**Commit:** `658d5d2`
+
+#### Issue #530/#528: Deprecated register_static_path (HA Core 2025.7+)
+
+**Problem:** Integration was using synchronous `hass.http.register_static_path()` which performs blocking I/O in the event loop. This method was deprecated and removed in HA Core 2025.7.
+
+**Root Cause:** The synchronous static path registration blocks the event loop, which can cause performance issues. Home Assistant moved to an async-only API for static path registration.
+
+**Solution:** Replaced with async API:
+- Changed from: `hass.http.register_static_path(url, path)`
+- Changed to: `await hass.http.async_register_static_paths([StaticPathConfig(url, path, cache_headers)])`
+- Added import: `from homeassistant.components.http import StaticPathConfig`
+
+**Files Changed:**
+- `custom_components/lock_code_manager/__init__.py`: Updated static path registration to async API
+
+**Commit:** `e9eb1cd`
+
+#### Issue #530: Z-Wave JS DATA_CLIENT Deprecation (HA Core 2025.8+)
+
+**Problem:** Integration was using deprecated `DATA_CLIENT` constant to access Z-Wave JS client objects. The internal data structure for Z-Wave JS integration changed in HA Core 2025.8, causing AttributeError when using the old access pattern.
+
+**Root Cause:** Home Assistant 2025.8 changed how Z-Wave JS stores client objects internally. The old dictionary-based access via `DATA_CLIENT` key was replaced with a new `_client_driver_map` attribute structure.
+
+**Investigation:** Reviewed PR #530 which showed the exact changes needed. The new pattern uses `getattr()` to access `_client_driver_map` and retrieves client from a `client_entry` object.
+
+**Solution:** Updated client access in `async_is_connection_up()`:
+- Removed import: `DATA_CLIENT` from `homeassistant.components.zwave_js.const`
+- Changed from: Dictionary access using `hass.data[ZWAVE_JS_DOMAIN][entry_id][DATA_CLIENT]`
+- Changed to: Attribute access using `getattr(zwave_data, "_client_driver_map", {}).get(entry_id)`
+- Updated client reference from `client` to `client_entry.client`
+
+**Bonus Fix:** Modernized imports by moving `Iterable` from `typing` to `collections.abc` (Python 3.9+ best practice).
+
+**Files Changed:**
+- `custom_components/lock_code_manager/providers/zwave_js.py`: Updated Z-Wave JS client access pattern and modernized imports
+
+**Commit:** `3023fc4`
+
+**Result:** Integration is now fully compatible with Home Assistant Core 2025.7, 2025.8, and 2025.11+. All deprecation warnings are eliminated, and the integration uses current APIs that won't break in future releases.
