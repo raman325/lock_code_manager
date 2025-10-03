@@ -20,7 +20,7 @@
   "dependencies": {
     "home-assistant-js-websocket": "^9.4.0",
     "lit": "^3.2.1",
-    "lit-html": "^3.1.4"
+    "lit-html": "^3.3.1"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
