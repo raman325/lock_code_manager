@@ -26,7 +26,8 @@
       "Bash(python3.13:*)",
       "Bash(source:*)",
       "Bash(pip install:*)",
-      "Bash(./scripts/setup)"
+      "Bash(./scripts/setup)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

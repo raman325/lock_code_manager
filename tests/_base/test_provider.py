@@ -14,12 +14,24 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 
 async def test_base(hass: HomeAssistant):
     """Test base class."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry()
+    config_entry.add_to_hass(hass)
+
+    # Create a proper registry entry
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
     lock = BaseLock(
         hass,
         dr.async_get(hass),
-        er.async_get(hass),
-        MockConfigEntry(),
-        er.RegistryEntry("lock.test", "blah", "blah"),
+        entity_reg,
+        config_entry,
+        lock_entity,
     )
     assert await lock.async_setup() is None
     assert await lock.async_unload(False) is None
