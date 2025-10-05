@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def test_get_slot_calendar_data(
     hass: HomeAssistant,
+    mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
@@ -72,6 +73,7 @@ async def test_get_slot_calendar_data(
 
 async def test_get_slot_calendar_data_unloaded_entry(
     hass: HomeAssistant,
+    mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
@@ -96,6 +98,7 @@ async def test_get_slot_calendar_data_unloaded_entry(
 
 async def test_get_config_entry_entities(
     hass: HomeAssistant,
+    mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
