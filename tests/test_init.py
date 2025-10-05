@@ -89,7 +89,9 @@ async def test_entry_setup_and_unload(
     assert len(hass.states.async_entity_ids(Platform.SWITCH)) == 2
     assert len(hass.states.async_entity_ids(Platform.TEXT)) == 4
 
-    resources = hass.data[LL_DOMAIN].get("resources")
+    ll_data = hass.data[LL_DOMAIN]
+    assert ll_data
+    resources = ll_data.resources
     assert resources
     assert resources.loaded
     assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
@@ -218,7 +220,7 @@ async def test_resource_already_loaded_ui(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is already loaded in UI mode."""
-    resources = hass.data[LL_DOMAIN].get("resources")
+    resources = hass.data[LL_DOMAIN].resources
     assert resources
     await resources.async_load()
 
@@ -328,7 +330,7 @@ async def test_resource_not_loaded_on_unload(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is not loaded when unloading config entry."""
-    resources = hass.data[LL_DOMAIN].get("resources")
+    resources = hass.data[LL_DOMAIN].resources
     assert resources
     await resources.async_load()
 
