@@ -25,7 +25,8 @@
       "Bash(deactivate)",
       "Bash(python3.13:*)",
       "Bash(source:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(./scripts/setup)"
     ],
     "deny": [],
     "ask": []
