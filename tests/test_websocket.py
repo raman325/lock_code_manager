@@ -70,13 +70,24 @@ async def test_get_slot_calendar_data(
     msg = await ws_client.receive_json()
     assert not msg["success"]
 
+
+async def test_get_slot_calendar_data_unloaded_entry(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test get_slot_calendar_data WS API with unloaded entry."""
+    ws_client = await hass_ws_client(hass)
+
+    # Unload the entry
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Try API call with entry ID
+    # Try API call with unloaded entry ID - should fail
     await ws_client.send_json(
         {
-            "id": 5,
+            "id": 1,
             "type": "lock_code_manager/get_slot_calendar_data",
             "config_entry_id": lock_code_manager_config_entry.entry_id,
         }
