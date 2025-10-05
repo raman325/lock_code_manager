@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr list:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git rebase:*)",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(pytest:*)",
+      "Bash(scripts/setup:*)",
+      "Bash(pip show:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh workflow:*)",
+      "Bash(git log:*)",
+      "WebSearch",
+      "Bash(git commit:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(act:*)",
+      "Bash(pip index versions:*)",
+      "Bash(brew install:*)",
+      "Bash(deactivate)",
+      "Bash(python3.13:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
