@@ -138,6 +138,7 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
 
     if config_entry.state == ConfigEntryState.LOADED:
         await hass.config_entries.async_unload(config_entry.entry_id)
+        await hass.async_block_till_done()
 
 
 @pytest.fixture(name="lock_code_manager_config_entry")
@@ -161,3 +162,4 @@ async def lock_code_manager_config_entry_fixture(
 
     if config_entry.state == ConfigEntryState.LOADED:
         await hass.config_entries.async_unload(config_entry.entry_id)
+        await hass.async_block_till_done()
