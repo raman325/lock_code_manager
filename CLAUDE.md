@@ -286,3 +286,21 @@ Three critical compatibility issues were identified and fixed to ensure the inte
 **Commit:** `3023fc4`
 
 **Result:** Integration is now fully compatible with Home Assistant Core 2025.7, 2025.8, and 2025.11+. All deprecation warnings are eliminated, and the integration uses current APIs that won't break in future releases.
+
+### Test Teardown Issue: test_get_slot_calendar_data Failures (2025-10-05)
+
+**Problem:** The `test_get_slot_calendar_data` test was failing in CI with a threading cleanup error during teardown. The test would pass its assertions, but Home Assistant's test cleanup validation detected a lingering `_run_safe_shutdown_loop` thread, causing the test run to fail with: `AssertionError: assert (False or False)` for thread cleanup verification.
+
+**Root Cause:** The test fixture `lock_code_manager_config_entry` unconditionally attempted to unload the config entry during teardown. However, `test_get_slot_calendar_data` manually unloads the config entry at line 73 (to test querying an unloaded entry). This caused a double-unload: the test explicitly unloaded the entry, then the fixture tried to unload it again during teardown, creating a lingering background thread that wasn't properly cleaned up.
+
+**Investigation:** Analyzed CI logs from failing PRs (#539, #540, #541, #532) which all showed the same teardown error. Traced through the test flow and discovered that `tests/conftest.py` fixture teardown (line 161) was attempting to unload an already-unloaded config entry.
+
+**Solution:** Updated test fixtures to check config entry state before attempting teardown unload:
+- Added import: `ConfigEntryState` from `homeassistant.config_entries`
+- Modified `mock_lock_config_entry` fixture: Check `config_entry.state == ConfigEntryState.LOADED` before unloading (line 139)
+- Modified `lock_code_manager_config_entry` fixture: Check `config_entry.state == ConfigEntryState.LOADED` before unloading (line 161)
+
+**Files Changed:**
+- `tests/conftest.py`: Added state checks to prevent double-unload in test fixtures
+
+**Result:** Test fixtures now gracefully handle cases where tests manually unload config entries. The teardown only attempts to unload if the entry is still in `LOADED` state, preventing double-unload issues and lingering threads. This allows tests to safely unload config entries as part of their test logic without causing teardown failures.

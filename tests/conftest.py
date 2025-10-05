@@ -18,7 +18,7 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
-from homeassistant.config_entries import ConfigEntry, ConfigFlow
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigFlow
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -136,7 +136,8 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
 
     yield config_entry
 
-    await hass.config_entries.async_unload(config_entry.entry_id)
+    if config_entry.state == ConfigEntryState.LOADED:
+        await hass.config_entries.async_unload(config_entry.entry_id)
 
 
 @pytest.fixture(name="lock_code_manager_config_entry")
@@ -158,4 +159,5 @@ async def lock_code_manager_config_entry_fixture(
 
     yield config_entry
 
-    await hass.config_entries.async_unload(config_entry.entry_id)
+    if config_entry.state == ConfigEntryState.LOADED:
+        await hass.config_entries.async_unload(config_entry.entry_id)
