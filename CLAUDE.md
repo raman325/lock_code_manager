@@ -304,3 +304,73 @@ Three critical compatibility issues were identified and fixed to ensure the inte
 - `tests/conftest.py`: Added state checks to prevent double-unload in test fixtures
 
 **Result:** Test fixtures now gracefully handle cases where tests manually unload config entries. The teardown only attempts to unload if the entry is still in `LOADED` state, preventing double-unload issues and lingering threads. This allows tests to safely unload config entries as part of their test logic without causing teardown failures.
+
+### Python 3.13 Upgrade and Test Teardown Fixes (2025-10-05)
+
+**Problem:** PR #552 aimed to fix test teardown failures in `test_get_slot_calendar_data` which was failing with lingering thread cleanup errors. The test would pass its assertions but Home Assistant's test cleanup validation detected a lingering `_run_safe_shutdown_loop` thread.
+
+**Root Cause Analysis:**
+The original test manually unloaded the `lock_code_manager_config_entry` during the test to verify error handling when querying an unloaded entry. This caused the test fixture teardown to attempt unloading the same entry again, creating a double-unload scenario that left lingering threads.
+
+**Key Fix:**
+The actual fix that resolved the thread cleanup issue was **splitting the test into two separate tests** (`commit 51d3e69`):
+1. `test_get_slot_calendar_data`: Tests normal operation WITHOUT manual unload
+2. `test_get_slot_calendar_data_unloaded_entry`: Tests error handling with an unloaded entry
+
+This separation ensured the fixture only teardowns entries that are still loaded, preventing the double-unload issue.
+
+**Additional Changes Made (Not All Required for Original Fix):**
+
+While upgrading dependencies and fixing other issues, several changes were made. Here's what was actually necessary vs. what was done as part of the upgrade:
+
+**✅ Required for Original Thread Issue:**
+- Splitting the test into two separate tests (`tests/test_websocket.py`)
+- Adding `ConfigEntryState.LOADED` checks in fixture teardown (`tests/conftest.py`)
+- Adding `await hass.async_block_till_done()` after fixture teardown unloads
+
+**⚠️ Required for Python 3.13 / HA 2025.10 Compatibility (Not Original Issue):**
+- Upgrading to Python 3.13 (`.github/workflows/pytest.yaml`)
+- Updating `pytest-homeassistant-custom-component` to 0.13.286
+- Updating `zeroconf` to 0.147.2
+- Updating `zwave-js-server-python` to 0.67.1
+- Removing `event_loop` parameter from pytest fixture (deprecated in pytest-asyncio 1.2.0+)
+- Updating `async_forward_entry_setup()` → `async_forward_entry_setups()` (HA 2025.10+ API change)
+- Fixing `RegistryEntry` constructor to use `async_get_or_create()`
+- Updating lovelace_data access pattern
+
+**❓ Possibly Unnecessary (Added Defensively):**
+- Overriding `async_unload()` in `MockLCMLock` to avoid executor threads (`tests/common.py`)
+
+**Files Changed:**
+- `.github/workflows/pytest.yaml`: Updated Python version to 3.13
+- `requirements_test.txt`: Updated pytest plugin version
+- `requirements_dev.txt`: Updated zeroconf and zwave-js-server-python
+- `tests/conftest.py`: Fixed fixture teardown and API compatibility
+- `tests/common.py`: Added async_unload override
+- `tests/test_websocket.py`: Split test to avoid teardown conflicts
+- `tests/_base/test_provider.py`: Fixed RegistryEntry usage
+- `tests/virtual/test_provider.py`: Fixed RegistryEntry usage
+- `custom_components/lock_code_manager/__init__.py`: Updated deprecated APIs
+
+**Test Results:**
+- ✅ 24 of 27 tests passing (originally 22/27)
+- ✅ All websocket tests pass (including the original failing test)
+- ✅ No more thread teardown errors
+- ❌ 3 tests still failing due to lovelace resources deprecation (under investigation)
+
+**Remaining Issues:**
+The 3 failing lovelace-related tests (`test_entry_setup_and_unload`, `test_resource_already_loaded_ui`, `test_resource_not_loaded_on_unload`) are failing with:
+```
+RuntimeError: Detected code that accessed lovelace_data.get('resources') instead of lovelace_data.resources
+```
+
+Despite updating the code to use `lovelace_data.resources`, the error persists. This appears to be a more complex deprecation issue in Home Assistant 2025.10 that requires further investigation. The lovelace resource management is a secondary feature for auto-registering the dashboard strategy module, not core lock code management functionality.
+
+**Lessons Learned:**
+1. When upgrading major dependencies (like Python 3.13 or HA 2025.10), expect cascading API changes
+2. The actual fix for a specific issue may be simple, but ensuring compatibility with latest versions requires broader changes
+3. Test splitting is an effective strategy to avoid fixture teardown conflicts
+4. Always verify which changes are actually needed vs. which are compatibility updates
+
+**PR:** #552 (in progress)
+**Commits:** Multiple commits spanning dependency upgrades and API fixes
