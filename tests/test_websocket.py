@@ -84,6 +84,10 @@ async def test_get_slot_calendar_data(
     msg = await ws_client.receive_json()
     assert not msg["success"]
 
+    # Clean up mock_lock_config_entry to prevent lingering threads
+    await hass.config_entries.async_unload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
 
 async def test_get_config_entry_entities(
     hass: HomeAssistant,
