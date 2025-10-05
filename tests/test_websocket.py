@@ -71,6 +71,7 @@ async def test_get_slot_calendar_data(
     assert not msg["success"]
 
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
 
     # Try API call with entry ID
     await ws_client.send_json(
