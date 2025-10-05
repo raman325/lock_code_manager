@@ -59,6 +59,11 @@ class MockLCMLock(BaseLock):
         """Return integration domain."""
         return "test"
 
+    async def async_setup(self) -> None:
+        """Set up lock asynchronously."""
+        self.setup()
+
+    @callback
     def setup(self) -> None:
         """Set up lock."""
         self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
@@ -67,9 +72,10 @@ class MockLCMLock(BaseLock):
         )
 
     async def async_unload(self, remove_permanently: bool) -> None:
-        """Unload lock asynchronously without executor to avoid thread issues."""
+        """Unload lock asynchronously."""
         self.unload(remove_permanently)
 
+    @callback
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         self.hass.data[LOCK_DATA].pop(self.lock.entity_id)
