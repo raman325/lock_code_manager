@@ -267,10 +267,15 @@ class LockCodeManagerCodeSlotInSyncEntity(
             entity_id = event.data["entity_id"]
             to_state = event.data["new_state"]
 
-        if not self.coordinator.last_update_success or (
-            entity_id is not None
-            and (
-                not (ent_entry := self.ent_reg.async_get(entity_id))
+        # Skip if coordinator update failed
+        if not self.coordinator.last_update_success:
+            return
+
+        # If triggered by event, validate it's relevant and state is valid
+        if entity_id is not None:
+            ent_entry = self.ent_reg.async_get(entity_id)
+            if (
+                not ent_entry
                 or ent_entry.platform != DOMAIN
                 or (ent_entry.domain, ent_entry.unique_id)
                 not in (
@@ -283,9 +288,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     to_state is not None
                     and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
                 )
-            )
-        ):
-            return
+            ):
+                return
 
         async with self._lock:
             # Check prerequisites for initial load
