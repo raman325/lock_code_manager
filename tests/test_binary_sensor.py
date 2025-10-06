@@ -177,6 +177,15 @@ async def test_startup_no_code_flapping_when_synced(
     lock_code_manager_config_entry,
 ):
     """Test that codes aren't unnecessarily cleared/set on startup when already synced."""
+    # Create a calendar event to make slot 2 active
+    # (slot 2 has calendar.test_1 configured in BASE_CONFIG)
+    calendar_1, calendar_2 = hass.data["lock_code_manager_calendars"]
+    now = dt_util.utcnow()
+    start = now - timedelta(hours=1)
+    end = now + timedelta(hours=1)
+    calendar_1.create_event(dtstart=start, dtend=end, summary="test")
+    await hass.async_block_till_done()
+
     # Get the in-sync binary sensor for lock 1, slot 2
     in_sync_entity = "binary_sensor.test_1_code_slot_2_in_sync"
 
@@ -264,7 +273,7 @@ async def test_startup_detects_out_of_sync_code(
     assert in_sync_binary_sensor
 
     # Wait for the next update cycle
-    await hass.helpers.entity_component.async_update_entity(in_sync_entity)
+    await async_update_entity(hass, in_sync_entity)
     await hass.async_block_till_done()
 
     # Verify that set_usercode WAS called to sync the code after initial load
