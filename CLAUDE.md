@@ -366,3 +366,385 @@ Upgrading to Python 3.13 and Home Assistant 2025.10 required fixing several depr
 
 **PR:** #552
 **Commits:** fd01fec (main fix) + multiple API compatibility updates
+
+## Future Improvements & TODOs
+
+This section tracks potential improvements, refactoring opportunities, and feature requests. Claude will periodically ask if you're ready to address these items.
+
+### 1. Remove Commented Code
+
+**Initial Analysis:** Search codebase for commented-out code blocks and remove dead code to improve maintainability.
+
+**Scope:**
+- Python files: Look for `# ` commented code blocks (not docstrings or inline comments)
+- TypeScript files: Look for `//` or `/* */` commented code blocks
+- Configuration files
+
+**Estimated Effort:** Low (1-2 hours)
+
+**Priority:** Low - Technical debt cleanup
+
+**Status:** Not started
+
+---
+
+### 2. Simplify Tests
+
+**Initial Analysis:** Review test suite for duplication, overly complex setup, and opportunities to use shared fixtures more effectively.
+
+**Current Issues:**
+- `tests/common.py` has some duplicated mock setup code
+- Some tests may have redundant assertions
+- Test fixtures could potentially be more reusable across test files
+
+**Potential Improvements:**
+- Consolidate duplicate test setup code into shared fixtures
+- Review test naming conventions for clarity
+- Consider parametrized tests where multiple similar tests exist
+- Reduce test boilerplate with helper functions
+
+**Estimated Effort:** Medium (4-8 hours)
+
+**Priority:** Medium - Improves developer experience and test maintainability
+
+**Status:** Not started
+
+---
+
+### 3. Simplify Code
+
+#### 3a. Remove Dispatcher Complexity
+
+**Initial Analysis:** The integration heavily uses Home Assistant's dispatcher system for dynamic entity management. Evaluate if this can be simplified or if there's a more modern approach.
+
+**Current Usage:** (`__init__.py` lines 27-30, various entity files)
+- Dispatcher signals used for: `add_lock_slot`, `update_lock_slot`, `remove_lock_slot`
+- Each entity listens for dispatcher signals to handle dynamic config changes
+- Pattern: `{DOMAIN}_{entry_id}_action_type`
+
+**Considerations:**
+- **Pros of current approach:** Decoupled, allows dynamic entity creation without tight coupling
+- **Cons:** More complex to trace, multiple layers of indirection
+- **Alternative:** Use `ConfigEntry.async_on_unload()` callbacks or `ConfigEntry.runtime_data` more extensively
+
+**Questions to Answer:**
+1. Can we use `ConfigEntry.add_update_listener()` instead of dispatchers for config changes?
+2. Would storing entity references in `ConfigEntry.runtime_data` allow more direct updates?
+3. Is the dispatcher pattern necessary for the dynamic slot management, or is there a simpler way?
+
+**Estimated Effort:** High (16+ hours) - Major architectural change
+
+**Priority:** Medium - Would improve code clarity but requires careful refactoring
+
+**Status:** Not started - Needs design review first
+
+#### 3b. Remove Other Unnecessary Complexity
+
+**Initial Analysis:** General code review to identify and eliminate unnecessary complexity.
+
+**Areas to Review:**
+1. **Dual storage pattern** (`data` + `options` in config entries) - Can this be simplified?
+2. **Entity unique ID format** - Is `{entry_id}|{slot}|{type}` optimal?
+3. **Multiple coordinator instances** - One per lock - could this be unified?
+4. **Internal method wrappers** - `async_internal_*` methods with locks - are all necessary?
+
+**Specific Items:**
+- Review if all `_get_entity_state()` calls can be simplified
+- Evaluate if `_entity_id_map` dictionary caching is worth the complexity
+- Consider if provider `async_internal_*` wrapper methods can be simplified
+- Review entity base classes for potential consolidation
+
+**Estimated Effort:** High (20+ hours) - Requires deep understanding and careful refactoring
+
+**Priority:** Low-Medium - Would improve long-term maintainability
+
+**Status:** Not started - Needs comprehensive audit first
+
+---
+
+### 4. Advanced Calendar Configuration
+
+**Feature Request:** Allow slot number and PIN to be configured directly in calendar event metadata, eliminating need for separate slot configuration.
+
+**Design Considerations:**
+
+**Current Behavior:**
+- Slot configured in config flow with fixed PIN
+- Calendar event (when present) only controls whether slot is active/inactive
+- PIN and slot number are static configuration
+
+**Proposed Behavior:**
+- Calendar event contains slot number and PIN in its metadata
+- User configures regex/pattern to extract slot number and PIN from:
+  - Event title (e.g., "Slot 3: 1234")
+  - Event description
+  - Event location
+  - Custom calendar properties
+
+**Implementation Requirements:**
+1. **Config Flow Changes:**
+   - Add "advanced calendar mode" toggle per slot
+   - When enabled, show pattern configuration UI
+   - Pattern fields: slot number regex, PIN regex, which field to parse (title/description/location)
+
+2. **Entity Changes:**
+   - Calendar event listener needs to parse event metadata
+   - Extract slot number and PIN based on user-defined patterns
+   - Validate extracted values (numeric slot, PIN format)
+
+3. **Binary Sensor Changes:**
+   - Check if calendar event contains valid extracted values
+   - Use extracted PIN instead of configured PIN
+   - Handle multiple calendar events with different slots
+
+**Example Patterns:**
+- Title: `"Guest Access: Slot 5, PIN 9876"` → Slot: `\d+`, PIN: `\d{4}$`
+- Description: `"Code: 1234 for slot 3"` → Slot: `slot (\d+)`, PIN: `Code: (\d+)`
+- Location: `"5:1234"` → Slot: `^(\d+):`, PIN: `:(\d+)$`
+
+**Challenges:**
+- Multiple calendar events with different slots
+- Error handling for invalid patterns
+- UI for testing patterns
+- Backward compatibility with existing simple calendar mode
+
+**Estimated Effort:** Very High (40+ hours) - New feature with UI, validation, and testing
+
+**Priority:** Medium - Power user feature, not essential for basic functionality
+
+**Status:** Not started - Needs detailed design document
+
+---
+
+### 5. Add Relevant New Home Assistant Core Features
+
+**Analysis:** Review Home Assistant release notes from 2024.1 through 2025.10 and integrate relevant new features.
+
+**Key Features to Evaluate (2024-2025):**
+
+1. **Config Entry Runtime Data** (2024.8+)
+   - `ConfigEntry.runtime_data` for type-safe runtime storage
+   - Could replace some `hass.data[DOMAIN]` usage
+   - **Action:** Audit `hass.data` usage and migrate to `runtime_data` where appropriate
+
+2. **DataUpdateCoordinator `_async_setup()`** (2024.8+)
+   - One-time initialization method
+   - **Action:** Evaluate if any coordinator setup code should move to `_async_setup()`
+
+3. **Entity Category Enhancements** (2024.x)
+   - New entity categories available
+   - **Action:** Review entity category assignments
+
+4. **Selector Improvements** (2024.x)
+   - New selector types for config flow
+   - **Action:** Review config flow UI for better selectors
+
+5. **LockState Enum** (2025.10)
+   - Replace deprecated `STATE_LOCKED`/`STATE_UNLOCKED` constants
+   - **Action:** Update to use `LockState.LOCKED` / `LockState.UNLOCKED`
+
+6. **Repair Platform** (2024.x)
+   - Notify users of configuration issues
+   - **Action:** Consider adding repairs for common misconfigurations
+
+7. **Config Entry Diagnostics** (2024.x)
+   - Better debugging information
+   - **Action:** Add diagnostics download capability
+
+**Estimated Effort:** Medium-High (12-20 hours) - Depends on features adopted
+
+**Priority:** Medium - Keeps integration modern and leverages platform improvements
+
+**Status:** Not started - Needs systematic review of release notes
+
+---
+
+### 6. Add Support for Additional Lock Providers
+
+**Current Providers:**
+- Z-Wave JS (`zwave_js.py`)
+- Virtual (`virtual.py`) - for testing only
+
+**Available Lock Integrations in Home Assistant Core:**
+
+Based on analysis of `home-assistant/core` repository, the following 62 integrations provide lock entities:
+
+**Smart Home Platforms:**
+- `deconz` - deCONZ (Zigbee/Z-Wave gateway)
+- `esphome` - ESPHome devices
+- `homematic` - Homematic (CCU)
+- `homematicip_cloud` - Homematic IP Cloud
+- `homekit_controller` - HomeKit accessories
+- `matter` - Matter protocol
+- `mqtt` - MQTT locks
+- `smartthings` - SmartThings
+- `zha` - Zigbee Home Automation
+- `zwave_js` - Z-Wave JS (already supported ✅)
+- `zwave_me` - Z-Wave.Me
+
+**Brand-Specific Integrations:**
+- `abode` - Abode Security
+- `august` - August Smart Locks
+- `bmw_connected_drive` - BMW Connected Drive
+- `dormakaba_dkey` - Dormakaba dkey
+- `igloohome` - igloohome
+- `kiwi` - Kiwi (Eufy)
+- `loqed` - Loqed Smart Lock
+- `nuki` - Nuki Smart Lock
+- `schlage` - Schlage Encode
+- `sesame` - Sesame Smart Lock
+- `switchbot` - SwitchBot Lock
+- `switchbot_cloud` - SwitchBot Cloud
+- `tedee` - Tedee Smart Lock
+- `yale` - Yale Access (August partnership)
+- `yalexs_ble` - Yale/August BLE
+- `yolink` - YoLink
+
+**Security Systems:**
+- `simplisafe` - SimpliSafe
+- `verisure` - Verisure
+- `yale_smart_alarm` - Yale Smart Alarm
+
+**Vehicle Integrations:**
+- `subaru` - Subaru Starlink
+- `tesla_fleet` - Tesla Fleet API
+- `teslemetry` - Teslemetry
+- `tessie` - Tessie (Tesla)
+- `starline` - StarLine
+
+**Other Integrations:**
+- `fibaro` - Fibaro
+- `freedompro` - Freedompro
+- `insteon` - Insteon
+- `isy994` - Universal Devices ISY
+- `keba` - KEBA EV Charger
+- `overkiz` - Overkiz (Somfy TaHoma)
+- `surepetcare` - Sure Petcare
+- `unifiprotect` - UniFi Protect
+- `vera` - Vera
+- `wallbox` - Wallbox EV Charger
+- `xiaomi_aqara` - Xiaomi Aqara
+
+**Utility/Helper Integrations:**
+- `demo` - Demo platform
+- `group` - Lock groups
+- `kitchen_sink` - Testing platform
+- `switch_as_x` - Convert switches to locks
+- `template` - Template locks
+- `homee` - Homee gateway
+
+**Recommended Priorities for Support:**
+
+**High Priority** (Popular, widely used):
+1. **ZHA (Zigbee Home Automation)** - Very popular, supports many lock brands
+2. **Matter** - Future-proof, industry standard
+3. **ESPHome** - DIY community, custom locks
+4. **MQTT** - Generic protocol, many custom implementations
+
+**Medium Priority** (Brand-specific, popular):
+5. **August/Yale** (`august`, `yale`, `yalexs_ble`) - Popular smart lock brand
+6. **Nuki** - Popular in Europe
+7. **Schlage** - Popular in North America
+8. **SwitchBot** - Growing popularity
+
+**Low Priority** (Niche or less common):
+- Vehicle locks (Tesla, BMW, Subaru) - Different use case
+- Security system locks - Usually managed by their own systems
+- Utility integrations (template, group) - May work without specific provider
+
+**Implementation Approach:**
+
+For each new provider:
+1. Create `providers/INTEGRATION_NAME.py`
+2. Subclass `BaseLock`
+3. Implement required methods
+4. Add integration-specific event listeners
+5. Add tests in `tests/INTEGRATION_NAME/test_provider.py`
+6. Update documentation
+
+**Estimated Effort per Provider:** Medium (6-12 hours each)
+
+**Priority:** Medium-High - Expands integration usefulness
+
+**Status:** Not started
+
+**Recommended First Addition:** ZHA (Zigbee) - Most requested, widely used
+
+---
+
+### Additional Improvement Ideas
+
+#### 7. Improve Dashboard UI/UX
+
+**Ideas:**
+- Add visual indicator when codes are out of sync
+- Bulk operations (enable/disable multiple slots)
+- Import/export slot configuration
+- QR code generation for PIN sharing
+- History view showing when codes were used
+- Slot templates for quick configuration
+
+**Estimated Effort:** High (20+ hours)
+
+**Priority:** Medium
+
+**Status:** Not started
+
+---
+
+#### 8. Add Service Actions
+
+**Ideas:**
+- `lock_code_manager.set_temporary_code` - Create time-limited PIN
+- `lock_code_manager.generate_pin` - Auto-generate secure PIN
+- `lock_code_manager.bulk_enable` - Enable multiple slots at once
+- `lock_code_manager.bulk_disable` - Disable multiple slots at once
+- `lock_code_manager.copy_slot` - Copy configuration from one slot to another
+
+**Estimated Effort:** Medium (8-16 hours)
+
+**Priority:** Medium-Low
+
+**Status:** Not started
+
+---
+
+#### 9. Enhanced Notifications
+
+**Ideas:**
+- Notify when PIN is used (already have event entity, could add notification action)
+- Notify when code goes out of sync
+- Notify when calendar event starts (PIN becomes active)
+- Notify when number of uses is depleted
+
+**Estimated Effort:** Medium (6-10 hours)
+
+**Priority:** Low - Can be done with automations currently
+
+**Status:** Not started
+
+---
+
+#### 10. Configuration Validation
+
+**Ideas:**
+- Warn if PIN is too simple (e.g., "1234", "0000")
+- Warn if multiple slots use same PIN
+- Validate PIN format against lock requirements
+- Check for slot conflicts across config entries
+
+**Estimated Effort:** Low-Medium (4-8 hours)
+
+**Priority:** Medium
+
+**Status:** Not started
+
+---
+
+### Review Schedule
+
+Claude will ask about addressing these TODOs:
+- After completing current work
+- When starting new features
+- During refactoring sessions
+- At your request with `/todos` command
