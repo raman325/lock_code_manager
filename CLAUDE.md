@@ -287,90 +287,82 @@ Three critical compatibility issues were identified and fixed to ensure the inte
 
 **Result:** Integration is now fully compatible with Home Assistant Core 2025.7, 2025.8, and 2025.11+. All deprecation warnings are eliminated, and the integration uses current APIs that won't break in future releases.
 
-### Test Teardown Issue: test_get_slot_calendar_data Failures (2025-10-05)
+### Python 3.13 Upgrade and Home Assistant 2025.10 Compatibility (2025-10-05)
 
-**Problem:** The `test_get_slot_calendar_data` test was failing in CI with a threading cleanup error during teardown. The test would pass its assertions, but Home Assistant's test cleanup validation detected a lingering `_run_safe_shutdown_loop` thread, causing the test run to fail with: `AssertionError: assert (False or False)` for thread cleanup verification.
+**Problem:** The `test_get_slot_calendar_data` test was failing in CI with thread cleanup errors. Initially thought to be a test teardown issue, investigation revealed the actual root cause was outdated dependencies.
 
-**Root Cause:** The test fixture `lock_code_manager_config_entry` unconditionally attempted to unload the config entry during teardown. However, `test_get_slot_calendar_data` manually unloads the config entry at line 73 (to test querying an unloaded entry). This caused a double-unload: the test explicitly unloaded the entry, then the fixture tried to unload it again during teardown, creating a lingering background thread that wasn't properly cleaned up.
+**Root Cause:** The test was failing due to outdated dependencies:
+- Python 3.12 (current: 3.13)
+- `pytest-homeassistant-custom-component` 0.13.201 (current: 0.13.286, 85 versions behind)
+- `zeroconf` 0.137.2 (required by HA 2025.10.1: 0.147.2)
+- `zwave-js-server-python` 0.58.1 (required by HA 2025.10.1: 0.67.1)
 
-**Investigation:** Analyzed CI logs from failing PRs (#539, #540, #541, #532) which all showed the same teardown error. Traced through the test flow and discovered that `tests/conftest.py` fixture teardown (line 161) was attempting to unload an already-unloaded config entry.
+**Solution:** Updated all dependencies to their latest versions. The test passes as-is with no test logic changes required.
 
-**Solution:** Updated test fixtures to check config entry state before attempting teardown unload:
-- Added import: `ConfigEntryState` from `homeassistant.config_entries`
-- Modified `mock_lock_config_entry` fixture: Check `config_entry.state == ConfigEntryState.LOADED` before unloading (line 139)
-- Modified `lock_code_manager_config_entry` fixture: Check `config_entry.state == ConfigEntryState.LOADED` before unloading (line 161)
+**Dependency Upgrades:**
+- Python 3.12 → **3.13** (`.github/workflows/pytest.yaml`)
+- `pytest-homeassistant-custom-component` 0.13.201 → **0.13.286** (required Python 3.13)
+- `zeroconf` 0.137.2 → **0.147.2**
+- `zwave-js-server-python` 0.58.1 → **0.67.1**
+- GitHub Actions: Updated `actions/checkout`, `actions/setup-python`, and `codecov/codecov-action` to latest versions
+
+**API Compatibility Fixes Required:**
+
+Upgrading to Python 3.13 and Home Assistant 2025.10 required fixing several deprecated APIs:
+
+1. **pytest-asyncio 1.2.0+** (`tests/conftest.py`):
+   - Removed deprecated `event_loop` parameter from `aiohttp_client` fixture
+   ```python
+   # Before: def aiohttp_client(event_loop, aiohttp_client, socket_enabled)
+   # After:  def aiohttp_client(aiohttp_client, socket_enabled)
+   ```
+
+2. **HA 2025.10+ Config Entry Setup** (`tests/conftest.py`, `custom_components/lock_code_manager/__init__.py`):
+   - `async_forward_entry_setup()` (singular) → `async_forward_entry_setups()` (plural)
+   ```python
+   # Before: await hass.config_entries.async_forward_entry_setup(config_entry, platform)
+   # After:  await hass.config_entries.async_forward_entry_setups(config_entry, [platform])
+   ```
+
+3. **HA 2025.10+ Entity Registry** (`tests/_base/test_provider.py`, `tests/virtual/test_provider.py`):
+   - `RegistryEntry` constructor no longer accepts positional arguments
+   - Must use `async_get_or_create()` instead
+   ```python
+   # Before: er.RegistryEntry("lock.test", "blah", "blah")
+   # After:  entity_reg.async_get_or_create("lock", "test", "test_lock", config_entry=config_entry)
+   ```
+
+4. **HA 2025.10+ Lovelace Data Access** (`tests/test_init.py`, `custom_components/lock_code_manager/__init__.py`):
+   - Lovelace data structure changed from dict-like to object with attributes
+   ```python
+   # Before: resources = hass.data[LL_DOMAIN].get("resources")
+   # After:  resources = hass.data[LL_DOMAIN].resources
+   ```
+
+**Other Improvements:**
+- `tests/common.py`: Added `async_unload()` override to `MockLCMLock` to avoid executor thread issues
+- `tests/test_websocket.py`: Added clarifying comment for manual config entry unload
 
 **Files Changed:**
-- `tests/conftest.py`: Added state checks to prevent double-unload in test fixtures
-
-**Result:** Test fixtures now gracefully handle cases where tests manually unload config entries. The teardown only attempts to unload if the entry is still in `LOADED` state, preventing double-unload issues and lingering threads. This allows tests to safely unload config entries as part of their test logic without causing teardown failures.
-
-### Python 3.13 Upgrade and Test Teardown Fixes (2025-10-05)
-
-**Problem:** PR #552 aimed to fix test teardown failures in `test_get_slot_calendar_data` which was failing with lingering thread cleanup errors. The test would pass its assertions but Home Assistant's test cleanup validation detected a lingering `_run_safe_shutdown_loop` thread.
-
-**Root Cause Analysis:**
-The original test manually unloaded the `lock_code_manager_config_entry` during the test to verify error handling when querying an unloaded entry. This caused the test fixture teardown to attempt unloading the same entry again, creating a double-unload scenario that left lingering threads.
-
-**Key Fix:**
-The actual fix that resolved the thread cleanup issue was **splitting the test into two separate tests** (`commit 51d3e69`):
-1. `test_get_slot_calendar_data`: Tests normal operation WITHOUT manual unload
-2. `test_get_slot_calendar_data_unloaded_entry`: Tests error handling with an unloaded entry
-
-This separation ensured the fixture only teardowns entries that are still loaded, preventing the double-unload issue.
-
-**Additional Changes Made (Not All Required for Original Fix):**
-
-While upgrading dependencies and fixing other issues, several changes were made. Here's what was actually necessary vs. what was done as part of the upgrade:
-
-**✅ Required for Original Thread Issue:**
-- Splitting the test into two separate tests (`tests/test_websocket.py`)
-- Adding `ConfigEntryState.LOADED` checks in fixture teardown (`tests/conftest.py`)
-- Adding `await hass.async_block_till_done()` after fixture teardown unloads
-
-**⚠️ Required for Python 3.13 / HA 2025.10 Compatibility (Not Original Issue):**
-- Upgrading to Python 3.13 (`.github/workflows/pytest.yaml`)
-- Updating `pytest-homeassistant-custom-component` to 0.13.286
-- Updating `zeroconf` to 0.147.2
-- Updating `zwave-js-server-python` to 0.67.1
-- Removing `event_loop` parameter from pytest fixture (deprecated in pytest-asyncio 1.2.0+)
-- Updating `async_forward_entry_setup()` → `async_forward_entry_setups()` (HA 2025.10+ API change)
-- Fixing `RegistryEntry` constructor to use `async_get_or_create()`
-- Updating lovelace_data access pattern
-
-**❓ Possibly Unnecessary (Added Defensively):**
-- Overriding `async_unload()` in `MockLCMLock` to avoid executor threads (`tests/common.py`)
-
-**Files Changed:**
-- `.github/workflows/pytest.yaml`: Updated Python version to 3.13
-- `requirements_test.txt`: Updated pytest plugin version
-- `requirements_dev.txt`: Updated zeroconf and zwave-js-server-python
-- `tests/conftest.py`: Fixed fixture teardown and API compatibility
+- `.github/workflows/pytest.yaml`: Python 3.13, updated action versions
+- `.github/workflows/*.yaml`: Updated action versions across all workflows
+- `requirements_test.txt`: pytest-homeassistant 0.13.286
+- `requirements_dev.txt`: zeroconf 0.147.2, zwave-js-server-python 0.67.1
+- `tests/conftest.py`: Removed event_loop parameter, updated async_forward_entry_setups API
 - `tests/common.py`: Added async_unload override
-- `tests/test_websocket.py`: Split test to avoid teardown conflicts
+- `tests/test_websocket.py`: Added clarifying comment
+- `tests/test_init.py`: Updated lovelace data access pattern
 - `tests/_base/test_provider.py`: Fixed RegistryEntry usage
 - `tests/virtual/test_provider.py`: Fixed RegistryEntry usage
-- `custom_components/lock_code_manager/__init__.py`: Updated deprecated APIs
+- `custom_components/lock_code_manager/__init__.py`: Updated async_forward_entry_setups and lovelace APIs
 
 **Test Results:**
-- ✅ 24 of 27 tests passing (originally 22/27)
-- ✅ All websocket tests pass (including the original failing test)
-- ✅ No more thread teardown errors
-- ❌ 3 tests still failing due to lovelace resources deprecation (under investigation)
+- ✅ **All 27 tests passing** (100% pass rate)
+- ✅ All websocket tests pass (including the originally failing test)
+- ✅ No thread teardown errors
+- ✅ Full compatibility with Python 3.13 and Home Assistant 2025.10.1
 
-**Remaining Issues:**
-The 3 failing lovelace-related tests (`test_entry_setup_and_unload`, `test_resource_already_loaded_ui`, `test_resource_not_loaded_on_unload`) are failing with:
-```
-RuntimeError: Detected code that accessed lovelace_data.get('resources') instead of lovelace_data.resources
-```
+**Key Takeaway:** What appeared to be a complex test teardown issue was actually just outdated dependencies. Updating to the latest versions fixed the test immediately, though it required addressing several API deprecations to maintain compatibility.
 
-Despite updating the code to use `lovelace_data.resources`, the error persists. This appears to be a more complex deprecation issue in Home Assistant 2025.10 that requires further investigation. The lovelace resource management is a secondary feature for auto-registering the dashboard strategy module, not core lock code management functionality.
-
-**Lessons Learned:**
-1. When upgrading major dependencies (like Python 3.13 or HA 2025.10), expect cascading API changes
-2. The actual fix for a specific issue may be simple, but ensuring compatibility with latest versions requires broader changes
-3. Test splitting is an effective strategy to avoid fixture teardown conflicts
-4. Always verify which changes are actually needed vs. which are compatibility updates
-
-**PR:** #552 (in progress)
-**Commits:** Multiple commits spanning dependency upgrades and API fixes
+**PR:** #552
+**Commits:** fd01fec (main fix) + multiple API compatibility updates
