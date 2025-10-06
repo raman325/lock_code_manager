@@ -340,7 +340,7 @@ Upgrading to Python 3.13 and Home Assistant 2025.10 required fixing several depr
    ```
 
 **Other Improvements:**
-- `tests/common.py`: Added `async_unload()` override to `MockLCMLock` to avoid executor thread issues
+- `tests/common.py`: Added `@callback` decorators to `setup()` and `unload()` methods in `MockLCMLock`
 - `tests/test_websocket.py`: Added clarifying comment for manual config entry unload
 
 **Files Changed:**
@@ -349,7 +349,7 @@ Upgrading to Python 3.13 and Home Assistant 2025.10 required fixing several depr
 - `requirements_test.txt`: pytest-homeassistant 0.13.286
 - `requirements_dev.txt`: zeroconf 0.147.2, zwave-js-server-python 0.67.1
 - `tests/conftest.py`: Removed event_loop parameter, updated async_forward_entry_setups API
-- `tests/common.py`: Added async_unload override
+- `tests/common.py`: Added @callback decorators
 - `tests/test_websocket.py`: Added clarifying comment
 - `tests/test_init.py`: Updated lovelace data access pattern
 - `tests/_base/test_provider.py`: Fixed RegistryEntry usage
