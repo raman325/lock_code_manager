@@ -323,6 +323,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             # Get current states once
             active_state = self._get_entity_state(ATTR_ACTIVE)
             pin_state = self._get_entity_state(CONF_PIN)
+            name_state = self._get_entity_state(CONF_NAME)
             code_state = self._get_entity_state(ATTR_CODE)
 
             # Calculate expected in-sync state
@@ -366,7 +367,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 if active_state == STATE_ON:
                     assert pin_state is not None  # Already verified above
                     await self.lock.async_internal_set_usercode(
-                        int(self.slot_num), pin_state, self._get_entity_state(CONF_NAME)
+                        int(self.slot_num), pin_state, name_state
                     )
                     _LOGGER.info(
                         "%s (%s): Set usercode for %s slot %s",
