@@ -254,23 +254,20 @@ async def test_startup_detects_out_of_sync_code(
     assert state, f"Entity {in_sync_entity} not found"
 
     # Initially should be out of sync because lock has "1234" but config wants "9999"
-    assert state.state == STATE_OFF, (
-        "Codes should be detected as out of sync on startup"
-    )
+    assert (
+        state.state == STATE_OFF
+    ), "Codes should be detected as out of sync on startup"
 
     # Verify that NO set_usercode was called during initial startup
     # (the fix prevents operations on first load)
     service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
     set_calls = service_calls.get("set_usercode", [])
-    assert len(set_calls) == 0, (
-        f"Expected no set_usercode calls during initial startup, but found: {set_calls}"
-    )
+    assert (
+        len(set_calls) == 0
+    ), f"Expected no set_usercode calls during initial startup, but found: {set_calls}"
 
     # Now trigger the async_update method which should detect the out-of-sync state
     # and correct it (this simulates the polling behavior)
-    in_sync_binary_sensor = hass.states.get(in_sync_entity)
-    assert in_sync_binary_sensor
-
     # Wait for the next update cycle
     await async_update_entity(hass, in_sync_entity)
     await hass.async_block_till_done()
@@ -332,9 +329,9 @@ async def test_startup_waits_for_valid_active_state(
     in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
 
     # Verify entities exist
-    assert hass.states.get(active_entity_id), (
-        f"Active entity {active_entity_id} not found"
-    )
+    assert hass.states.get(
+        active_entity_id
+    ), f"Active entity {active_entity_id} not found"
     assert hass.states.get(in_sync_entity), f"In-sync entity {in_sync_entity} not found"
 
     # Get the entity object
