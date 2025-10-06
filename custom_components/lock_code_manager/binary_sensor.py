@@ -127,11 +127,11 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
                 continue
 
             if key == CONF_CALENDAR and (hass_state := self.hass.states.get(state)):
-                states[key] = None
-                if hass_state.state == STATE_ON:
-                    states[key] = True
-                elif hass_state.state == STATE_OFF:
-                    states[key] = False
+                states[key] = (
+                    hass_state.state == STATE_ON
+                    if hass_state.state in (STATE_ON, STATE_OFF)
+                    else None
+                )
                 continue
 
             if key == CONF_NUMBER_OF_USES:
