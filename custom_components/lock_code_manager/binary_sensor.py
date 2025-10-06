@@ -321,14 +321,27 @@ class LockCodeManagerCodeSlotInSyncEntity(
             # On initial load, just set the state without triggering sync operations
             # to prevent flapping when Z-Wave JS is still loading
             if not self._initial_state_loaded:
+                # Verify active entity has a valid state (on or off) before proceeding
+                active_state = self._get_entity_state(ATTR_ACTIVE)
+                if active_state not in (STATE_ON, STATE_OFF):
+                    _LOGGER.debug(
+                        "%s (%s): Active entity for %s slot %s has invalid state '%s', waiting for valid state",
+                        self.config_entry.entry_id,
+                        self.config_entry.title,
+                        self.lock.lock.entity_id,
+                        self.slot_num,
+                        active_state,
+                    )
+                    return
+
                 self._initial_state_loaded = True
 
                 # Check if we're in sync or out of sync
-                if self._get_entity_state(ATTR_ACTIVE) == STATE_ON:
+                if active_state == STATE_ON:
                     pin_state = self._get_entity_state(CONF_PIN)
                     code_state = self._get_entity_state(ATTR_CODE)
                     self._attr_is_on = pin_state == code_state
-                elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
+                else:  # active_state == STATE_OFF
                     self._attr_is_on = self._get_entity_state(ATTR_CODE) == ""
 
                 _LOGGER.debug(
