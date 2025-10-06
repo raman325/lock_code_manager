@@ -384,16 +384,14 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
+
+                # Refresh coordinator after sync operation
+                await self.coordinator.async_refresh()
             elif not self._attr_is_on:
                 # Was out of sync, now in sync
                 self._attr_is_on = True
                 self.async_write_ha_state()
             # else: already in sync, no state change needed
-
-            if self._attr_is_on:
-                self.async_write_ha_state()
-            else:
-                await self.coordinator.async_refresh()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
