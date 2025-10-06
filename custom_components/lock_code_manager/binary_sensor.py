@@ -288,18 +288,20 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return
 
         async with self._lock:
-            # Skip sync checks until we've loaded the initial state and verified
-            # all entities are available to prevent startup flapping
-            if not self._initial_state_loaded:
-                # Verify coordinator has valid data for this slot
-                if int(self.slot_num) not in self.coordinator.data:
-                    _LOGGER.debug(
-                        "%s (%s): Slot %s not yet in coordinator data, skipping initial sync check",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        self.slot_num,
-                    )
-                    return
+            # Check prerequisites for initial load
+            if (
+                not self._initial_state_loaded
+                and int(self.slot_num) not in self.coordinator.data
+            ):
+                _LOGGER.debug(
+                    "%s (%s): Slot %s not yet in coordinator data, skipping initial sync check",
+                    self.config_entry.entry_id,
+                    self.config_entry.title,
+                    self.slot_num,
+                )
+                return
+
+            # Build entity ID map and verify all entities exist with valid states
             for key, domain, unique_id in (
                 (CONF_PIN, TEXT_DOMAIN, self._pin_text_unique_id),
                 (CONF_NAME, TEXT_DOMAIN, self._name_text_unique_id),
@@ -318,11 +320,20 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 if self._get_entity_state(key) is None:
                     return
 
-            # On initial load, just set the state without triggering sync operations
-            # to prevent flapping when Z-Wave JS is still loading
+            # Get current states once
+            active_state = self._get_entity_state(ATTR_ACTIVE)
+            pin_state = self._get_entity_state(CONF_PIN)
+            code_state = self._get_entity_state(ATTR_CODE)
+
+            # Calculate expected in-sync state
+            expected_in_sync = (
+                pin_state == code_state
+                if active_state == STATE_ON
+                else code_state == ""
+            )
+
+            # On initial load, verify active state and set initial sync status without operations
             if not self._initial_state_loaded:
-                # Verify active entity has a valid state (on or off) before proceeding
-                active_state = self._get_entity_state(ATTR_ACTIVE)
                 if active_state not in (STATE_ON, STATE_OFF):
                     _LOGGER.debug(
                         "%s (%s): Active entity for %s slot %s has invalid state '%s', waiting for valid state",
@@ -335,15 +346,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     return
 
                 self._initial_state_loaded = True
-
-                # Check if we're in sync or out of sync
-                if active_state == STATE_ON:
-                    pin_state = self._get_entity_state(CONF_PIN)
-                    code_state = self._get_entity_state(ATTR_CODE)
-                    self._attr_is_on = pin_state == code_state
-                else:  # active_state == STATE_OFF
-                    self._attr_is_on = self._get_entity_state(ATTR_CODE) == ""
-
+                self._attr_is_on = expected_in_sync
                 _LOGGER.debug(
                     "%s (%s): Initial state loaded for %s slot %s, in_sync=%s",
                     self.config_entry.entry_id,
@@ -355,13 +358,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self.async_write_ha_state()
                 return
 
-            # Normal operation after initial load
-            if self._get_entity_state(ATTR_ACTIVE) == STATE_ON:
-                if (
-                    pin_state := self._get_entity_state(CONF_PIN)
-                ) is not None and pin_state != self._get_entity_state(ATTR_CODE):
-                    self._attr_is_on = False
-                    self.async_write_ha_state()
+            # Normal operation - perform sync if needed
+            if not expected_in_sync:
+                self._attr_is_on = False
+                self.async_write_ha_state()
+
+                if active_state == STATE_ON:
+                    assert pin_state is not None  # Already verified above
                     await self.lock.async_internal_set_usercode(
                         int(self.slot_num), pin_state, self._get_entity_state(CONF_NAME)
                     )
@@ -372,26 +375,20 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
-                elif self._attr_is_on:
-                    return
-                else:
-                    self._attr_is_on = True
-            elif self._get_entity_state(ATTR_ACTIVE) == STATE_OFF:
-                if self._get_entity_state(ATTR_CODE) != "":
-                    self._attr_is_on = False
-                    self.async_write_ha_state()
+                else:  # active_state == STATE_OFF
                     await self.lock.async_internal_clear_usercode(int(self.slot_num))
                     _LOGGER.info(
-                        "%s (%s): Cleared usercode for lock %s slot %s",
+                        "%s (%s): Cleared usercode for %s slot %s",
                         self.config_entry.entry_id,
                         self.config_entry.title,
                         self.lock.lock.entity_id,
                         self.slot_num,
                     )
-                elif self._attr_is_on:
-                    return
-                else:
-                    self._attr_is_on = True
+            elif not self._attr_is_on:
+                # Was out of sync, now in sync
+                self._attr_is_on = True
+                self.async_write_ha_state()
+            # else: already in sync, no state change needed
 
             if self._attr_is_on:
                 self.async_write_ha_state()
