@@ -59,6 +59,7 @@ class MockLCMLock(BaseLock):
         """Return integration domain."""
         return "test"
 
+    @callback
     def setup(self) -> None:
         """Set up lock."""
         self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
@@ -66,6 +67,7 @@ class MockLCMLock(BaseLock):
             {"codes": {1: "1234", 2: "5678"}, "service_calls": defaultdict(list)},
         )
 
+    @callback
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         self.hass.data[LOCK_DATA].pop(self.lock.entity_id)

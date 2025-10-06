@@ -34,7 +34,7 @@ TEST_DOMAIN = "test"
 
 
 @pytest.fixture(autouse=True)
-def aiohttp_client(event_loop, aiohttp_client, socket_enabled):
+def aiohttp_client(aiohttp_client, socket_enabled):
     """Return aiohttp_client and allow opening sockets."""
     return aiohttp_client
 
@@ -73,8 +73,9 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
         hass: HomeAssistant, config_entry: ConfigEntry
     ) -> bool:
         """Set up test config entry."""
-        for platform in (Platform.CALENDAR, Platform.LOCK):
-            await hass.config_entries.async_forward_entry_setup(config_entry, platform)
+        await hass.config_entries.async_forward_entry_setups(
+            config_entry, [Platform.CALENDAR, Platform.LOCK]
+        )
         return True
 
     async def async_unload_entry_init(

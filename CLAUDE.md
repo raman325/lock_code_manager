@@ -286,3 +286,83 @@ Three critical compatibility issues were identified and fixed to ensure the inte
 **Commit:** `3023fc4`
 
 **Result:** Integration is now fully compatible with Home Assistant Core 2025.7, 2025.8, and 2025.11+. All deprecation warnings are eliminated, and the integration uses current APIs that won't break in future releases.
+
+### Python 3.13 Upgrade and Home Assistant 2025.10 Compatibility (2025-10-05)
+
+**Problem:** The `test_get_slot_calendar_data` test was failing in CI with thread cleanup errors. Initially thought to be a test teardown issue, investigation revealed the actual root cause was outdated dependencies.
+
+**Root Cause:** The test was failing due to outdated dependencies:
+- Python 3.12 (current: 3.13)
+- `pytest-homeassistant-custom-component` 0.13.201 (current: 0.13.286, 85 versions behind)
+- `zeroconf` 0.137.2 (required by HA 2025.10.1: 0.147.2)
+- `zwave-js-server-python` 0.58.1 (required by HA 2025.10.1: 0.67.1)
+
+**Solution:** Updated all dependencies to their latest versions. The test passes as-is with no test logic changes required.
+
+**Dependency Upgrades:**
+- Python 3.12 → **3.13** (`.github/workflows/pytest.yaml`)
+- `pytest-homeassistant-custom-component` 0.13.201 → **0.13.286** (required Python 3.13)
+- `zeroconf` 0.137.2 → **0.147.2**
+- `zwave-js-server-python` 0.58.1 → **0.67.1**
+- GitHub Actions: Updated `actions/checkout`, `actions/setup-python`, and `codecov/codecov-action` to latest versions
+
+**API Compatibility Fixes Required:**
+
+Upgrading to Python 3.13 and Home Assistant 2025.10 required fixing several deprecated APIs:
+
+1. **pytest-asyncio 1.2.0+** (`tests/conftest.py`):
+   - Removed deprecated `event_loop` parameter from `aiohttp_client` fixture
+   ```python
+   # Before: def aiohttp_client(event_loop, aiohttp_client, socket_enabled)
+   # After:  def aiohttp_client(aiohttp_client, socket_enabled)
+   ```
+
+2. **HA 2025.10+ Config Entry Setup** (`tests/conftest.py`, `custom_components/lock_code_manager/__init__.py`):
+   - `async_forward_entry_setup()` (singular) → `async_forward_entry_setups()` (plural)
+   ```python
+   # Before: await hass.config_entries.async_forward_entry_setup(config_entry, platform)
+   # After:  await hass.config_entries.async_forward_entry_setups(config_entry, [platform])
+   ```
+
+3. **HA 2025.10+ Entity Registry** (`tests/_base/test_provider.py`, `tests/virtual/test_provider.py`):
+   - `RegistryEntry` constructor no longer accepts positional arguments
+   - Must use `async_get_or_create()` instead
+   ```python
+   # Before: er.RegistryEntry("lock.test", "blah", "blah")
+   # After:  entity_reg.async_get_or_create("lock", "test", "test_lock", config_entry=config_entry)
+   ```
+
+4. **HA 2025.10+ Lovelace Data Access** (`tests/test_init.py`, `custom_components/lock_code_manager/__init__.py`):
+   - Lovelace data structure changed from dict-like to object with attributes
+   ```python
+   # Before: resources = hass.data[LL_DOMAIN].get("resources")
+   # After:  resources = hass.data[LL_DOMAIN].resources
+   ```
+
+**Other Improvements:**
+- `tests/common.py`: Added `@callback` decorators to `setup()` and `unload()` methods in `MockLCMLock`
+- `tests/test_websocket.py`: Added clarifying comment for manual config entry unload
+
+**Files Changed:**
+- `.github/workflows/pytest.yaml`: Python 3.13, updated action versions
+- `.github/workflows/*.yaml`: Updated action versions across all workflows
+- `requirements_test.txt`: pytest-homeassistant 0.13.286
+- `requirements_dev.txt`: zeroconf 0.147.2, zwave-js-server-python 0.67.1
+- `tests/conftest.py`: Removed event_loop parameter, updated async_forward_entry_setups API
+- `tests/common.py`: Added @callback decorators
+- `tests/test_websocket.py`: Added clarifying comment
+- `tests/test_init.py`: Updated lovelace data access pattern
+- `tests/_base/test_provider.py`: Fixed RegistryEntry usage
+- `tests/virtual/test_provider.py`: Fixed RegistryEntry usage
+- `custom_components/lock_code_manager/__init__.py`: Updated async_forward_entry_setups and lovelace APIs
+
+**Test Results:**
+- ✅ **All 27 tests passing** (100% pass rate)
+- ✅ All websocket tests pass (including the originally failing test)
+- ✅ No thread teardown errors
+- ✅ Full compatibility with Python 3.13 and Home Assistant 2025.10.1
+
+**Key Takeaway:** What appeared to be a complex test teardown issue was actually just outdated dependencies. Updating to the latest versions fixed the test immediately, though it required addressing several API deprecations to maintain compatibility.
+
+**PR:** #552
+**Commits:** fd01fec (main fix) + multiple API compatibility updates

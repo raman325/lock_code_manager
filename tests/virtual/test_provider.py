@@ -14,12 +14,24 @@ from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 async def test_door_lock(hass: HomeAssistant):
     """Test a lock entity."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry()
+    config_entry.add_to_hass(hass)
+
+    # Create a proper registry entry
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
     lock = VirtualLock(
         hass,
         dr.async_get(hass),
-        er.async_get(hass),
-        MockConfigEntry(),
-        er.RegistryEntry("lock.test", "blah", "blah"),
+        entity_reg,
+        config_entry,
+        lock_entity,
     )
     assert await lock.async_setup() is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)

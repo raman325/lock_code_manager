@@ -2,6 +2,7 @@
 .venv
 venv
 *.pyc
+.claude
 .coverage
 .pytest_cache
 .mypy_cache

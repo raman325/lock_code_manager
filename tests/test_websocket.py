@@ -70,9 +70,10 @@ async def test_get_slot_calendar_data(
     msg = await ws_client.receive_json()
     assert not msg["success"]
 
+    # Unload the entry
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
 
-    # Try API call with entry ID
+    # Try API call with unloaded entry ID - should fail
     await ws_client.send_json(
         {
             "id": 5,
