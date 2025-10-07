@@ -460,6 +460,55 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 **Status:** Not started - Needs comprehensive audit first
 
+#### 3c. Move Sync Logic to Coordinator
+
+**Initial Analysis:** The startup flapping fix (see Bug Fixes section) added `_initial_state_loaded` flag to handle race conditions during startup. This complexity exists because the in-sync binary sensor reads state from other entities and compares with coordinator data, creating timing dependencies.
+
+**Current Architecture Issues:**
+- In-sync binary sensor reads PIN config from text entities via `_get_entity_state()`
+- Reads lock state from coordinator data
+- Compares them and triggers sync operations (set_usercode/clear_usercode)
+- Cross-entity dependencies create race conditions during startup
+- Requires `_initial_state_loaded` flag to prevent flapping
+
+**Proposed Solution:**
+Move sync logic entirely into the coordinator:
+- Coordinator already has access to both desired state (from config) and actual state (from lock)
+- Coordinator performs sync operations during its `_async_update_data()` cycle
+- Binary sensor becomes read-only, just displays coordinator's computed in-sync status
+- Text/number/switch entities remain as config views
+
+**Example Implementation:**
+```python
+# In coordinator._async_update_data()
+actual_code = await self.provider.get_usercodes()
+desired_code = self.config_entry.data[slot]["pin"]
+
+if actual_code != desired_code and slot_enabled:
+    await self.provider.set_usercode(slot, desired_code)
+
+return {"in_sync": actual_code == desired_code, "actual_code": actual_code}
+```
+
+**Benefits:**
+- Eliminates cross-entity state reading
+- Removes `_initial_state_loaded` flag and startup detection logic
+- No race conditions during startup
+- Simpler, more centralized sync logic
+- Coordinator is single source of truth
+
+**Considerations:**
+- Major architectural change
+- Would need to update binary sensor to be read-only
+- Config updates still flow through text/switch entities
+- Need to ensure coordinator runs sync on config changes
+
+**Estimated Effort:** High (16-24 hours) - Significant architectural refactoring
+
+**Priority:** Medium - Would eliminate startup complexity and simplify architecture
+
+**Status:** Not started - Consider after current PR is merged
+
 ---
 
 ### 4. Advanced Calendar Configuration

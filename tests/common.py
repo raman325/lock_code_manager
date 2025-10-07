@@ -93,6 +93,12 @@ class MockLCMLock(BaseLock):
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
+        # During test teardown, the data might already be cleaned up
+        if (
+            LOCK_DATA not in self.hass.data
+            or self.lock.entity_id not in self.hass.data[LOCK_DATA]
+        ):
+            return
         self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"][code_slot] = usercode
         self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
             "set_usercode"
@@ -100,6 +106,12 @@ class MockLCMLock(BaseLock):
 
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
+        # During test teardown, the data might already be cleaned up
+        if (
+            LOCK_DATA not in self.hass.data
+            or self.lock.entity_id not in self.hass.data[LOCK_DATA]
+        ):
+            return
         self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot, None)
         self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
             "clear_usercode"
