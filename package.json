@@ -27,7 +27,7 @@
     "@babel/preset-env": "^7.28.3",
     "@rollup/plugin-babel": "^6.1.0",
     "@rollup/plugin-json": "^6.1.0",
-    "@rollup/plugin-node-resolve": "^16.0.2",
+    "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.1.4",
     "@stylistic/eslint-plugin-js": "^3.1.0",
