@@ -29,7 +29,7 @@
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^0.4.4",
-    "@rollup/plugin-typescript": "^12.1.4",
+    "@rollup/plugin-typescript": "^12.3.0",
     "@stylistic/eslint-plugin-js": "^3.1.0",
     "@tsconfig/node20": "^20.1.6",
     "@types/node": "^24.8.1",
