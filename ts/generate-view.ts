@@ -66,8 +66,9 @@ export async function generateView(
     ];
 
     const useFoldEntityRow =
-        lovelaceResources.filter((resource) => resource.url.includes(FOLD_ENTITY_ROW_SEARCH_STRING))
-            .length > 0;
+        lovelaceResources.filter((resource) =>
+            resource.url?.includes(FOLD_ENTITY_ROW_SEARCH_STRING)
+        ).length > 0;
 
     const cards = slotMappings.map((slotMapping) =>
         generateSlotCard(
@@ -161,7 +162,7 @@ function generateSlotCard(
                 entities: [
                     ...generateEntityCards(configEntry, slotMapping.mainEntities),
                     DIVIDER_CARD,
-                    ...(slotMapping.pinActiveEntity
+                    ...(slotMapping.pinActiveEntity?.entity_id
                         ? [
                               {
                                   entity: slotMapping.pinActiveEntity.entity_id,
@@ -169,7 +170,7 @@ function generateSlotCard(
                               }
                           ]
                         : []),
-                    ...(slotMapping.codeEventEntity
+                    ...(slotMapping.codeEventEntity?.entity_id
                         ? [
                               {
                                   entity: slotMapping.codeEventEntity.entity_id,
