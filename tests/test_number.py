@@ -2,7 +2,8 @@
 
 import logging
 
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_STATE, STATE_LOCKED, STATE_UNLOCKED
+from homeassistant.components.lock import LockState
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_STATE
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import (
@@ -35,12 +36,12 @@ async def test_number_entity(
         {
             ATTR_NOTIFICATION_SOURCE: "event",
             ATTR_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_STATE: STATE_UNLOCKED,
+            ATTR_STATE: LockState.UNLOCKED,
             ATTR_ACTION_TEXT: "test",
             ATTR_CODE_SLOT: 2,
             ATTR_CODE_SLOT_NAME: "test2",
-            ATTR_FROM: STATE_LOCKED,
-            ATTR_TO: STATE_UNLOCKED,
+            ATTR_FROM: LockState.LOCKED,
+            ATTR_TO: LockState.UNLOCKED,
         },
     )
 
