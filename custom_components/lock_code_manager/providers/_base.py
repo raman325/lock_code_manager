@@ -8,6 +8,7 @@ from datetime import timedelta
 import functools
 from typing import Any, Literal, final
 
+from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -15,8 +16,6 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_STATE,
     CONF_NAME,
-    STATE_LOCKED,
-    STATE_UNLOCKED,
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -313,11 +312,11 @@ class BaseLock:
         from_state: str | None = None
         to_state: str | None = None
         if to_locked:
-            from_state = STATE_UNLOCKED
-            to_state = STATE_LOCKED
+            from_state = LockState.UNLOCKED
+            to_state = LockState.LOCKED
         elif to_locked is False:
-            from_state = STATE_LOCKED
-            to_state = STATE_UNLOCKED
+            from_state = LockState.LOCKED
+            to_state = LockState.UNLOCKED
 
         notification_source: Literal["event", "state"] | None = None
         extra_data: dict[str, Any] | None = None

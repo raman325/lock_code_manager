@@ -6,8 +6,9 @@ import copy
 import logging
 from typing import Any, final
 
+from homeassistant.components.lock import LockState
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNLOCKED
+from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE
 from homeassistant.core import (
     Event,
     EventStateChangedData,
@@ -203,7 +204,7 @@ class BaseLockCodeManagerEntity(Entity):
                 event_data[ATTR_ENTITY_ID] == lock.lock.entity_id for lock in self.locks
             )
             and event_data[ATTR_CODE_SLOT] == int(self.slot_num)
-            and event_data[ATTR_TO] == STATE_UNLOCKED
+            and event_data[ATTR_TO] == LockState.UNLOCKED
         )
 
     @callback
