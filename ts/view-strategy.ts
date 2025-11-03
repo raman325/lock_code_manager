@@ -48,10 +48,23 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                 config_entry_id !== undefined
                     ? `with ID \`${config_entry_id}\``
                     : `called \`${config_entry_title}\``;
+
+            // Log error details for debugging
+            // eslint-disable-next-line no-console
+            console.error('[Lock Code Manager] Error loading view strategy:', {
+                config_entry_id,
+                config_entry_title,
+                error: err instanceof Error ? err.message : String(err),
+                stack: err instanceof Error ? err.stack : undefined
+            });
+
             return {
                 cards: [
                     {
-                        content: `## ERROR: No Lock Code Manager configuration ${content} found!`,
+                        content:
+                            `## ERROR: No Lock Code Manager configuration ${content} found!` +
+                            `\n\n**Error Details:** ${err instanceof Error ? err.message : String(err)}` +
+                            `\n\nCheck the browser console (F12) for more details.`,
                         type: 'markdown'
                     }
                 ],
