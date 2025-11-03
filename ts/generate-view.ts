@@ -34,6 +34,15 @@ export async function generateView(
     const callData = {
         type: 'lock_code_manager/get_config_entry_entities'
     };
+
+    // Log diagnostic info
+    // eslint-disable-next-line no-console
+    console.debug('[Lock Code Manager] Generating view:', {
+        configEntry: configEntry.title,
+        entityCount: entities.length,
+        entryId: configEntry.entry_id
+    });
+
     const [configEntryData, lovelaceResources] = await Promise.all([
         hass.callWS<LockCodeManagerConfigEntryData>({
             config_entry_id: configEntry.entry_id,
@@ -239,6 +248,25 @@ function getSlotMapping(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
     const calendarEntityId: string | null | undefined = configEntryData.slots[slotNum];
+
+    // Log missing entities for debugging
+    // eslint-disable-next-line no-console
+    if (!pinActiveEntity) {
+        console.warn(`[Lock Code Manager] Slot ${slotNum}: Missing pinActiveEntity`);
+    }
+    // eslint-disable-next-line no-console
+    if (!codeEventEntity) {
+        console.debug(
+            `[Lock Code Manager] Slot ${slotNum}: No codeEventEntity (expected if no events)`
+        );
+    }
+    // eslint-disable-next-line no-console
+    if (mainEntities.length === 0) {
+        console.warn(
+            `[Lock Code Manager] Slot ${slotNum}: No main entities found (name, PIN, etc.)`
+        );
+    }
+
     return {
         calendarEntityId,
         codeEventEntity,
