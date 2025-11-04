@@ -46,6 +46,7 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .const import (
     ATTR_SETUP_TASKS,
@@ -478,7 +479,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 )
                 try:
                     await coordinator.async_config_entry_first_refresh()
-                except HomeAssistantError as err:
+                except UpdateFailed as err:
                     _LOGGER.warning(
                         "%s (%s): Failed to fetch initial data for lock %s: %s. "
                         "Entities will be created but unavailable until lock is ready.",
