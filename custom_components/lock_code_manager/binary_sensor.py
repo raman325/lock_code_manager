@@ -238,7 +238,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         ):
             return
 
-        _LOGGER.info(
+        _LOGGER.debug(
             "Code slot %s on %s is out of sync, syncing now",
             self.slot_num,
             self.lock.lock.entity_id,
