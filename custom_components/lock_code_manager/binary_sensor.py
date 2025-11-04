@@ -234,6 +234,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             or not (state := self.hass.states.get(self.lock.lock.entity_id))
             or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
             or not self.coordinator.last_update_success
+            or not await self.lock.async_internal_is_connection_up()
         ):
             return
 
@@ -305,16 +306,29 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 ) is not None and pin_state != self._get_entity_state(ATTR_CODE):
                     self._attr_is_on = False
                     self.async_write_ha_state()
-                    await self.lock.async_internal_set_usercode(
-                        int(self.slot_num), pin_state, self._get_entity_state(CONF_NAME)
-                    )
-                    _LOGGER.info(
-                        "%s (%s): Set usercode for %s slot %s",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        self.lock.lock.entity_id,
-                        self.slot_num,
-                    )
+                    try:
+                        await self.lock.async_internal_set_usercode(
+                            int(self.slot_num),
+                            pin_state,
+                            self._get_entity_state(CONF_NAME),
+                        )
+                        _LOGGER.info(
+                            "%s (%s): Set usercode for %s slot %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                        )
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "%s (%s): Unable to set usercode for %s slot %s: %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                            err,
+                        )
+                        return
                 elif self._attr_is_on:
                     return
                 else:
@@ -323,14 +337,27 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 if self._get_entity_state(ATTR_CODE) != "":
                     self._attr_is_on = False
                     self.async_write_ha_state()
-                    await self.lock.async_internal_clear_usercode(int(self.slot_num))
-                    _LOGGER.info(
-                        "%s (%s): Cleared usercode for lock %s slot %s",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        self.lock.lock.entity_id,
-                        self.slot_num,
-                    )
+                    try:
+                        await self.lock.async_internal_clear_usercode(
+                            int(self.slot_num)
+                        )
+                        _LOGGER.info(
+                            "%s (%s): Cleared usercode for lock %s slot %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                        )
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "%s (%s): Unable to clear usercode for %s slot %s: %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                            err,
+                        )
+                        return
                 elif self._attr_is_on:
                     return
                 else:

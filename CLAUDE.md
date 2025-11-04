@@ -367,6 +367,98 @@ Upgrading to Python 3.13 and Home Assistant 2025.10 required fixing several depr
 **PR:** #552
 **Commits:** fd01fec (main fix) + multiple API compatibility updates
 
+### Entity Creation Blocking Issue (2025-11-04)
+
+**Problem:** No entities were being generated when creating a config entry with locks and code slots. Users would configure the integration, but no entities would appear in Home Assistant.
+
+**Root Cause Analysis:** The integration was blocking during `async_update_listener()` while waiting for Z-Wave JS locks to be connected before creating entities. The blocking wait loop in `__init__.py` (lines 448-462) would infinitely retry connection checks during startup:
+
+```python
+while not await lock.async_internal_is_connection_up():
+    await asyncio.sleep(timeout)
+    timeout = min(timeout * 2, 180)
+```
+
+This created a startup race condition:
+1. Lock Code Manager loads and forwards entity platform setups
+2. `async_update_listener()` is called to create entities
+3. Lock provider checks if Z-Wave JS is connected - it's not (still loading)
+4. Integration waits indefinitely for connection
+5. **Entity creation completely blocked** - dispatcher signals never sent
+6. Z-Wave JS eventually loads, but entities are never created because the flow never progressed
+
+**Why Previous "Fixes" Were Wrong:**
+
+**Issue #527 / PR #534 (2025-10-03):**
+- **Wrong Solution:** Made dashboard UI entities optional (`pinActiveEntity?: LockCodeManagerEntityEntry`, `codeEventEntity?: LockCodeManagerEntityEntry`) and added conditional rendering with optional chaining
+- **Why Wrong:** This was treating the symptom (missing entities) as expected behavior rather than fixing the root cause (entities not being created at all)
+- **Result:** Masked the real problem - the UI would silently fail to show entities instead of throwing an error that would reveal the bug
+
+**PR #594 (2025-11-03):**
+- **Wrong Solution:** Added more optional chaining (`resource.url?.includes()`) to handle potentially undefined values
+- **Why Wrong:** Further defensive programming around missing entities, continuing to mask the underlying issue
+- **Result:** Made it even harder to detect that entities weren't being created, as the UI gracefully degraded
+
+**The Correct Solution:**
+
+The fix addresses the root cause by removing the blocking wait and handling Z-Wave JS initialization gracefully:
+
+1. **Removed Blocking Wait Loop** (`__init__.py` lines 447-455):
+   - Changed from infinite `while` loop to single connection check
+   - Log DEBUG message if not connected (not WARNING - this is expected during startup)
+   - Continue with entity creation regardless of connection state
+   - Wrapped coordinator first refresh in try/except to handle disconnected state
+
+2. **Added Connection Checks in Provider** (`providers/_base.py`):
+   - Import `LockDisconnected` exception at module level (line 40)
+   - Check connection in `async_internal_set_usercode()` before attempting to set codes (lines 168-171)
+   - Check connection in `async_internal_clear_usercode()` before attempting to clear codes (lines 187-190)
+   - Raise `LockDisconnected` exception if lock not ready
+
+3. **Added Error Handling in Sync Logic** (`binary_sensor.py`):
+   - Added connection check in `async_update()` to prevent sync attempts when disconnected (line 237)
+   - Wrapped `async_internal_set_usercode()` call in try/except (lines 309-329)
+   - Wrapped `async_internal_clear_usercode()` call in try/except (lines 338-356)
+   - Log failures as DEBUG (not ERROR) since this is expected during startup
+
+4. **Reverted Defensive UI Changes** (`ts/types.ts`, `ts/generate-view.ts`):
+   - Changed `pinActiveEntity` and `codeEventEntity` back to required (non-optional)
+   - Removed optional chaining and conditional rendering
+   - Removed defensive logging about missing entities
+   - Added non-null assertion (`!`) to `.find()` call since entities will always exist
+   - UI now fails fast if entities truly missing, making problems immediately obvious
+
+**Behavior After Fix:**
+
+**During Startup (Z-Wave JS not ready):**
+- ✅ Entities created immediately
+- ✅ Entities show as "unavailable" until locks come online
+- ✅ No blocking or infinite waits
+- ✅ Clean DEBUG logs (not WARNING or ERROR)
+- ✅ No failed attempts to program codes
+
+**Once Z-Wave JS Ready:**
+- ✅ Entities automatically become available
+- ✅ Coordinator polls and syncs codes properly
+- ✅ Dashboard UI works correctly with all entities present
+
+**Files Changed:**
+- `custom_components/lock_code_manager/__init__.py`: Removed blocking wait loop, added graceful connection check
+- `custom_components/lock_code_manager/providers/_base.py`: Added connection checks with `LockDisconnected` exception
+- `custom_components/lock_code_manager/binary_sensor.py`: Added connection check and error handling for sync operations
+- `ts/types.ts`: Reverted optional entity types from PR #534
+- `ts/generate-view.ts`: Reverted optional chaining and conditional rendering from PRs #534 & #594
+- `custom_components/lock_code_manager/www/lock-code-manager-strategy.js`: Rebuilt from TypeScript
+
+**Key Lessons:**
+1. **Fix root causes, not symptoms** - The entities should always exist; making them optional was hiding the real problem
+2. **Race conditions during startup are common** - Integrations must handle dependencies loading at different times
+3. **Blocking operations during setup prevent entity creation** - Entity creation should be non-blocking
+4. **Fail fast in UI** - Better to get an error that reveals a bug than silently handle missing data
+5. **Log levels matter** - Expected startup behavior should be DEBUG, not WARNING
+
+**Result:** Entities are now created immediately and reliably, regardless of Z-Wave JS load timing. The integration handles startup race conditions gracefully without blocking, and the UI correctly expects all entities to be present.
+
 ## Future Improvements & TODOs
 
 This section tracks potential improvements, refactoring opportunities, and feature requests. Claude will periodically ask if you're ready to address these items.

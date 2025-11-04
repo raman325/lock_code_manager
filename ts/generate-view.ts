@@ -34,6 +34,15 @@ export async function generateView(
     const callData = {
         type: 'lock_code_manager/get_config_entry_entities'
     };
+
+    // Log diagnostic info
+    // eslint-disable-next-line no-console
+    console.debug('[Lock Code Manager] Generating view:', {
+        configEntry: configEntry.title,
+        entityCount: entities.length,
+        entryId: configEntry.entry_id
+    });
+
     const [configEntryData, lovelaceResources] = await Promise.all([
         hass.callWS<LockCodeManagerConfigEntryData>({
             config_entry_id: configEntry.entry_id,
@@ -66,9 +75,8 @@ export async function generateView(
     ];
 
     const useFoldEntityRow =
-        lovelaceResources.filter((resource) =>
-            resource.url?.includes(FOLD_ENTITY_ROW_SEARCH_STRING)
-        ).length > 0;
+        lovelaceResources.filter((resource) => resource.url.includes(FOLD_ENTITY_ROW_SEARCH_STRING))
+            .length > 0;
 
     const cards = slotMappings.map((slotMapping) =>
         generateSlotCard(
@@ -162,22 +170,14 @@ function generateSlotCard(
                 entities: [
                     ...generateEntityCards(configEntry, slotMapping.mainEntities),
                     DIVIDER_CARD,
-                    ...(slotMapping.pinActiveEntity?.entity_id
-                        ? [
-                              {
-                                  entity: slotMapping.pinActiveEntity.entity_id,
-                                  name: 'PIN active'
-                              }
-                          ]
-                        : []),
-                    ...(slotMapping.codeEventEntity?.entity_id
-                        ? [
-                              {
-                                  entity: slotMapping.codeEventEntity.entity_id,
-                                  name: 'PIN last used'
-                              }
-                          ]
-                        : []),
+                    {
+                        entity: slotMapping.pinActiveEntity.entity_id,
+                        name: 'PIN active'
+                    },
+                    {
+                        entity: slotMapping.codeEventEntity.entity_id,
+                        name: 'PIN last used'
+                    },
                     ...maybeGenerateFoldEntityRowConditionCard(
                         configEntry,
                         slotMapping.conditionEntities,
@@ -220,7 +220,7 @@ function getSlotMapping(
     const conditionEntities: LockCodeManagerEntityEntry[] = [];
     const codeSensorEntities: LockCodeManagerEntityEntry[] = [];
     const inSyncEntities: LockCodeManagerEntityEntry[] = [];
-    let codeEventEntity: LockCodeManagerEntityEntry | undefined;
+    let codeEventEntity: LockCodeManagerEntityEntry;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
@@ -240,6 +240,7 @@ function getSlotMapping(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     );
     const calendarEntityId: string | null | undefined = configEntryData.slots[slotNum];
+
     return {
         calendarEntityId,
         codeEventEntity,

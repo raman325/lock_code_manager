@@ -37,6 +37,7 @@ from ..const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from ..data import get_entry_data
+from ..exceptions import LockDisconnected
 from .const import LOGGER
 
 
@@ -164,6 +165,10 @@ class BaseLock:
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
+        if not await self.async_is_connection_up():
+            raise LockDisconnected(
+                f"Cannot set usercode on {self.lock.entity_id} - lock not connected"
+            )
         async with self._aio_lock:
             await self.async_set_usercode(code_slot, usercode, name=name)
 
@@ -178,6 +183,10 @@ class BaseLock:
     @final
     async def async_internal_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
+        if not await self.async_is_connection_up():
+            raise LockDisconnected(
+                f"Cannot clear usercode on {self.lock.entity_id} - lock not connected"
+            )
         async with self._aio_lock:
             await self.async_clear_usercode(code_slot)
 

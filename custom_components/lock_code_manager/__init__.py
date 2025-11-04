@@ -442,22 +442,17 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 )
                 await lock.async_setup()
 
-            # Make sure lock is up before we proceed
-            timeout = 1
-
-            while not await lock.async_internal_is_connection_up():
+            # Check if lock is connected (but don't wait - entity creation doesn't require it)
+            is_connected = await lock.async_internal_is_connection_up()
+            if not is_connected:
                 _LOGGER.debug(
-                    (
-                        "%s (%s): Lock %s is not connected to Home Assistant yet, waiting %s "
-                        "seconds before retrying"
-                    ),
+                    "%s (%s): Lock %s is not connected yet. Entities will be created "
+                    "but will be unavailable until the lock comes online. This is normal "
+                    "during startup if Z-Wave JS is still initializing.",
                     entry_id,
                     entry_title,
                     lock.lock.entity_id,
-                    timeout,
                 )
-                await asyncio.sleep(timeout)
-                timeout = min(timeout * 2, 180)
 
             if lock_entity_id in hass_data[COORDINATORS]:
                 _LOGGER.debug(
@@ -481,7 +476,17 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 ][COORDINATORS][lock_entity_id] = LockUsercodeUpdateCoordinator(
                     hass, lock
                 )
-                await coordinator.async_config_entry_first_refresh()
+                try:
+                    await coordinator.async_config_entry_first_refresh()
+                except Exception as err:
+                    _LOGGER.warning(
+                        "%s (%s): Failed to fetch initial data for lock %s: %s. "
+                        "Entities will be created but unavailable until lock is ready.",
+                        entry_id,
+                        entry_title,
+                        lock_entity_id,
+                        err,
+                    )
             for slot_num in new_slots:
                 _LOGGER.debug(
                     "%s (%s): Adding lock %s slot %s sensor and event entity",
