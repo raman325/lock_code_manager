@@ -444,8 +444,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 await lock.async_setup()
 
             # Check if lock is connected (but don't wait - entity creation doesn't require it)
-            is_connected = await lock.async_internal_is_connection_up()
-            if not is_connected:
+            if not await lock.async_internal_is_connection_up():
                 _LOGGER.debug(
                     "%s (%s): Lock %s is not connected yet. Entities will be created "
                     "but will be unavailable until the lock comes online. This is normal "
