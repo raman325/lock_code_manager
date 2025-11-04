@@ -38,4 +38,4 @@ class HacsCard extends LitElement {
     }
 }
 
-customElements.define('hacs-card', HacsCard);
+customElements.define('custom:hacs-card', HacsCard);
