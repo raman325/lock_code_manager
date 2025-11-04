@@ -478,7 +478,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 )
                 try:
                     await coordinator.async_config_entry_first_refresh()
-                except Exception as err:
+                except HomeAssistantError as err:
                     _LOGGER.warning(
                         "%s (%s): Failed to fetch initial data for lock %s: %s. "
                         "Entities will be created but unavailable until lock is ready.",

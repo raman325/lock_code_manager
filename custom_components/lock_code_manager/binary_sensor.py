@@ -29,6 +29,7 @@ from homeassistant.core import (
     State,
     callback,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
@@ -319,7 +320,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                             self.lock.lock.entity_id,
                             self.slot_num,
                         )
-                    except Exception as err:
+                    except HomeAssistantError as err:
                         _LOGGER.debug(
                             "%s (%s): Unable to set usercode for %s slot %s: %s",
                             self.config_entry.entry_id,
@@ -348,7 +349,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                             self.lock.lock.entity_id,
                             self.slot_num,
                         )
-                    except Exception as err:
+                    except HomeAssistantError as err:
                         _LOGGER.debug(
                             "%s (%s): Unable to clear usercode for %s slot %s: %s",
                             self.config_entry.entry_id,
