@@ -35,14 +35,6 @@ export async function generateView(
         type: 'lock_code_manager/get_config_entry_entities'
     };
 
-    // Log diagnostic info
-    // eslint-disable-next-line no-console
-    console.debug('[Lock Code Manager] Generating view:', {
-        configEntry: configEntry.title,
-        entityCount: entities.length,
-        entryId: configEntry.entry_id
-    });
-
     const [configEntryData, lovelaceResources] = await Promise.all([
         hass.callWS<LockCodeManagerConfigEntryData>({
             config_entry_id: configEntry.entry_id,

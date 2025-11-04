@@ -235,14 +235,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
             or not (state := self.hass.states.get(self.lock.lock.entity_id))
             or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
             or not self.coordinator.last_update_success
-            or not await self.lock.async_internal_is_connection_up()
         ):
             return
 
-        _LOGGER.error(
-            "Updating %s code slot %s because it is out of sync",
-            self.lock.lock.entity_id,
+        _LOGGER.info(
+            "Code slot %s on %s is out of sync, syncing now",
             self.slot_num,
+            self.lock.lock.entity_id,
         )
         await self._async_update_state()
 
