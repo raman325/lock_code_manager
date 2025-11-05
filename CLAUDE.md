@@ -463,7 +463,84 @@ The fix addresses the root cause by removing the blocking wait and handling Z-Wa
 
 This section tracks potential improvements, refactoring opportunities, and feature requests. Claude will periodically ask if you're ready to address these items.
 
-### 1. Remove Commented Code
+### 1. Fix Locks Out of Sync Issue
+
+**Problem:** Users report that locks go out of sync and the integration doesn't automatically re-sync them. The in-sync binary sensor shows "off" but the integration doesn't trigger automatic sync operations to fix the issue.
+
+**Initial Analysis:** Based on PR review comments, the current auto-sync logic has issues:
+
+**Current Behavior (in `binary_sensor.py`):**
+- `LockCodeManagerCodeSlotInSyncEntity.async_update()` (lines 230-246) attempts to auto-sync when:
+  - Lock is not locked (`self._lock.locked()` is False)
+  - Entity shows out of sync (`self.is_on` is False)
+  - Lock state is available
+  - Coordinator successfully updated
+- If conditions met, calls `_async_update_state()` to perform sync
+
+**Issues Identified:**
+1. **Insufficient sync triggers**: Only runs during polling interval (default 30 seconds from `SCAN_INTERVAL`)
+2. **Lock condition problematic**: `self._lock.locked()` check may prevent syncing when it should happen
+3. **No user-initiated sync**: No manual way to force re-sync
+4. **Polling dependency**: Relies entirely on periodic polling, doesn't respond to state changes
+
+**Root Cause Areas to Investigate:**
+1. **When does `async_update()` actually get called?**
+   - Currently only during coordinator updates (polling)
+   - State change events don't trigger sync attempts
+
+2. **What does `self._lock.locked()` check?**
+   - This is an `asyncio.Lock()` (line 216), not lock state
+   - Prevents concurrent sync operations
+   - May block legitimate sync attempts if lock held
+
+3. **Why doesn't state change listener trigger sync?**
+   - `async_track_state_change_filtered()` (line 378) calls `_async_update_state()`
+   - But `_async_update_state()` has guards that may prevent action (lines 264-282)
+   - May need to trigger sync more aggressively on state changes
+
+**Proposed Solutions:**
+
+**Option 1: More Aggressive Auto-Sync**
+- Remove or adjust `self._lock.locked()` check in `async_update()`
+- Add retry logic with exponential backoff
+- Trigger sync on any PIN/name/active state change, not just during polling
+- Add sync on coordinator refresh success
+
+**Option 2: Manual Sync Service**
+- Add `lock_code_manager.sync_slot` service action
+- Add `lock_code_manager.sync_all_slots` service action
+- Allow users to manually trigger sync when they notice issues
+- Could be called from automations
+
+**Option 3: Better State Change Detection**
+- Enhance `_async_update_state()` to be more responsive
+- Remove guards that prevent sync on legitimate state changes
+- Add more detailed logging to understand why syncs don't happen
+- Consider firing HA events when sync fails repeatedly
+
+**Investigation Steps:**
+1. Add detailed logging to understand when `async_update()` is called
+2. Add logging to show why sync operations are skipped
+3. Monitor `self._lock.locked()` state to see if it blocks syncs
+4. Review state change event handling to ensure it triggers appropriately
+5. Test with deliberately out-of-sync locks to reproduce issue
+
+**Files to Modify:**
+- `custom_components/lock_code_manager/binary_sensor.py`: Lines 230-246 (async_update), 254-370 (_async_update_state)
+- Potentially add new service actions in `custom_components/lock_code_manager/__init__.py`
+- Add tests in `tests/test_binary_sensor.py` for sync behavior
+
+**Estimated Effort:** High (16-24 hours) - Requires investigation, testing, and careful changes to sync logic
+
+**Priority:** **HIGH** - User-reported issue affecting core functionality
+
+**Status:** Not started - Needs investigation phase first
+
+**Related Issues:** Review comments on PR indicating locks don't auto-sync
+
+---
+
+### 2. Remove Commented Code
 
 **Initial Analysis:** Search codebase for commented-out code blocks and remove dead code to improve maintainability.
 
@@ -480,7 +557,7 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 ---
 
-### 2. Simplify Tests
+### 3. Simplify Tests
 
 **Initial Analysis:** Review test suite for duplication, overly complex setup, and opportunities to use shared fixtures more effectively.
 
@@ -503,9 +580,9 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 ---
 
-### 3. Simplify Code
+### 4. Simplify Code
 
-#### 3a. Remove Dispatcher Complexity
+#### 4a. Remove Dispatcher Complexity
 
 **Initial Analysis:** The integration heavily uses Home Assistant's dispatcher system for dynamic entity management. Evaluate if this can be simplified or if there's a more modern approach.
 
@@ -530,7 +607,7 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 **Status:** Not started - Needs design review first
 
-#### 3b. Remove Other Unnecessary Complexity
+#### 4b. Remove Other Unnecessary Complexity
 
 **Initial Analysis:** General code review to identify and eliminate unnecessary complexity.
 
@@ -554,7 +631,7 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 ---
 
-### 4. Advanced Calendar Configuration
+### 5. Advanced Calendar Configuration
 
 **Feature Request:** Allow slot number and PIN to be configured directly in calendar event metadata, eliminating need for separate slot configuration.
 
@@ -608,7 +685,7 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 ---
 
-### 5. Add Relevant New Home Assistant Core Features
+### 6. Add Relevant New Home Assistant Core Features
 
 **Analysis:** Review Home Assistant release notes from 2024.1 through 2025.10 and integrate relevant new features.
 
@@ -651,7 +728,7 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 ---
 
-### 6. Add Support for Additional Lock Providers
+### 7. Add Support for Additional Lock Providers
 
 **Current Providers:**
 - Z-Wave JS (`zwave_js.py`)
@@ -766,7 +843,7 @@ For each new provider:
 
 ### Additional Improvement Ideas
 
-#### 7. Improve Dashboard UI/UX
+#### 8. Improve Dashboard UI/UX
 
 **Ideas:**
 - Add visual indicator when codes are out of sync
@@ -784,7 +861,7 @@ For each new provider:
 
 ---
 
-#### 8. Add Service Actions
+#### 9. Add Service Actions
 
 **Ideas:**
 - `lock_code_manager.set_temporary_code` - Create time-limited PIN
@@ -801,7 +878,7 @@ For each new provider:
 
 ---
 
-#### 9. Enhanced Notifications
+#### 10. Enhanced Notifications
 
 **Ideas:**
 - Notify when PIN is used (already have event entity, could add notification action)
@@ -817,7 +894,7 @@ For each new provider:
 
 ---
 
-#### 10. Configuration Validation
+#### 11. Configuration Validation
 
 **Ideas:**
 - Warn if PIN is too simple (e.g., "1234", "0000")

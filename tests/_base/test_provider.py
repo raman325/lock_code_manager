@@ -42,9 +42,9 @@ async def test_base(hass: HomeAssistant):
         await lock.async_internal_is_connection_up()
     with pytest.raises(HomeAssistantError):
         await lock.async_internal_hard_refresh_codes()
-    with pytest.raises(HomeAssistantError):
+    with pytest.raises(NotImplementedError):
         await lock.async_internal_clear_usercode(1)
-    with pytest.raises(HomeAssistantError):
+    with pytest.raises(NotImplementedError):
         await lock.async_internal_set_usercode(1, 1)
     with pytest.raises(NotImplementedError):
         await lock.async_internal_get_usercodes()

@@ -93,17 +93,19 @@ class MockLCMLock(BaseLock):
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"][code_slot] = usercode
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "set_usercode"
-        ].append((code_slot, usercode, name))
+        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
+        if lock_data:
+            lock_data["codes"][code_slot] = usercode
+            lock_data["service_calls"]["set_usercode"].append(
+                (code_slot, usercode, name)
+            )
 
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot, None)
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "clear_usercode"
-        ].append((code_slot,))
+        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
+        if lock_data:
+            lock_data["codes"].pop(code_slot, None)
+            lock_data["service_calls"]["clear_usercode"].append((code_slot,))
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
@@ -117,10 +119,11 @@ class MockLCMLock(BaseLock):
             'B': '5678',
         }
         """
-        codes = self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"]
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "get_usercodes"
-        ].append(codes)
+        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
+        if not lock_data:
+            return {}
+        codes = lock_data["codes"]
+        lock_data["service_calls"]["get_usercodes"].append(codes)
         return codes
 
 

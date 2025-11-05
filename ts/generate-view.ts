@@ -212,7 +212,6 @@ function getSlotMapping(
     const conditionEntities: LockCodeManagerEntityEntry[] = [];
     const codeSensorEntities: LockCodeManagerEntityEntry[] = [];
     const inSyncEntities: LockCodeManagerEntityEntry[] = [];
-    let codeEventEntity: LockCodeManagerEntityEntry;
     lockCodeManagerEntities
         .filter((entity) => entity.slotNum === slotNum)
         .forEach((entity) => {
@@ -220,14 +219,15 @@ function getSlotMapping(
                 codeSensorEntities.push(entity);
             } else if (entity.key === IN_SYNC_KEY) {
                 inSyncEntities.push(entity);
-            } else if (entity.key === CODE_EVENT_KEY) {
-                codeEventEntity = entity;
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);
             } else if (![ACTIVE_KEY, IN_SYNC_KEY].includes(entity.key)) {
                 mainEntities.push(entity);
             }
         });
+    const codeEventEntity = lockCodeManagerEntities.find(
+        (entity) => entity.slotNum === slotNum && entity.key === CODE_EVENT_KEY
+    );
     const pinActiveEntity = lockCodeManagerEntities.find(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
     )!;
