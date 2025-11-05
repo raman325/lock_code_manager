@@ -41,13 +41,20 @@ BASE_CONFIG = {
     },
 }
 
-ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
-NUMBER_OF_USES_ENTITY = "number.mock_title_code_slot_2_number_of_uses"
-ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
-EVENT_ENTITY = "event.mock_title_code_slot_2"
-PIN_ENTITY = "text.mock_title_code_slot_2_pin"
-NAME_ENTITY = "text.mock_title_code_slot_2_name"
-PIN_SYNCED_ENTITY = "binary_sensor.test_1_code_slot_2_pin_synced"
+SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
+SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
+SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
+SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
+SLOT_1_NAME_ENTITY = "text.mock_title_code_slot_1_name"
+SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
+
+SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
+SLOT_2_NUMBER_OF_USES_ENTITY = "number.mock_title_code_slot_2_number_of_uses"
+SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
+SLOT_2_EVENT_ENTITY = "event.mock_title_code_slot_2"
+SLOT_2_PIN_ENTITY = "text.mock_title_code_slot_2_pin"
+SLOT_2_NAME_ENTITY = "text.mock_title_code_slot_2_name"
+SLOT_2_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_2_in_sync"
 
 
 @dataclass(repr=False, eq=False)

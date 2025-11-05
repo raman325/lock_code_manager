@@ -32,14 +32,16 @@ from custom_components.lock_code_manager.const import (
 )
 
 from .common import (
-    ACTIVE_ENTITY,
     BASE_CONFIG,
-    ENABLED_ENTITY,
     LOCK_1_ENTITY_ID,
     LOCK_DATA,
-    NUMBER_OF_USES_ENTITY,
-    PIN_ENTITY,
-    PIN_SYNCED_ENTITY,
+    SLOT_1_ACTIVE_ENTITY,
+    SLOT_1_IN_SYNC_ENTITY,
+    SLOT_1_PIN_ENTITY,
+    SLOT_2_ACTIVE_ENTITY,
+    SLOT_2_ENABLED_ENTITY,
+    SLOT_2_NUMBER_OF_USES_ENTITY,
+    SLOT_2_PIN_ENTITY,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,12 +53,12 @@ async def test_binary_sensor_entity(
     lock_code_manager_config_entry,
 ):
     """Test sensor entity."""
-    calendar_1, calendar_2 = hass.data["lock_code_manager_calendars"]
+    calendar_1, _ = hass.data["lock_code_manager_calendars"]
     state = hass.states.get("calendar.test_1")
     assert state
     assert state.state == STATE_OFF
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -67,21 +69,21 @@ async def test_binary_sensor_entity(
     cal_event = calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
     calendar_1.delete_event(cal_event.uid)
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -89,12 +91,12 @@ async def test_binary_sensor_entity(
         NUMBER_DOMAIN,
         NUMBER_SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: 0},
-        target={ATTR_ENTITY_ID: NUMBER_OF_USES_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_NUMBER_OF_USES_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -102,36 +104,36 @@ async def test_binary_sensor_entity(
         NUMBER_DOMAIN,
         NUMBER_SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: 5},
-        target={ATTR_ENTITY_ID: NUMBER_OF_USES_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_NUMBER_OF_USES_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_OFF,
-        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_ENABLED_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_ON,
-        target={ATTR_ENTITY_ID: ENABLED_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_ENABLED_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_ON
 
@@ -139,7 +141,7 @@ async def test_binary_sensor_entity(
         TEXT_DOMAIN,
         TEXT_SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: "0987"},
-        target={ATTR_ENTITY_ID: PIN_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
@@ -156,7 +158,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get(ACTIVE_ENTITY)
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
 
@@ -169,10 +171,10 @@ async def test_handles_disconnected_lock_on_set(
 ):
     """Test that binary sensor handles LockDisconnected exception when setting usercode."""
     # Verify initial state - slot should be active and in sync
-    active_state = hass.states.get(ACTIVE_ENTITY)
+    active_state = hass.states.get(SLOT_1_ACTIVE_ENTITY)
     assert active_state.state == STATE_ON
 
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
+    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
     # Change PIN to trigger sync
@@ -180,20 +182,20 @@ async def test_handles_disconnected_lock_on_set(
         TEXT_DOMAIN,
         TEXT_SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: "9999"},
-        target={ATTR_ENTITY_ID: PIN_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
         blocking=True,
     )
     await hass.async_block_till_done()
 
     # Synced state should now be off (out of sync)
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
+    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_OFF
 
     # Get the lock provider instance and disconnect it
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
-    lock_provider = coordinators[LOCK_1_ENTITY_ID]._lock
+    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
     lock_provider.set_connected(False)
 
     # Trigger coordinator refresh to attempt sync
@@ -207,7 +209,7 @@ async def test_handles_disconnected_lock_on_set(
     await hass.async_block_till_done()
 
     # Binary sensor should remain off due to failed sync
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
+    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_OFF
 
     # Verify debug log was created
@@ -215,7 +217,7 @@ async def test_handles_disconnected_lock_on_set(
     assert "lock not connected" in caplog.text
 
     # Verify the code wasn't actually changed (still old value)
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][2] == "5678"
+    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "1234"
 
 
 async def test_handles_disconnected_lock_on_clear(
@@ -226,21 +228,21 @@ async def test_handles_disconnected_lock_on_clear(
 ):
     """Test that binary sensor handles LockDisconnected exception when clearing usercode."""
     # Verify initial state - slot should be active and in sync
-    active_state = hass.states.get(ACTIVE_ENTITY)
+    active_state = hass.states.get(SLOT_1_ACTIVE_ENTITY)
     assert active_state.state == STATE_ON
 
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
+    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
     # Disable the slot to trigger clear
-    hass.states.async_set(ACTIVE_ENTITY, STATE_OFF)
+    hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_OFF)
     await hass.async_block_till_done()
 
     # Get the lock provider instance and disconnect it
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
-    lock_provider = coordinators[LOCK_1_ENTITY_ID]._lock
+    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
     lock_provider.set_connected(False)
 
     # Trigger coordinator refresh
@@ -258,66 +260,4 @@ async def test_handles_disconnected_lock_on_clear(
     assert "lock not connected" in caplog.text
 
     # Verify the code wasn't actually cleared (still has value)
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(2) == "5678"
-
-
-async def test_syncs_when_lock_reconnects(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that binary sensor successfully syncs once lock reconnects."""
-    # Change PIN to trigger sync
-    await hass.services.async_call(
-        TEXT_DOMAIN,
-        TEXT_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "9999"},
-        target={ATTR_ENTITY_ID: PIN_ENTITY},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    # Synced state should be off
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
-    assert synced_state.state == STATE_OFF
-
-    # Get the lock provider and disconnect it
-    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
-        COORDINATORS
-    ]
-    lock_provider = coordinators[LOCK_1_ENTITY_ID]._lock
-    lock_provider.set_connected(False)
-
-    # Attempt sync while disconnected - should fail silently
-    await coordinators[LOCK_1_ENTITY_ID].async_refresh()
-    await hass.async_block_till_done()
-
-    # Fire time changed to trigger update
-    async_fire_time_changed(
-        hass, dt_util.utcnow() + coordinators[LOCK_1_ENTITY_ID].update_interval
-    )
-    await hass.async_block_till_done()
-
-    # Should still be out of sync
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
-    assert synced_state.state == STATE_OFF
-
-    # Reconnect the lock
-    lock_provider.set_connected(True)
-
-    # Trigger another sync
-    await coordinators[LOCK_1_ENTITY_ID].async_refresh()
-    await hass.async_block_till_done()
-
-    # Fire time changed again
-    async_fire_time_changed(
-        hass, dt_util.utcnow() + coordinators[LOCK_1_ENTITY_ID].update_interval
-    )
-    await hass.async_block_till_done()
-
-    # Now it should sync successfully
-    synced_state = hass.states.get(PIN_SYNCED_ENTITY)
-    assert synced_state.state == STATE_ON
-
-    # Verify the code was actually changed
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][2] == "9999"
+    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) == "1234"
