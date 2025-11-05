@@ -54,6 +54,11 @@ PIN_SYNCED_ENTITY = "binary_sensor.test_1_code_slot_2_pin_synced"
 class MockLCMLock(BaseLock):
     """Mock Lock Code Manager lock instance."""
 
+    def __init__(self, *args, **kwargs):
+        """Initialize mock lock."""
+        super().__init__(*args, **kwargs)
+        self._connected = True
+
     @property
     def domain(self) -> str:
         """Return integration domain."""
@@ -74,9 +79,13 @@ class MockLCMLock(BaseLock):
         if not self.hass.data[LOCK_DATA]:
             self.hass.data.pop(LOCK_DATA)
 
+    def set_connected(self, connected: bool) -> None:
+        """Set connection state for testing."""
+        self._connected = connected
+
     def is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        return True
+        return self._connected
 
     def hard_refresh_codes(self) -> None:
         """
