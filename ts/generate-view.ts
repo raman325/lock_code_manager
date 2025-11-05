@@ -230,7 +230,7 @@ function getSlotMapping(
     );
     const pinActiveEntity = lockCodeManagerEntities.find(
         (entity) => entity.slotNum === slotNum && entity.key === ACTIVE_KEY
-    )!;
+    );
     const calendarEntityId: string | null | undefined = configEntryData.slots[slotNum];
 
     return {
