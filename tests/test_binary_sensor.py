@@ -56,7 +56,6 @@ from .common import (
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_NUMBER_OF_USES_ENTITY,
     SLOT_2_PIN_ENTITY,
-    MockLCMLock,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -227,15 +226,8 @@ async def test_startup_no_code_flapping_when_synced(
 async def test_startup_detects_out_of_sync_code(
     hass: HomeAssistant,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test that out-of-sync codes are detected on startup and automatically corrected."""
-    # Monkeypatch the helper to use our mock lock
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
     # Create config with a different PIN than what's on the lock
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
@@ -302,16 +294,9 @@ async def test_startup_detects_out_of_sync_code(
 async def test_startup_waits_for_valid_active_state(
     hass: HomeAssistant,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ):
     """Test that in-sync entity doesn't load initial state when active entity has invalid state."""
-    # Monkeypatch the helper to use our mock lock
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
