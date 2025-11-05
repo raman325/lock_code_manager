@@ -13,7 +13,7 @@ from homeassistant.components.text import (
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 
-from .common import NAME_ENTITY, PIN_ENTITY
+from .common import SLOT_2_NAME_ENTITY, SLOT_2_PIN_ENTITY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,11 +24,11 @@ async def test_text_entities(
     lock_code_manager_config_entry,
 ):
     """Test text entities."""
-    state = hass.states.get(NAME_ENTITY)
+    state = hass.states.get(SLOT_2_NAME_ENTITY)
     assert state
     assert state.state == "test2"
 
-    state = hass.states.get(PIN_ENTITY)
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
     assert state
     assert state.state == "5678"
 
@@ -36,11 +36,11 @@ async def test_text_entities(
         TEXT_DOMAIN,
         SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: "0987"},
-        target={ATTR_ENTITY_ID: PIN_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
         blocking=True,
     )
 
-    state = hass.states.get(PIN_ENTITY)
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
     assert state
     assert state.state == "0987"
 
@@ -49,12 +49,12 @@ async def test_text_entities(
         TEXT_DOMAIN,
         SERVICE_SET_VALUE,
         service_data={ATTR_VALUE: ""},
-        target={ATTR_ENTITY_ID: PIN_ENTITY},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
         blocking=True,
     )
 
     assert len(_async_get_or_create_notifications(hass)) == 1
 
-    state = hass.states.get(PIN_ENTITY)
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
     assert state
     assert state.state == "0987"
