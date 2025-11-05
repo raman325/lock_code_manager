@@ -217,7 +217,7 @@ async def test_config_flow_reauth(
     assert len(flows) == 1
     [result] = flows
 
-    result["step_id"] == "reauth"
+    assert result["step_id"] == "reauth"
     flow_id = result["flow_id"]
 
     result = await hass.config_entries.flow.async_configure(

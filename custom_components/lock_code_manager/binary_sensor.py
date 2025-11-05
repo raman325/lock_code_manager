@@ -49,6 +49,7 @@ from .const import (
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
+from .exceptions import LockDisconnected
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -244,10 +245,10 @@ class LockCodeManagerCodeSlotInSyncEntity(
         ):
             return
 
-        _LOGGER.error(
-            "Updating %s code slot %s because it is out of sync",
-            self.lock.lock.entity_id,
+        _LOGGER.debug(
+            "Code slot %s on %s is out of sync, syncing now",
             self.slot_num,
+            self.lock.lock.entity_id,
         )
         await self._async_update_state()
 
@@ -368,27 +369,41 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self._attr_is_on = False
                 self.async_write_ha_state()
 
-                if active_state == STATE_ON:
-                    assert pin_state is not None  # Already verified above
-                    await self.lock.async_internal_set_usercode(
-                        int(self.slot_num), pin_state, name_state
-                    )
-                    _LOGGER.info(
-                        "%s (%s): Set usercode for %s slot %s",
+                try:
+                    if active_state == STATE_ON:
+                        assert pin_state is not None  # Already verified above
+                        await self.lock.async_internal_set_usercode(
+                            int(self.slot_num), pin_state, name_state
+                        )
+                        _LOGGER.info(
+                            "%s (%s): Set usercode for %s slot %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                        )
+                    else:  # active_state == STATE_OFF
+                        await self.lock.async_internal_clear_usercode(
+                            int(self.slot_num)
+                        )
+                        _LOGGER.info(
+                            "%s (%s): Cleared usercode for %s slot %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                        )
+                except LockDisconnected as err:
+                    _LOGGER.debug(
+                        "%s (%s): Unable to %s usercode for %s slot %s: %s",
                         self.config_entry.entry_id,
                         self.config_entry.title,
+                        "set" if active_state == STATE_ON else "clear",
                         self.lock.lock.entity_id,
                         self.slot_num,
+                        err,
                     )
-                else:  # active_state == STATE_OFF
-                    await self.lock.async_internal_clear_usercode(int(self.slot_num))
-                    _LOGGER.info(
-                        "%s (%s): Cleared usercode for %s slot %s",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        self.lock.lock.entity_id,
-                        self.slot_num,
-                    )
+                    return
 
                 # Refresh coordinator after sync operation
                 await self.coordinator.async_refresh()

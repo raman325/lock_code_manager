@@ -32,7 +32,7 @@
     "@rollup/plugin-typescript": "^12.3.0",
     "@stylistic/eslint-plugin-js": "^3.1.0",
     "@tsconfig/node20": "^20.1.6",
-    "@types/node": "^24.9.2",
+    "@types/node": "^24.10.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.56.0",

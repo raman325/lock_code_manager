@@ -41,18 +41,30 @@ BASE_CONFIG = {
     },
 }
 
-ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
-NUMBER_OF_USES_ENTITY = "number.mock_title_code_slot_2_number_of_uses"
-ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
-EVENT_ENTITY = "event.mock_title_code_slot_2"
-PIN_ENTITY = "text.mock_title_code_slot_2_pin"
-NAME_ENTITY = "text.mock_title_code_slot_2_name"
-PIN_SYNCED_ENTITY = "binary_sensor.test_1_code_slot_2_pin_synced"
+SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
+SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
+SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
+SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
+SLOT_1_NAME_ENTITY = "text.mock_title_code_slot_1_name"
+SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
+
+SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
+SLOT_2_NUMBER_OF_USES_ENTITY = "number.mock_title_code_slot_2_number_of_uses"
+SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
+SLOT_2_EVENT_ENTITY = "event.mock_title_code_slot_2"
+SLOT_2_PIN_ENTITY = "text.mock_title_code_slot_2_pin"
+SLOT_2_NAME_ENTITY = "text.mock_title_code_slot_2_name"
+SLOT_2_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_2_in_sync"
 
 
 @dataclass(repr=False, eq=False)
 class MockLCMLock(BaseLock):
     """Mock Lock Code Manager lock instance."""
+
+    def __init__(self, *args, **kwargs):
+        """Initialize mock lock."""
+        super().__init__(*args, **kwargs)
+        self._connected = True
 
     @property
     def domain(self) -> str:
@@ -74,9 +86,13 @@ class MockLCMLock(BaseLock):
         if not self.hass.data[LOCK_DATA]:
             self.hass.data.pop(LOCK_DATA)
 
+    def set_connected(self, connected: bool) -> None:
+        """Set connection state for testing."""
+        self._connected = connected
+
     def is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        return True
+        return self._connected
 
     def hard_refresh_codes(self) -> None:
         """
@@ -93,29 +109,19 @@ class MockLCMLock(BaseLock):
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        # During test teardown, the data might already be cleaned up
-        if (
-            LOCK_DATA not in self.hass.data
-            or self.lock.entity_id not in self.hass.data[LOCK_DATA]
-        ):
-            return
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"][code_slot] = usercode
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "set_usercode"
-        ].append((code_slot, usercode, name))
+        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
+        if lock_data:
+            lock_data["codes"][code_slot] = usercode
+            lock_data["service_calls"]["set_usercode"].append(
+                (code_slot, usercode, name)
+            )
 
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        # During test teardown, the data might already be cleaned up
-        if (
-            LOCK_DATA not in self.hass.data
-            or self.lock.entity_id not in self.hass.data[LOCK_DATA]
-        ):
-            return
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"].pop(code_slot, None)
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "clear_usercode"
-        ].append((code_slot,))
+        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
+        if lock_data:
+            lock_data["codes"].pop(code_slot, None)
+            lock_data["service_calls"]["clear_usercode"].append((code_slot,))
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
@@ -129,10 +135,11 @@ class MockLCMLock(BaseLock):
             'B': '5678',
         }
         """
-        codes = self.hass.data[LOCK_DATA][self.lock.entity_id]["codes"]
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "get_usercodes"
-        ].append(codes)
+        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
+        if not lock_data:
+            return {}
+        codes = lock_data["codes"]
+        lock_data["service_calls"]["get_usercodes"].append(codes)
         return codes
 
 

@@ -29,6 +29,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         )
         self.data: dict[int, int | str] = {}
 
+    @property
+    def lock(self) -> BaseLock:
+        """Return the lock."""
+        return self._lock
+
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Update usercodes."""
         try:
