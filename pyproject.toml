@@ -75,7 +75,6 @@ good-names = ["_", "ev", "ex", "fp", "i", "id", "j", "k", "Run", "T"]
 # wrong-import-order - isort guards this
 disable = [
     "format",
-    "abstract-class-little-used",
     "abstract-method",
     "cyclic-import",
     "duplicate-code",
