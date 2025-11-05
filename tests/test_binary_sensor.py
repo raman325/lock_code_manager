@@ -177,6 +177,13 @@ async def test_handles_disconnected_lock_on_set(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
+    # Get the lock provider instance and disconnect it
+    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
+        COORDINATORS
+    ]
+    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
+    lock_provider.set_connected(False)
+
     # Change PIN to trigger sync
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -190,13 +197,6 @@ async def test_handles_disconnected_lock_on_set(
     # Synced state should now be off (out of sync)
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_OFF
-
-    # Get the lock provider instance and disconnect it
-    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
-        COORDINATORS
-    ]
-    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
-    lock_provider.set_connected(False)
 
     # Trigger coordinator refresh to attempt sync
     await coordinators[LOCK_1_ENTITY_ID].async_refresh()
@@ -234,16 +234,16 @@ async def test_handles_disconnected_lock_on_clear(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    # Disable the slot to trigger clear
-    hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_OFF)
-    await hass.async_block_till_done()
-
     # Get the lock provider instance and disconnect it
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
     lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
     lock_provider.set_connected(False)
+
+    # Disable the slot to trigger clear
+    hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_OFF)
+    await hass.async_block_till_done()
 
     # Trigger coordinator refresh
     await coordinators[LOCK_1_ENTITY_ID].async_refresh()
