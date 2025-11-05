@@ -331,9 +331,8 @@ async def test_startup_waits_for_valid_active_state(
     in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
     assert in_sync_entity_obj
 
-    # Reset flags to simulate pre-initial-load state
-    in_sync_entity_obj._initial_state_loaded = False
-    in_sync_entity_obj._attr_is_on = False
+    # Reset to simulate pre-initial-load state
+    in_sync_entity_obj._attr_is_on = None
 
     # Set the active entity to unavailable
     hass.states.async_set(active_entity_id, STATE_UNAVAILABLE)
@@ -352,8 +351,8 @@ async def test_startup_waits_for_valid_active_state(
         for record in caplog.records
     ), "Should log that it's waiting for valid active state"
 
-    # Verify initial state is still not loaded
-    assert not in_sync_entity_obj._initial_state_loaded
+    # Verify initial state is still not loaded (is_on still None)
+    assert in_sync_entity_obj._attr_is_on is None
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 

@@ -220,7 +220,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
         )
         self._lock = asyncio.Lock()
-        self._initial_state_loaded = False
+        self._attr_is_on: bool | None = None  # None means not yet initialized
 
     @property
     def should_poll(self) -> bool:
@@ -293,9 +293,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 return
 
         async with self._lock:
-            # Check prerequisites for initial load
+            # Check prerequisites for initial load - coordinator must have data for this slot
             if (
-                not self._initial_state_loaded
+                self._attr_is_on is None
                 and int(self.slot_num) not in self.coordinator.data
             ):
                 _LOGGER.debug(
@@ -339,7 +339,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             )
 
             # On initial load, verify active state and set initial sync status without operations
-            if not self._initial_state_loaded:
+            if self._attr_is_on is None:
                 if active_state not in (STATE_ON, STATE_OFF):
                     _LOGGER.debug(
                         "%s (%s): Active entity for %s slot %s has invalid state '%s', waiting for valid state",
@@ -351,7 +351,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     )
                     return
 
-                self._initial_state_loaded = True
                 self._attr_is_on = expected_in_sync
                 _LOGGER.debug(
                     "%s (%s): Initial state loaded for %s slot %s, in_sync=%s",
