@@ -258,6 +258,11 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return None
         return state.state
 
+    def _update_sync_state(self, is_on: bool) -> None:
+        """Update sync state and write to Home Assistant."""
+        self._attr_is_on = is_on
+        self.async_write_ha_state()
+
     async def _async_update_state(
         self, event: Event[EventStateChangedData] | None = None
     ) -> None:
@@ -351,22 +356,20 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     )
                     return
 
-                self._attr_is_on = expected_in_sync
+                self._update_sync_state(expected_in_sync)
                 _LOGGER.debug(
                     "%s (%s): Initial state loaded for %s slot %s, in_sync=%s",
                     self.config_entry.entry_id,
                     self.config_entry.title,
                     self.lock.lock.entity_id,
                     self.slot_num,
-                    self._attr_is_on,
+                    expected_in_sync,
                 )
-                self.async_write_ha_state()
                 return
 
             # Normal operation - perform sync if needed
             if not expected_in_sync:
-                self._attr_is_on = False
-                self.async_write_ha_state()
+                self._update_sync_state(False)
 
                 try:
                     if active_state == STATE_ON:
@@ -408,8 +411,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 await self.coordinator.async_refresh()
             elif not self._attr_is_on:
                 # Was out of sync, now in sync
-                self._attr_is_on = True
-                self.async_write_ha_state()
+                self._update_sync_state(True)
             # else: already in sync, no state change needed
 
     async def async_added_to_hass(self) -> None:
