@@ -33,7 +33,7 @@ ensure_link "${PWD}/custom_components/lock_code_manager" "${PWD}/.ha/custom_comp
 if [[ ! -d "${PWD}/.ha/custom_components/virtual" ]]; then
     curl -L -o virtual.zip https://github.com/twrecked/hass-virtual/archive/refs/tags/v0.9.3.zip
     unzip -j virtual.zip "hass-virtual-0.9.3/custom_components/virtual/*" -d "${PWD}/.ha/custom_components/virtual/"
-    
+
     rm virtual.zip
 fi
 
