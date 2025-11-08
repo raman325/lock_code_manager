@@ -9,7 +9,7 @@
       "args": ["--debug", "--config", "${workspaceFolder}/.ha"],
       "cwd": "${workspaceFolder}/.ha",
       "subProcess": false,
-      "justMyCode": false,
+      "justMyCode": false
     }
   ]
 }
