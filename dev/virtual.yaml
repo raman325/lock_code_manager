@@ -1,0 +1,7 @@
+version: 1
+devices:
+  Test Lock:
+  - platform: lock
+    name: Test Lock
+    initial_value: locked
+    locking_time: 5
