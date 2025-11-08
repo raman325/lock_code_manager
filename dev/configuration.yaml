@@ -7,4 +7,4 @@ logger:
     custom_components.lock_code_manager: debug
 
 virtual:
-  yaml_config: True
+  yaml_config: true
