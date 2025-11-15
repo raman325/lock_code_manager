@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
+import time
 from typing import Any, Literal, final
 
 from homeassistant.components.lock import LockState
@@ -52,6 +54,66 @@ class BaseLock:
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _last_operation_time: float = field(default=0.0, init=False)
+    _min_operation_delay: float = field(default=2.0, init=False)
+
+    @staticmethod
+    def _rate_limited_operation(
+        operation_type: Literal["get", "set", "clear", "refresh"],
+    ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
+        """Rate limit and protect lock operations.
+
+        Args:
+            operation_type: Type of operation ("get", "set", "clear", "refresh")
+
+        Returns:
+            Decorated function with rate limiting applied.
+
+        """
+
+        def decorator(
+            func: Callable[..., Awaitable[Any]],
+        ) -> Callable[..., Awaitable[Any]]:
+            @functools.wraps(func)
+            async def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+                # Check connection for write operations
+                if operation_type in ("set", "clear", "refresh"):
+                    if not await self.async_is_connection_up():
+                        raise LockDisconnected(
+                            f"Cannot {operation_type} on {self.lock.entity_id} - lock not connected"
+                        )
+
+                async with self._aio_lock:
+                    # Rate limiting - enforce minimum delay between operations
+                    elapsed = time.monotonic() - self._last_operation_time
+                    if elapsed < self._min_operation_delay:
+                        delay = self._min_operation_delay - elapsed
+                        LOGGER.debug(
+                            "Rate limiting %s operation on %s, waiting %.1f seconds",
+                            operation_type,
+                            self.lock.entity_id,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+
+                    # Log operation
+                    LOGGER.debug(
+                        "Executing %s operation on %s",
+                        operation_type,
+                        self.lock.entity_id,
+                    )
+
+                    # Execute the actual operation
+                    result = await func(self, *args, **kwargs)
+
+                    # Update timestamp for rate limiting
+                    self._last_operation_time = time.monotonic()
+
+                    return result
+
+            return wrapper
+
+        return decorator
 
     @final
     @callback
@@ -136,6 +198,7 @@ class BaseLock:
         await self.hass.async_add_executor_job(self.hard_refresh_codes)
 
     @final
+    @_rate_limited_operation("refresh")
     async def async_internal_hard_refresh_codes(self) -> None:
         """
         Perform hard refresh of all codes.
@@ -143,8 +206,7 @@ class BaseLock:
         Needed for integrations where usercodes are cached and may get out of sync with
         the lock.
         """
-        async with self._aio_lock:
-            await self.async_hard_refresh_codes()
+        await self.async_hard_refresh_codes()
 
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -161,16 +223,12 @@ class BaseLock:
         )
 
     @final
+    @_rate_limited_operation("set")
     async def async_internal_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        if not await self.async_is_connection_up():
-            raise LockDisconnected(
-                f"Cannot set usercode on {self.lock.entity_id} - lock not connected"
-            )
-        async with self._aio_lock:
-            await self.async_set_usercode(code_slot, usercode, name=name)
+        await self.async_set_usercode(code_slot, usercode, name=name)
 
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
@@ -181,14 +239,10 @@ class BaseLock:
         await self.hass.async_add_executor_job(self.clear_usercode, code_slot)
 
     @final
+    @_rate_limited_operation("clear")
     async def async_internal_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        if not await self.async_is_connection_up():
-            raise LockDisconnected(
-                f"Cannot clear usercode on {self.lock.entity_id} - lock not connected"
-            )
-        async with self._aio_lock:
-            await self.async_clear_usercode(code_slot)
+        await self.async_clear_usercode(code_slot)
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
@@ -219,6 +273,7 @@ class BaseLock:
         return await self.hass.async_add_executor_job(self.get_usercodes)
 
     @final
+    @_rate_limited_operation("get")
     async def async_internal_get_usercodes(self) -> dict[int, int | str]:
         """
         Get dictionary of code slots and usercodes.
@@ -231,8 +286,7 @@ class BaseLock:
             'B': '5678',
         }
         """
-        async with self._aio_lock:
-            return await self.async_get_usercodes()
+        return await self.async_get_usercodes()
 
     @final
     def call_service(

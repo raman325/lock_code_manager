@@ -368,6 +368,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 return
 
             # Normal operation - perform sync if needed
+            sync_performed = False
             if not expected_in_sync:
                 self._update_sync_state(False)
 
@@ -377,24 +378,26 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         await self.lock.async_internal_set_usercode(
                             int(self.slot_num), pin_state, name_state
                         )
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "%s (%s): Set usercode for %s slot %s",
                             self.config_entry.entry_id,
                             self.config_entry.title,
                             self.lock.lock.entity_id,
                             self.slot_num,
                         )
+                        sync_performed = True
                     else:  # active_state == STATE_OFF
                         await self.lock.async_internal_clear_usercode(
                             int(self.slot_num)
                         )
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "%s (%s): Cleared usercode for %s slot %s",
                             self.config_entry.entry_id,
                             self.config_entry.title,
                             self.lock.lock.entity_id,
                             self.slot_num,
                         )
+                        sync_performed = True
                 except LockDisconnected as err:
                     _LOGGER.debug(
                         "%s (%s): Unable to %s usercode for %s slot %s: %s",
@@ -407,8 +410,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     )
                     return
 
-                # Refresh coordinator after sync operation
-                await self.coordinator.async_refresh()
+                # Refresh coordinator after successful sync to verify operation completed
+                # Note: Due to rate limiting in the provider, multiple slots syncing will
+                # be serialized, and this refresh will happen after each one. However,
+                # the coordinator itself is also rate limited, so excessive calls are
+                # prevented at the provider level.
+                if sync_performed:
+                    await self.coordinator.async_refresh()
             elif not self._attr_is_on:
                 # Was out of sync, now in sync
                 self._update_sync_state(True)
