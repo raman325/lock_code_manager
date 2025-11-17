@@ -1,0 +1,10 @@
+logger:
+  default: info
+  logs:
+    haffmpeg.core: fatal
+    haffmpeg.tools: fatal
+    homeassistant.components.camera.img_util: fatal
+    custom_components.lock_code_manager: debug
+
+virtual:
+  yaml_config: true
