@@ -10,6 +10,15 @@ import functools
 import time
 from typing import Any, Literal, final
 
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
+
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
@@ -64,7 +73,7 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Execute an operation with rate limiting and connection checking.
+        """Execute an operation with rate limiting, retry, and connection checking.
 
         Args:
             operation_type: Type of operation ("get", "set", "clear", "refresh")
@@ -77,6 +86,7 @@ class BaseLock:
 
         Raises:
             LockDisconnected: If lock is not connected (for write operations).
+            HomeAssistantError: If operation fails after all retries.
 
         """
         # Check connection for write operations
@@ -86,33 +96,65 @@ class BaseLock:
                     f"Cannot {operation_type} on {self.lock.entity_id} - lock not connected"
                 )
 
-        async with self._aio_lock:
-            # Rate limiting - enforce minimum delay between operations
-            elapsed = time.monotonic() - self._last_operation_time
-            if elapsed < self._min_operation_delay:
-                delay = self._min_operation_delay - elapsed
+        # Define retry wrapper with tenacity
+        @retry(
+            retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError)),
+            wait=wait_exponential(multiplier=1, min=2, max=10) + wait_random(0, 2),
+            stop=stop_after_attempt(3),
+            reraise=True,
+        )
+        async def _execute_with_retry() -> Any:
+            """Execute operation with automatic retry on transient failures."""
+            async with self._aio_lock:
+                # Rate limiting - enforce minimum delay between operations
+                elapsed = time.monotonic() - self._last_operation_time
+                if elapsed < self._min_operation_delay:
+                    delay = self._min_operation_delay - elapsed
+                    LOGGER.debug(
+                        "Rate limiting %s operation on %s, waiting %.1f seconds",
+                        operation_type,
+                        self.lock.entity_id,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+
+                # Log operation
                 LOGGER.debug(
-                    "Rate limiting %s operation on %s, waiting %.1f seconds",
+                    "Executing %s operation on %s",
                     operation_type,
                     self.lock.entity_id,
-                    delay,
                 )
-                await asyncio.sleep(delay)
 
-            # Log operation
-            LOGGER.debug(
-                "Executing %s operation on %s",
+                try:
+                    # Execute the actual operation
+                    result = await func(*args, **kwargs)
+
+                    # Update timestamp for rate limiting
+                    self._last_operation_time = time.monotonic()
+
+                    return result
+                except (asyncio.TimeoutError, ConnectionError) as err:
+                    LOGGER.warning(
+                        "Transient error during %s operation on %s: %s. Will retry.",
+                        operation_type,
+                        self.lock.entity_id,
+                        err,
+                    )
+                    raise
+
+        try:
+            return await _execute_with_retry()
+        except RetryError as err:
+            # All retries exhausted
+            LOGGER.error(
+                "Failed to execute %s operation on %s after all retries: %s",
                 operation_type,
                 self.lock.entity_id,
+                err,
             )
-
-            # Execute the actual operation
-            result = await func(*args, **kwargs)
-
-            # Update timestamp for rate limiting
-            self._last_operation_time = time.monotonic()
-
-            return result
+            raise HomeAssistantError(
+                f"Failed to {operation_type} on {self.lock.entity_id} after retries"
+            ) from err
 
     @final
     @callback
