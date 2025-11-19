@@ -77,30 +77,7 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Inner worker: Rate limit + execute + retry on failure.
-
-        This is the @retry decorated worker that:
-        1. Acquires the asyncio lock (serializes operations)
-        2. Enforces rate limiting (2s minimum between operations)
-        3. Executes the operation
-        4. On failure, tenacity automatically retries with exponential backoff
-
-        Retry behavior:
-        - Retries: All HomeAssistantError, TimeoutError, ConnectionError
-        - Backoff: Exponential 2s → 4s → 8s → 16s ... → 180s max
-        - Stop: Never (retries indefinitely until success)
-        - Safe: Operations already rate-limited, connection checks don't hit network
-
-        Args:
-            operation_type: Type of operation for logging
-            func: The async function to execute
-            *args: Positional arguments to pass to func
-            **kwargs: Keyword arguments to pass to func
-
-        Returns:
-            Result from the executed function.
-
-        """
+        """Execute operation with rate limiting and infinite retry with exponential backoff."""
         async with self._aio_lock:
             # Rate limiting - enforce minimum delay between operations
             elapsed = time.monotonic() - self._last_operation_time
@@ -141,21 +118,7 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Public interface: Execute operation with rate limiting and retry.
-
-        This is a simple pass-through to _execute_with_retry(). It exists as
-        the stable public interface called by async_internal_* methods.
-
-        Args:
-            operation_type: Type of operation ("get", "set", "clear", "refresh")
-            func: The async function to execute
-            *args: Positional arguments to pass to func
-            **kwargs: Keyword arguments to pass to func
-
-        Returns:
-            Result from the executed function (will retry indefinitely on failure).
-
-        """
+        """Execute operation with rate limiting and retry."""
         return await self._execute_with_retry(operation_type, func, *args, **kwargs)
 
     @final
