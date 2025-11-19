@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from tenacity import RetryError
-
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
-from .exceptions import LockDisconnected
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,7 +38,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         """Update usercodes."""
         try:
             return await self._lock.async_internal_get_usercodes()
-        except (LockDisconnected, RetryError) as err:
+        except HomeAssistantError as err:
             # We can silently fail if we've never been able to retrieve data
             if not self.last_update_success:
                 return {}

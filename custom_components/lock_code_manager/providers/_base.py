@@ -11,10 +11,8 @@ import time
 from typing import Any, Literal, final
 
 from tenacity import (
-    RetryError,
     retry,
     retry_if_exception_type,
-    stop_after_attempt,
     wait_exponential,
     wait_random,
 )
@@ -48,7 +46,6 @@ from ..const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from ..data import get_entry_data
-from ..exceptions import LockDisconnected
 from .const import LOGGER
 
 
@@ -67,9 +64,10 @@ class BaseLock:
     _min_operation_delay: float = field(default=2.0, init=False)
 
     @retry(
-        retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError)),
-        wait=wait_exponential(multiplier=1, min=2, max=10) + wait_random(0, 2),
-        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(
+            (asyncio.TimeoutError, ConnectionError, HomeAssistantError)
+        ),
+        wait=wait_exponential(multiplier=1, min=2, max=180) + wait_random(0, 2),
         reraise=True,
     )
     async def _execute_with_retry(
@@ -79,7 +77,19 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Execute operation with rate limiting and automatic retry on transient failures.
+        """Inner worker: Rate limit + execute + retry on failure.
+
+        This is the @retry decorated worker that:
+        1. Acquires the asyncio lock (serializes operations)
+        2. Enforces rate limiting (2s minimum between operations)
+        3. Executes the operation
+        4. On failure, tenacity automatically retries with exponential backoff
+
+        Retry behavior:
+        - Retries: All HomeAssistantError, TimeoutError, ConnectionError
+        - Backoff: Exponential 2s → 4s → 8s → 16s ... → 180s max
+        - Stop: Never (retries indefinitely until success)
+        - Safe: Operations already rate-limited, connection checks don't hit network
 
         Args:
             operation_type: Type of operation for logging
@@ -89,10 +99,6 @@ class BaseLock:
 
         Returns:
             Result from the executed function.
-
-        Raises:
-            asyncio.TimeoutError: If operation times out (will be retried)
-            ConnectionError: If connection fails (will be retried)
 
         """
         async with self._aio_lock:
@@ -119,9 +125,9 @@ class BaseLock:
                 result = await func(*args, **kwargs)
                 self._last_operation_time = time.monotonic()
                 return result
-            except (asyncio.TimeoutError, ConnectionError) as err:
+            except Exception as err:
                 LOGGER.warning(
-                    "Transient error during %s operation on %s: %s. Will retry.",
+                    "Error during %s operation on %s: %s. Will retry.",
                     operation_type,
                     self.lock.entity_id,
                     err,
@@ -135,7 +141,10 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Execute an operation with rate limiting, retry, and connection checking.
+        """Public interface: Execute operation with rate limiting and retry.
+
+        This is a simple pass-through to _execute_with_retry(). It exists as
+        the stable public interface called by async_internal_* methods.
 
         Args:
             operation_type: Type of operation ("get", "set", "clear", "refresh")
@@ -144,33 +153,10 @@ class BaseLock:
             **kwargs: Keyword arguments to pass to func
 
         Returns:
-            Result from the executed function.
-
-        Raises:
-            LockDisconnected: If lock is not connected (for write operations).
-            HomeAssistantError: If operation fails after all retries.
+            Result from the executed function (will retry indefinitely on failure).
 
         """
-        # Check connection for write operations
-        if operation_type in ("set", "clear", "refresh"):
-            if not await self.async_is_connection_up():
-                raise LockDisconnected(
-                    f"Cannot {operation_type} on {self.lock.entity_id} - lock not connected"
-                )
-
-        # Execute with retry
-        try:
-            return await self._execute_with_retry(operation_type, func, *args, **kwargs)
-        except RetryError as err:
-            LOGGER.error(
-                "Failed to execute %s operation on %s after all retries: %s",
-                operation_type,
-                self.lock.entity_id,
-                err,
-            )
-            raise HomeAssistantError(
-                f"Failed to {operation_type} on {self.lock.entity_id} after retries"
-            ) from err
+        return await self._execute_with_retry(operation_type, func, *args, **kwargs)
 
     @final
     @callback
