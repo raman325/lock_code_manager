@@ -277,20 +277,18 @@ class LockCodeManagerCodeSlotInSyncEntity(
         if not self.coordinator.last_update_success:
             return
 
-        # If triggered by event, validate it's relevant and state is valid
-        if entity_id is not None:
-            ent_entry = self.ent_reg.async_get(entity_id)
+        # If triggered by event, validate it's from a relevant entity with valid state
+        if entity_id is not None and (ent_entry := self.ent_reg.async_get(entity_id)):
             if (
-                not ent_entry
-                or ent_entry.platform != DOMAIN
+                ent_entry.platform != DOMAIN  # Not from our integration
                 or (ent_entry.domain, ent_entry.unique_id)
-                not in (
+                not in (  # Not one of our tracked entities for this slot
                     (BINARY_SENSOR_DOMAIN, self._active_unique_id),
                     (TEXT_DOMAIN, self._name_text_unique_id),
                     (TEXT_DOMAIN, self._pin_text_unique_id),
                     (SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
                 )
-                or (
+                or (  # New state is unavailable/unknown
                     to_state is not None
                     and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
                 )
