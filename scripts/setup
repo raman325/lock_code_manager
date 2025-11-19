@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# Setups the repository.
 
-# Stop on errors
+# Utilities
+ensure_link() {
+    local target="$1"
+    local link="$2"
+
+    mkdir -p "$(dirname "$link")"
+    [ ! -e "$link" ] && ln -s "$target" "$link" || true
+}
+
+# Script setup
 set -e
+cd "$(dirname "$0")/.."
 
+# Script start
 if [ ! -n "$DEVCONTAINER" ] && [ ! -n "$VIRTUAL_ENV" ];then
   python3.13 -m venv venv
   source venv/bin/activate
@@ -12,6 +22,21 @@ fi
 pip install --upgrade uv
 uv pip install -r requirements_dev.txt
 
-pre-commit install
 
+pre-commit install
 yarn install
+
+# Setup directories for HA and linking
+ensure_link "${PWD}/dev/configuration.yaml" "${PWD}/.ha/configuration.yaml"
+ensure_link "${PWD}/dev/virtual.yaml" "${PWD}/.ha/virtual.yaml"
+ensure_link "${PWD}/custom_components/lock_code_manager" "${PWD}/.ha/custom_components/lock_code_manager"
+
+# Download and extract Virtual component if not already present
+if [[ ! -d "${PWD}/.ha/custom_components/virtual" ]]; then
+    curl -L -o virtual.zip https://github.com/twrecked/hass-virtual/archive/refs/tags/v0.9.3.zip
+    unzip -j virtual.zip "hass-virtual-0.9.3/custom_components/virtual/*" -d "${PWD}/.ha/custom_components/virtual/"
+
+    rm virtual.zip
+fi
+
+hass --config "${PWD}/.ha" --script ensure_config

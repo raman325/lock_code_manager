@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Home Assistant",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "homeassistant",
+      "args": ["--debug", "--config", "${workspaceFolder}/.ha"],
+      "cwd": "${workspaceFolder}/.ha",
+      "subProcess": false,
+      "justMyCode": false
+    }
+  ]
+}
