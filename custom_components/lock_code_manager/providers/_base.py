@@ -77,7 +77,19 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Execute operation with rate limiting and infinite retry with exponential backoff."""
+        """Execute operation with rate limiting and infinite retry with exponential backoff.
+
+        This is the @retry decorated worker that:
+        1. Acquires the asyncio lock (serializes operations)
+        2. Enforces rate limiting (2s minimum between operations)
+        3. Executes the operation
+        4. On failure, tenacity automatically retries with exponential backoff
+
+        Retry behavior: All HomeAssistantError, TimeoutError, ConnectionError are retried
+        with exponential backoff (2s → 4s → 8s → 16s ... max 180s between attempts).
+        Retries indefinitely until success - safe since operations are rate-limited and
+        connection checks don't hit the Z-Wave network.
+        """
         async with self._aio_lock:
             # Rate limiting - enforce minimum delay between operations
             elapsed = time.monotonic() - self._last_operation_time
@@ -118,7 +130,11 @@ class BaseLock:
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Execute operation with rate limiting and retry."""
+        """Execute operation with rate limiting and retry.
+
+        Simple pass-through to _execute_with_retry(). Exists as the stable public
+        interface called by async_internal_* methods.
+        """
         return await self._execute_with_retry(operation_type, func, *args, **kwargs)
 
     @final
