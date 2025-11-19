@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
+import time
 from typing import Any, Literal, final
+
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    wait_exponential,
+    wait_random,
+)
 
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -37,7 +46,6 @@ from ..const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from ..data import get_entry_data
-from ..exceptions import LockDisconnected
 from .const import LOGGER
 
 
@@ -52,6 +60,82 @@ class BaseLock:
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _last_operation_time: float = field(default=0.0, init=False)
+    _min_operation_delay: float = field(default=2.0, init=False)
+
+    @retry(
+        retry=retry_if_exception_type(
+            (asyncio.TimeoutError, ConnectionError, HomeAssistantError)
+        ),
+        wait=wait_exponential(multiplier=1, min=2, max=180) + wait_random(0, 2),
+        reraise=True,
+    )
+    async def _execute_with_retry(
+        self,
+        operation_type: str,
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute operation with rate limiting and infinite retry with exponential backoff.
+
+        This is the @retry decorated worker that:
+        1. Acquires the asyncio lock (serializes operations)
+        2. Enforces rate limiting (2s minimum between operations)
+        3. Executes the operation
+        4. On failure, tenacity automatically retries with exponential backoff
+
+        Retry behavior: All HomeAssistantError, TimeoutError, ConnectionError are retried
+        with exponential backoff (2s → 4s → 8s → 16s ... max 180s between attempts).
+        Retries indefinitely until success - safe since operations are rate-limited and
+        connection checks don't hit the Z-Wave network.
+        """
+        async with self._aio_lock:
+            # Rate limiting - enforce minimum delay between operations
+            elapsed = time.monotonic() - self._last_operation_time
+            if elapsed < self._min_operation_delay:
+                delay = self._min_operation_delay - elapsed
+                LOGGER.debug(
+                    "Rate limiting %s operation on %s, waiting %.1f seconds",
+                    operation_type,
+                    self.lock.entity_id,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+            # Execute operation
+            LOGGER.debug(
+                "Executing %s operation on %s",
+                operation_type,
+                self.lock.entity_id,
+            )
+
+            try:
+                result = await func(*args, **kwargs)
+                self._last_operation_time = time.monotonic()
+                return result
+            except Exception as err:
+                LOGGER.warning(
+                    "Error during %s operation on %s: %s. Will retry.",
+                    operation_type,
+                    self.lock.entity_id,
+                    err,
+                )
+                raise
+
+    async def _execute_rate_limited(
+        self,
+        operation_type: Literal["get", "set", "clear", "refresh"],
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute operation with rate limiting and retry.
+
+        Simple pass-through to _execute_with_retry(). Exists as the stable public
+        interface called by async_internal_* methods.
+        """
+        return await self._execute_with_retry(operation_type, func, *args, **kwargs)
 
     @final
     @callback
@@ -143,8 +227,7 @@ class BaseLock:
         Needed for integrations where usercodes are cached and may get out of sync with
         the lock.
         """
-        async with self._aio_lock:
-            await self.async_hard_refresh_codes()
+        await self._execute_rate_limited("refresh", self.async_hard_refresh_codes)
 
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -165,12 +248,9 @@ class BaseLock:
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        if not await self.async_is_connection_up():
-            raise LockDisconnected(
-                f"Cannot set usercode on {self.lock.entity_id} - lock not connected"
-            )
-        async with self._aio_lock:
-            await self.async_set_usercode(code_slot, usercode, name=name)
+        await self._execute_rate_limited(
+            "set", self.async_set_usercode, code_slot, usercode, name=name
+        )
 
     def clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
@@ -183,12 +263,7 @@ class BaseLock:
     @final
     async def async_internal_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        if not await self.async_is_connection_up():
-            raise LockDisconnected(
-                f"Cannot clear usercode on {self.lock.entity_id} - lock not connected"
-            )
-        async with self._aio_lock:
-            await self.async_clear_usercode(code_slot)
+        await self._execute_rate_limited("clear", self.async_clear_usercode, code_slot)
 
     def get_usercodes(self) -> dict[int, int | str]:
         """
@@ -231,8 +306,7 @@ class BaseLock:
             'B': '5678',
         }
         """
-        async with self._aio_lock:
-            return await self.async_get_usercodes()
+        return await self._execute_rate_limited("get", self.async_get_usercodes)
 
     @final
     def call_service(

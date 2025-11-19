@@ -204,7 +204,7 @@ class ZWaveJSLock(BaseLock):
             int(code_slot)
             for entry in self.hass.config_entries.async_entries(DOMAIN)
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
-            if self.lock.entity_id not in get_entry_data(entry, CONF_LOCKS, [])
+            if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         )
         data: dict[int, int | str] = {}
         code_slot = 1
