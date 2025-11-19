@@ -66,6 +66,68 @@ class BaseLock:
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=2.0, init=False)
 
+    @retry(
+        retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError)),
+        wait=wait_exponential(multiplier=1, min=2, max=10) + wait_random(0, 2),
+        stop=stop_after_attempt(3),
+        reraise=True,
+    )
+    async def _execute_with_retry(
+        self,
+        operation_type: str,
+        func: Callable[..., Awaitable[Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute operation with rate limiting and automatic retry on transient failures.
+
+        Args:
+            operation_type: Type of operation for logging
+            func: The async function to execute
+            *args: Positional arguments to pass to func
+            **kwargs: Keyword arguments to pass to func
+
+        Returns:
+            Result from the executed function.
+
+        Raises:
+            asyncio.TimeoutError: If operation times out (will be retried)
+            ConnectionError: If connection fails (will be retried)
+
+        """
+        async with self._aio_lock:
+            # Rate limiting - enforce minimum delay between operations
+            elapsed = time.monotonic() - self._last_operation_time
+            if elapsed < self._min_operation_delay:
+                delay = self._min_operation_delay - elapsed
+                LOGGER.debug(
+                    "Rate limiting %s operation on %s, waiting %.1f seconds",
+                    operation_type,
+                    self.lock.entity_id,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+            # Execute operation
+            LOGGER.debug(
+                "Executing %s operation on %s",
+                operation_type,
+                self.lock.entity_id,
+            )
+
+            try:
+                result = await func(*args, **kwargs)
+                self._last_operation_time = time.monotonic()
+                return result
+            except (asyncio.TimeoutError, ConnectionError) as err:
+                LOGGER.warning(
+                    "Transient error during %s operation on %s: %s. Will retry.",
+                    operation_type,
+                    self.lock.entity_id,
+                    err,
+                )
+                raise
+
     async def _execute_rate_limited(
         self,
         operation_type: Literal["get", "set", "clear", "refresh"],
@@ -96,56 +158,10 @@ class BaseLock:
                     f"Cannot {operation_type} on {self.lock.entity_id} - lock not connected"
                 )
 
-        # Define retry wrapper with tenacity
-        @retry(
-            retry=retry_if_exception_type((asyncio.TimeoutError, ConnectionError)),
-            wait=wait_exponential(multiplier=1, min=2, max=10) + wait_random(0, 2),
-            stop=stop_after_attempt(3),
-            reraise=True,
-        )
-        async def _execute_with_retry() -> Any:
-            """Execute operation with automatic retry on transient failures."""
-            async with self._aio_lock:
-                # Rate limiting - enforce minimum delay between operations
-                elapsed = time.monotonic() - self._last_operation_time
-                if elapsed < self._min_operation_delay:
-                    delay = self._min_operation_delay - elapsed
-                    LOGGER.debug(
-                        "Rate limiting %s operation on %s, waiting %.1f seconds",
-                        operation_type,
-                        self.lock.entity_id,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-
-                # Log operation
-                LOGGER.debug(
-                    "Executing %s operation on %s",
-                    operation_type,
-                    self.lock.entity_id,
-                )
-
-                try:
-                    # Execute the actual operation
-                    result = await func(*args, **kwargs)
-
-                    # Update timestamp for rate limiting
-                    self._last_operation_time = time.monotonic()
-
-                    return result
-                except (asyncio.TimeoutError, ConnectionError) as err:
-                    LOGGER.warning(
-                        "Transient error during %s operation on %s: %s. Will retry.",
-                        operation_type,
-                        self.lock.entity_id,
-                        err,
-                    )
-                    raise
-
+        # Execute with retry
         try:
-            return await _execute_with_retry()
+            return await self._execute_with_retry(operation_type, func, *args, **kwargs)
         except RetryError as err:
-            # All retries exhausted
             LOGGER.error(
                 "Failed to execute %s operation on %s after all retries: %s",
                 operation_type,
