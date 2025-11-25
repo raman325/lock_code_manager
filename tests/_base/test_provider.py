@@ -23,7 +23,7 @@ async def test_base(hass: HomeAssistant):
     config_entry = MockConfigEntry()
     config_entry.add_to_hass(hass)
 
-    # Create a proper registry entry
+    # Create a proper registry entry for the mock lock
     lock_entity = entity_reg.async_get_or_create(
         "lock",
         "test",
@@ -64,7 +64,7 @@ async def test_set_usercode_when_disconnected(
     lock_code_manager_config_entry,
 ):
     """Test that async_internal_set_usercode raises LockDisconnected when lock is disconnected."""
-    # Get the lock provider instance
+    # Arrange: get the provider and force it offline
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
@@ -87,7 +87,7 @@ async def test_clear_usercode_when_disconnected(
     lock_code_manager_config_entry,
 ):
     """Test that async_internal_clear_usercode raises LockDisconnected when lock is disconnected."""
-    # Get the lock provider instance
+    # Arrange: get the provider and force it offline
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
@@ -107,7 +107,7 @@ async def test_rate_limiting_set_usercode(
     lock_code_manager_config_entry,
 ):
     """Test that operations are rate limited with minimum delay between calls."""
-    # Get the lock provider instance
+    # Arrange: shorter delay for faster assertions
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
@@ -148,7 +148,7 @@ async def test_rate_limiting_mixed_operations(
     lock_code_manager_config_entry,
 ):
     """Test that rate limiting applies across different operation types."""
-    # Get the lock provider instance
+    # Arrange: shorter delay for faster assertions
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
@@ -175,7 +175,7 @@ async def test_rate_limiting_get_usercodes(
     lock_code_manager_config_entry,
 ):
     """Test that get operations are also rate limited."""
-    # Get the lock provider instance
+    # Arrange: shorter delay for faster assertions
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
@@ -206,7 +206,7 @@ async def test_operations_are_serialized(
     lock_code_manager_config_entry,
 ):
     """Test that multiple parallel operations are serialized by the lock."""
-    # Get the lock provider instance
+    # Arrange: shorter delay for faster assertions
     coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
         COORDINATORS
     ]
@@ -236,3 +236,36 @@ async def test_operations_are_serialized(
         len(hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"])
         == 3
     )
+
+
+async def test_connection_failure_does_not_rate_limit_next_operation(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that failed connection checks do not advance rate limit timing."""
+    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
+        COORDINATORS
+    ]
+    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
+
+    # Tighten delay to keep test quick
+    lock_provider._min_operation_delay = 0.5
+    lock_provider._last_operation_time = 0.0
+
+    lock_provider.set_connected(False)
+
+    # First attempt should fail fast without waiting
+    start = time.monotonic()
+    with pytest.raises(LockDisconnected):
+        await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
+    failed_duration = time.monotonic() - start
+    assert failed_duration < 0.2
+
+    # Reconnect and verify the next call is not delayed by the failed attempt
+    lock_provider.set_connected(True)
+    start = time.monotonic()
+    await lock_provider.async_internal_set_usercode(1, "2222", "Test 2")
+    succeeded_duration = time.monotonic() - start
+
+    assert succeeded_duration < 0.2

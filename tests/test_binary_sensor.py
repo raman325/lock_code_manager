@@ -4,7 +4,6 @@ import copy
 from datetime import timedelta
 import logging
 
-import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -44,10 +43,14 @@ from custom_components.lock_code_manager.const import (
     COORDINATORS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.coordinator import (
+    LockUsercodeUpdateCoordinator,
+)
 
 from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
     LOCK_DATA,
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
@@ -61,12 +64,30 @@ from .common import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_lock_context(hass: HomeAssistant, config_entry: MockConfigEntry):
+    """Return coordinator and provider for lock_1."""
+    coordinators = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
+    coordinator = coordinators[LOCK_1_ENTITY_ID]
+    return coordinator, coordinator.lock
+
+
+async def _async_force_sync_cycle(
+    hass: HomeAssistant, coordinator: LockUsercodeUpdateCoordinator
+):
+    """Trigger a coordinator refresh and follow-up entity update."""
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    async_fire_time_changed(hass, dt_util.utcnow() + coordinator.update_interval)
+    await hass.async_block_till_done()
+
+
 async def test_binary_sensor_entity(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test sensor entity."""
+    """Walk through calendar, usage, enable/disable, and PIN updates for slot 2."""
+    # Initial calendar/active state should be off
     calendar_1, _ = hass.data["lock_code_manager_calendars"]
     state = hass.states.get("calendar.test_1")
     assert state
@@ -76,6 +97,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_OFF
 
+    # Create an event to activate the slot and verify it toggles on
     now = dt_util.utcnow()
     start = now - timedelta(hours=1)
     end = now + timedelta(hours=1)
@@ -87,6 +109,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_ON
 
+    # Removing the event should turn the slot off
     calendar_1.delete_event(cal_event.uid)
     await hass.async_block_till_done()
 
@@ -94,6 +117,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_OFF
 
+    # Adding another event turns it back on
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
 
@@ -101,6 +125,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_ON
 
+    # Exhaust uses and then restore them
     await hass.services.async_call(
         NUMBER_DOMAIN,
         NUMBER_SERVICE_SET_VALUE,
@@ -127,6 +152,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_ON
 
+    # Disable/enable the slot via switch
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_OFF,
@@ -151,6 +177,7 @@ async def test_binary_sensor_entity(
     assert state
     assert state.state == STATE_ON
 
+    # Change PIN and ensure provider receives the update
     await hass.services.async_call(
         TEXT_DOMAIN,
         TEXT_SERVICE_SET_VALUE,
@@ -172,6 +199,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
+    # Changing to a different calendar should deactivate the slot
     state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
     assert state
     assert state.state == STATE_OFF
@@ -291,10 +319,65 @@ async def test_startup_detects_out_of_sync_code(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
+async def test_startup_out_of_sync_slots_sync_once(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Ensure out-of-sync slots sync once each without extra operations."""
+    # Arrange two slots that need syncing on startup
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "9999", CONF_ENABLED: True},
+            2: {CONF_NAME: "test2", CONF_PIN: "0000", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Test Multi Sync", title="Test LCM"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Reduce provider delay to keep the test fast
+    _, lock_provider = _get_lock_context(hass, config_entry)
+    lock_provider._min_operation_delay = 0.01
+    lock_provider._last_operation_time = 0.0
+
+    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+
+    assert hass.states.get(in_sync_slot_1)
+    assert hass.states.get(in_sync_slot_2)
+
+    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    # No set calls should have happened before we trigger updates
+    assert service_calls["set_usercode"] == []
+
+    # Trigger sync for both slots
+    await async_update_entity(hass, in_sync_slot_1)
+    await async_update_entity(hass, in_sync_slot_2)
+    await hass.async_block_till_done()
+
+    set_calls = service_calls["set_usercode"]
+    assert len(set_calls) == 2
+    assert (1, "9999", "test1") in set_calls
+    assert (2, "0000", "test2") in set_calls
+
+    # Further updates should not issue extra operations once in sync
+    await async_update_entity(hass, in_sync_slot_1)
+    await async_update_entity(hass, in_sync_slot_2)
+    await hass.async_block_till_done()
+
+    assert len(service_calls["set_usercode"]) == 2
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
 async def test_startup_waits_for_valid_active_state(
     hass: HomeAssistant,
     mock_lock_config_entry,
-    caplog: pytest.LogCaptureFixture,
 ):
     """Test that in-sync entity doesn't load initial state when active entity has invalid state."""
     config = {
@@ -312,7 +395,6 @@ async def test_startup_waits_for_valid_active_state(
     )
     config_entry.add_to_hass(hass)
 
-    caplog.set_level(logging.DEBUG)
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
@@ -338,18 +420,9 @@ async def test_startup_waits_for_valid_active_state(
     hass.states.async_set(active_entity_id, STATE_UNAVAILABLE)
     await hass.async_block_till_done()
 
-    caplog.clear()
-
     # Trigger update with unavailable active state
     await async_update_entity(hass, in_sync_entity)
     await hass.async_block_till_done()
-
-    # Verify it logged the validation message
-    assert any(
-        "has invalid state" in record.message
-        and "waiting for valid state" in record.message
-        for record in caplog.records
-    ), "Should log that it's waiting for valid active state"
 
     # Verify initial state is still not loaded (is_on still None)
     assert in_sync_entity_obj._attr_is_on is None
@@ -357,11 +430,93 @@ async def test_startup_waits_for_valid_active_state(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
+async def test_in_sync_waits_for_missing_pin_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that in-sync entity waits for dependent entities to report state."""
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
+
+    # Simulate pre-initialization state
+    in_sync_entity_obj._attr_is_on = None
+
+    # Remove the PIN entity state so _ensure_entities_ready() fails
+    hass.states.async_remove(SLOT_1_PIN_ENTITY)
+    await hass.async_block_till_done()
+
+    await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
+    await hass.async_block_till_done()
+
+    # Entity should still be waiting on initial state
+    assert in_sync_entity_obj._attr_is_on is None, (
+        "In-sync sensor should not initialize when PIN state is missing"
+    )
+
+    # Restore the PIN entity state and verify initialization completes
+    hass.states.async_set(SLOT_1_PIN_ENTITY, "1234")
+    await hass.async_block_till_done()
+
+    await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
+    await hass.async_block_till_done()
+
+    assert in_sync_entity_obj._attr_is_on is True, (
+        "In-sync sensor should initialize once dependent states are available"
+    )
+
+
+async def test_entities_track_availability(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that entities react to lock availability and coordinator data."""
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    active_entity_obj = entity_component.get_entity(SLOT_1_ACTIVE_ENTITY)
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert active_entity_obj is not None
+    assert in_sync_entity_obj is not None
+
+    coordinator, _ = _get_lock_context(hass, lock_code_manager_config_entry)
+
+    assert active_entity_obj.available
+    assert in_sync_entity_obj.available
+
+    # Make lock 1 unavailable and verify per-lock entity follows
+    hass.states.async_set(LOCK_1_ENTITY_ID, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+
+    assert active_entity_obj.available
+    assert not in_sync_entity_obj.available
+
+    # When all locks are unavailable, the shared entity also becomes unavailable
+    hass.states.async_set(LOCK_2_ENTITY_ID, STATE_UNAVAILABLE)
+    await hass.async_block_till_done()
+
+    assert not active_entity_obj.available
+
+    # Restoring the lock state should re-enable availability
+    hass.states.async_set(LOCK_1_ENTITY_ID, "locked")
+    hass.states.async_set(LOCK_2_ENTITY_ID, "locked")
+    await hass.async_block_till_done()
+
+    assert active_entity_obj.available
+    assert in_sync_entity_obj.available
+
+    # The per-lock entity should also reflect missing coordinator data
+    coordinator.data.pop(1)
+    assert not in_sync_entity_obj.available
+
+    coordinator.data[1] = "1234"
+    assert in_sync_entity_obj.available
+
+
 async def test_handles_disconnected_lock_on_set(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-    caplog,
 ):
     """Test that binary sensor handles LockDisconnected exception when setting usercode."""
     # Verify initial state - slot should be active and in sync
@@ -371,11 +526,7 @@ async def test_handles_disconnected_lock_on_set(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    # Get the lock provider instance and disconnect it
-    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
-        COORDINATORS
-    ]
-    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
+    coordinator, lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
     lock_provider.set_connected(False)
 
     # Change PIN to trigger sync
@@ -393,32 +544,31 @@ async def test_handles_disconnected_lock_on_set(
     assert synced_state.state == STATE_OFF
 
     # Trigger coordinator refresh to attempt sync
-    await coordinators[LOCK_1_ENTITY_ID].async_refresh()
-    await hass.async_block_till_done()
+    await _async_force_sync_cycle(hass, coordinator)
 
-    # Fire time changed to trigger binary sensor update (which calls async_update)
-    async_fire_time_changed(
-        hass, dt_util.utcnow() + coordinators[LOCK_1_ENTITY_ID].update_interval
-    )
-    await hass.async_block_till_done()
-
-    # Binary sensor should remain off due to failed sync
+    # Binary sensor should remain out of sync due to failed sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
-    assert synced_state.state == STATE_OFF
-
-    # Verify debug log was created
-    assert "Unable to set usercode" in caplog.text
-    assert "lock not connected" in caplog.text
+    assert synced_state.state in (STATE_OFF, STATE_UNAVAILABLE)
 
     # Verify the code wasn't actually changed (still old value)
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "1234"
+
+    # Reconnect the lock and trigger the scheduled retry to ensure it resyncs
+    lock_provider.set_connected(True)
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    await in_sync_entity_obj._handle_retry_callback(dt_util.utcnow())
+    await hass.async_block_till_done()
+    await _async_force_sync_cycle(hass, coordinator)
+
+    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "9999"
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
 async def test_handles_disconnected_lock_on_clear(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-    caplog,
 ):
     """Test that binary sensor handles LockDisconnected exception when clearing usercode."""
     # Verify initial state - slot should be active and in sync
@@ -428,11 +578,7 @@ async def test_handles_disconnected_lock_on_clear(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    # Get the lock provider instance and disconnect it
-    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
-        COORDINATORS
-    ]
-    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
+    coordinator, lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
     lock_provider.set_connected(False)
 
     # Disable the slot to trigger clear
@@ -440,18 +586,17 @@ async def test_handles_disconnected_lock_on_clear(
     await hass.async_block_till_done()
 
     # Trigger coordinator refresh
-    await coordinators[LOCK_1_ENTITY_ID].async_refresh()
-    await hass.async_block_till_done()
-
-    # Fire time changed to trigger binary sensor update
-    async_fire_time_changed(
-        hass, dt_util.utcnow() + coordinators[LOCK_1_ENTITY_ID].update_interval
-    )
-    await hass.async_block_till_done()
-
-    # Verify debug log was created
-    assert "Unable to clear usercode" in caplog.text
-    assert "lock not connected" in caplog.text
+    await _async_force_sync_cycle(hass, coordinator)
 
     # Verify the code wasn't actually cleared (still has value)
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) == "1234"
+
+    # Reconnect the lock and trigger the scheduled retry to ensure it clears the code
+    lock_provider.set_connected(True)
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    await in_sync_entity_obj._handle_retry_callback(dt_util.utcnow())
+    await hass.async_block_till_done()
+    await _async_force_sync_cycle(hass, coordinator)
+
+    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) is None

@@ -1,8 +1,6 @@
 Dev:
-- Reevaluate logging
+- Done: Added debug logging when dependent entity state is missing during sync
 
 Test:
 - Test strategy
-- Test handling when a state is missing for binary sensor
 - Test lock providers
-- Test availability logic
