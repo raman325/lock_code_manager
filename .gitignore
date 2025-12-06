@@ -3,9 +3,11 @@
 venv
 *.pyc
 .claude
+.codex
 .coverage
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.uv-cache
 node_modules
 .ha
