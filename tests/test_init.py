@@ -216,7 +216,6 @@ async def test_resource_already_loaded_ui(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is already loaded in UI mode."""
@@ -239,7 +238,10 @@ async def test_resource_already_loaded_ui(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert "already registered" in caplog.text
+    items = [
+        item for item in resources.async_items() if item[CONF_URL] == STRATEGY_PATH
+    ]
+    assert len(items) == 1
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -253,7 +255,6 @@ async def test_resource_already_loaded_yaml(
     setup_lovelace_ui,
     mock_lock_config_entry,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ):
     """Test when strategy resource is already loaded in YAML mode."""
     monkeypatch.setattr(
@@ -268,9 +269,51 @@ async def test_resource_already_loaded_yaml(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert "already registered" in caplog.text
+    resources = hass.data[LL_DOMAIN].resources
+    assert resources
+    items = [
+        item for item in resources.async_items() if item[CONF_URL] == STRATEGY_PATH
+    ]
+    assert len(items) == 1
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"mode": "yaml", "resources": [{"type": "module", CONF_URL: STRATEGY_PATH}]}],
+)
+async def test_resource_unload_skips_yaml_mode(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Ensure resource removal is skipped when resources are managed via YAML."""
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Simulate auto-registration bookkeeping being set from a prior run
+    hass.data[DOMAIN]["resources"] = True
+
+    resources = hass.data[LL_DOMAIN].resources
+    assert resources
+    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+    # Resource should remain because YAML mode can't be modified automatically
+    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
 
 
 @pytest.mark.parametrize(
@@ -282,7 +325,6 @@ async def test_resource_not_loaded_yaml(
     setup_lovelace_ui,
     mock_lock_config_entry,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ):
     """Test when strategy resource is not loaded in YAML mode."""
     monkeypatch.setattr(
@@ -297,7 +339,9 @@ async def test_resource_not_loaded_yaml(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert "module can't automatically be registered" in caplog.text
+    resources = hass.data[LL_DOMAIN].resources
+    assert resources
+    assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -326,7 +370,6 @@ async def test_resource_not_loaded_on_unload(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is not loaded when unloading config entry."""
@@ -346,7 +389,7 @@ async def test_resource_not_loaded_on_unload(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert "Registered strategy module" in caplog.text
+    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
 
     await resources.async_delete_item(
         next(
@@ -358,4 +401,5 @@ async def test_resource_not_loaded_on_unload(
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
-    assert "Strategy module not found so there is nothing to remove" in caplog.text
+    assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+    assert DOMAIN not in hass.data
