@@ -4,6 +4,9 @@ aiofiles==25.1.0
 colorlog==6.10.1
 debugpy==1.8.18
 homeassistant==2025.12.2
+# Temporary: pycares 5.0.0 breaks aiodns, pinned in HA 2025.12.3 but we're on 2025.12.2
+# See: https://github.com/home-assistant/core/pull/158695
+pycares<5.0.0
 pyserial==3.5
 pyudev==0.24.4
 uv
