@@ -269,3 +269,30 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
     succeeded_duration = time.monotonic() - start
 
     assert succeeded_duration < 0.2
+
+
+async def test_async_call_service_raises_lock_disconnected_on_error(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that async_call_service raises LockDisconnected when service call fails."""
+    coordinators = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
+        COORDINATORS
+    ]
+    lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
+
+    # Register a service that raises an error
+    async def failing_service(call):
+        raise ValueError("Service failed")
+
+    hass.services.async_register("test_domain", "failing_service", failing_service)
+
+    # Calling a failing service should raise LockDisconnected
+    with pytest.raises(
+        LockDisconnected, match="Service call test_domain.failing_service failed"
+    ):
+        await lock_provider.async_call_service("test_domain", "failing_service", {})
+
+    # Clean up
+    hass.services.async_remove("test_domain", "failing_service")

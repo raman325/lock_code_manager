@@ -316,7 +316,7 @@ class BaseLock:
         service_data: dict[str, Any] | None = None,
         blocking: bool = True,
     ):
-        """Call a hass service and log a failure on an error."""
+        """Call a hass service and re-raise failures as LockDisconnected."""
         try:
             await self.hass.services.async_call(
                 domain, service, service_data=service_data, blocking=blocking
@@ -325,6 +325,9 @@ class BaseLock:
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
+            raise LockDisconnected(
+                f"Service call {domain}.{service} failed: {err}"
+            ) from err
 
     @final
     @callback

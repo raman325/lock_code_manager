@@ -39,7 +39,7 @@ from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_filtered,
 )
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity, UpdateFailed
 
 from .const import (
     ATTR_ACTIVE,
@@ -524,7 +524,19 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 # Refresh coordinator to verify operation completed
                 # Rate limiting at provider level prevents excessive calls
                 if sync_performed:
-                    await self.coordinator.async_refresh()
+                    try:
+                        await self.coordinator.async_refresh()
+                    except UpdateFailed as err:
+                        _LOGGER.debug(
+                            "%s (%s): Coordinator refresh failed after sync for %s "
+                            "slot %s, scheduling retry: %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                            err,
+                        )
+                        self._schedule_retry()
 
             elif not self._attr_is_on:
                 # Was out of sync, now in sync

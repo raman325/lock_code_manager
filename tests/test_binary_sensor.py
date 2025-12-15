@@ -3,6 +3,7 @@
 import copy
 from datetime import timedelta
 import logging
+from unittest.mock import AsyncMock, patch
 
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -34,6 +35,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_component import async_update_entity
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
@@ -600,3 +602,49 @@ async def test_handles_disconnected_lock_on_clear(
     await _async_force_sync_cycle(hass, coordinator)
 
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) is None
+
+
+async def test_coordinator_refresh_failure_schedules_retry(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that coordinator refresh failure after sync schedules a retry."""
+    # Verify initial state - slot should be active and in sync
+    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
+    assert synced_state.state == STATE_ON
+
+    coordinator, lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider._min_operation_delay = 0.01
+    lock_provider._last_operation_time = 0.0
+
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+
+    # Verify no retry is scheduled initially
+    assert in_sync_entity_obj._retry_unsub is None
+
+    # Patch coordinator refresh to fail BEFORE changing PIN
+    # This way the failure happens during the sync triggered by the PIN change
+    with patch.object(
+        coordinator,
+        "async_refresh",
+        new=AsyncMock(side_effect=UpdateFailed("Connection failed")),
+    ):
+        # Change PIN to trigger sync - coordinator refresh will fail
+        await hass.services.async_call(
+            TEXT_DOMAIN,
+            TEXT_SERVICE_SET_VALUE,
+            service_data={ATTR_VALUE: "9999"},
+            target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    # Retry should be scheduled due to coordinator refresh failure
+    assert in_sync_entity_obj._retry_unsub is not None, (
+        "Retry should be scheduled when coordinator refresh fails after sync"
+    )
+
+    # Clean up - cancel the retry
+    in_sync_entity_obj._cancel_retry()
