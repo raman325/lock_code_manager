@@ -19,7 +19,7 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
-from homeassistant.config_entries import ConfigEntry, ConfigEntryError
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -39,7 +39,7 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.core_config import Config
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
