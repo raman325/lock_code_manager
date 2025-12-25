@@ -45,6 +45,16 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+@pytest.fixture(autouse=True)
+def auto_setup_mock_lock(monkeypatch: pytest.MonkeyPatch):
+    """Automatically set up MockLCMLock for all tests."""
+    monkeypatch.setattr(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLock},
+    )
+    yield
+
+
 class MockFlow(ConfigFlow):
     """Test flow."""
 
@@ -141,15 +151,8 @@ async def mock_lock_config_entry_fixture(hass: HomeAssistant, mock_config_flow):
 
 
 @pytest.fixture(name="lock_code_manager_config_entry")
-async def lock_code_manager_config_entry_fixture(
-    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
-):
+async def lock_code_manager_config_entry_fixture(hass: HomeAssistant):
     """Set up the config entry for lock code manager."""
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )

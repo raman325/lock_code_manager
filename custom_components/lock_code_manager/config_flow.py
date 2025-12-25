@@ -302,15 +302,11 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
         """Get options flow."""
-        return LockCodeManagerOptionsFlow(config_entry)
+        return LockCodeManagerOptionsFlow()
 
 
 class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry):
-        """Initialize."""
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

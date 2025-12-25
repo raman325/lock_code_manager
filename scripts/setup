@@ -19,8 +19,10 @@ if [ ! -n "$DEVCONTAINER" ] && [ ! -n "$VIRTUAL_ENV" ];then
   source venv/bin/activate
 fi
 
-# Install requirements
-python -m pip install -r requirements_dev.txt
+pip install --upgrade uv
+uv pip install -r requirements_dev.txt
+
+
 pre-commit install
 yarn install
 

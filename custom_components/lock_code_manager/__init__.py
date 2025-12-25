@@ -19,7 +19,7 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
-from homeassistant.config_entries import ConfigEntry, ConfigEntryError
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -39,7 +39,7 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.core_config import Config
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryError, HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -322,6 +322,14 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
                         "Strategy module not found so there is nothing to remove"
                     )
                 else:
+                    if isinstance(resources, ResourceYAMLCollection):
+                        _LOGGER.debug(
+                            "Resources switched to YAML mode after registration, skipping automatic removal for %s",
+                            STRATEGY_PATH,
+                        )
+                        hass.data.pop(DOMAIN)
+                        return unload_ok
+
                     await resources.async_delete_item(resource_id)
                     _LOGGER.debug(
                         "Removed strategy module (resource ID %s)", resource_id
