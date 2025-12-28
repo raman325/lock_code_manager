@@ -244,6 +244,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     async def async_update(self) -> None:
         """Update entity."""
+        if self._attr_is_on is None:
+            return
+
         if (
             self._lock.locked()
             or self.is_on
@@ -367,7 +370,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self._entity_id_map[key] = ent_id
 
             # Verify entity has a state
-            if self._get_entity_state(key) is None:
+            state = self._get_entity_state(key)
+            if state is None or state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
                 _LOGGER.debug(
                     "%s (%s): Waiting for %s state for %s slot %s",
                     self.config_entry.entry_id,
@@ -482,9 +486,14 @@ class LockCodeManagerCodeSlotInSyncEntity(
             assert pin_state is not None
             assert code_state is not None
 
+            coordinator_code = self.coordinator.data.get(int(self.slot_num))
+            effective_code_state = (
+                str(coordinator_code) if coordinator_code is not None else code_state
+            )
+
             # Calculate expected sync state
             expected_in_sync = self._calculate_expected_sync(
-                active_state, pin_state, code_state
+                active_state, pin_state, effective_code_state
             )
 
             # Initial load: Set sync state without performing operations (prevents startup flapping)
@@ -514,6 +523,26 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
             # Normal operation: Perform sync if needed
             if not expected_in_sync:
+                if (
+                    coordinator_code == ""
+                    and active_state == STATE_ON
+                    and pin_state.isnumeric()
+                ):
+                    try:
+                        await self.coordinator.async_refresh()
+                    except UpdateFailed as err:
+                        _LOGGER.debug(
+                            "%s (%s): Coordinator refresh failed while verifying "
+                            "masked PIN state for %s slot %s: %s",
+                            self.config_entry.entry_id,
+                            self.config_entry.title,
+                            self.lock.lock.entity_id,
+                            self.slot_num,
+                            err,
+                        )
+                        self._schedule_retry()
+                    return
+
                 self._update_sync_state(False)
 
                 # Perform sync operation

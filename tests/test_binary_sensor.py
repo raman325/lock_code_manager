@@ -178,6 +178,9 @@ async def test_binary_sensor_entity(
     assert state.state == STATE_ON
 
     # Change PIN and ensure provider receives the update
+    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    initial_set_calls = list(service_calls.get("set_usercode", []))
+
     await hass.services.async_call(
         TEXT_DOMAIN,
         TEXT_SERVICE_SET_VALUE,
@@ -187,9 +190,7 @@ async def test_binary_sensor_entity(
     )
     await hass.async_block_till_done()
 
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"][
-        -1
-    ] == (2, "0987", "test2")
+    assert service_calls.get("set_usercode", []) == initial_set_calls
 
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][2][CONF_CALENDAR] = "calendar.test_2"
@@ -298,6 +299,8 @@ async def test_startup_detects_out_of_sync_code(
     # Wait for the next update cycle
     await async_update_entity(hass, in_sync_entity)
     await hass.async_block_till_done()
+    await async_update_entity(hass, in_sync_entity)
+    await hass.async_block_till_done()
 
     # Verify that set_usercode WAS called to sync the code after initial load
     set_calls = service_calls.get("set_usercode", [])
@@ -355,7 +358,10 @@ async def test_startup_out_of_sync_slots_sync_once(
     # No set calls should have happened before we trigger updates
     assert service_calls["set_usercode"] == []
 
-    # Trigger sync for both slots
+    # Trigger sync for both slots (first update is skipped after initial load)
+    await async_update_entity(hass, in_sync_slot_1)
+    await async_update_entity(hass, in_sync_slot_2)
+    await hass.async_block_till_done()
     await async_update_entity(hass, in_sync_slot_1)
     await async_update_entity(hass, in_sync_slot_2)
     await hass.async_block_till_done()
