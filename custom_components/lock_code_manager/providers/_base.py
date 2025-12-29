@@ -75,17 +75,6 @@ class BaseLock:
             )
         return await self.hass.async_add_executor_job(func, *args)
 
-    async def _ensure_connected(
-        self, operation_type: Literal["get", "set", "clear", "refresh"]
-    ) -> None:
-        """Ensure the underlying integration reports the lock as connected."""
-        if await self.async_internal_is_connection_up():
-            return
-
-        raise LockDisconnected(
-            f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - lock not connected"
-        )
-
     async def _execute_rate_limited(
         self,
         operation_type: Literal["get", "set", "clear", "refresh"],
@@ -94,7 +83,10 @@ class BaseLock:
         **kwargs: Any,
     ) -> Any:
         """Execute operation with connection check, serialization, and delay."""
-        await self._ensure_connected(operation_type)
+        if not await self.async_internal_is_connection_up():
+            raise LockDisconnected(
+                f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - lock not connected"
+            )
 
         async with self._aio_lock:
             elapsed = time.monotonic() - self._last_operation_time
