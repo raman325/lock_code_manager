@@ -216,6 +216,8 @@ async def test_operations_are_serialized(
 
     # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
+    # Reset the last operation time to ensure clean test isolation
+    lock_provider._last_operation_time = 0.0
 
     # Start multiple operations in parallel
     start_time = time.monotonic()
