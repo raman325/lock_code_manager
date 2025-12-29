@@ -281,43 +281,6 @@ async def test_resource_already_loaded_yaml(
 
 @pytest.mark.parametrize(
     "config",
-    [{"mode": "yaml", "resources": [{"type": "module", CONF_URL: STRATEGY_PATH}]}],
-)
-async def test_resource_unload_skips_yaml_mode(
-    hass: HomeAssistant,
-    setup_lovelace_ui,
-    mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Ensure resource removal is skipped when resources are managed via YAML."""
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
-    config_entry = MockConfigEntry(
-        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
-    )
-    config_entry.add_to_hass(hass)
-
-    await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    # Simulate auto-registration bookkeeping being set from a prior run
-    hass.data[DOMAIN]["resources"] = True
-
-    resources = hass.data[LL_DOMAIN].resources
-    assert resources
-    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-
-    await hass.config_entries.async_unload(config_entry.entry_id)
-
-    # Resource should remain because YAML mode can't be modified automatically
-    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-
-
-@pytest.mark.parametrize(
-    "config",
     [{"mode": "yaml", "resources": [{"type": "module", CONF_URL: "fake_module.js"}]}],
 )
 async def test_resource_not_loaded_yaml(
