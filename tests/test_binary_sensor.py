@@ -558,9 +558,10 @@ async def test_handles_disconnected_lock_on_set(
     lock_provider.set_connected(True)
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
-    await in_sync_entity_obj._handle_retry_callback(dt_util.utcnow())
+
+    # Directly trigger the update state method to perform sync
+    await in_sync_entity_obj._async_update_state()
     await hass.async_block_till_done()
-    await _async_force_sync_cycle(hass, coordinator)
 
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "9999"
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
@@ -596,9 +597,10 @@ async def test_handles_disconnected_lock_on_clear(
     lock_provider.set_connected(True)
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
-    await in_sync_entity_obj._handle_retry_callback(dt_util.utcnow())
+
+    # Directly trigger the update state method to perform sync
+    await in_sync_entity_obj._async_update_state()
     await hass.async_block_till_done()
-    await _async_force_sync_cycle(hass, coordinator)
 
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) is None
 
