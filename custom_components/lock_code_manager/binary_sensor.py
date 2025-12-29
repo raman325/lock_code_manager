@@ -29,7 +29,6 @@ from homeassistant.core import (
     Event,
     EventStateChangedData,
     HomeAssistant,
-    State,
     callback,
 )
 from homeassistant.helpers import entity_registry as er
@@ -38,6 +37,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     TrackStates,
     async_call_later,
+    async_track_state_change_event,
     async_track_state_change_filtered,
 )
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, UpdateFailed
@@ -228,6 +228,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
         self._lock = asyncio.Lock()
         self._attr_is_on: bool | None = None  # None means not yet initialized
+        self._tracked_entity_ids: set[str] = set()
         self._retry_unsub: Callable[[], None] | None = None
         self._retry_active = False
 
@@ -311,64 +312,38 @@ class LockCodeManagerCodeSlotInSyncEntity(
         finally:
             self._retry_active = False
 
-    def _is_event_relevant(self, entity_id: str | None, to_state: State | None) -> bool:
-        """Check if state change event is relevant to this sensor.
-
-        Only process events from our integration's entities for this slot,
-        and ignore unavailable/unknown states.
-        """
-        if entity_id is None:
-            return True  # Not an event, process normally
-
-        ent_entry = self.ent_reg.async_get(entity_id)
-        if not ent_entry:
-            return False
-
-        # Must be from our integration
-        if ent_entry.platform != DOMAIN:
-            return False
-
-        # Must be one of our tracked entities for this slot
-        if (ent_entry.domain, ent_entry.unique_id) not in (
-            (BINARY_SENSOR_DOMAIN, self._active_unique_id),
-            (TEXT_DOMAIN, self._name_text_unique_id),
-            (TEXT_DOMAIN, self._pin_text_unique_id),
-            (SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
-        ):
-            return False
-
-        # Ignore unavailable/unknown states
-        if to_state and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return False
-
-        return True
-
-    def _ensure_entities_ready(self) -> bool:
-        """Ensure all dependent entities exist with valid states.
-
-        Builds entity ID map on first call. Returns False if any entity
-        is missing or has no state yet.
-        """
+    def _build_entity_id_map(self) -> bool:
+        """Build and cache entity IDs for this slot."""
+        missing = False
         for key, domain, unique_id in (
             (CONF_PIN, TEXT_DOMAIN, self._pin_text_unique_id),
             (CONF_NAME, TEXT_DOMAIN, self._name_text_unique_id),
             (ATTR_ACTIVE, BINARY_SENSOR_DOMAIN, self._active_unique_id),
             (ATTR_CODE, SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
         ):
-            # Build entity ID map on first access
+            if key in self._entity_id_map:
+                continue
+            ent_id = self.ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)
+            if not ent_id:
+                _LOGGER.debug(
+                    "%s (%s): Missing %s entity for %s slot %s",
+                    self.config_entry.entry_id,
+                    self.config_entry.title,
+                    key,
+                    self.lock.lock.entity_id,
+                    self.slot_num,
+                )
+                missing = True
+                continue
+            self._entity_id_map[key] = ent_id
+        self._tracked_entity_ids = set(self._entity_id_map.values())
+        return not missing
+
+    def _ensure_entities_ready(self) -> bool:
+        """Ensure all dependent entities exist with valid states."""
+        for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
             if key not in self._entity_id_map:
-                ent_id = self.ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)
-                if not ent_id:
-                    _LOGGER.debug(
-                        "%s (%s): Missing %s entity for %s slot %s",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        key,
-                        self.lock.lock.entity_id,
-                        self.slot_num,
-                    )
-                    return False
-                self._entity_id_map[key] = ent_id
+                return False
 
             # Verify entity has a state
             state = self._get_entity_state(key)
@@ -414,7 +389,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         if not self.coordinator.last_update_success and not self._retry_active:
             return None
 
-        if not self._is_event_relevant(entity_id, to_state):
+        if not self._build_entity_id_map():
             return None
 
         if self._attr_is_on is None and int(self.slot_num) not in self.coordinator.data:
@@ -424,6 +399,12 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self.config_entry.title,
                 self.slot_num,
             )
+            return None
+
+        if entity_id is not None and entity_id not in self._tracked_entity_ids:
+            return None
+
+        if to_state and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return None
 
         if not self._ensure_entities_ready():
@@ -587,11 +568,18 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
 
-        self.async_on_remove(
-            async_track_state_change_filtered(
-                self.hass, TrackStates(True, set(), set()), self._async_update_state
-            ).async_remove
-        )
+        if self._build_entity_id_map():
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass, self._tracked_entity_ids, self._async_update_state
+                )
+            )
+        else:
+            self.async_on_remove(
+                async_track_state_change_filtered(
+                    self.hass, TrackStates(True, set(), set()), self._async_update_state
+                ).async_remove
+            )
         await self._async_update_state()
 
     async def _async_remove(self) -> None:
