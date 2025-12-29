@@ -305,7 +305,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     async def _handle_retry_callback(self, _now: datetime) -> None:
         """Handle retry callback."""
-        self._retry_unsub = None
+        if self._retry_unsub:
+            self._retry_unsub()
+            self._retry_unsub = None
         self._retry_active = True
         try:
             await self.async_update()
