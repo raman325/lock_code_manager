@@ -33,6 +33,7 @@ async def test_door_lock(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
+    lock._min_operation_delay = 0.0
     assert await lock.async_setup() is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     assert lock.domain == "virtual"

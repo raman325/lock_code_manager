@@ -18,6 +18,7 @@
 - Move coordinator setup into `_async_setup()` where it reduces boilerplate.
 - Review dispatcher usage and simplify if a smaller pattern works.
 - Track entity registry updates and warn if LCM entities change entity IDs (reload required).
+- Explore using HA's scheduler instead of direct sleeps, with task tracking managed by HA.
 
 ## Features
 

@@ -42,6 +42,7 @@ from ..data import get_entry_data
 from ..exceptions import LockDisconnected
 from .const import LOGGER
 
+MIN_OPERATION_DELAY = 2.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
     "get": "get from",
     "set": "set on",
@@ -62,7 +63,7 @@ class BaseLock:
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _last_operation_time: float = field(default=0.0, init=False)
-    _min_operation_delay: float = field(default=2.0, init=False)
+    _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
 
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
