@@ -343,11 +343,6 @@ async def test_startup_out_of_sync_slots_sync_once(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Reduce provider delay to keep the test fast
-    _, lock_provider = _get_lock_context(hass, config_entry)
-    lock_provider._min_operation_delay = 0.01
-    lock_provider._last_operation_time = 0.0
-
     in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
     in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
 
@@ -618,9 +613,7 @@ async def test_coordinator_refresh_failure_schedules_retry(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    coordinator, lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
-    lock_provider._min_operation_delay = 0.01
-    lock_provider._last_operation_time = 0.0
+    coordinator, _ = _get_lock_context(hass, lock_code_manager_config_entry)
 
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)

@@ -24,9 +24,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 
-import custom_components.lock_code_manager as lcm_init
-from custom_components.lock_code_manager import helpers
-from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
+from custom_components.lock_code_manager.const import DOMAIN
 
 from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
 
@@ -54,21 +52,6 @@ def auto_setup_mock_lock(monkeypatch: pytest.MonkeyPatch):
         "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLock},
     )
-    yield
-
-
-@pytest.fixture(autouse=True)
-def auto_disable_lock_rate_limit(monkeypatch: pytest.MonkeyPatch):
-    """Disable per-lock rate limiting during test setup."""
-    original_create = helpers.async_create_lock_instance
-
-    def _create_lock_instance(*args, **kwargs):
-        lock = original_create(*args, **kwargs)
-        lock._min_operation_delay = 0.0
-        return lock
-
-    monkeypatch.setattr(helpers, "async_create_lock_instance", _create_lock_instance)
-    monkeypatch.setattr(lcm_init, "async_create_lock_instance", _create_lock_instance)
     yield
 
 
@@ -176,10 +159,6 @@ async def lock_code_manager_config_entry_fixture(hass: HomeAssistant):
     config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    entry_data = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
-    if entry_data:
-        for lock in entry_data.get(CONF_LOCKS, {}).values():
-            lock._min_operation_delay = 0.0
 
     yield config_entry
 
