@@ -60,11 +60,22 @@ def auto_setup_mock_lock(monkeypatch: pytest.MonkeyPatch):
 def disable_rate_limiting(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ):
-    """Disable BaseLock rate limiting for most tests to speed them up."""
+    """Disable BaseLock rate limiting for most tests to speed them up.
+
+    We patch __post_init__ to set _min_operation_delay=0.0 on new instances.
+    """
     if request.fspath and "tests/_base/test_provider.py" in str(request.fspath):
         yield
         return
-    monkeypatch.setattr(base_lock, "MIN_OPERATION_DELAY", 0.0)
+
+    original_post_init = getattr(base_lock.BaseLock, "__post_init__", None)
+
+    def patched_post_init(self):
+        if original_post_init:
+            original_post_init(self)
+        self._min_operation_delay = 0.0
+
+    monkeypatch.setattr(base_lock.BaseLock, "__post_init__", patched_post_init)
     yield
 
 
