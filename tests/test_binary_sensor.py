@@ -554,8 +554,11 @@ async def test_handles_disconnected_lock_on_set(
     # Verify the code wasn't actually changed (still old value)
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "1234"
 
-    # Reconnect the lock and trigger the scheduled retry to ensure it resyncs
+    # Reconnect the lock and refresh coordinator to restore availability
     lock_provider.set_connected(True)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
@@ -593,8 +596,11 @@ async def test_handles_disconnected_lock_on_clear(
     # Verify the code wasn't actually cleared (still has value)
     assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) == "1234"
 
-    # Reconnect the lock and trigger the scheduled retry to ensure it clears the code
+    # Reconnect the lock and refresh coordinator to restore availability
     lock_provider.set_connected(True)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
