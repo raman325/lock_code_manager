@@ -25,6 +25,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.providers import _base as base_lock
 
 from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
 
@@ -52,6 +53,18 @@ def auto_setup_mock_lock(monkeypatch: pytest.MonkeyPatch):
         "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLock},
     )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def disable_rate_limiting(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
+    """Disable BaseLock rate limiting for most tests to speed them up."""
+    if request.fspath and "tests/_base/test_provider.py" in str(request.fspath):
+        yield
+        return
+    monkeypatch.setattr(base_lock, "MIN_OPERATION_DELAY", 0.0)
     yield
 
 
