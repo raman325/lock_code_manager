@@ -158,6 +158,8 @@ async def test_rate_limiting_mixed_operations(
 
     # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
+    # Reset the last operation time to ensure clean test isolation
+    lock_provider._last_operation_time = 0.0
 
     # First operation: set usercode
     await lock_provider.async_internal_set_usercode(1, "1111", "Test")
