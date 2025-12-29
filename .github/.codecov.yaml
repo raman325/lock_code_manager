@@ -22,5 +22,8 @@ comment:
   behavior: default
   require_changes: no
 
+github_checks:
+  annotations: true
+
 ignore:
   - "tests/" # no need to test the tests

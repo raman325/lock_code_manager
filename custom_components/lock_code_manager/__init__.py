@@ -19,7 +19,7 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
-from homeassistant.config_entries import ConfigEntry, ConfigEntryError
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -39,7 +39,11 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.core_config import Config
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import (
+    ConfigEntryError,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+)
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -483,11 +487,11 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 coordinator = hass_data[COORDINATORS][lock_entity_id] = hass_data[
                     entry_id
                 ][COORDINATORS][lock_entity_id] = LockUsercodeUpdateCoordinator(
-                    hass, lock
+                    hass, lock, config_entry
                 )
                 try:
                     await coordinator.async_config_entry_first_refresh()
-                except UpdateFailed as err:
+                except (ConfigEntryNotReady, UpdateFailed) as err:
                     _LOGGER.warning(
                         "%s (%s): Failed to fetch initial data for lock %s: %s. "
                         "Entities will be created but unavailable until lock is ready.",

@@ -72,6 +72,7 @@ export async function generateView(
 
     const cards = slotMappings.map((slotMapping) =>
         generateSlotCard(
+            hass,
             configEntry,
             slotMapping,
             useFoldEntityRow,
@@ -120,32 +121,44 @@ function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManag
 }
 
 function generateEntityCards(
+    hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     entities: LockCodeManagerEntityEntry[]
 ): { entity: string }[] {
     return entities.map((entity) => {
         if ([IN_SYNC_KEY, CODE_SENSOR_KEY].includes(entity.key)) {
             return {
-                entity: entity.entity_id
+                entity: entity.entity_id,
+                name:
+                    hass.states[entity.lockEntityId]?.attributes?.friendly_name ??
+                    entity.lockEntityId
             };
         }
-        const name = (entity.name || entity.original_name)
-            .replace(`Code slot ${entity.slotNum}`, '')
-            .replace('  ', ' ')
-            .replace('  ', ' ')
-            .trim()
-            .replace(configEntry.title, '')
-            .replace('  ', ' ')
-            .replace('  ', ' ')
-            .trim();
         return {
             entity: entity.entity_id,
-            name: capitalize(name)
+            name: getEntityDisplayName(configEntry, entity)
         };
     });
 }
 
+function getEntityDisplayName(
+    configEntry: ConfigEntryJSONFragment,
+    entity: LockCodeManagerEntityEntry
+): string {
+    const baseName = entity.name ?? entity.original_name ?? '';
+    const configTitle = configEntry.title ?? '';
+    let name = baseName.replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '').trim();
+    if (configTitle && name.toLowerCase().startsWith(configTitle.toLowerCase())) {
+        name = name.slice(configTitle.length).trim();
+    }
+    if (!name) {
+        name = baseName || entity.entity_id;
+    }
+    return capitalize(name);
+}
+
 function generateSlotCard(
+    hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     slotMapping: SlotMapping,
     useFoldEntityRow: boolean,
@@ -160,7 +173,7 @@ function generateSlotCard(
             },
             {
                 entities: [
-                    ...generateEntityCards(configEntry, slotMapping.mainEntities),
+                    ...generateEntityCards(hass, configEntry, slotMapping.mainEntities),
                     DIVIDER_CARD,
                     {
                         entity: slotMapping.pinActiveEntity.entity_id,
@@ -171,6 +184,7 @@ function generateSlotCard(
                         name: 'PIN last used'
                     },
                     ...maybeGenerateFoldEntityRowConditionCard(
+                        hass,
                         configEntry,
                         slotMapping.conditionEntities,
                         slotMapping.calendarEntityId,
@@ -179,6 +193,7 @@ function generateSlotCard(
                     ),
                     ...(include_in_sync_sensors
                         ? maybeGenerateFoldEntityRowCard(
+                              hass,
                               configEntry,
                               slotMapping.inSyncEntities,
                               'Locks in sync',
@@ -187,6 +202,7 @@ function generateSlotCard(
                         : []),
                     ...(include_code_slot_sensors
                         ? maybeGenerateFoldEntityRowCard(
+                              hass,
                               configEntry,
                               slotMapping.codeSensorEntities,
                               'Code slot sensors',
@@ -221,7 +237,7 @@ function getSlotMapping(
                 inSyncEntities.push(entity);
             } else if (CONDITION_KEYS.includes(entity.key)) {
                 conditionEntities.push(entity);
-            } else if (![ACTIVE_KEY, IN_SYNC_KEY].includes(entity.key)) {
+            } else if (![ACTIVE_KEY, IN_SYNC_KEY, CODE_EVENT_KEY].includes(entity.key)) {
                 mainEntities.push(entity);
             }
         });
@@ -246,13 +262,14 @@ function getSlotMapping(
 }
 
 function maybeGenerateFoldEntityRowCard(
+    hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     entities: LockCodeManagerEntityEntry[],
     label: string,
     useFoldEntityRow: boolean
 ) {
     if (entities.length === 0) return [];
-    const entityCards = generateEntityCards(configEntry, entities);
+    const entityCards = generateEntityCards(hass, configEntry, entities);
     return useFoldEntityRow
         ? [
               DIVIDER_CARD,
@@ -275,6 +292,7 @@ function maybeGenerateFoldEntityRowCard(
 }
 
 function maybeGenerateFoldEntityRowConditionCard(
+    hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     conditionEntities: LockCodeManagerEntityEntry[],
     calendarEntityId: string | null | undefined,
@@ -282,7 +300,7 @@ function maybeGenerateFoldEntityRowConditionCard(
     useFoldEntityRow: boolean
 ) {
     if (conditionEntities.length === 0 && calendarEntityId == null) return [];
-    const entityCards = generateEntityCards(configEntry, conditionEntities);
+    const entityCards = generateEntityCards(hass, configEntry, conditionEntities);
     if (calendarEntityId != null) {
         entityCards.unshift({
             entity: calendarEntityId
