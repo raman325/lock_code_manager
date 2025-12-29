@@ -16,6 +16,8 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 
 from ..common import LOCK_1_ENTITY_ID, LOCK_DATA
 
+TEST_OPERATION_DELAY = 0.1
+
 
 async def test_base(hass: HomeAssistant):
     """Test base class."""
@@ -113,8 +115,8 @@ async def test_rate_limiting_set_usercode(
     ]
     lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
 
-    # Set a smaller delay for testing (0.1 seconds instead of 2)
-    lock_provider._min_operation_delay = 0.1
+    # Set a smaller delay for testing
+    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
 
     # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
@@ -132,8 +134,8 @@ async def test_rate_limiting_set_usercode(
     await lock_provider.async_internal_set_usercode(2, "2222", "Test 2")
     second_duration = time.monotonic() - start_time
 
-    # Second operation should take at least the rate limit time (0.1 seconds)
-    assert second_duration >= 0.1
+    # Second operation should take at least the rate limit time
+    assert second_duration >= TEST_OPERATION_DELAY
 
     # Verify both operations completed
     assert (
@@ -155,7 +157,7 @@ async def test_rate_limiting_mixed_operations(
     lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
 
     # Set a smaller delay for testing
-    lock_provider._min_operation_delay = 0.1
+    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
 
     # First operation: set usercode
     await lock_provider.async_internal_set_usercode(1, "1111", "Test")
@@ -166,7 +168,7 @@ async def test_rate_limiting_mixed_operations(
     duration = time.monotonic() - start_time
 
     # Should be rate limited even though it's a different operation type
-    assert duration >= 0.1
+    assert duration >= TEST_OPERATION_DELAY
 
 
 async def test_rate_limiting_get_usercodes(
@@ -182,7 +184,7 @@ async def test_rate_limiting_get_usercodes(
     lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
 
     # Set a smaller delay for testing
-    lock_provider._min_operation_delay = 0.1
+    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
 
     # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
@@ -197,7 +199,7 @@ async def test_rate_limiting_get_usercodes(
     start_time = time.monotonic()
     await lock_provider.async_internal_get_usercodes()
     second_duration = time.monotonic() - start_time
-    assert second_duration >= 0.1
+    assert second_duration >= TEST_OPERATION_DELAY
 
 
 async def test_operations_are_serialized(
@@ -213,7 +215,7 @@ async def test_operations_are_serialized(
     lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
 
     # Set a smaller delay for testing
-    lock_provider._min_operation_delay = 0.1
+    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
 
     # Start multiple operations in parallel
     start_time = time.monotonic()
@@ -224,12 +226,12 @@ async def test_operations_are_serialized(
     )
     total_duration = time.monotonic() - start_time
 
-    # With 3 operations and 0.1s delay between each:
+    # With 3 operations and the test delay between each:
     # - First operation: executes immediately
-    # - Second operation: waits 0.1s
-    # - Third operation: waits 0.1s
-    # Total should be at least 0.2s (2 * 0.1s)
-    assert total_duration >= 0.2
+    # - Second operation: waits once
+    # - Third operation: waits once
+    # Total should be at least 2 * TEST_OPERATION_DELAY
+    assert total_duration >= 2 * TEST_OPERATION_DELAY
 
     # Verify all operations completed
     assert (
@@ -250,7 +252,7 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
     lock_provider = coordinators[LOCK_1_ENTITY_ID].lock
 
     # Tighten delay to keep test quick
-    lock_provider._min_operation_delay = 0.1
+    lock_provider._min_operation_delay = TEST_OPERATION_DELAY
     lock_provider._last_operation_time = 0.0
 
     lock_provider.set_connected(False)
