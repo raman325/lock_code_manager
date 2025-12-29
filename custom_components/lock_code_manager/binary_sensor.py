@@ -368,9 +368,15 @@ class LockCodeManagerCodeSlotInSyncEntity(
         Active: PIN should match code on lock
         Inactive: Code on lock should be empty
         """
+        # Use coordinator data if available, otherwise fall back to sensor state
+        lock_code = (
+            str(slot_state.coordinator_code)
+            if slot_state.coordinator_code is not None
+            else slot_state.code_state
+        )
         if slot_state.active_state == STATE_ON:
-            return slot_state.pin_state == slot_state.effective_code_state
-        return slot_state.effective_code_state == ""
+            return slot_state.pin_state == lock_code
+        return lock_code == ""
 
     @dataclass(frozen=True)
     class _SlotState:
@@ -379,7 +385,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
         name_state: str | None
         code_state: str
         coordinator_code: int | str | None
-        effective_code_state: str
 
     def _resolve_slot_state(
         self, event: Event[EventStateChangedData] | None
@@ -421,16 +426,12 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return None
 
         coordinator_code = self.coordinator.data.get(int(self.slot_num))
-        effective_code_state = (
-            str(coordinator_code) if coordinator_code is not None else code_state
-        )
         return self._SlotState(
             active_state=active_state,
             pin_state=pin_state,
             name_state=name_state,
             code_state=code_state,
             coordinator_code=coordinator_code,
-            effective_code_state=effective_code_state,
         )
 
     async def _perform_sync_operation(self, slot_state: _SlotState) -> bool:
@@ -517,26 +518,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
             # Normal operation: Perform sync if needed
             if not expected_in_sync:
-                if (
-                    slot_state.coordinator_code == ""
-                    and slot_state.active_state == STATE_ON
-                    and slot_state.pin_state.isnumeric()
-                ):
-                    try:
-                        await self.coordinator.async_refresh()
-                    except UpdateFailed as err:
-                        _LOGGER.debug(
-                            "%s (%s): Coordinator refresh failed while verifying "
-                            "masked PIN state for %s slot %s: %s",
-                            self.config_entry.entry_id,
-                            self.config_entry.title,
-                            self.lock.lock.entity_id,
-                            self.slot_num,
-                            err,
-                        )
-                        self._schedule_retry()
-                    return
-
                 self._update_sync_state(False)
 
                 # Perform sync operation
