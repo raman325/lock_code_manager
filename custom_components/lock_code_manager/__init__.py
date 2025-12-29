@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 from pathlib import Path
 from typing import Any
@@ -236,12 +235,22 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
     else:
-        config_entry.async_on_unload(
-            hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED,
-                functools.partial(_setup_entry_after_start, hass, config_entry),
-            )
-        )
+        # One-time listeners auto-remove when they fire, so unsubscribing
+        # during unload may fail if the event already fired. Ignore that error.
+        @callback
+        def _on_started(event: Event) -> None:
+            _setup_entry_after_start(hass, config_entry, event)
+
+        unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
+
+        @callback
+        def _safe_unsub() -> None:
+            try:
+                unsub()
+            except ValueError:
+                pass  # Listener already removed when event fired
+
+        config_entry.async_on_unload(_safe_unsub)
 
     return True
 
