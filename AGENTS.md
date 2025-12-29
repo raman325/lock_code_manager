@@ -14,7 +14,7 @@ Lock Code Manager is a Home Assistant custom integration that allows users to ma
 - Provider connection failures no longer advance rate-limit timing; see `test_connection_failure_does_not_rate_limit_next_operation` for regression coverage.
 - Lovelace strategy resource: only needs to be registered once globally; if HA is in YAML mode we skip removal on unload (mirrors ha_scrypted handling). New test `test_resource_unload_skips_yaml_mode` covers the YAML guard.
 - Claude and Codex collaborated on the startup flapping fix (see “Startup Code Flapping Issue” below). Connection handling is no longer regressed after this session, but keep an eye on `tests/_base/test_provider.py::test_*disconnected` and `tests/test_binary_sensor.py::test_handles_disconnected_lock_on_*` whenever touching provider logic.
-- A focused test command that confirms the connection/ retry behaviour is `source venv/bin/activate && pytest tests/_base/test_provider.py -k disconnected -q`.
+- A focused test command that confirms the connection/retry behaviour is `source venv/bin/activate && pytest tests/_base/test_provider.py -k disconnected -q`.
 - This session also added the `AGENTS.md` mirror of `CLAUDE.md` so future coding agents (e.g., GPT-based) can track their own context along with Claude’s notes. Keep both files updated when architecture/process guidance changes.
 
 ## Architecture
@@ -75,7 +75,7 @@ Lock Code Manager is a Home Assistant custom integration that allows users to ma
 ```bash
 scripts/setup
 ```
-Creates Python 3.12 venv, installs dependencies with uv, sets up pre-commit hooks, and installs Node dependencies.
+Creates Python 3.13 venv, installs dependencies with uv, sets up pre-commit hooks, and installs Node dependencies.
 
 ### Testing
 ```bash
@@ -420,7 +420,7 @@ This section tracks potential improvements, refactoring opportunities, and featu
 
 **Status:** Not started - Needs comprehensive audit first
 
-#### 3c. Move Sync Logic to Coordinator
+#### 4c. Move Sync Logic to Coordinator
 
 **Initial Analysis:** The startup flapping fix (see Bug Fixes section) added `_initial_state_loaded` flag to handle race conditions during startup. This complexity exists because the in-sync binary sensor reads state from other entities and compares with coordinator data, creating timing dependencies.
 
