@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 
@@ -384,27 +385,80 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
         return True
 
-    def _calculate_expected_sync(
-        self, active_state: str, pin_state: str, code_state: str
-    ) -> bool:
+    def _calculate_expected_sync(self, slot_state: _SlotState) -> bool:
         """Calculate whether slot should be in sync.
 
         Active: PIN should match code on lock
         Inactive: Code on lock should be empty
         """
-        return pin_state == code_state if active_state == STATE_ON else code_state == ""
+        if slot_state.active_state == STATE_ON:
+            return slot_state.pin_state == slot_state.effective_code_state
+        return slot_state.effective_code_state == ""
 
-    async def _perform_sync_operation(
-        self, active_state: str, pin_state: str, name_state: str | None
-    ) -> bool:
+    @dataclass(frozen=True)
+    class _SlotState:
+        active_state: str
+        pin_state: str
+        name_state: str | None
+        code_state: str
+        coordinator_code: int | str | None
+        effective_code_state: str
+
+    def _resolve_slot_state(
+        self, event: Event[EventStateChangedData] | None
+    ) -> _SlotState | None:
+        """Resolve slot state while applying shared guards."""
+        entity_id = event.data["entity_id"] if event else None
+        to_state = event.data["new_state"] if event else None
+
+        if not self.coordinator.last_update_success and not self._retry_active:
+            return None
+
+        if not self._is_event_relevant(entity_id, to_state):
+            return None
+
+        if self._attr_is_on is None and int(self.slot_num) not in self.coordinator.data:
+            _LOGGER.debug(
+                "%s (%s): Slot %s not yet in coordinator data, skipping",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.slot_num,
+            )
+            return None
+
+        if not self._ensure_entities_ready():
+            return None
+
+        active_state = self._get_entity_state(ATTR_ACTIVE)
+        pin_state = self._get_entity_state(CONF_PIN)
+        name_state = self._get_entity_state(CONF_NAME)
+        code_state = self._get_entity_state(ATTR_CODE)
+
+        if active_state is None or pin_state is None or code_state is None:
+            return None
+
+        coordinator_code = self.coordinator.data.get(int(self.slot_num))
+        effective_code_state = (
+            str(coordinator_code) if coordinator_code is not None else code_state
+        )
+        return self._SlotState(
+            active_state=active_state,
+            pin_state=pin_state,
+            name_state=name_state,
+            code_state=code_state,
+            coordinator_code=coordinator_code,
+            effective_code_state=effective_code_state,
+        )
+
+    async def _perform_sync_operation(self, slot_state: _SlotState) -> bool:
         """Perform sync operation (set or clear usercode).
 
         Returns True if sync was performed, False if lock disconnected.
         """
         try:
-            if active_state == STATE_ON:
+            if slot_state.active_state == STATE_ON:
                 await self.lock.async_internal_set_usercode(
-                    int(self.slot_num), pin_state, name_state
+                    int(self.slot_num), slot_state.pin_state, slot_state.name_state
                 )
                 _LOGGER.debug(
                     "%s (%s): Set usercode for %s slot %s",
@@ -429,7 +483,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 "%s (%s): Unable to %s usercode for %s slot %s: %s",
                 self.config_entry.entry_id,
                 self.config_entry.title,
-                "set" if active_state == STATE_ON else "clear",
+                "set" if slot_state.active_state == STATE_ON else "clear",
                 self.lock.lock.entity_id,
                 self.slot_num,
                 err,
@@ -445,68 +499,25 @@ class LockCodeManagerCodeSlotInSyncEntity(
         On initial load (when _attr_is_on is None): Sets sync state without operations.
         On subsequent updates: Performs sync operations when out of sync.
         """
-        # Extract event data if present
-        entity_id = event.data["entity_id"] if event else None
-        to_state = event.data["new_state"] if event else None
-
-        # Guard: Skip if coordinator hasn't successfully updated yet
-        if not self.coordinator.last_update_success and not self._retry_active:
-            return
-
-        # Guard: Skip if event is not relevant to this sensor
-        if not self._is_event_relevant(entity_id, to_state):
-            return
-
         async with self._lock:
-            # Guard: On initial load, wait for coordinator data for this slot
-            if (
-                self._attr_is_on is None
-                and int(self.slot_num) not in self.coordinator.data
-            ):
-                _LOGGER.debug(
-                    "%s (%s): Slot %s not yet in coordinator data, skipping",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.slot_num,
-                )
+            slot_state = self._resolve_slot_state(event)
+            if slot_state is None:
                 return
-
-            # Guard: Ensure all entities are ready
-            if not self._ensure_entities_ready():
-                return
-
-            # Get current states
-            active_state = self._get_entity_state(ATTR_ACTIVE)
-            pin_state = self._get_entity_state(CONF_PIN)
-            name_state = self._get_entity_state(CONF_NAME)
-            code_state = self._get_entity_state(ATTR_CODE)
-
-            # _ensure_entities_ready() guarantees these are populated
-            assert active_state is not None
-            assert pin_state is not None
-            assert code_state is not None
-
-            coordinator_code = self.coordinator.data.get(int(self.slot_num))
-            effective_code_state = (
-                str(coordinator_code) if coordinator_code is not None else code_state
-            )
 
             # Calculate expected sync state
-            expected_in_sync = self._calculate_expected_sync(
-                active_state, pin_state, effective_code_state
-            )
+            expected_in_sync = self._calculate_expected_sync(slot_state)
 
             # Initial load: Set sync state without performing operations (prevents startup flapping)
             if self._attr_is_on is None:
                 # Guard: Verify active state is valid
-                if active_state not in (STATE_ON, STATE_OFF):
+                if slot_state.active_state not in (STATE_ON, STATE_OFF):
                     _LOGGER.debug(
                         "%s (%s): Active entity for %s slot %s has invalid state '%s'",
                         self.config_entry.entry_id,
                         self.config_entry.title,
                         self.lock.lock.entity_id,
                         self.slot_num,
-                        active_state,
+                        slot_state.active_state,
                     )
                     return
 
@@ -524,9 +535,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
             # Normal operation: Perform sync if needed
             if not expected_in_sync:
                 if (
-                    coordinator_code == ""
-                    and active_state == STATE_ON
-                    and pin_state.isnumeric()
+                    slot_state.coordinator_code == ""
+                    and slot_state.active_state == STATE_ON
+                    and slot_state.pin_state.isnumeric()
                 ):
                     try:
                         await self.coordinator.async_refresh()
@@ -546,9 +557,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self._update_sync_state(False)
 
                 # Perform sync operation
-                sync_performed = await self._perform_sync_operation(
-                    active_state, pin_state, name_state
-                )
+                sync_performed = await self._perform_sync_operation(slot_state)
 
                 # Refresh coordinator to verify operation completed
                 # Rate limiting at provider level prevents excessive calls
