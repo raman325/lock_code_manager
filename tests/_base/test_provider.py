@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 
 from ..common import LOCK_1_ENTITY_ID, LOCK_DATA
 
-TEST_OPERATION_DELAY = 0.1
+TEST_OPERATION_DELAY = 0.01
 
 
 async def test_base(hass: HomeAssistant):
