@@ -124,6 +124,8 @@ class ZWaveJSLock(BaseLock):
 ```python
 class LockUsercodeUpdateCoordinator(DataUpdateCoordinator):
     def __init__(self, hass, lock, config_entry):
+        self._drift_unsub: Callable[[], None] | None = None
+
         # For push-enabled locks, disable periodic polling
         update_interval = (
             None if lock.supports_push
@@ -138,32 +140,52 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator):
             config_entry=config_entry,
         )
 
+        # Set up drift detection timer for all locks with hard_refresh_interval
+        if lock.hard_refresh_interval:
+            self._drift_unsub = async_track_time_interval(
+                hass,
+                self._async_drift_check,
+                lock.hard_refresh_interval,
+            )
+
     @callback
     def push_update(self, updates: dict[int, int | str]) -> None:
-        """Push one or more slot updates and notify entities.
-
-        Args:
-            updates: Dict mapping slot numbers to usercode values.
-                     Single update: {1: "1234"}
-                     Bulk update: {1: "1234", 2: "5678", 3: ""}
-        """
+        """Push one or more slot updates and notify entities."""
         if not updates:
             return
-
-        # Merge updates into existing data
         self.data.update(updates)
-
-        # Notify all listening entities
         self.async_set_updated_data(self.data)
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
-        """Poll method - used for initial load and drift detection."""
-        # Existing implementation...
+        """Get usercodes - used for initial load and periodic updates (poll locks)."""
+        return await self._lock.async_internal_get_usercodes()
 
-        # For push-enabled locks, this only runs:
-        # 1. On initial setup
-        # 2. When hard_refresh_interval triggers drift detection
+    async def _async_drift_check(self, now: datetime) -> None:
+        """Perform periodic drift detection."""
+        new_data = await self._lock.async_internal_hard_refresh_codes()
+        if new_data != self.data:
+            self.async_set_updated_data(new_data)
+
+    async def async_shutdown(self) -> None:
+        """Shut down the coordinator and clean up resources."""
+        if self._drift_unsub:
+            self._drift_unsub()
+            self._drift_unsub = None
+        await super().async_shutdown()
 ```
+
+### Method Return Types
+
+Both `async_get_usercodes()` and `async_hard_refresh_codes()` return `dict[int, int | str]`:
+
+```python
+async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+    """Perform hard refresh and return all codes."""
+    await self.node.async_refresh_cc_values(CommandClass.USER_CODE)
+    return await self.async_get_usercodes()
+```
+
+This allows drift detection to compare old vs new data and only notify listeners on changes.
 
 ### Setup Flow
 

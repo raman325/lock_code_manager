@@ -78,6 +78,7 @@ class ZWaveJSLock(BaseLock):
 
     lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
+    _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -96,6 +97,57 @@ class ZWaveJSLock(BaseLock):
         to minimize network traffic when codes haven't changed.
         """
         return DEFAULT_HARD_REFRESH_INTERVAL
+
+    @property
+    def supports_push(self) -> bool:
+        """
+        Return whether this lock supports push-based updates.
+
+        Z-Wave JS emits value update events when the cache changes, so we
+        subscribe to those instead of polling.
+        """
+        return True
+
+    @callback
+    def subscribe_push_updates(self) -> None:
+        """Subscribe to User Code CC value update events."""
+
+        @callback
+        def on_value_updated(event: dict[str, Any]) -> None:
+            """Handle value update events from Z-Wave JS."""
+            args: dict[str, Any] = event["args"]
+            # Filter for User Code CC only
+            if args.get("commandClass") != CommandClass.USER_CODE:
+                return
+
+            code_slot = int(args["property"])
+            usercode = args.get("newValue", {})
+
+            # Build update value
+            if isinstance(usercode, dict) and usercode.get("in_use"):
+                value: int | str = usercode.get("usercode", "")
+            else:
+                value = ""
+
+            _LOGGER.debug(
+                "Lock %s received push update for slot %s: %s",
+                self.lock.entity_id,
+                code_slot,
+                "****" if value else "(cleared)",
+            )
+
+            # Push update to coordinator
+            if self.coordinator:
+                self.coordinator.push_update({code_slot: value})
+
+        self._value_update_unsub = self.node.on("value updated", on_value_updated)
+
+    @callback
+    def unsubscribe_push_updates(self) -> None:
+        """Unsubscribe from value update events."""
+        if self._value_update_unsub:
+            self._value_update_unsub()
+            self._value_update_unsub = None
 
     @callback
     def _zwave_js_event_filter(self, event_data: dict[str, Any]) -> bool:
@@ -157,6 +209,7 @@ class ZWaveJSLock(BaseLock):
         for listener in self._listeners:
             listener()
         self._listeners.clear()
+        await super().async_unload(remove_permanently)
 
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
@@ -169,14 +222,16 @@ class ZWaveJSLock(BaseLock):
             and runtime_data.client.driver is not None
         )
 
-    async def async_hard_refresh_codes(self) -> None:
+    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
         """
-        Perform hard refresh of all codes.
+        Perform hard refresh and return all codes.
 
         Uses Z-Wave JS's refresh_cc_values which handles checksum optimization
         internally - it will skip re-fetching codes if the checksum hasn't changed.
+        Returns codes in the same format as async_get_usercodes().
         """
-        await self.node.async_refresh_cc_values(CommandClass.USER_CODE)
+        await self._async_refresh_usercode_cache()
+        return await self.async_get_usercodes()
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -241,6 +296,20 @@ class ZWaveJSLock(BaseLock):
         )
         return True
 
+    def _get_usercodes_from_cache(self) -> list[dict[str, Any]]:
+        """Get usercodes from Z-Wave JS value DB cache."""
+        try:
+            return list(get_usercodes(self.node) or [])
+        except Exception as err:
+            raise LockDisconnected from err
+
+    async def _async_refresh_usercode_cache(self) -> None:
+        """Refresh usercode cache from the device."""
+        try:
+            await self.node.async_refresh_cc_values(CommandClass.USER_CODE)
+        except Exception as err:
+            raise LockDisconnected from err
+
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
         code_slots = {
@@ -254,92 +323,87 @@ class ZWaveJSLock(BaseLock):
         if not await self.async_is_connection_up():
             raise LockDisconnected
 
-        try:
-            slots = list(get_usercodes(self.node) or [])
+        slots = self._get_usercodes_from_cache()
+        slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
+
+        # If any configured slot is missing or has unknown state, do one hard
+        # refresh to populate the cache. This is more efficient than fetching
+        # individual slots and uses Z-Wave JS's checksum optimization.
+        # Note: We call _async_refresh_usercode_cache directly here to avoid
+        # recursion since async_hard_refresh_codes calls async_get_usercodes.
+        if any(
+            slot_num not in slots_by_num or slots_by_num[slot_num].get("in_use") is None
+            for slot_num in code_slots
+        ):
+            _LOGGER.debug(
+                "Lock %s has missing/unknown slots, performing hard refresh",
+                self.lock.entity_id,
+            )
+            await self._async_refresh_usercode_cache()
+            slots = self._get_usercodes_from_cache()
             slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
 
-            # If any configured slot is missing or has unknown state, do one hard
-            # refresh to populate the cache. This is more efficient than fetching
-            # individual slots and uses Z-Wave JS's checksum optimization.
-            needs_refresh = any(
-                slot_num not in slots_by_num
-                or slots_by_num[slot_num].get("in_use") is None
-                for slot_num in code_slots
-            )
-            if needs_refresh:
-                _LOGGER.debug(
-                    "Lock %s has missing/unknown slots, performing hard refresh",
-                    self.lock.entity_id,
+        for slot in slots:
+            code_slot = int(slot["code_slot"])
+            usercode: str = slot["usercode"] or ""
+            in_use: bool | None = slot["in_use"]
+
+            if not in_use:
+                if code_slot in code_slots:
+                    _LOGGER.debug(
+                        "Lock %s code slot %s not enabled",
+                        self.lock.entity_id,
+                        code_slot,
+                    )
+                data[code_slot] = ""
+            # Special handling if usercode is all *'s
+            elif usercode and len(str(usercode)) * "*" == str(usercode):
+                # Build data from entities
+                config_entry = next(
+                    config_entry
+                    for config_entry in self.hass.config_entries.async_entries(DOMAIN)
+                    if self.lock.entity_id
+                    in get_entry_data(config_entry, CONF_LOCKS, [])
+                    and int(code_slot)
+                    in (
+                        int(slot)
+                        for slot in get_entry_data(config_entry, CONF_SLOTS, {})
+                    )
                 )
-                await self.async_hard_refresh_codes()
-                slots = list(get_usercodes(self.node) or [])
-                slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
-
-            for slot in slots:
-                code_slot = int(slot["code_slot"])
-                usercode: str = slot["usercode"] or ""
-                in_use: bool | None = slot["in_use"]
-
-                if not in_use:
-                    if code_slot in code_slots:
-                        _LOGGER.debug(
-                            "Lock %s code slot %s not enabled",
-                            self.lock.entity_id,
-                            code_slot,
-                        )
-                    data[code_slot] = ""
-                # Special handling if usercode is all *'s
-                elif usercode and len(str(usercode)) * "*" == str(usercode):
-                    # Build data from entities
-                    config_entry = next(
-                        config_entry
-                        for config_entry in self.hass.config_entries.async_entries(
-                            DOMAIN
-                        )
-                        if self.lock.entity_id
-                        in get_entry_data(config_entry, CONF_LOCKS, [])
-                        and int(code_slot)
-                        in (
-                            int(slot)
-                            for slot in get_entry_data(config_entry, CONF_SLOTS, {})
-                        )
+                base_unique_id = f"{config_entry.entry_id}|{code_slot}"
+                active = self.ent_reg.async_get_entity_id(
+                    SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
+                )
+                assert active
+                active_state = self.hass.states.get(active)
+                pin_entity_id = self.ent_reg.async_get_entity_id(
+                    TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
+                )
+                assert pin_entity_id
+                pin_state = self.hass.states.get(pin_entity_id)
+                assert active_state
+                assert pin_state
+                if code_slot in code_slots:
+                    _LOGGER.debug(
+                        (
+                            "PIN is masked for lock %s code slot %s so "
+                            "assuming value from PIN entity %s"
+                        ),
+                        self.lock.entity_id,
+                        code_slot,
+                        pin_entity_id,
                     )
-                    base_unique_id = f"{config_entry.entry_id}|{code_slot}"
-                    active = self.ent_reg.async_get_entity_id(
-                        SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
-                    )
-                    assert active
-                    active_state = self.hass.states.get(active)
-                    pin_entity_id = self.ent_reg.async_get_entity_id(
-                        TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
-                    )
-                    assert pin_entity_id
-                    pin_state = self.hass.states.get(pin_entity_id)
-                    assert active_state
-                    assert pin_state
-                    if code_slot in code_slots:
-                        _LOGGER.debug(
-                            (
-                                "PIN is masked for lock %s code slot %s so "
-                                "assuming value from PIN entity %s"
-                            ),
-                            self.lock.entity_id,
-                            code_slot,
-                            pin_entity_id,
-                        )
-                    if active_state.state == STATE_ON and pin_state.state.isnumeric():
-                        data[code_slot] = pin_state.state
-                    else:
-                        data[code_slot] = ""
+                if active_state.state == STATE_ON and pin_state.state.isnumeric():
+                    data[code_slot] = pin_state.state
                 else:
-                    if code_slot in code_slots:
-                        _LOGGER.debug(
-                            "Lock %s code slot %s has a PIN",
-                            self.lock.entity_id,
-                            code_slot,
-                        )
-                    data[code_slot] = usercode or ""
-        except Exception as err:
-            raise LockDisconnected from err
+                    data[code_slot] = ""
+            else:
+                if code_slot in code_slots:
+                    _LOGGER.debug(
+                        "Lock %s code slot %s has a PIN",
+                        self.lock.entity_id,
+                        code_slot,
+                    )
+                data[code_slot] = usercode or ""
 
         return data
