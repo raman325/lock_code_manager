@@ -104,21 +104,36 @@ class MockLCMLock(BaseLock):
 
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> None:
-        """Set a usercode on a code slot."""
+    ) -> bool:
+        """Set a usercode on a code slot.
+
+        Returns True if the value was changed, False if already set to this value.
+        """
         lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
         if lock_data:
+            # Check if value already matches
+            if lock_data["codes"].get(code_slot) == usercode:
+                return False
             lock_data["codes"][code_slot] = usercode
             lock_data["service_calls"]["set_usercode"].append(
                 (code_slot, usercode, name)
             )
+            return True
+        return True
 
-    def clear_usercode(self, code_slot: int) -> None:
-        """Clear a usercode on a code slot."""
+    def clear_usercode(self, code_slot: int) -> bool:
+        """Clear a usercode on a code slot.
+
+        Returns True if the value was changed, False if already cleared.
+        """
         lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
         if lock_data:
+            if code_slot not in lock_data["codes"]:
+                return False
             lock_data["codes"].pop(code_slot, None)
             lock_data["service_calls"]["clear_usercode"].append((code_slot,))
+            return True
+        return True
 
     def get_usercodes(self) -> dict[int, int | str]:
         """

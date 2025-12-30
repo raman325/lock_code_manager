@@ -64,3 +64,85 @@ async def test_door_lock(hass: HomeAssistant):
     assert await lock.async_unload(True) is None
     assert await lock.async_setup(config_entry) is None
     assert not lock._data
+
+
+async def test_set_usercode_returns_changed_status(hass: HomeAssistant):
+    """Test that set_usercode returns True when value changes, False when unchanged."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_2",
+        config_entry=config_entry,
+    )
+
+    lock = VirtualLock(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+    await lock.async_setup(config_entry)
+
+    # First set should return True (value changed from empty)
+    changed = await lock.async_set_usercode(1, "1234", "test")
+    assert changed is True
+    assert lock._data["1"] == {"code": "1234", "name": "test"}
+
+    # Setting the same value should return False (no change)
+    changed = await lock.async_set_usercode(1, "1234", "test")
+    assert changed is False
+
+    # Changing the code should return True
+    changed = await lock.async_set_usercode(1, "5678", "test")
+    assert changed is True
+    assert lock._data["1"] == {"code": "5678", "name": "test"}
+
+    # Changing the name should return True
+    changed = await lock.async_set_usercode(1, "5678", "new_name")
+    assert changed is True
+    assert lock._data["1"] == {"code": "5678", "name": "new_name"}
+
+
+async def test_clear_usercode_returns_changed_status(hass: HomeAssistant):
+    """Test that clear_usercode returns True when value changes, False when already cleared."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_3",
+        config_entry=config_entry,
+    )
+
+    lock = VirtualLock(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+    await lock.async_setup(config_entry)
+
+    # Clearing non-existent slot should return False
+    changed = await lock.async_clear_usercode(1)
+    assert changed is False
+
+    # Set a usercode first
+    await lock.async_set_usercode(1, "1234", "test")
+    assert "1" in lock._data
+
+    # Clearing existing slot should return True
+    changed = await lock.async_clear_usercode(1)
+    assert changed is True
+    assert "1" not in lock._data
+
+    # Clearing again should return False (already cleared)
+    changed = await lock.async_clear_usercode(1)
+    assert changed is False
