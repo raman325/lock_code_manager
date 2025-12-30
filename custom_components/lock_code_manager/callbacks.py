@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import logging
 from typing import TYPE_CHECKING, Protocol
 
+from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ UnregisterFunc = Callable[[], None]
 
 
 @dataclass
-class EntityCallbacks:
+class EntityCallbackRegistry:
     """Registry of entity lifecycle callbacks.
 
     This replaces the HA dispatcher pattern with explicit, typed callbacks.
@@ -165,6 +166,7 @@ class EntityCallbacks:
 
     # --- Invocation methods (called by __init__.py orchestrator) ---
 
+    @callback
     def invoke_add_slot(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Invoke all slot entity creation callbacks."""
         for cb in self.add_slot_entity:
@@ -173,6 +175,7 @@ class EntityCallbacks:
             except Exception:
                 _LOGGER.exception("Error in slot entity callback for slot %s", slot_num)
 
+    @callback
     def invoke_add_per_lock(
         self, lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
@@ -187,6 +190,7 @@ class EntityCallbacks:
                     slot_num,
                 )
 
+    @callback
     def invoke_add_optional(
         self, key: str, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
@@ -226,6 +230,7 @@ class EntityCallbacks:
             except Exception:
                 _LOGGER.exception("Error removing entity with uid %s", uid)
 
+    @callback
     def invoke_lock_added(self, locks: list[BaseLock]) -> None:
         """Notify all registered callbacks about new locks."""
         for cb in self.lock_added:
@@ -234,6 +239,7 @@ class EntityCallbacks:
             except Exception:
                 _LOGGER.exception("Error in lock added callback")
 
+    @callback
     def invoke_lock_removed(self, lock_entity_id: str) -> None:
         """Notify all registered callbacks about lock removal."""
         for cb in self.lock_removed:
