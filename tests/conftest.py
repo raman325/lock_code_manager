@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -25,7 +26,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.providers import _base as base_lock
+from custom_components.lock_code_manager.providers._base import BaseLock
 
 from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
 
@@ -47,19 +48,17 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 
 @pytest.fixture(autouse=True)
-def auto_setup_mock_lock(monkeypatch: pytest.MonkeyPatch):
+def auto_setup_mock_lock():
     """Automatically set up MockLCMLock for all tests."""
-    monkeypatch.setattr(
+    with patch(
         "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLock},
-    )
-    yield
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)
-def disable_rate_limiting(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-):
+def disable_rate_limiting(request: pytest.FixtureRequest):
     """Disable BaseLock rate limiting for most tests to speed them up.
 
     We patch __post_init__ to set _min_operation_delay=0.0 on new instances.
@@ -68,15 +67,18 @@ def disable_rate_limiting(
         yield
         return
 
-    original_post_init = getattr(base_lock.BaseLock, "__post_init__", None)
+    original_post_init = getattr(BaseLock, "__post_init__", None)
 
     def patched_post_init(self):
         if original_post_init:
             original_post_init(self)
         self._min_operation_delay = 0.0
 
-    monkeypatch.setattr(base_lock.BaseLock, "__post_init__", patched_post_init)
-    yield
+    with patch(
+        "custom_components.lock_code_manager.providers._base.BaseLock.__post_init__",
+        patched_post_init,
+    ):
+        yield
 
 
 class MockFlow(ConfigFlow):

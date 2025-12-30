@@ -38,7 +38,6 @@ from .common import (
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     LOCK_DATA,
-    MockLCMLock,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -216,7 +215,6 @@ async def test_resource_already_loaded_ui(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is already loaded in UI mode."""
     resources = hass.data[LL_DOMAIN].resources
@@ -225,10 +223,6 @@ async def test_resource_already_loaded_ui(
 
     await resources.async_create_item(
         {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
-    )
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
     )
 
     config_entry = MockConfigEntry(
@@ -254,14 +248,8 @@ async def test_resource_already_loaded_yaml(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is already loaded in YAML mode."""
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )
@@ -287,14 +275,8 @@ async def test_resource_not_loaded_yaml(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is not loaded in YAML mode."""
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )
@@ -317,14 +299,8 @@ async def test_resource_unload_skips_yaml_mode(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     """Ensure resource removal is skipped when resources are managed via YAML."""
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
-
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )
@@ -370,17 +346,11 @@ async def test_resource_not_loaded_on_unload(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     """Test when strategy resource is not loaded when unloading config entry."""
     resources = hass.data[LL_DOMAIN].resources
     assert resources
     await resources.async_load()
-
-    monkeypatch.setattr(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
-    )
 
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
