@@ -65,11 +65,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _get_lock_context(hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry):
-    """Return coordinator and provider for lock_1."""
-    lock = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None
-    return coordinator, lock
+    """Return provider for lock_1."""
+    return config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
 
 async def _async_force_sync_cycle(
@@ -481,7 +478,9 @@ async def test_entities_track_availability(
     assert active_entity_obj is not None
     assert in_sync_entity_obj is not None
 
-    coordinator, _ = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
 
     assert active_entity_obj.available
     assert in_sync_entity_obj.available
@@ -528,7 +527,9 @@ async def test_handles_disconnected_lock_on_set(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    coordinator, lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
     lock_provider.set_connected(False)
 
     # Change PIN to trigger sync
@@ -584,7 +585,9 @@ async def test_handles_disconnected_lock_on_clear(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    coordinator, lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
     lock_provider.set_connected(False)
 
     # Disable the slot to trigger clear
@@ -622,7 +625,9 @@ async def test_coordinator_refresh_failure_schedules_retry(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    coordinator, _ = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
 
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
