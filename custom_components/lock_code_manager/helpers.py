@@ -86,7 +86,7 @@ def get_locks_from_targets(
                     "Lock with entity ID %s does not have a Lock Code Manager entry, "
                     "skipping"
                 ),
-                entity_id,
+                lock_entity_id,
             )
 
     return locks
