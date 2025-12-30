@@ -149,8 +149,9 @@ class ZWaveJSLock(BaseLock):
         """Return integration domain."""
         return ZWAVE_JS_DOMAIN
 
-    async def async_setup(self) -> None:
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock."""
+        await super().async_setup(config_entry)
         self._listeners.append(
             self.hass.bus.async_listen(
                 ZWAVE_JS_NOTIFICATION_EVENT,

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN
-from .providers import BaseLock
+
+if TYPE_CHECKING:
+    from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 

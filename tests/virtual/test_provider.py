@@ -9,14 +9,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.const import COORDINATORS, DOMAIN
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 
 async def test_door_lock(hass: HomeAssistant):
     """Test a lock entity."""
     entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry()
+    config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
+
+    hass.data.setdefault(DOMAIN, {})[COORDINATORS] = {}
 
     # Create a proper registry entry
     lock_entity = entity_reg.async_get_or_create(
@@ -33,7 +36,7 @@ async def test_door_lock(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
-    assert await lock.async_setup() is None
+    assert await lock.async_setup(config_entry) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     assert lock.domain == "virtual"
     assert await lock.async_internal_is_connection_up()
@@ -52,7 +55,7 @@ async def test_door_lock(hass: HomeAssistant):
 
     # if we unload without removing permanently, the data should be saved
     assert await lock.async_unload(False) is None
-    assert await lock.async_setup() is None
+    assert await lock.async_setup(config_entry) is None
     assert lock._data["1"] == {"code": 1, "name": "test"}
 
     # we can clear a valid usercode
@@ -63,5 +66,5 @@ async def test_door_lock(hass: HomeAssistant):
 
     # if we unload with removing permanently, the data should be removed
     assert await lock.async_unload(True) is None
-    assert await lock.async_setup() is None
+    assert await lock.async_setup(config_entry) is None
     assert not lock._data

@@ -12,7 +12,7 @@ from typing import Any, Literal, final
 
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
@@ -20,8 +20,9 @@ from homeassistant.const import (
     CONF_NAME,
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from ..const import (
     ATTR_ACTION_TEXT,
@@ -35,9 +36,11 @@ from ..const import (
     ATTR_TO,
     CONF_LOCKS,
     CONF_SLOTS,
+    COORDINATORS,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
 from .const import LOGGER
@@ -61,6 +64,7 @@ class BaseLock:
     lock_config_entry: ConfigEntry | None = field(repr=False)
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
+    coordinator: LockUsercodeUpdateCoordinator | None = field(default=None, init=False)
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
@@ -149,9 +153,39 @@ class BaseLock:
         """Set up lock."""
         pass
 
-    async def async_setup(self) -> None:
-        """Set up lock."""
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Set up lock and coordinator."""
         await self.hass.async_add_executor_job(self.setup)
+
+        hass_data = self.hass.data[DOMAIN]
+        lock_entity_id = self.lock.entity_id
+
+        # Reuse existing coordinator or create new one
+        if lock_entity_id in hass_data[COORDINATORS]:
+            self.coordinator = hass_data[COORDINATORS][lock_entity_id]
+        else:
+            self.coordinator = hass_data[COORDINATORS][lock_entity_id] = (
+                LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
+            )
+            if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
+                try:
+                    await self.coordinator.async_config_entry_first_refresh()
+                except (ConfigEntryNotReady, UpdateFailed) as err:
+                    LOGGER.warning(
+                        "Failed to fetch initial data for lock %s: %s. "
+                        "Entities will be created but unavailable until lock is ready.",
+                        lock_entity_id,
+                        err,
+                    )
+            else:
+                await self.coordinator.async_refresh()
+                if not self.coordinator.last_update_success:
+                    LOGGER.warning(
+                        "Failed to fetch initial data for lock %s: %s. "
+                        "Entities will be created but unavailable until lock is ready.",
+                        lock_entity_id,
+                        self.coordinator.last_exception,
+                    )
 
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
