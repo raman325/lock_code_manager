@@ -41,11 +41,8 @@ BASE_CONFIG = {
     },
 }
 
-SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
 SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
-SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
 SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
-SLOT_1_NAME_ENTITY = "text.mock_title_code_slot_1_name"
 SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
 
 SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
