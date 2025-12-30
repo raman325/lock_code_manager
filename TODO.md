@@ -18,7 +18,6 @@
 - Review dispatcher usage and simplify if a smaller pattern works.
 - Track entity registry updates and warn if LCM entities change entity IDs (reload required).
 - Explore using HA's scheduler instead of direct sleeps, with task tracking managed by HA.
-- Switch monkeypatch usage to patch, using string module/function references instead of patch.object.
 
 ## Features
 
