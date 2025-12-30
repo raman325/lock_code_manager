@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import logging
 from typing import TypedDict
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
@@ -34,12 +35,13 @@ class VirtualLock(BaseLock):
         """Return integration domain."""
         return "virtual"
 
-    async def async_setup(self) -> None:
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock."""
         self._store = Store(
             self.hass, 1, f"{self.domain}_{DOMAIN}_{self.lock.entity_id}"
         )
         await self.async_hard_refresh_codes()
+        await super().async_setup(config_entry)
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""

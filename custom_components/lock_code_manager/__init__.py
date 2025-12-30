@@ -39,7 +39,6 @@ from homeassistant.core import (
 from homeassistant.core_config import Config
 from homeassistant.exceptions import (
     ConfigEntryError,
-    ConfigEntryNotReady,
     HomeAssistantError,
 )
 from homeassistant.helpers import (
@@ -48,7 +47,6 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .const import (
     CONF_LOCKS,
@@ -467,7 +465,7 @@ async def async_update_listener(
                     entry_title,
                     lock,
                 )
-                await lock.async_setup()
+                await lock.async_setup(config_entry)
 
             # Check if lock is connected (but don't wait - entity creation doesn't require it)
             if not await lock.async_internal_is_connection_up():
@@ -480,39 +478,9 @@ async def async_update_listener(
                     lock.lock.entity_id,
                 )
 
-            if lock_entity_id in hass_data[COORDINATORS]:
-                _LOGGER.debug(
-                    "%s (%s): Reusing coordinator for lock %s",
-                    entry_id,
-                    entry_title,
-                    lock,
-                )
-                runtime_data.coordinators[lock_entity_id] = hass_data[COORDINATORS][
-                    lock_entity_id
-                ]
-            else:
-                _LOGGER.debug(
-                    "%s (%s): Creating coordinator for lock %s",
-                    entry_id,
-                    entry_title,
-                    lock,
-                )
-                coordinator = hass_data[COORDINATORS][
-                    lock_entity_id
-                ] = runtime_data.coordinators[lock_entity_id] = (
-                    LockUsercodeUpdateCoordinator(hass, lock, config_entry)
-                )
-                try:
-                    await coordinator.async_config_entry_first_refresh()
-                except (ConfigEntryNotReady, UpdateFailed) as err:
-                    _LOGGER.warning(
-                        "%s (%s): Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
-                        entry_id,
-                        entry_title,
-                        lock_entity_id,
-                        err,
-                    )
+            # Store coordinator reference for this config entry
+            runtime_data.coordinators[lock_entity_id] = lock.coordinator
+
             for slot_num in new_slots:
                 _LOGGER.debug(
                     "%s (%s): Adding lock %s slot %s sensor and event entity",

@@ -3,6 +3,7 @@
 import asyncio
 from datetime import timedelta
 import time
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -10,6 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.const import COORDINATORS, DOMAIN
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers._base import BaseLock
 
@@ -21,8 +23,11 @@ TEST_OPERATION_DELAY = 0.01
 async def test_base(hass: HomeAssistant):
     """Test base class."""
     entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry()
+    config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
+
+    # Set up hass.data structure needed for coordinator setup
+    hass.data.setdefault(DOMAIN, {})[COORDINATORS] = {}
 
     # Create a proper registry entry for the mock lock
     lock_entity = entity_reg.async_get_or_create(
@@ -39,7 +44,20 @@ async def test_base(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
-    assert await lock.async_setup() is None
+    # Mock coordinator refreshes since BaseLock doesn't implement
+    # the abstract methods needed for a real refresh.
+    with (
+        patch(
+            "custom_components.lock_code_manager.coordinator."
+            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
+        ),
+        patch(
+            "custom_components.lock_code_manager.coordinator."
+            "LockUsercodeUpdateCoordinator.async_refresh"
+        ),
+    ):
+        assert await lock.async_setup(config_entry) is None
+    assert lock.coordinator is not None
     assert await lock.async_unload(False) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     with pytest.raises(NotImplementedError):
