@@ -12,17 +12,13 @@
 
 ## Refactors / Maintenance
 
-### Dispatcher simplification
-
-Review dispatcher usage and simplify if a smaller pattern works.
-
 ### Entity registry change detection
 
 Track entity registry updates and warn if LCM entities change entity IDs (reload required).
 
 ### Push mechanism for coordinator
 
-Add push mechanism support to the coordinator for lock integrations that support real-time value updates. Integrations can use both: polling for drift detection (periodic hard refresh with checksum) and push for immediate updates. The coordinator should accept direct data updates from push-enabled integrations.
+Add push-based updates for lock integrations that support real-time value change events. See `docs/design/push-coordinator.md` for full design.
 
 ### Convert config and internal dicts to dataclasses
 
