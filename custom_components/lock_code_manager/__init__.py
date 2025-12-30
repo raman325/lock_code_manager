@@ -281,7 +281,7 @@ async def async_unload_lock(
             lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
 
-        runtime_data.locks.pop(_lock_entity_id)
+        runtime_data.locks.pop(_lock_entity_id, None)
 
     for _lock_entity_id in lock_entity_ids:
         if not any(
@@ -297,7 +297,7 @@ async def async_unload_lock(
             )
             await coordinator.async_shutdown()
 
-        runtime_data.coordinators.pop(_lock_entity_id)
+        runtime_data.coordinators.pop(_lock_entity_id, None)
 
 
 async def async_unload_entry(
@@ -487,9 +487,9 @@ async def async_update_listener(
                     entry_title,
                     lock,
                 )
-                coordinator = runtime_data.coordinators[lock_entity_id] = hass_data[
-                    COORDINATORS
-                ][lock_entity_id]
+                runtime_data.coordinators[lock_entity_id] = hass_data[COORDINATORS][
+                    lock_entity_id
+                ]
             else:
                 _LOGGER.debug(
                     "%s (%s): Creating coordinator for lock %s",
