@@ -40,12 +40,12 @@ from custom_components.lock_code_manager.const import (
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
-    COORDINATORS,
     DOMAIN,
 )
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
+from custom_components.lock_code_manager.data import LockCodeManagerConfigEntry
 
 from .common import (
     BASE_CONFIG,
@@ -64,10 +64,9 @@ from .common import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _get_lock_context(hass: HomeAssistant, config_entry: MockConfigEntry):
+def _get_lock_context(hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry):
     """Return coordinator and provider for lock_1."""
-    coordinators = hass.data[DOMAIN][config_entry.entry_id][COORDINATORS]
-    coordinator = coordinators[LOCK_1_ENTITY_ID]
+    coordinator = config_entry.runtime_data.coordinators[LOCK_1_ENTITY_ID]
     return coordinator, coordinator.lock
 
 

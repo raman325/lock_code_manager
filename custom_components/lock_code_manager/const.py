@@ -14,7 +14,6 @@ STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
 
 SERVICE_HARD_REFRESH_USERCODES = "hard_refresh_usercodes"
 
-ATTR_SETUP_TASKS = "setup_tasks"
 ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
 ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
 

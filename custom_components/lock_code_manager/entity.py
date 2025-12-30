@@ -25,11 +25,10 @@ from .const import (
     ATTR_CODE_SLOT,
     ATTR_TO,
     CONF_CALENDAR,
-    CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
 )
-from .data import get_slot_data
+from .data import LockCodeManagerConfigEntry, get_slot_data
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ class BaseLockCodeManagerEntity(Entity):
         self,
         hass: HomeAssistant,
         ent_reg: er.EntityRegistry,
-        config_entry: ConfigEntry,
+        config_entry: LockCodeManagerConfigEntry,
         slot_num: int,
         key: str,
     ) -> None:
@@ -54,9 +53,7 @@ class BaseLockCodeManagerEntity(Entity):
         self._hass = hass
         self.config_entry = config_entry
         self.entry_id = self.base_unique_id = config_entry.entry_id
-        self.locks: list[BaseLock] = list(
-            hass.data[DOMAIN][config_entry.entry_id][CONF_LOCKS].values()
-        )
+        self.locks: list[BaseLock] = list(config_entry.runtime_data.locks.values())
         self.slot_num = slot_num
         self.key = key
         self.ent_reg = ent_reg
