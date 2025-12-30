@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.event import EventEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
+from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LockCodeManagerConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Set up config entry."""
@@ -55,7 +55,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         self,
         hass: HomeAssistant,
         ent_reg: er.EntityRegistry,
-        config_entry: ConfigEntry,
+        config_entry: LockCodeManagerConfigEntry,
         slot_num: int,
         key: str,
     ) -> None:

@@ -18,7 +18,6 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -52,7 +51,6 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .const import (
-    ATTR_SETUP_TASKS,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -67,7 +65,11 @@ from .const import (
     Platform,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import get_entry_data
+from .data import (
+    LockCodeManagerConfigEntry,
+    LockCodeManagerConfigEntryData,
+    get_entry_data,
+)
 from .helpers import async_create_lock_instance, get_locks_from_targets
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
@@ -173,7 +175,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
 @callback
 def _setup_entry_after_start(
-    hass: HomeAssistant, config_entry: ConfigEntry, event: Event | None = None
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    event: Event | None = None,
 ) -> None:
     """
     Set up config entry.
@@ -196,7 +200,9 @@ def _setup_entry_after_start(
         )
 
 
-async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> bool:
     """Set up is called when Home Assistant is loading our component."""
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
@@ -215,11 +221,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         )
 
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
-    hass.data[DOMAIN][entry_id] = {
-        CONF_LOCKS: {},
-        COORDINATORS: {},
-        ATTR_SETUP_TASKS: {},
-    }
+    config_entry.runtime_data = LockCodeManagerConfigEntryData()
 
     dev_reg = dr.async_get(hass)
     dev_reg.async_get_or_create(
@@ -257,15 +259,15 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
 async def async_unload_lock(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LockCodeManagerConfigEntry,
     lock_entity_id: str | None = None,
     remove_permanently: bool = False,
 ):
     """Unload lock."""
     hass_data = hass.data[DOMAIN]
-    entry_id = config_entry.entry_id
+    runtime_data = config_entry.runtime_data
     lock_entity_ids = (
-        [lock_entity_id] if lock_entity_id else hass_data[entry_id][CONF_LOCKS].copy()
+        [lock_entity_id] if lock_entity_id else list(runtime_data.locks.keys())
     )
     for _lock_entity_id in lock_entity_ids:
         if not any(
@@ -279,7 +281,7 @@ async def async_unload_lock(
             lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
 
-        hass_data[entry_id][CONF_LOCKS].pop(_lock_entity_id)
+        runtime_data.locks.pop(_lock_entity_id)
 
     for _lock_entity_id in lock_entity_ids:
         if not any(
@@ -295,25 +297,26 @@ async def async_unload_lock(
             )
             await coordinator.async_shutdown()
 
-        hass_data[entry_id][COORDINATORS].pop(_lock_entity_id)
+        runtime_data.coordinators.pop(_lock_entity_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> bool:
     """Handle removal of an entry."""
-    entry_id = config_entry.entry_id
     hass_data = hass.data[DOMAIN]
+    runtime_data = config_entry.runtime_data
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry,
         {
             *PLATFORMS,
-            *hass_data[entry_id][ATTR_SETUP_TASKS].keys(),
+            *runtime_data.setup_tasks.keys(),
         },
     )
 
     if unload_ok:
         await async_unload_lock(hass, config_entry)
-        hass_data.pop(entry_id, None)
 
     if {k: v for k, v in hass_data.items() if k != "resources"} == {
         CONF_LOCKS: {},
@@ -358,7 +361,9 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
     return unload_ok
 
 
-async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+async def async_update_listener(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
     """Update listener."""
     # No need to update if there are no options because that only happens at the end
     # of this function
@@ -366,6 +371,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
         return
 
     hass_data = hass.data[DOMAIN]
+    runtime_data = config_entry.runtime_data
     ent_reg = er.async_get(hass)
     entities_to_remove: dict[str, bool] = {}
     entities_to_add: dict[str, bool] = {}
@@ -374,9 +380,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
     entry_title = config_entry.title
     _LOGGER.info("%s (%s): Creating and/or updating entities", entry_id, entry_title)
 
-    setup_tasks: dict[str | Platform, asyncio.Task] = hass_data[entry_id][
-        ATTR_SETUP_TASKS
-    ]
+    setup_tasks = runtime_data.setup_tasks
 
     curr_slots: dict[int, Any] = {**config_entry.data.get(CONF_SLOTS, {})}
     new_slots: dict[int, Any] = {**config_entry.options.get(CONF_SLOTS, {})}
@@ -444,13 +448,13 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                     entry_title,
                     hass_data[CONF_LOCKS][lock_entity_id],
                 )
-                lock = hass_data[entry_id][CONF_LOCKS][lock_entity_id] = hass_data[
-                    CONF_LOCKS
-                ][lock_entity_id]
+                lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
+                    lock_entity_id
+                ]
             else:
-                lock = hass_data[CONF_LOCKS][lock_entity_id] = hass.data[DOMAIN][
-                    entry_id
-                ][CONF_LOCKS][lock_entity_id] = async_create_lock_instance(
+                lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
+                    lock_entity_id
+                ] = async_create_lock_instance(
                     hass,
                     dr.async_get(hass),
                     ent_reg,
@@ -483,9 +487,9 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                     entry_title,
                     lock,
                 )
-                coordinator = hass_data[entry_id][COORDINATORS][lock_entity_id] = (
-                    hass_data[COORDINATORS][lock_entity_id]
-                )
+                coordinator = runtime_data.coordinators[lock_entity_id] = hass_data[
+                    COORDINATORS
+                ][lock_entity_id]
             else:
                 _LOGGER.debug(
                     "%s (%s): Creating coordinator for lock %s",
@@ -493,10 +497,10 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                     entry_title,
                     lock,
                 )
-                coordinator = hass_data[COORDINATORS][lock_entity_id] = hass_data[
-                    entry_id
-                ][COORDINATORS][lock_entity_id] = LockUsercodeUpdateCoordinator(
-                    hass, lock, config_entry
+                coordinator = hass_data[COORDINATORS][
+                    lock_entity_id
+                ] = runtime_data.coordinators[lock_entity_id] = (
+                    LockUsercodeUpdateCoordinator(hass, lock, config_entry)
                 )
                 try:
                     await coordinator.async_config_entry_first_refresh()
@@ -541,7 +545,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
             CONF_PIN: True,
             EVENT_PIN_USED: True,
         }
-        for lock_entity_id, lock in hass_data[entry_id][CONF_LOCKS].items():
+        for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:
                 continue
             _LOGGER.debug(
@@ -578,7 +582,7 @@ async def async_update_listener(hass: HomeAssistant, config_entry: ConfigEntry) 
                 hass, f"{DOMAIN}_{entry_id}_add_{key}", slot_num, ent_reg
             )
 
-        for lock_entity_id, lock in hass_data[entry_id][CONF_LOCKS].items():
+        for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:
                 continue
             _LOGGER.debug(

@@ -17,8 +17,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_FROM,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
-    CONF_LOCKS,
-    DOMAIN,
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -37,9 +35,7 @@ async def test_event_entity(
     assert state
     assert state.state == STATE_UNKNOWN
 
-    lock: BaseLock = hass.data[DOMAIN][lock_code_manager_config_entry.entry_id][
-        CONF_LOCKS
-    ][LOCK_1_ENTITY_ID]
+    lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
 

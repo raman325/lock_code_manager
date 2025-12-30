@@ -14,7 +14,6 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
@@ -48,12 +47,11 @@ from .const import (
     ATTR_IN_SYNC,
     CONF_CALENDAR,
     CONF_NUMBER_OF_USES,
-    COORDINATORS,
     DOMAIN,
     EVENT_PIN_USED,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import get_slot_data
+from .data import LockCodeManagerConfigEntry, get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .exceptions import LockDisconnected
 from .providers import BaseLock
@@ -65,7 +63,7 @@ RETRY_DELAY = timedelta(seconds=10)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LockCodeManagerConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Set up config entry."""
@@ -87,9 +85,7 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ):
         """Add code slot sensor entities for slot."""
-        coordinator: LockUsercodeUpdateCoordinator = hass.data[DOMAIN][
-            config_entry.entry_id
-        ][COORDINATORS][lock.lock.entity_id]
+        coordinator = config_entry.runtime_data.coordinators[lock.lock.entity_id]
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
@@ -160,7 +156,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         self.async_write_ha_state()
 
     async def _config_entry_update_listener(
-        self, hass: HomeAssistant, config_entry: ConfigEntry
+        self, hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
     ) -> None:
         """Update listener."""
         if config_entry.options:
@@ -208,7 +204,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         self,
         hass: HomeAssistant,
         ent_reg: er.EntityRegistry,
-        config_entry: ConfigEntry,
+        config_entry: LockCodeManagerConfigEntry,
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         slot_num: int,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -13,8 +12,9 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_CODE, COORDINATORS, DOMAIN
+from .const import ATTR_CODE, DOMAIN
 from .coordinator import LockUsercodeUpdateCoordinator
+from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
 from .providers import BaseLock
 
@@ -23,7 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LockCodeManagerConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Set up config entry."""
@@ -33,9 +33,7 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Add code slot sensor entities for slot."""
-        coordinator: LockUsercodeUpdateCoordinator = hass.data[DOMAIN][
-            config_entry.entry_id
-        ][COORDINATORS][lock.lock.entity_id]
+        coordinator = config_entry.runtime_data.coordinators[lock.lock.entity_id]
         async_add_entities(
             [
                 LockCodeManagerCodeSlotSensorEntity(
@@ -68,7 +66,7 @@ class LockCodeManagerCodeSlotSensorEntity(
         self,
         hass: HomeAssistant,
         ent_reg: er.EntityRegistry,
-        config_entry: ConfigEntry,
+        config_entry: LockCodeManagerConfigEntry,
         lock: BaseLock,
         coordinator: LockUsercodeUpdateCoordinator,
         slot_num: int,

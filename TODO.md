@@ -12,7 +12,6 @@
 
 ## Refactors / Maintenance
 
-- Migrate `hass.data[DOMAIN]` to `config_entry.runtime_data` if it does not add complexity.
 - On slot changes, trigger a partial coordinator refresh (or update coordinator data from value updates) so polling only corrects drift/out-of-HA changes.
 - Deduplicate coordinator refresh vs `hard_refresh_usercodes` cache refresh logic for Z-Wave JS.
 - Move coordinator setup into `_async_setup()` where it reduces boilerplate.
