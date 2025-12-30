@@ -52,7 +52,6 @@ from .const import (
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
-    COORDINATORS,
     DOMAIN,
     EVENT_PIN_USED,
     PLATFORM_MAP,
@@ -62,7 +61,6 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .coordinator import LockUsercodeUpdateCoordinator
 from .data import (
     LockCodeManagerConfigEntry,
     LockCodeManagerConfigEntryData,
@@ -79,7 +77,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
         [
@@ -218,7 +216,7 @@ async def async_setup_entry(
             f"Unable to start because lock {entity_id} can't be found"
         )
 
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, COORDINATORS: {}, "resources": False})
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
     config_entry.runtime_data = LockCodeManagerConfigEntryData()
 
     dev_reg = dr.async_get(hass)
@@ -278,24 +276,10 @@ async def async_unload_lock(
         ):
             lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
+            if lock.coordinator is not None:
+                await lock.coordinator.async_shutdown()
 
         runtime_data.locks.pop(_lock_entity_id, None)
-
-    for _lock_entity_id in lock_entity_ids:
-        if not any(
-            entry != config_entry
-            and _lock_entity_id
-            in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
-            for entry in hass.config_entries.async_entries(
-                DOMAIN, include_disabled=False, include_ignore=False
-            )
-        ):
-            coordinator: LockUsercodeUpdateCoordinator = hass_data[COORDINATORS].pop(
-                _lock_entity_id
-            )
-            await coordinator.async_shutdown()
-
-        runtime_data.coordinators.pop(_lock_entity_id, None)
 
 
 async def async_unload_entry(
@@ -318,7 +302,6 @@ async def async_unload_entry(
 
     if {k: v for k, v in hass_data.items() if k != "resources"} == {
         CONF_LOCKS: {},
-        COORDINATORS: {},
     }:
         resources: ResourceStorageCollection | ResourceYAMLCollection | None = None
         if lovelace_data := hass.data.get(LL_DOMAIN):
@@ -477,9 +460,6 @@ async def async_update_listener(
                     entry_title,
                     lock.lock.entity_id,
                 )
-
-            # Store coordinator reference for this config entry
-            runtime_data.coordinators[lock_entity_id] = lock.coordinator
 
             for slot_num in new_slots:
                 _LOGGER.debug(

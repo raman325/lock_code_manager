@@ -33,7 +33,16 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Add code slot sensor entities for slot."""
-        coordinator = config_entry.runtime_data.coordinators[lock.lock.entity_id]
+        coordinator = lock.coordinator
+        if coordinator is None:
+            _LOGGER.warning(
+                "%s (%s): Coordinator missing for lock %s when adding slot %s entities",
+                config_entry.entry_id,
+                config_entry.title,
+                lock.lock.entity_id,
+                slot_num,
+            )
+            return
         async_add_entities(
             [
                 LockCodeManagerCodeSlotSensorEntity(

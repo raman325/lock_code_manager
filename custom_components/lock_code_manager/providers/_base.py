@@ -36,7 +36,6 @@ from ..const import (
     ATTR_TO,
     CONF_LOCKS,
     CONF_SLOTS,
-    COORDINATORS,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
@@ -157,36 +156,36 @@ class BaseLock:
         """Set up lock and coordinator."""
         await self.hass.async_add_executor_job(self.setup)
 
-        hass_data = self.hass.data[DOMAIN]
         lock_entity_id = self.lock.entity_id
 
         # Reuse existing coordinator or create new one
-        if lock_entity_id in hass_data[COORDINATORS]:
-            self.coordinator = hass_data[COORDINATORS][lock_entity_id]
-            self.coordinator.async_request_refresh()
-        else:
-            self.coordinator = hass_data[COORDINATORS][lock_entity_id] = (
-                LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
+        if self.coordinator is not None:
+            self.hass.async_create_task(
+                self.coordinator.async_request_refresh(),
+                f"Refresh coordinator for {lock_entity_id}",
             )
-            if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
-                try:
-                    await self.coordinator.async_config_entry_first_refresh()
-                except (ConfigEntryNotReady, UpdateFailed) as err:
-                    LOGGER.warning(
-                        "Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
-                        lock_entity_id,
-                        err,
-                    )
-            else:
-                await self.coordinator.async_refresh()
-                if not self.coordinator.last_update_success:
-                    LOGGER.warning(
-                        "Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
-                        lock_entity_id,
-                        self.coordinator.last_exception,
-                    )
+            return
+
+        self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
+        if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
+            try:
+                await self.coordinator.async_config_entry_first_refresh()
+            except (ConfigEntryNotReady, UpdateFailed) as err:
+                LOGGER.warning(
+                    "Failed to fetch initial data for lock %s: %s. "
+                    "Entities will be created but unavailable until lock is ready.",
+                    lock_entity_id,
+                    err,
+                )
+        else:
+            await self.coordinator.async_refresh()
+            if not self.coordinator.last_update_success:
+                LOGGER.warning(
+                    "Failed to fetch initial data for lock %s: %s. "
+                    "Entities will be created but unavailable until lock is ready.",
+                    lock_entity_id,
+                    self.coordinator.last_exception,
+                )
 
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
