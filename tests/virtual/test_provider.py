@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import COORDINATORS, DOMAIN
+from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 
@@ -18,8 +18,6 @@ async def test_door_lock(hass: HomeAssistant):
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
-
-    hass.data.setdefault(DOMAIN, {})[COORDINATORS] = {}
 
     # Create a proper registry entry
     lock_entity = entity_reg.async_get_or_create(

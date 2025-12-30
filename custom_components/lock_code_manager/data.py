@@ -13,7 +13,6 @@ from homeassistant.const import Platform
 from .const import CONF_SLOTS
 
 if TYPE_CHECKING:
-    from .coordinator import LockUsercodeUpdateCoordinator
     from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,7 +23,6 @@ class LockCodeManagerConfigEntryData:
     """Runtime data for a Lock Code Manager config entry."""
 
     locks: dict[str, BaseLock] = field(default_factory=dict)
-    coordinators: dict[str, LockUsercodeUpdateCoordinator] = field(default_factory=dict)
     setup_tasks: dict[str | Platform, asyncio.Task[Any]] = field(default_factory=dict)
 
 
