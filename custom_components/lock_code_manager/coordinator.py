@@ -43,11 +43,8 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
 
     def _should_hard_refresh(self) -> bool:
         """Return True if a hard refresh should be performed."""
-        if (hard_refresh_interval := self._lock.hard_refresh_interval) is None:
-            return False
-
         # Refresh if never refreshed before or interval has elapsed
-        return (
+        return bool(hard_refresh_interval := self._lock.hard_refresh_interval) and (
             self._last_hard_refresh is None
             or dt_util.utcnow() - self._last_hard_refresh >= hard_refresh_interval
         )
