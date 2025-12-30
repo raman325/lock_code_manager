@@ -222,7 +222,7 @@ class BaseLock:
         """
         Perform hard refresh all codes.
 
-        Needed for integraitons where usercodes are cached and may get out of sync with
+        Needed for integrations where usercodes are cached and may get out of sync with
         the lock.
         """
         raise HomeAssistantError from NotImplementedError()
