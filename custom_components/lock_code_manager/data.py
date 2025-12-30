@@ -29,7 +29,7 @@ class LockCodeManagerConfigEntryData:
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]
 
 
-def get_entry_data(config_entry: ConfigEntry, key: str, default: Any = {}) -> Any:
+def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
     """Get data from config entry."""
     return config_entry.data.get(key, config_entry.options.get(key, default))
 
