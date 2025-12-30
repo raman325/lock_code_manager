@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 import logging
 import time
 from typing import Any
 
+from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
@@ -50,6 +52,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # Avoid repeated CC fetches for missing usercode slots.
 USERCODE_FETCH_COOLDOWN = 60.0
+# Default interval between hard refreshes (checksum-optimized full code refresh)
+DEFAULT_HARD_REFRESH_INTERVAL = timedelta(hours=1)
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
 ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
@@ -104,6 +108,17 @@ class ZWaveJSLock(BaseLock):
         return async_get_node_from_entity_id(
             self.hass, self.lock.entity_id, self.ent_reg
         )
+
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """
+        Return interval between hard refreshes.
+
+        Z-Wave JS caches user codes and may get out of sync if codes are changed
+        at the lock's keypad. The hard refresh uses Z-Wave JS's checksum optimization
+        to minimize network traffic when codes haven't changed.
+        """
+        return DEFAULT_HARD_REFRESH_INTERVAL
 
     @callback
     def _zwave_js_event_filter(self, event_data: dict[str, Any]) -> bool:
@@ -181,14 +196,10 @@ class ZWaveJSLock(BaseLock):
         """
         Perform hard refresh of all codes.
 
-        Needed for integrations where usercodes are cached and may get out of sync with
-        the lock.
+        Uses Z-Wave JS's refresh_cc_values which handles checksum optimization
+        internally - it will skip re-fetching codes if the checksum hasn't changed.
         """
-        for config_entry in self.hass.config_entries.async_entries(DOMAIN):
-            if self.lock.entity_id not in get_entry_data(config_entry, CONF_LOCKS, []):
-                continue
-            for code_slot in get_entry_data(config_entry, CONF_SLOTS, {}):
-                await get_usercode_from_node(self.node, int(code_slot))
+        await self.node.async_refresh_cc_values(CommandClass.USER_CODE)
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None

@@ -148,6 +148,16 @@ class BaseLock:
         """Return scan interval for usercodes."""
         return timedelta(minutes=1)
 
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """
+        Return interval between hard refreshes.
+
+        Hard refreshes re-fetch all codes from the lock to detect out-of-band changes.
+        Returns None to disable periodic hard refreshes (default).
+        """
+        return None
+
     def setup(self) -> None:
         """Set up lock."""
         pass
