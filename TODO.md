@@ -16,9 +16,13 @@
 
 Track entity registry updates and warn if LCM entities change entity IDs (reload required).
 
-### Push mechanism for coordinator
+### Drift detection failure alerting
 
-Add push-based updates for lock integrations that support real-time value change events. See `docs/design/push-coordinator.md` for full design.
+Add mechanism to alert users when drift detection consistently fails over extended periods (e.g., lock offline). Currently failures are logged but there's no visibility to users or entities.
+
+### ~~Push mechanism for coordinator~~
+
+Implemented in PR #693. See `docs/development/provider-state-management.md` for provider guide.
 
 ### Convert config and internal dicts to dataclasses
 
