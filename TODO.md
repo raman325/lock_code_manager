@@ -12,7 +12,6 @@
 
 ## Refactors / Maintenance
 
-- On slot changes, trigger a partial coordinator refresh (or update coordinator data from value updates) so polling only corrects drift/out-of-HA changes.
 - Review dispatcher usage and simplify if a smaller pattern works.
 - Track entity registry updates and warn if LCM entities change entity IDs (reload required).
 - Add push mechanism support to the coordinator for lock integrations that support real-time value updates. Integrations can use both: polling for drift detection (periodic hard refresh with checksum) and push for immediate updates. The coordinator should accept direct data updates from push-enabled integrations.
