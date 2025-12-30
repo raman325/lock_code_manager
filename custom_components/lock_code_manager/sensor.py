@@ -7,12 +7,11 @@ import logging
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_CODE, DOMAIN
+from .const import ATTR_CODE
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
@@ -53,10 +52,8 @@ async def async_setup_entry(
         )
 
     config_entry.async_on_unload(
-        async_dispatcher_connect(
-            hass,
-            f"{DOMAIN}_{config_entry.entry_id}_add_lock_slot",
-            add_code_slot_entities,
+        config_entry.runtime_data.callbacks.register_per_lock_adder(
+            add_code_slot_entities
         )
     )
     return True

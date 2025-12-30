@@ -7,10 +7,9 @@ import logging
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_NUMBER_OF_USES, DOMAIN, EVENT_LOCK_STATE_CHANGED
+from .const import CONF_NUMBER_OF_USES, EVENT_LOCK_STATE_CHANGED
 from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
 
@@ -37,10 +36,8 @@ async def async_setup_entry(
         )
 
     config_entry.async_on_unload(
-        async_dispatcher_connect(
-            hass,
-            f"{DOMAIN}_{config_entry.entry_id}_add_{CONF_NUMBER_OF_USES}",
-            add_number_entities,
+        config_entry.runtime_data.callbacks.register_optional_adder(
+            CONF_NUMBER_OF_USES, add_number_entities
         )
     )
     return True
