@@ -6,7 +6,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-import time
 from typing import Any
 
 from zwave_js_server.const import CommandClass
@@ -16,11 +15,7 @@ from zwave_js_server.const.command_class.notification import (
     NotificationType,
 )
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import (
-    get_usercode,
-    get_usercode_from_node,
-    get_usercodes,
-)
+from zwave_js_server.util.lock import get_usercode, get_usercodes
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -54,8 +49,6 @@ from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
-# Avoid repeated CC fetches for missing usercode slots.
-USERCODE_FETCH_COOLDOWN = 60.0
 # Default interval between hard refreshes (checksum-optimized full code refresh)
 DEFAULT_HARD_REFRESH_INTERVAL = timedelta(hours=1)
 # All known Access Control Notification CC events that indicate the lock is locked
@@ -85,26 +78,6 @@ class ZWaveJSLock(BaseLock):
 
     lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
-    _usercode_fetch_attempts: dict[int, float] = field(init=False, default_factory=dict)
-
-    def _should_fetch_usercode(self, code_slot: int) -> bool:
-        """Return True if we should fetch a missing usercode slot."""
-        last_attempt = self._usercode_fetch_attempts.get(code_slot)
-        if last_attempt is None:
-            return True
-        return (time.monotonic() - last_attempt) >= USERCODE_FETCH_COOLDOWN
-
-    async def _fetch_usercode_from_node(self, code_slot: int) -> dict[str, Any] | None:
-        """Fetch a usercode directly from the node with cooldown."""
-        if not self._should_fetch_usercode(code_slot):
-            return None
-        try:
-            usercode_resp = await get_usercode_from_node(self.node, code_slot)
-        except Exception:
-            self._usercode_fetch_attempts[code_slot] = time.monotonic()
-            return None
-        self._usercode_fetch_attempts.pop(code_slot, None)
-        return usercode_resp
 
     @property
     def node(self) -> Node:
@@ -277,7 +250,6 @@ class ZWaveJSLock(BaseLock):
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
         data: dict[int, int | str] = {}
-        code_slot = 1
 
         if not await self.async_is_connection_up():
             raise LockDisconnected
@@ -286,23 +258,27 @@ class ZWaveJSLock(BaseLock):
             slots = list(get_usercodes(self.node) or [])
             slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
 
-            # Fetch configured slots that aren't tracked by Z-Wave JS yet.
-            missing_slots = sorted(code_slots - set(slots_by_num))
-            for slot_num in missing_slots:
-                if usercode_resp := await self._fetch_usercode_from_node(slot_num):
-                    slots.append(usercode_resp)
-                    slots_by_num[int(usercode_resp["code_slot"])] = usercode_resp
+            # If any configured slot is missing or has unknown state, do one hard
+            # refresh to populate the cache. This is more efficient than fetching
+            # individual slots and uses Z-Wave JS's checksum optimization.
+            needs_refresh = any(
+                slot_num not in slots_by_num
+                or slots_by_num[slot_num].get("in_use") is None
+                for slot_num in code_slots
+            )
+            if needs_refresh:
+                _LOGGER.debug(
+                    "Lock %s has missing/unknown slots, performing hard refresh",
+                    self.lock.entity_id,
+                )
+                await self.async_hard_refresh_codes()
+                slots = list(get_usercodes(self.node) or [])
+                slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
 
             for slot in slots:
                 code_slot = int(slot["code_slot"])
                 usercode: str = slot["usercode"] or ""
                 in_use: bool | None = slot["in_use"]
-                # Retrieve code slots that haven't been populated yet
-                if in_use is None and code_slot in code_slots:
-                    usercode_resp = await self._fetch_usercode_from_node(code_slot)
-                    if usercode_resp:
-                        usercode = slot["usercode"] = usercode_resp["usercode"] or ""
-                        in_use = slot["in_use"] = usercode_resp["in_use"]
 
                 if not in_use:
                     if code_slot in code_slots:
