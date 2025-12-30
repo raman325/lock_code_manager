@@ -45,7 +45,6 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
-from custom_components.lock_code_manager.data import LockCodeManagerConfigEntry
 
 from .common import (
     BASE_CONFIG,
@@ -62,11 +61,6 @@ from .common import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _get_lock_context(hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry):
-    """Return provider for lock_1."""
-    return config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
 
 async def _async_force_sync_cycle(
@@ -478,7 +472,7 @@ async def test_entities_track_availability(
     assert active_entity_obj is not None
     assert in_sync_entity_obj is not None
 
-    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
@@ -527,7 +521,7 @@ async def test_handles_disconnected_lock_on_set(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
     lock_provider.set_connected(False)
@@ -585,7 +579,7 @@ async def test_handles_disconnected_lock_on_clear(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
     lock_provider.set_connected(False)
@@ -625,7 +619,7 @@ async def test_coordinator_refresh_failure_schedules_retry(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
 
-    lock_provider = _get_lock_context(hass, lock_code_manager_config_entry)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
