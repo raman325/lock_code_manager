@@ -25,9 +25,6 @@ ATTR_LCM_CONFIG_ENTRY_ID = "lock_code_manager_config_entry_id"
 ATTR_LOCK_CONFIG_ENTRY_ID = "lock_config_entry_id"
 ATTR_EXTRA_DATA = "extra_data"
 
-# hass.data attributes
-COORDINATORS = "coordinators"
-
 # Events
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 

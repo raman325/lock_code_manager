@@ -14,7 +14,6 @@
 
 - On slot changes, trigger a partial coordinator refresh (or update coordinator data from value updates) so polling only corrects drift/out-of-HA changes.
 - Deduplicate coordinator refresh vs `hard_refresh_usercodes` cache refresh logic for Z-Wave JS.
-- Simplify coordinator storage: since `lock.coordinator` now exists on BaseLock instances (which are global to LCM), `hass_data[COORDINATORS]` and `runtime_data.coordinators` may be redundant.
 - Review dispatcher usage and simplify if a smaller pattern works.
 - Track entity registry updates and warn if LCM entities change entity IDs (reload required).
 - Explore using HA's scheduler instead of direct sleeps, with task tracking managed by HA.

@@ -11,7 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import COORDINATORS, DOMAIN
+from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers._base import BaseLock
 
@@ -25,9 +25,6 @@ async def test_base(hass: HomeAssistant):
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
-
-    # Set up hass.data structure needed for coordinator setup
-    hass.data.setdefault(DOMAIN, {})[COORDINATORS] = {}
 
     # Create a proper registry entry for the mock lock
     lock_entity = entity_reg.async_get_or_create(
@@ -84,9 +81,7 @@ async def test_set_usercode_when_disconnected(
 ):
     """Test that async_internal_set_usercode raises LockDisconnected when lock is disconnected."""
     # Arrange: get the provider and force it offline
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Simulate disconnected lock
     lock_provider.set_connected(False)
@@ -106,9 +101,7 @@ async def test_clear_usercode_when_disconnected(
 ):
     """Test that async_internal_clear_usercode raises LockDisconnected when lock is disconnected."""
     # Arrange: get the provider and force it offline
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Simulate disconnected lock
     lock_provider.set_connected(False)
@@ -125,9 +118,7 @@ async def test_rate_limiting_set_usercode(
 ):
     """Test that operations are rate limited with minimum delay between calls."""
     # Arrange: shorter delay for faster assertions
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
@@ -165,9 +156,7 @@ async def test_rate_limiting_mixed_operations(
 ):
     """Test that rate limiting applies across different operation types."""
     # Arrange: shorter delay for faster assertions
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
@@ -193,9 +182,7 @@ async def test_rate_limiting_get_usercodes(
 ):
     """Test that get operations are also rate limited."""
     # Arrange: shorter delay for faster assertions
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
@@ -223,9 +210,7 @@ async def test_operations_are_serialized(
 ):
     """Test that multiple parallel operations are serialized by the lock."""
     # Arrange: shorter delay for faster assertions
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
@@ -261,9 +246,7 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
     lock_code_manager_config_entry,
 ):
     """Test that failed connection checks do not advance rate limit timing."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Tighten delay to keep test quick
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
@@ -293,9 +276,7 @@ async def test_async_call_service_raises_lock_disconnected_on_error(
     lock_code_manager_config_entry,
 ):
     """Test that async_call_service raises LockDisconnected when service call fails."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.coordinators[
-        LOCK_1_ENTITY_ID
-    ].lock
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     # Register a service that raises an error
     async def failing_service(call):

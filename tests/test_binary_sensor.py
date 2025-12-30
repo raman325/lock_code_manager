@@ -66,8 +66,10 @@ _LOGGER = logging.getLogger(__name__)
 
 def _get_lock_context(hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry):
     """Return coordinator and provider for lock_1."""
-    coordinator = config_entry.runtime_data.coordinators[LOCK_1_ENTITY_ID]
-    return coordinator, coordinator.lock
+    lock = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+    return coordinator, lock
 
 
 async def _async_force_sync_cycle(
