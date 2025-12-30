@@ -2,11 +2,9 @@
 
 from datetime import timedelta
 
-import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
@@ -41,9 +39,9 @@ async def test_door_lock(hass: HomeAssistant):
     assert lock._data == {}
     await lock.async_internal_hard_refresh_codes()
     assert lock._data == {}
-    # we should not be able to clear a usercode that does not exist
-    with pytest.raises(HomeAssistantError):
-        await lock.async_internal_clear_usercode(1)
+    # clearing a usercode that does not exist is a no-op (returns False, no error)
+    await lock.async_internal_clear_usercode(1)
+    assert lock._data == {}
 
     # we should be able to set a usercode and see it in the data
     await lock.async_internal_set_usercode(1, 1, "test")

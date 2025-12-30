@@ -248,15 +248,27 @@ class BaseLock:
 
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> None:
-        """Set a usercode on a code slot."""
+    ) -> bool:
+        """
+        Set a usercode on a code slot.
+
+        Returns True if the value was changed, False if already set to this value.
+        If the provider cannot determine whether a change occurred, return True
+        to ensure the coordinator refreshes and verifies the state.
+        """
         raise HomeAssistantError from NotImplementedError()
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> None:
-        """Set a usercode on a code slot."""
-        await self._async_executor_call(
+    ) -> bool:
+        """
+        Set a usercode on a code slot.
+
+        Returns True if the value was changed, False if already set to this value.
+        If the provider cannot determine whether a change occurred, return True
+        to ensure the coordinator refreshes and verifies the state.
+        """
+        return await self._async_executor_call(
             self.set_usercode, code_slot, usercode, name=name
         )
 
@@ -265,27 +277,41 @@ class BaseLock:
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        await self._execute_rate_limited(
+        changed = await self._execute_rate_limited(
             "set", self.async_set_usercode, code_slot, usercode, name=name
         )
-        # Refresh coordinator to update entity states from cache
-        if self.coordinator:
+        # Refresh coordinator to update entity states from cache (only if changed)
+        if changed and self.coordinator:
             await self.coordinator.async_request_refresh()
 
-    def clear_usercode(self, code_slot: int) -> None:
-        """Clear a usercode on a code slot."""
+    def clear_usercode(self, code_slot: int) -> bool:
+        """
+        Clear a usercode on a code slot.
+
+        Returns True if the value was changed, False if already cleared.
+        If the provider cannot determine whether a change occurred, return True
+        to ensure the coordinator refreshes and verifies the state.
+        """
         raise HomeAssistantError from NotImplementedError()
 
-    async def async_clear_usercode(self, code_slot: int) -> None:
-        """Clear a usercode on a code slot."""
-        await self._async_executor_call(self.clear_usercode, code_slot)
+    async def async_clear_usercode(self, code_slot: int) -> bool:
+        """
+        Clear a usercode on a code slot.
+
+        Returns True if the value was changed, False if already cleared.
+        If the provider cannot determine whether a change occurred, return True
+        to ensure the coordinator refreshes and verifies the state.
+        """
+        return await self._async_executor_call(self.clear_usercode, code_slot)
 
     @final
     async def async_internal_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        await self._execute_rate_limited("clear", self.async_clear_usercode, code_slot)
-        # Refresh coordinator to update entity states from cache
-        if self.coordinator:
+        changed = await self._execute_rate_limited(
+            "clear", self.async_clear_usercode, code_slot
+        )
+        # Refresh coordinator to update entity states from cache (only if changed)
+        if changed and self.coordinator:
             await self.coordinator.async_request_refresh()
 
     def get_usercodes(self) -> dict[int, int | str]:

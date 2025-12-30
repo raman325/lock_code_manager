@@ -16,7 +16,11 @@ from zwave_js_server.const.command_class.notification import (
     NotificationType,
 )
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode_from_node, get_usercodes
+from zwave_js_server.util.lock import (
+    get_usercode,
+    get_usercode_from_node,
+    get_usercodes,
+)
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -203,8 +207,28 @@ class ZWaveJSLock(BaseLock):
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> None:
-        """Set a usercode on a code slot."""
+    ) -> bool:
+        """
+        Set a usercode on a code slot.
+
+        Returns True if the value was changed, False if already set to this value.
+        """
+        # Check if the code is already set to this value (avoid unnecessary network call)
+        try:
+            current = get_usercode(self.node, code_slot)
+            if current.get("in_use") and str(current.get("usercode", "")) == str(
+                usercode
+            ):
+                _LOGGER.debug(
+                    "Lock %s slot %s already has this PIN, skipping set",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return False
+        except Exception:
+            # If we can't check the cache, proceed with the set
+            pass
+
         service_data = {
             ATTR_ENTITY_ID: self.lock.entity_id,
             ATTR_CODE_SLOT: code_slot,
@@ -213,9 +237,28 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
         )
+        return True
 
-    async def async_clear_usercode(self, code_slot: int) -> None:
-        """Clear a usercode on a code slot."""
+    async def async_clear_usercode(self, code_slot: int) -> bool:
+        """
+        Clear a usercode on a code slot.
+
+        Returns True if the value was changed, False if already cleared.
+        """
+        # Check if the slot is already cleared (avoid unnecessary network call)
+        try:
+            current = get_usercode(self.node, code_slot)
+            if not current.get("in_use"):
+                _LOGGER.debug(
+                    "Lock %s slot %s already cleared, skipping clear",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return False
+        except Exception:
+            # If we can't check the cache, proceed with the clear
+            pass
+
         service_data = {
             ATTR_ENTITY_ID: self.lock.entity_id,
             ATTR_CODE_SLOT: code_slot,
@@ -223,6 +266,7 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
         )
+        return True
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""

@@ -7,7 +7,6 @@ import logging
 from typing import TypedDict
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
@@ -65,15 +64,30 @@ class VirtualLock(BaseLock):
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> None:
-        """Set a usercode on a code slot."""
-        self._data[str(code_slot)] = CodeSlotData(code=usercode, name=name)
+    ) -> bool:
+        """
+        Set a usercode on a code slot.
 
-    async def async_clear_usercode(self, code_slot: int) -> None:
-        """Clear a usercode on a code slot."""
-        if str(code_slot) not in self._data:
-            raise HomeAssistantError(f"Code slot {code_slot} not found")
-        self._data.pop(str(code_slot))
+        Returns True if the value was changed, False if already set to this value.
+        """
+        slot_key = str(code_slot)
+        new_data = CodeSlotData(code=usercode, name=name)
+        if slot_key in self._data and self._data[slot_key] == new_data:
+            return False
+        self._data[slot_key] = new_data
+        return True
+
+    async def async_clear_usercode(self, code_slot: int) -> bool:
+        """
+        Clear a usercode on a code slot.
+
+        Returns True if the value was changed, False if already cleared.
+        """
+        slot_key = str(code_slot)
+        if slot_key not in self._data:
+            return False
+        self._data.pop(slot_key)
+        return True
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
