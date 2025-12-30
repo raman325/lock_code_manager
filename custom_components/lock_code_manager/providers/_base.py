@@ -163,6 +163,7 @@ class BaseLock:
         # Reuse existing coordinator or create new one
         if lock_entity_id in hass_data[COORDINATORS]:
             self.coordinator = hass_data[COORDINATORS][lock_entity_id]
+            self.coordinator.async_request_refresh()
         else:
             self.coordinator = hass_data[COORDINATORS][lock_entity_id] = (
                 LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
