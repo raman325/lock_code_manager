@@ -21,16 +21,16 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class SlotEntityCallback(Protocol):
-    """Protocol for callbacks that create standard slot entities."""
+class StandardEntityCallback(Protocol):
+    """Protocol for callbacks that create standard slot entities (one per slot)."""
 
     def __call__(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Create entities for a slot."""
         ...
 
 
-class PerLockEntityCallback(Protocol):
-    """Protocol for callbacks that create per-lock entities."""
+class LockSlotEntityCallback(Protocol):
+    """Protocol for callbacks that create lock-slot entities (one per lock+slot)."""
 
     def __call__(
         self, lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
@@ -69,12 +69,25 @@ class EntityCallbackRegistry:
     This replaces the HA dispatcher pattern with explicit, typed callbacks.
     Platforms register their entity creation callbacks here, and entities
     register their removal callbacks.
+
+    Entity Types:
+        Standard: Entities created once per slot (e.g., enabled switch, name/PIN
+            text fields, event sensor, active binary sensor). These exist for
+            every configured slot.
+
+        Lock-slot: Entities created once per lock+slot combination (e.g., PIN
+            code sensor showing the actual code on the lock, in-sync binary
+            sensor). For 3 locks with 2 slots, this creates 6 entities.
+
+        Keyed: Entities created only when a specific config key has a value
+            (e.g., number_of_uses). The key parameter identifies which config
+            option triggers entity creation.
     """
 
     # Entity creation callbacks (platforms register these in async_setup_entry)
-    add_slot_entity: list[SlotEntityCallback] = field(default_factory=list)
-    add_per_lock_entity: list[PerLockEntityCallback] = field(default_factory=list)
-    add_optional_entity: dict[str, list[SlotEntityCallback]] = field(
+    add_standard_entity: list[StandardEntityCallback] = field(default_factory=list)
+    add_lock_slot_entity: list[LockSlotEntityCallback] = field(default_factory=list)
+    add_keyed_entity: dict[str, list[StandardEntityCallback]] = field(
         default_factory=dict
     )
 
@@ -88,44 +101,45 @@ class EntityCallbackRegistry:
 
     # --- Registration methods (return unregister functions) ---
 
-    def register_slot_adder(self, callback: SlotEntityCallback) -> UnregisterFunc:
+    def register_standard_adder(
+        self, callback: StandardEntityCallback
+    ) -> UnregisterFunc:
         """Register callback for adding standard slot entities.
 
         Used by: switch, text, event, binary_sensor (active sensor)
         """
-        self.add_slot_entity.append(callback)
+        self.add_standard_entity.append(callback)
         return lambda: (
-            self.add_slot_entity.remove(callback)
-            if callback in self.add_slot_entity
+            self.add_standard_entity.remove(callback)
+            if callback in self.add_standard_entity
             else None
         )
 
-    def register_per_lock_adder(
-        self, callback: PerLockEntityCallback
+    def register_lock_slot_adder(
+        self, callback: LockSlotEntityCallback
     ) -> UnregisterFunc:
-        """Register callback for adding per-lock entities.
+        """Register callback for adding lock-slot entities.
 
         Used by: sensor (PIN code), binary_sensor (in-sync)
         """
-        self.add_per_lock_entity.append(callback)
+        self.add_lock_slot_entity.append(callback)
         return lambda: (
-            self.add_per_lock_entity.remove(callback)
-            if callback in self.add_per_lock_entity
+            self.add_lock_slot_entity.remove(callback)
+            if callback in self.add_lock_slot_entity
             else None
         )
 
-    def register_optional_adder(
-        self, key: str, callback: SlotEntityCallback
+    def register_keyed_adder(
+        self, key: str, callback: StandardEntityCallback
     ) -> UnregisterFunc:
-        """Register callback for adding optional entities by key.
+        """Register callback for adding keyed entities (only when config key is set).
 
         Used by: number (number_of_uses)
         """
-        self.add_optional_entity.setdefault(key, []).append(callback)
+        self.add_keyed_entity.setdefault(key, []).append(callback)
         return lambda: (
-            self.add_optional_entity[key].remove(callback)
-            if key in self.add_optional_entity
-            and callback in self.add_optional_entity[key]
+            self.add_keyed_entity[key].remove(callback)
+            if key in self.add_keyed_entity and callback in self.add_keyed_entity[key]
             else None
         )
 
@@ -167,35 +181,37 @@ class EntityCallbackRegistry:
     # --- Invocation methods (called by __init__.py orchestrator) ---
 
     @callback
-    def invoke_add_slot(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
-        """Invoke all slot entity creation callbacks."""
-        for cb in self.add_slot_entity:
+    def invoke_add_standard(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
+        """Invoke all standard entity creation callbacks."""
+        for cb in self.add_standard_entity:
             try:
                 cb(slot_num, ent_reg)
             except Exception:
-                _LOGGER.exception("Error in slot entity callback for slot %s", slot_num)
+                _LOGGER.exception(
+                    "Error in standard entity callback for slot %s", slot_num
+                )
 
     @callback
-    def invoke_add_per_lock(
+    def invoke_add_lock_slot(
         self, lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
-        """Invoke all per-lock entity creation callbacks."""
-        for cb in self.add_per_lock_entity:
+        """Invoke all lock-slot entity creation callbacks."""
+        for cb in self.add_lock_slot_entity:
             try:
                 cb(lock, slot_num, ent_reg)
             except Exception:
                 _LOGGER.exception(
-                    "Error in per-lock entity callback for lock %s slot %s",
+                    "Error in lock-slot entity callback for lock %s slot %s",
                     lock.lock.entity_id,
                     slot_num,
                 )
 
     @callback
-    def invoke_add_optional(
+    def invoke_add_keyed(
         self, key: str, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
-        """Invoke optional entity creation callbacks for a specific key."""
-        for cb in self.add_optional_entity.get(key, []):
+        """Invoke keyed entity creation callbacks for a specific config key."""
+        for cb in self.add_keyed_entity.get(key, []):
             try:
                 cb(slot_num, ent_reg)
             except Exception:

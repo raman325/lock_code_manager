@@ -52,7 +52,7 @@ async def async_setup_entry(
         )
 
     config_entry.async_on_unload(
-        config_entry.runtime_data.callbacks.register_per_lock_adder(
+        config_entry.runtime_data.callbacks.register_lock_slot_adder(
             add_code_slot_entities
         )
     )

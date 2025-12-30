@@ -472,7 +472,7 @@ async def async_update_listener(
                     lock_entity_id,
                     slot_num,
                 )
-                callbacks.invoke_add_per_lock(lock, slot_num, ent_reg)
+                callbacks.invoke_add_lock_slot(lock, slot_num, ent_reg)
 
         # Notify existing entities about the new locks
         if added_locks:
@@ -508,7 +508,7 @@ async def async_update_listener(
                 lock_entity_id,
                 slot_num,
             )
-            callbacks.invoke_add_per_lock(lock, slot_num, ent_reg)
+            callbacks.invoke_add_lock_slot(lock, slot_num, ent_reg)
 
         # Check if we need to add a number of uses entity
         if slot_config.get(CONF_NUMBER_OF_USES) not in (None, ""):
@@ -520,7 +520,7 @@ async def async_update_listener(
             entry_title,
             slot_num,
         )
-        callbacks.invoke_add_slot(slot_num, ent_reg)
+        callbacks.invoke_add_standard(slot_num, ent_reg)
         for key in entities_to_add:
             _LOGGER.debug(
                 "%s (%s): Adding %s entity for slot %s",
@@ -529,7 +529,7 @@ async def async_update_listener(
                 key,
                 slot_num,
             )
-            callbacks.invoke_add_optional(key, slot_num, ent_reg)
+            callbacks.invoke_add_keyed(key, slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:
@@ -541,7 +541,7 @@ async def async_update_listener(
                 lock_entity_id,
                 slot_num,
             )
-            callbacks.invoke_add_per_lock(lock, slot_num, ent_reg)
+            callbacks.invoke_add_lock_slot(lock, slot_num, ent_reg)
 
     # For all slots that are in both the old and new config, check if any of the
     # configuration options have changed
@@ -583,7 +583,7 @@ async def async_update_listener(
                 key,
                 slot_num,
             )
-            callbacks.invoke_add_optional(key, slot_num, ent_reg)
+            callbacks.invoke_add_keyed(key, slot_num, ent_reg)
 
     # Existing entities will listen to updates and act on it
     new_data = {CONF_LOCKS: new_locks, CONF_SLOTS: new_slots}

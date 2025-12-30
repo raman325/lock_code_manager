@@ -36,7 +36,7 @@ async def async_setup_entry(
         )
 
     config_entry.async_on_unload(
-        config_entry.runtime_data.callbacks.register_optional_adder(
+        config_entry.runtime_data.callbacks.register_keyed_adder(
             CONF_NUMBER_OF_USES, add_number_entities
         )
     )

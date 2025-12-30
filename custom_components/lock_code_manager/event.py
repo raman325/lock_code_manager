@@ -36,7 +36,9 @@ async def async_setup_entry(
         )
 
     config_entry.async_on_unload(
-        config_entry.runtime_data.callbacks.register_slot_adder(add_code_slot_entities)
+        config_entry.runtime_data.callbacks.register_standard_adder(
+            add_code_slot_entities
+        )
     )
     return True
 

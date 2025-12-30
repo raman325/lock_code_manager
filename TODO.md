@@ -20,14 +20,6 @@ Track entity registry updates and warn if LCM entities change entity IDs (reload
 
 Add push mechanism support to the coordinator for lock integrations that support real-time value updates. Integrations can use both: polling for drift detection (periodic hard refresh with checksum) and push for immediate updates. The coordinator should accept direct data updates from push-enabled integrations.
 
-### Partial coordinator refresh on slot changes
-
-On slot changes, trigger a partial coordinator refresh (or update coordinator data from value updates) so polling only corrects drift/out-of-HA changes.
-
-### Explore HA scheduler
-
-Explore using HA's scheduler instead of direct sleeps, with task tracking managed by HA.
-
 ### Convert config and internal dicts to dataclasses
 
 Convert config entry data to typed dataclasses with `from_dict`/`from_entry` class methods. Use object instances internally instead of iterating through raw config dicts. Audit codebase for other complex dicts that would benefit from dataclass conversion (e.g., slot data, lock state, coordinator data). This improves type safety, IDE autocompletion, and code readability.

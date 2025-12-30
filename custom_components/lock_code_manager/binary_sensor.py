@@ -104,9 +104,11 @@ async def async_setup_entry(
         )
 
     callbacks = config_entry.runtime_data.callbacks
-    config_entry.async_on_unload(callbacks.register_slot_adder(add_pin_active_entity))
     config_entry.async_on_unload(
-        callbacks.register_per_lock_adder(add_code_slot_entities)
+        callbacks.register_standard_adder(add_pin_active_entity)
+    )
+    config_entry.async_on_unload(
+        callbacks.register_lock_slot_adder(add_code_slot_entities)
     )
     return True
 
