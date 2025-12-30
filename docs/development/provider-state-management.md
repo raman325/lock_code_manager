@@ -14,6 +14,8 @@ The coordinator manages usercode state through three update modes:
 
 All modes include an initial poll to populate coordinator data.
 
+> **Note:** Even with push mode enabled, you must implement `get_usercodes()`. The coordinator always calls it for the initial data load and any manual refresh requests.
+
 ## Architecture
 
 ```
@@ -79,6 +81,8 @@ class MyLock(BaseLock):
     def hard_refresh_interval(self) -> timedelta | None:
         return timedelta(hours=1)  # Check for drift hourly
 ```
+
+> **Note:** You still need to implement `get_usercodes()` - it's called for initial load and manual refreshes even when push is enabled.
 
 ### Poll with Drift Detection
 
