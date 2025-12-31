@@ -181,7 +181,9 @@ class EntityCallbackRegistry:
     # --- Invocation methods (called by __init__.py orchestrator) ---
 
     @callback
-    def invoke_add_standard(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
+    def invoke_standard_adders(
+        self, slot_num: int, ent_reg: er.EntityRegistry
+    ) -> None:
         """Invoke all standard entity creation callbacks."""
         for cb in self.add_standard_entity:
             try:
@@ -192,7 +194,7 @@ class EntityCallbackRegistry:
                 )
 
     @callback
-    def invoke_add_lock_slot(
+    def invoke_lock_slot_adders(
         self, lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Invoke all lock-slot entity creation callbacks."""
@@ -207,7 +209,7 @@ class EntityCallbackRegistry:
                 )
 
     @callback
-    def invoke_add_keyed(
+    def invoke_keyed_adders(
         self, key: str, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Invoke keyed entity creation callbacks for a specific config key."""
@@ -221,8 +223,8 @@ class EntityCallbackRegistry:
                     slot_num,
                 )
 
-    async def invoke_remove_slot(self, slot_num: int) -> None:
-        """Remove all entities for a slot."""
+    async def invoke_entity_removers_for_slot(self, slot_num: int) -> None:
+        """Invoke entity removal callbacks for an entire slot."""
         prefix = f"{slot_num}|"
         to_remove = [uid for uid in self.remove_entity if uid.startswith(prefix)]
         for uid in to_remove:
@@ -231,8 +233,8 @@ class EntityCallbackRegistry:
             except Exception:
                 _LOGGER.exception("Error removing entity with uid %s", uid)
 
-    async def invoke_remove_entity(self, slot_num: int, key: str) -> None:
-        """Remove a specific entity by slot and key."""
+    async def invoke_entity_removers_for_key(self, slot_num: int, key: str) -> None:
+        """Invoke entity removal callbacks for a specific slot/key."""
         # Match both "{slot}|{key}" and "{slot}|{key}|{lock}" patterns
         prefix = f"{slot_num}|{key}"
         to_remove = [
@@ -247,8 +249,8 @@ class EntityCallbackRegistry:
                 _LOGGER.exception("Error removing entity with uid %s", uid)
 
     @callback
-    def invoke_lock_added(self, locks: list[BaseLock]) -> None:
-        """Notify all registered callbacks about new locks."""
+    def invoke_lock_added_handlers(self, locks: list[BaseLock]) -> None:
+        """Invoke lock-added callbacks."""
         for cb in self.lock_added:
             try:
                 cb(locks)
@@ -256,8 +258,8 @@ class EntityCallbackRegistry:
                 _LOGGER.exception("Error in lock added callback")
 
     @callback
-    def invoke_lock_removed(self, lock_entity_id: str) -> None:
-        """Notify all registered callbacks about lock removal."""
+    def invoke_lock_removed_handlers(self, lock_entity_id: str) -> None:
+        """Invoke lock-removed callbacks."""
         for cb in self.lock_removed:
             try:
                 cb(lock_entity_id)
