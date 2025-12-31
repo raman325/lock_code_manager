@@ -181,9 +181,7 @@ class EntityCallbackRegistry:
     # --- Invocation methods (called by __init__.py orchestrator) ---
 
     @callback
-    def invoke_standard_adders(
-        self, slot_num: int, ent_reg: er.EntityRegistry
-    ) -> None:
+    def invoke_standard_adders(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
         """Invoke all standard entity creation callbacks."""
         for cb in self.add_standard_entity:
             try:
