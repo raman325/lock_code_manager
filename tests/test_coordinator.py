@@ -14,6 +14,7 @@ from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
+from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
@@ -537,3 +538,106 @@ async def test_drift_check_calls_hard_refresh(
         await coordinator._async_drift_check(dt_util.utcnow())
 
         mock_hard_refresh.assert_called_once()
+
+
+async def test_coordinator_lock_property(
+    hass: HomeAssistant,
+):
+    """Test that coordinator.lock returns the lock instance."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+
+    # Verify lock property returns the lock
+    assert coordinator.lock is lock
+
+
+async def test_drift_check_skips_before_initial_success(
+    hass: HomeAssistant,
+):
+    """Test that _async_drift_check skips if initial data hasn't loaded."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
+    lock = MockLockWithPush(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+    lock._hard_refresh_interval = timedelta(hours=1)
+
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    # Simulate no successful update yet
+    coordinator.last_update_success = False
+
+    mock_hard_refresh = AsyncMock()
+    with patch.object(lock, "async_internal_hard_refresh_codes", mock_hard_refresh):
+        await coordinator._async_drift_check(dt_util.utcnow())
+
+        # Should not call hard refresh when last_update_success is False
+        mock_hard_refresh.assert_not_called()
+
+
+async def test_drift_check_handles_hard_refresh_error(
+    hass: HomeAssistant,
+):
+    """Test that _async_drift_check handles hard refresh errors gracefully."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
+    lock = MockLockWithPush(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+    lock._hard_refresh_interval = timedelta(hours=1)
+
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.last_update_success = True
+    coordinator.data = {1: "1234"}
+
+    # Mock hard refresh to raise an exception
+    mock_hard_refresh = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_hard_refresh_codes", mock_hard_refresh):
+        # Should not raise, should handle gracefully
+        await coordinator._async_drift_check(dt_util.utcnow())
+
+        # Data should remain unchanged
+        assert coordinator.data == {1: "1234"}
