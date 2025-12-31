@@ -17,7 +17,6 @@ from homeassistant.helpers import (
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
 from custom_components.lock_code_manager.helpers import get_locks_from_targets
 
-
 # =============================================================================
 # get_locks_from_targets Tests
 # =============================================================================
