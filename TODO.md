@@ -78,6 +78,7 @@ class LCMConfig:
 
 - Manual sync services (per-slot and bulk).
 - Better out-of-sync visibility in the UI.
+- Add websocket commands to expose per-lock coordinator data (used slots/PINs) and confirm whether an existing card (e.g., template card) can render it before building a custom card for tabular lock data display.
 
 ## Docs
 

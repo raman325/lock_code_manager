@@ -89,6 +89,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         (e.g., codes changed at the lock's keypad). If changes are detected,
         updates coordinator data and notifies listeners.
         """
+        # Skip if we haven't successfully loaded initial data yet
+        if not self.last_update_success:
+            return
+
         _LOGGER.debug(
             "Performing drift detection hard refresh for %s",
             self._lock.lock.entity_id,

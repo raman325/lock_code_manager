@@ -292,8 +292,9 @@ class BaseLock:
                     self.coordinator.last_exception,
                 )
 
-        # Subscribe to push updates after coordinator is set up
-        if self.supports_push:
+        # Subscribe to push updates only after successful initial data load
+        # (avoids race where push updates arrive before baseline data exists)
+        if self.supports_push and self.coordinator.last_update_success:
             self.subscribe_push_updates()
 
     def unload(self, remove_permanently: bool) -> None:
