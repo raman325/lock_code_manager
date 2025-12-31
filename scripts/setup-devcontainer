@@ -4,8 +4,10 @@
 set -e
 cd "$(dirname "$0")/.."
 
+export DEVCONTAINER=1
+
 get_virtual_release_tag() {
-  python3 - <<'PY' "https://api.github.com/repos/twrecked/hass-virtual/releases/latest"
+    python3 - <<'PY' "https://api.github.com/repos/twrecked/hass-virtual/releases/latest"
 import json
 import sys
 import urllib.request
@@ -39,20 +41,9 @@ ensure_link() {
     ln -s "$target" "$link"
 }
 
-# Script start
-if [ -n "$DEVCONTAINER" ]; then
-  echo "Use scripts/setup-devcontainer when running inside a devcontainer." >&2
-  exit 1
-fi
-
-if [ ! -n "$VIRTUAL_ENV" ];then
-  python3.13 -m venv venv
-  source venv/bin/activate
-fi
-
-pip install --upgrade uv
-uv pip install -r requirements_dev.txt
-
+# Install dependencies into the container's system Python environment.
+python3 -m pip install --upgrade uv
+uv pip install --system -r requirements_dev.txt
 
 pre-commit install
 yarn install
