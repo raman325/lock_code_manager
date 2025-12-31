@@ -529,7 +529,8 @@ async def async_update_listener(
                 key,
                 slot_num,
             )
-            callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
+            if key in callbacks.add_keyed_entity:
+                callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:

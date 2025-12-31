@@ -230,6 +230,8 @@ class EntityCallbackRegistry:
                 await self.remove_entity[uid]()
             except Exception:
                 _LOGGER.exception("Error removing entity with uid %s", uid)
+            finally:
+                self.remove_entity.pop(uid, None)
 
     async def invoke_entity_removers_for_key(self, slot_num: int, key: str) -> None:
         """Invoke entity removal callbacks for a specific slot/key."""
@@ -245,6 +247,8 @@ class EntityCallbackRegistry:
                 await self.remove_entity[uid]()
             except Exception:
                 _LOGGER.exception("Error removing entity with uid %s", uid)
+            finally:
+                self.remove_entity.pop(uid, None)
 
     @callback
     def invoke_lock_added_handlers(self, locks: list[BaseLock]) -> None:
