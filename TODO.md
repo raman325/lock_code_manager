@@ -3,12 +3,9 @@
 ## Testing
 
 - Test strategy UI module end-to-end (resource registration, YAML mode, reload).
-- Test lock providers beyond Z-Wave JS (virtual, future providers).
-- Add regression tests for "startup no flapping" and retry behavior.
+- Add provider tests for integrations beyond Z-Wave JS and virtual.
 - Add Z-Wave JS provider tests (requires Z-Wave JS door lock mocks/fixtures).
-- Test lock offline/disconnected behavior (retry scheduler, `_retry_unsub`).
 - Test rate limiting and connection failure timing in live environment.
-- Test entity availability and wait-for-state behavior.
 
 ## Refactors / Maintenance
 
