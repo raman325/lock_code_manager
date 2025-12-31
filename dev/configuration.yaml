@@ -5,6 +5,7 @@ logger:
     haffmpeg.tools: fatal
     homeassistant.components.camera.img_util: fatal
     custom_components.lock_code_manager: debug
+    # zwave_js_server: debug
 
 virtual:
   yaml_config: true

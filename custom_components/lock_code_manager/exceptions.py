@@ -27,3 +27,26 @@ class EntityNotFoundError(LockCodeManagerError):
 
 class LockDisconnected(LockCodeManagerError):
     """Raised when lock can't be communicated with."""
+
+
+class ProviderNotImplementedError(LockCodeManagerError, NotImplementedError):
+    """Raised when a provider method is not implemented.
+
+    This exception should be raised by BaseLock methods that must be overridden
+    by provider subclasses. It combines LockCodeManagerError (so the coordinator
+    can catch it uniformly) with NotImplementedError (for standard Python semantics).
+    """
+
+    def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
+        """Initialize the error.
+
+        Args:
+            provider: The provider instance (self).
+            method_name: Name of the method that needs to be implemented.
+            guidance: Optional guidance on how to implement the method.
+
+        """
+        message = f"{provider.__class__.__name__} does not implement {method_name}()."
+        if guidance:
+            message = f"{message} {guidance}"
+        super().__init__(message)

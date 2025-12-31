@@ -53,14 +53,15 @@ class VirtualLock(BaseLock):
         """Return whether connection to lock is up."""
         return True
 
-    async def async_hard_refresh_codes(self) -> None:
+    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
         """
-        Perform hard refresh of all codes.
+        Perform hard refresh and return all codes.
 
         Needed for integrations where usercodes are cached and may get out of sync with
-        the lock.
+        the lock. Returns codes in the same format as async_get_usercodes().
         """
         self._data = data if (data := await self._store.async_load()) else {}
+        return await self.async_get_usercodes()
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
