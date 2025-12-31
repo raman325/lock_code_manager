@@ -9,7 +9,6 @@ from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -38,8 +37,8 @@ async def async_setup_entry(
         )
 
     config_entry.async_on_unload(
-        async_dispatcher_connect(
-            hass, f"{DOMAIN}_{config_entry.entry_id}_add", add_standard_text_entities
+        config_entry.runtime_data.callbacks.register_standard_adder(
+            add_standard_text_entities
         )
     )
 

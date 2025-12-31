@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 
+from .callbacks import EntityCallbackRegistry
 from .const import CONF_SLOTS
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ class LockCodeManagerConfigEntryData:
 
     locks: dict[str, BaseLock] = field(default_factory=dict)
     setup_tasks: dict[str | Platform, asyncio.Task[Any]] = field(default_factory=dict)
+    callbacks: EntityCallbackRegistry = field(default_factory=EntityCallbackRegistry)
 
 
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]

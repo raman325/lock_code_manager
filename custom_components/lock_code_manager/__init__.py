@@ -46,7 +46,6 @@ from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
 )
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
     CONF_LOCKS,
@@ -395,12 +394,14 @@ async def async_update_listener(
     locks_to_add: list[str] = [lock for lock in new_locks if lock not in curr_locks]
     locks_to_remove: list[str] = [lock for lock in curr_locks if lock not in new_locks]
 
+    callbacks = runtime_data.callbacks
+
     # Remove old lock entities (slot sensors)
     for lock_entity_id in locks_to_remove:
         _LOGGER.debug(
             "%s (%s): Removing lock %s entities", entry_id, entry_title, lock_entity_id
         )
-        async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_remove_lock", lock_entity_id)
+        callbacks.invoke_lock_removed_handlers(lock_entity_id)
         lock: BaseLock = hass.data[DOMAIN][CONF_LOCKS][lock_entity_id]
         if lock.device_entry:
             dev_reg = dr.async_get(hass)
@@ -420,7 +421,7 @@ async def async_update_listener(
             entry_title,
             locks_to_add,
         )
-        async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add_locks", locks_to_add)
+        added_locks: list[BaseLock] = []
         for lock_entity_id in locks_to_add:
             if lock_entity_id in hass_data[CONF_LOCKS]:
                 _LOGGER.debug(
@@ -450,6 +451,8 @@ async def async_update_listener(
                 )
                 await lock.async_setup(config_entry)
 
+            added_locks.append(lock)
+
             # Check if lock is connected (but don't wait - entity creation doesn't require it)
             if not await lock.async_internal_is_connection_up():
                 _LOGGER.debug(
@@ -469,16 +472,18 @@ async def async_update_listener(
                     lock_entity_id,
                     slot_num,
                 )
-                async_dispatcher_send(
-                    hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num, ent_reg
-                )
+                callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
+
+        # Notify existing entities about the new locks
+        if added_locks:
+            callbacks.invoke_lock_added_handlers(added_locks)
 
     # Remove slot sensors that are no longer in the config
     for slot_num in slots_to_remove.keys():
         _LOGGER.debug(
             "%s (%s): Removing slot %s sensors", entry_id, entry_title, slot_num
         )
-        async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_remove_{slot_num}")
+        await callbacks.invoke_entity_removers_for_slot(slot_num)
 
     # For each new slot, add standard entities and configuration entities. We also
     # add slot sensors for existing locks only since new locks were already set up
@@ -503,9 +508,7 @@ async def async_update_listener(
                 lock_entity_id,
                 slot_num,
             )
-            async_dispatcher_send(
-                hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num, ent_reg
-            )
+            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
         # Check if we need to add a number of uses entity
         if slot_config.get(CONF_NUMBER_OF_USES) not in (None, ""):
@@ -517,7 +520,7 @@ async def async_update_listener(
             entry_title,
             slot_num,
         )
-        async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_add", slot_num, ent_reg)
+        callbacks.invoke_standard_adders(slot_num, ent_reg)
         for key in entities_to_add:
             _LOGGER.debug(
                 "%s (%s): Adding %s entity for slot %s",
@@ -526,9 +529,8 @@ async def async_update_listener(
                 key,
                 slot_num,
             )
-            async_dispatcher_send(
-                hass, f"{DOMAIN}_{entry_id}_add_{key}", slot_num, ent_reg
-            )
+            if key in callbacks.add_keyed_entity:
+                callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:
@@ -540,9 +542,7 @@ async def async_update_listener(
                 lock_entity_id,
                 slot_num,
             )
-            async_dispatcher_send(
-                hass, f"{DOMAIN}_{entry_id}_add_lock_slot", lock, slot_num, ent_reg
-            )
+            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
     # For all slots that are in both the old and new config, check if any of the
     # configuration options have changed
@@ -574,7 +574,7 @@ async def async_update_listener(
                 key,
                 slot_num,
             )
-            async_dispatcher_send(hass, f"{DOMAIN}_{entry_id}_remove_{slot_num}_{key}")
+            await callbacks.invoke_entity_removers_for_key(slot_num, key)
 
         for key in entities_to_add:
             _LOGGER.debug(
@@ -584,9 +584,7 @@ async def async_update_listener(
                 key,
                 slot_num,
             )
-            async_dispatcher_send(
-                hass, f"{DOMAIN}_{entry_id}_add_{key}", slot_num, ent_reg
-            )
+            callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
 
     # Existing entities will listen to updates and act on it
     new_data = {CONF_LOCKS: new_locks, CONF_SLOTS: new_slots}

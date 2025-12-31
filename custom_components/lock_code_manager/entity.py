@@ -17,7 +17,6 @@ from homeassistant.core import (
     callback,
 )
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 
@@ -156,41 +155,34 @@ class BaseLockCodeManagerEntity(Entity):
         """
         self.locks.extend(locks)
 
-    @callback
-    def dispatcher_connect(self) -> None:
-        """
-        Connect entity to dispatcher signals.
+    def _get_removal_uid(self) -> str:
+        """Get unique ID for removal callback registration.
 
-        Can be overwritten by platforms if necessary
+        Override in subclasses for different UID formats.
         """
-        entry = self.config_entry
+        return f"{self.slot_num}|{self.key}"
+
+    @callback
+    def _register_callbacks(self) -> None:
+        """Register entity with callback registry.
+
+        Can be overwritten by platforms if necessary.
+        """
+        callbacks = self.config_entry.runtime_data.callbacks
+
+        # Register for removal by slot/key pattern
         self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{entry.entry_id}_remove_{self.slot_num}_{self.key}",
-                self._internal_async_remove,
+            callbacks.register_entity_remover(
+                self._get_removal_uid(), self._internal_async_remove
             )
         )
+
+        # Register for lock lifecycle events
         self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{entry.entry_id}_remove_{self.slot_num}",
-                self._internal_async_remove,
-            )
+            callbacks.register_lock_removed_handler(self._handle_remove_lock)
         )
         self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{entry.entry_id}_remove_lock",
-                self._handle_remove_lock,
-            )
-        )
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{entry.entry_id}_add_locks",
-                self._handle_add_locks,
-            )
+            callbacks.register_lock_added_handler(self._handle_add_locks)
         )
 
     @callback
@@ -244,7 +236,7 @@ class BaseLockCodeManagerEntity(Entity):
         """Handle entity added to hass."""
         await Entity.async_added_to_hass(self)
 
-        self.dispatcher_connect()
+        self._register_callbacks()
         self.async_on_remove(
             async_track_state_change_filtered(
                 self.hass,
@@ -288,6 +280,10 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         self._attr_unique_id = (
             f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
         )
+
+    def _get_removal_uid(self) -> str:
+        """Get unique ID for removal callback registration (per-lock variant)."""
+        return f"{self.slot_num}|{self.key}|{self.lock.lock.entity_id}"
 
     @callback
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
