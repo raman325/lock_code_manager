@@ -119,18 +119,32 @@ class ZWaveJSLock(BaseLock):
         def on_value_updated(event: dict[str, Any]) -> None:
             """Handle value update events from Z-Wave JS."""
             args: dict[str, Any] = event["args"]
-            # Filter for User Code CC only
-            if args.get("commandClass") != CommandClass.USER_CODE:
+            # Filter for User Code CC userCode property only (not userIdStatus)
+            if (
+                args.get("commandClass") != CommandClass.USER_CODE
+                or args.get("property") != "userCode"
+            ):
                 return
 
-            code_slot = int(args["property"])
-            usercode = args.get("newValue", {})
+            code_slot = int(args["propertyKey"])
 
-            # Build update value
-            if isinstance(usercode, dict) and usercode.get("in_use"):
-                value: int | str = usercode.get("usercode", "")
+            # Slot 0 is not a valid user code slot (used for status/metadata)
+            if code_slot == 0:
+                return
+
+            # newValue is the raw PIN string (or None/empty/"0000" if cleared)
+            new_value = args.get("newValue")
+            # Treat empty, None, or all-zeros as cleared
+            if not new_value or (
+                isinstance(new_value, str) and new_value.strip("0") == ""
+            ):
+                value: int | str = ""
             else:
-                value = ""
+                value = str(new_value)
+
+            # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
+            if self.coordinator and self.coordinator.data.get(code_slot) == value:
+                return
 
             _LOGGER.debug(
                 "Lock %s received push update for slot %s: %s",
