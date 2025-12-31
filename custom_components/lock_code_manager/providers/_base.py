@@ -231,12 +231,16 @@ class BaseLock:
         Subscribe to push-based value updates.
 
         Override in subclasses that support push. Called during async_setup()
-        when supports_push is True.
+        when supports_push is True, and retried during drift detection if
+        initial setup failed.
+
+        Implementations MUST be idempotent (no-op if already subscribed).
         """
         self._raise_not_implemented(
             "subscribe_push_updates",
             "Override this method to subscribe to real-time value updates "
-            "and call coordinator.push_update({slot: value}) when updates arrive.",
+            "and call coordinator.push_update({slot: value}) when updates arrive. "
+            "Must be idempotent (no-op if already subscribed).",
         )
 
     @callback
@@ -292,9 +296,9 @@ class BaseLock:
                     self.coordinator.last_exception,
                 )
 
-        # Subscribe to push updates only after successful initial data load
-        # (avoids race where push updates arrive before baseline data exists)
-        if self.supports_push and self.coordinator.last_update_success:
+        # Subscribe to push updates after coordinator is set up
+        # (out-of-order updates are fine since they merge into coordinator.data)
+        if self.supports_push:
             self.subscribe_push_updates()
 
     def unload(self, remove_permanently: bool) -> None:

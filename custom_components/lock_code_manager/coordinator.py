@@ -107,6 +107,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             )
             return
 
+        # Retry push subscription if supported but not yet subscribed
+        # (handles case where initial setup failed but lock is now available)
+        if self._lock.supports_push:
+            self._lock.subscribe_push_updates()
+
         # Compare with current data and notify if changed
         if new_data != self.data:
             _LOGGER.debug(
