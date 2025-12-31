@@ -3,12 +3,9 @@
 ## Testing
 
 - Test strategy UI module end-to-end (resource registration, YAML mode, reload).
-- Test lock providers beyond Z-Wave JS (virtual, future providers).
-- Add regression tests for "startup no flapping" and retry behavior.
+- Add provider tests for integrations beyond Z-Wave JS and virtual.
 - Add Z-Wave JS provider tests (requires Z-Wave JS door lock mocks/fixtures).
-- Test lock offline/disconnected behavior (retry scheduler, `_retry_unsub`).
 - Test rate limiting and connection failure timing in live environment.
-- Test entity availability and wait-for-state behavior.
 
 ## Refactors / Maintenance
 
@@ -16,9 +13,9 @@
 
 Track entity registry updates and warn if LCM entities change entity IDs (reload required).
 
-### Push mechanism for coordinator
+### Drift detection failure alerting
 
-Add push mechanism support to the coordinator for lock integrations that support real-time value updates. Integrations can use both: polling for drift detection (periodic hard refresh with checksum) and push for immediate updates. The coordinator should accept direct data updates from push-enabled integrations.
+Add mechanism to alert users when drift detection consistently fails over extended periods (e.g., lock offline). Currently failures are logged but there's no visibility to users or entities.
 
 ### Convert config and internal dicts to dataclasses
 
@@ -74,6 +71,7 @@ class LCMConfig:
 
 - Manual sync services (per-slot and bulk).
 - Better out-of-sync visibility in the UI.
+- Add websocket commands to expose per-lock coordinator data (used slots/PINs) and confirm whether an existing card (e.g., template card) can render it before building a custom card for tabular lock data display.
 
 ## Docs
 

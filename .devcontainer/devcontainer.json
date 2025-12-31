@@ -1,6 +1,7 @@
 {
     "name": "lock_code_manager Dev",
     "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "forwardPorts": [8123],
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "lts"
@@ -11,9 +12,10 @@
         }
     },
     "containerEnv": {
+        "DEVCONTAINER": "1",
         "PIP_BREAK_SYSTEM_PACKAGES": "1"
     },
-    "postCreateCommand": "scripts/setup",
+    "postCreateCommand": "scripts/setup-devcontainer",
     "customizations": {
         "vscode": {
             "extensions": [

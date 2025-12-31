@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
 import time
-from typing import Any, Literal, final
+from typing import Any, Literal, NoReturn, final
 
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -20,7 +20,7 @@ from homeassistant.const import (
     CONF_NAME,
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -41,7 +41,7 @@ from ..const import (
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
-from ..exceptions import LockDisconnected
+from ..exceptions import LockDisconnected, ProviderNotImplementedError
 from .const import LOGGER
 
 MIN_OPERATION_DELAY = 2.0
@@ -55,7 +55,57 @@ _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
 
 @dataclass(repr=False, eq=False)
 class BaseLock:
-    """Base for lock instance."""
+    """
+    Base class for lock provider implementations.
+
+    Data Fetching Modes
+    -------------------
+    The coordinator supports three update modes. All modes include an initial poll.
+
+    1. Poll for updates (default):
+       - Periodic calls to get_usercodes() at usercode_scan_interval
+       - Used when supports_push = False
+       - Suitable for integrations without real-time events
+
+    2. Push for updates:
+       - Real-time value updates via subscribe_push_updates()
+       - Enabled when supports_push = True
+       - Disables periodic polling (poll for updates)
+       - Updates pushed via coordinator.push_update({slot: value})
+
+    3. Poll for drift:
+       - Periodic hard_refresh_codes() at hard_refresh_interval
+       - Detects out-of-band changes (e.g., codes changed at keypad)
+       - Runs regardless of push/poll mode
+       - Set hard_refresh_interval = None to disable
+
+    Configuration Examples
+    ----------------------
+    Poll-only (default):
+        supports_push = False
+        usercode_scan_interval = timedelta(minutes=1)
+        hard_refresh_interval = None
+
+    Push with drift detection (recommended for Z-Wave JS):
+        supports_push = True
+        hard_refresh_interval = timedelta(hours=1)
+        # Override subscribe_push_updates() to handle value events
+
+    Poll with drift detection:
+        supports_push = False
+        usercode_scan_interval = timedelta(minutes=1)
+        hard_refresh_interval = timedelta(hours=1)
+
+    Exception Handling
+    ------------------
+    Provider implementations should raise LockCodeManagerError (or subclasses like
+    LockDisconnected) for lock communication failures. The coordinator catches
+    LockCodeManagerError and handles it appropriately (e.g., retrying, logging).
+
+    Do NOT raise generic exceptions or HomeAssistantError directly - always use
+    LCM-derived exceptions so the coordinator can distinguish lock failures from
+    other errors.
+    """
 
     hass: HomeAssistant = field(repr=False)
     dev_reg: dr.DeviceRegistry = field(repr=False)
@@ -138,6 +188,11 @@ class BaseLock:
             return False
         return self.lock.entity_id == other.lock.entity_id
 
+    @final
+    def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:
+        """Raise ProviderNotImplementedError for unimplemented methods."""
+        raise ProviderNotImplementedError(self, method_name, guidance)
+
     @property
     def domain(self) -> str:
         """Return integration domain."""
@@ -153,10 +208,54 @@ class BaseLock:
         """
         Return interval between hard refreshes.
 
-        Hard refreshes re-fetch all codes from the lock to detect out-of-band changes.
+        Hard refreshes re-fetch all codes from the lock to detect out-of-band changes
+        that wouldn't otherwise be detected through normal polling.
         Returns None to disable periodic hard refreshes (default).
         """
         return None
+
+    @property
+    def supports_push(self) -> bool:
+        """
+        Return whether this lock supports push-based updates.
+
+        When True, the lock will receive real-time value updates via
+        subscribe_push_updates() instead of periodic polling. Polling is
+        still used for initial load and drift detection (hard_refresh_interval).
+        """
+        return False
+
+    @callback
+    def subscribe_push_updates(self) -> None:
+        """
+        Subscribe to push-based value updates.
+
+        Override in subclasses that support push. Called during async_setup()
+        when supports_push is True, and retried during drift detection if
+        initial setup failed.
+
+        Implementations MUST be idempotent (no-op if already subscribed).
+        """
+        self._raise_not_implemented(
+            "subscribe_push_updates",
+            "Override this method to subscribe to real-time value updates "
+            "and call coordinator.push_update({slot: value}) when updates arrive. "
+            "Must be idempotent (no-op if already subscribed).",
+        )
+
+    @callback
+    def unsubscribe_push_updates(self) -> None:
+        """
+        Unsubscribe from push-based value updates.
+
+        Override in subclasses that support push. Called during async_unload()
+        when supports_push is True.
+        """
+        self._raise_not_implemented(
+            "unsubscribe_push_updates",
+            "Override this method to clean up any subscriptions "
+            "created in subscribe_push_updates().",
+        )
 
     def setup(self) -> None:
         """Set up lock."""
@@ -197,12 +296,21 @@ class BaseLock:
                     self.coordinator.last_exception,
                 )
 
+        # Subscribe to push updates after coordinator is set up
+        # (out-of-order updates are fine since they merge into coordinator.data)
+        if self.supports_push:
+            self.subscribe_push_updates()
+
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         pass
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
+        # Unsubscribe from push updates before unloading
+        if self.supports_push:
+            self.unsubscribe_push_updates()
+
         await self.hass.async_add_executor_job(self.unload, remove_permanently)
 
     def is_connection_up(self) -> bool:
@@ -218,33 +326,42 @@ class BaseLock:
         """Return whether connection to lock is up."""
         return await self.async_is_connection_up()
 
-    def hard_refresh_codes(self) -> None:
+    def hard_refresh_codes(self) -> dict[int, int | str]:
         """
-        Perform hard refresh all codes.
+        Perform hard refresh and return all codes.
 
         Needed for integrations where usercodes are cached and may get out of sync with
-        the lock.
-        """
-        raise HomeAssistantError from NotImplementedError()
+        the lock. Returns codes in the same format as get_usercodes().
 
-    async def async_hard_refresh_codes(self) -> None:
+        Raises:
+            LockDisconnected: If the lock cannot be communicated with.
+
         """
-        Perform hard refresh of all codes.
+        self._raise_not_implemented(
+            "hard_refresh_codes",
+            "Override this method to re-fetch codes from the lock device.",
+        )
+
+    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+        """
+        Perform hard refresh and return all codes.
 
         Needed for integrations where usercodes are cached and may get out of sync with
-        the lock.
+        the lock. Returns codes in the same format as async_get_usercodes().
         """
-        await self._async_executor_call(self.hard_refresh_codes)
+        return await self._async_executor_call(self.hard_refresh_codes)
 
     @final
-    async def async_internal_hard_refresh_codes(self) -> None:
+    async def async_internal_hard_refresh_codes(self) -> dict[int, int | str]:
         """
-        Perform hard refresh of all codes.
+        Perform hard refresh and return all codes.
 
         Needed for integrations where usercodes are cached and may get out of sync with
-        the lock.
+        the lock. Returns codes in the same format as async_internal_get_usercodes().
         """
-        await self._execute_rate_limited("refresh", self.async_hard_refresh_codes)
+        return await self._execute_rate_limited(
+            "refresh", self.async_hard_refresh_codes
+        )
 
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -255,8 +372,15 @@ class BaseLock:
         Returns True if the value was changed, False if already set to this value.
         If the provider cannot determine whether a change occurred, return True
         to ensure the coordinator refreshes and verifies the state.
+
+        Raises:
+            LockDisconnected: If the lock cannot be communicated with.
+
         """
-        raise HomeAssistantError from NotImplementedError()
+        self._raise_not_implemented(
+            "set_usercode",
+            "Override this method to set a usercode on the lock.",
+        )
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -291,8 +415,15 @@ class BaseLock:
         Returns True if the value was changed, False if already cleared.
         If the provider cannot determine whether a change occurred, return True
         to ensure the coordinator refreshes and verifies the state.
+
+        Raises:
+            LockDisconnected: If the lock cannot be communicated with.
+
         """
-        raise HomeAssistantError from NotImplementedError()
+        self._raise_not_implemented(
+            "clear_usercode",
+            "Override this method to clear a usercode from the lock.",
+        )
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """
@@ -325,8 +456,15 @@ class BaseLock:
             1: '1234',
             'B': '5678',
         }
+
+        Raises:
+            LockDisconnected: If the lock cannot be communicated with.
+
         """
-        raise NotImplementedError()
+        self._raise_not_implemented(
+            "get_usercodes",
+            "Override this method to retrieve usercodes from the lock.",
+        )
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """
@@ -339,6 +477,10 @@ class BaseLock:
             1: '1234',
             'B': '5678',
         }
+
+        Raises:
+            LockDisconnected: If the lock cannot be communicated with.
+
         """
         return await self._async_executor_call(self.get_usercodes)
 

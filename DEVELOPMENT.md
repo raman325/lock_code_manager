@@ -4,7 +4,7 @@
 
 This project uses a VS Code Dev Container for development, which provides a consistent development environment with all necessary dependencies pre-installed. The container includes a debug-enabled Home Assistant instance with Lock Code Manager integration for testing and development purposes.
 
-When set up, the container automatically creates a `.ha` folder containing the Lock Code Manager component and required configurations.
+When set up, the container automatically runs `scripts/setup-devcontainer` to install dependencies into the container's system Python and creates a `.ha` folder containing the Lock Code Manager component and required configurations.
 
 ### Getting Started
 
