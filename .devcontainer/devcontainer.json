@@ -1,6 +1,7 @@
 {
     "name": "lock_code_manager Dev",
     "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "forwardPorts": [8123],
     "features": {
         "ghcr.io/devcontainers/features/node:1": {
             "version": "lts"
