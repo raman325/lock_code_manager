@@ -13,13 +13,7 @@ from typing import Any, Literal, NoReturn, final
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import (
-    ATTR_DEVICE_ID,
-    ATTR_ENTITY_ID,
-    ATTR_STATE,
-    CONF_NAME,
-    EVENT_CONFIG_ENTRY_STATE_CHANGED,
-)
+from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_STATE, CONF_NAME
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -122,6 +116,7 @@ class BaseLock:
     _config_entry_state_unsub: Callable[[], None] | None = field(
         default=None, init=False
     )
+    _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
 
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -338,17 +333,18 @@ class BaseLock:
 
     def _setup_config_entry_state_listener(self) -> None:
         """Listen for lock config entry state changes to resubscribe."""
-        if not self.lock_config_entry or self._config_entry_state_unsub:
+        lock_entry = self.lock_config_entry
+        if not lock_entry or self._config_entry_state_unsub:
             return
 
-        entry_id = self.lock_config_entry.entry_id
+        self._last_entry_state = lock_entry.state
 
         @callback
-        def _handle_state_change(event: Event) -> None:
-            if event.data.get("entry_id") != entry_id:
+        def _handle_state_change() -> None:
+            to_state = lock_entry.state
+            if to_state == self._last_entry_state:
                 return
 
-            to_state = event.data.get("to_state")
             if to_state == ConfigEntryState.LOADED:
                 if self.coordinator:
                     self.hass.async_create_task(
@@ -357,11 +353,15 @@ class BaseLock:
                     )
                 if self.supports_push:
                     self.subscribe_push_updates()
-            elif self.supports_push:
+            elif (
+                self.supports_push and self._last_entry_state == ConfigEntryState.LOADED
+            ):
                 self.unsubscribe_push_updates()
 
-        self._config_entry_state_unsub = self.hass.bus.async_listen(
-            EVENT_CONFIG_ENTRY_STATE_CHANGED, _handle_state_change
+            self._last_entry_state = to_state
+
+        self._config_entry_state_unsub = lock_entry.async_on_state_change(
+            _handle_state_change
         )
 
     async def async_is_connection_up(self) -> bool:
@@ -372,9 +372,10 @@ class BaseLock:
     async def async_internal_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
         is_up = await self.async_is_connection_up()
-        if self.supports_push and self.lock_config_entry:
+        lock_entry = self.lock_config_entry
+        if self.supports_push and lock_entry:
             # Only react to connection transitions when the config entry is loaded.
-            if self.lock_config_entry.state == ConfigEntryState.LOADED:
+            if lock_entry.state == ConfigEntryState.LOADED:
                 if self._last_connection_up is False and is_up:
                     if self.coordinator:
                         self.hass.async_create_task(
