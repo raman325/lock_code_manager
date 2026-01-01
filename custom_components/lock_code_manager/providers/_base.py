@@ -248,6 +248,8 @@ class BaseLock:
         """
         Unsubscribe from push-based value updates.
 
+        Implementations MUST be idempotent (no-op if already unsubscribed).
+
         Override in subclasses that support push. Called during async_unload()
         when supports_push is True.
         """
