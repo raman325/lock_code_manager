@@ -266,6 +266,8 @@ class BaseLock:
         await self.hass.async_add_executor_job(self.setup)
 
         lock_entity_id = self.lock.entity_id
+        # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
+        # when that integration reloads or reconnects.
         self._setup_config_entry_state_listener()
 
         # Reuse existing coordinator or create new one
@@ -297,8 +299,8 @@ class BaseLock:
                     self.coordinator.last_exception,
                 )
 
-        # Subscribe to push updates after coordinator is set up
-        # (out-of-order updates are fine since they merge into coordinator.data)
+        # Subscribe to push updates after coordinator is ready. If the provider's
+        # config entry isn't loaded yet, defer and let the state listener resubscribe.
         if self.supports_push:
             if (
                 self.lock_config_entry
@@ -332,7 +334,7 @@ class BaseLock:
         raise NotImplementedError()
 
     def _setup_config_entry_state_listener(self) -> None:
-        """Listen for lock config entry state changes to resubscribe."""
+        """Listen for provider config entry state changes to resubscribe."""
         lock_entry = self.lock_config_entry
         if not lock_entry or self._config_entry_state_unsub:
             return

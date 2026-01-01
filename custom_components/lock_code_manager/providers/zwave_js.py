@@ -263,6 +263,7 @@ class ZWaveJSLock(BaseLock):
         """Return whether connection to lock is up."""
         runtime_data = getattr(self.lock_config_entry, "runtime_data", None)
         client = getattr(runtime_data, "client", None) if runtime_data else None
+        # Config entry can be loaded before the Z-Wave JS client is fully ready.
         if not client:
             return False
 
