@@ -352,7 +352,7 @@ class BaseLock:
             if to_state == ConfigEntryState.LOADED:
                 if self.coordinator:
                     self.hass.async_create_task(
-                        self.coordinator.async_refresh(),
+                        self.coordinator.async_request_refresh(),
                         f"Refresh coordinator for {self.lock.entity_id} after reload",
                     )
                 if self.supports_push:
