@@ -8,6 +8,7 @@ from datetime import timedelta
 import logging
 from typing import Any
 
+from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
 from zwave_js_server.const.command_class.notification import (
@@ -32,6 +33,7 @@ from homeassistant.components.zwave_js.const import (
     ZWAVE_JS_NOTIFICATION_EVENT,
 )
 from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
+from homeassistant.components.zwave_js.models import ZwaveJSData
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DEVICE_ID,
@@ -108,8 +110,12 @@ class ZWaveJSLock(BaseLock):
         if self.lock_config_entry.state != ConfigEntryState.LOADED:
             return False, "config entry not loaded"
 
-        runtime_data = getattr(self.lock_config_entry, "runtime_data", None)
-        client = getattr(runtime_data, "client", None) if runtime_data else None
+        runtime_data: ZwaveJSData | None = getattr(
+            self.lock_config_entry, "runtime_data", None
+        )
+        client: Client | None = (
+            getattr(runtime_data, "client", None) if runtime_data else None
+        )
         if not client:
             return False, "Z-Wave JS client not ready"
 
