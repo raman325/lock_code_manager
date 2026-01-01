@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -88,6 +89,10 @@ async def test_drift_timer_not_created_without_hard_refresh_interval(
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
+    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
 
     lock_entity = entity_reg.async_get_or_create(
         "lock",
@@ -354,6 +359,7 @@ async def test_subscribe_push_updates_called_during_setup(
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
+    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
 
     lock_entity = entity_reg.async_get_or_create(
         "lock",
