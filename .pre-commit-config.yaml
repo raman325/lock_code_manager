@@ -1,6 +1,7 @@
 ---
 ci:
   skip: [yarn-build, yarn-lint]
+minimum_pre_commit_version: 3.2.0
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10
