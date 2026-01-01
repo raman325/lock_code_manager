@@ -27,6 +27,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         """Initialize the usercode update coordinator."""
         self._lock = lock
         self._drift_unsub: Callable[[], None] | None = None
+        self._connection_unsub: Callable[[], None] | None = None
         # Disable periodic polling when push updates are supported.
         # Polling is still used for initial load.
         update_interval = None if lock.supports_push else lock.usercode_scan_interval
@@ -46,6 +47,14 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
                 hass,
                 self._async_drift_check,
                 lock.hard_refresh_interval,
+            )
+
+        if lock.connection_check_interval:
+            # Periodic connection checks drive reconnect handling for non-push providers.
+            self._connection_unsub = async_track_time_interval(
+                hass,
+                self._async_connection_check,
+                lock.connection_check_interval,
             )
 
     @property
@@ -120,9 +129,21 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             )
             self.async_set_updated_data(new_data)
 
+    async def _async_connection_check(self, now: datetime) -> None:
+        """Poll connection state so providers can resubscribe on reconnect."""
+        try:
+            await self._lock.async_internal_is_connection_up()
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "Connection check failed for %s: %s", self._lock.lock.entity_id, err
+            )
+
     async def async_shutdown(self) -> None:
         """Shut down the coordinator and clean up resources."""
         if self._drift_unsub:
             self._drift_unsub()
             self._drift_unsub = None
+        if self._connection_unsub:
+            self._connection_unsub()
+            self._connection_unsub = None
         await super().async_shutdown()

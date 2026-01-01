@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 import logging
 from typing import Any
 
@@ -96,6 +97,11 @@ class ZWaveJSLock(BaseLock):
         subscribe to those instead of polling.
         """
         return True
+
+    @property
+    def connection_check_interval(self) -> timedelta | None:
+        """Z-Wave JS exposes config entry state changes, so skip polling."""
+        return None
 
     @callback
     def subscribe_push_updates(self) -> None:

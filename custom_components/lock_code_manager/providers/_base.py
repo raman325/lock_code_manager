@@ -74,22 +74,30 @@ class BaseLock:
        - Runs regardless of push/poll mode
        - Set hard_refresh_interval = None to disable
 
+    4. Poll connection state:
+       - Periodic async_internal_is_connection_up() at connection_check_interval
+       - Helps detect reconnects for integrations without config entry state signals
+       - Set connection_check_interval = None to disable
+
     Configuration Examples
     ----------------------
     Poll-only (default):
         supports_push = False
         usercode_scan_interval = timedelta(minutes=1)
         hard_refresh_interval = None
+        connection_check_interval = timedelta(seconds=30)
 
     Push with drift detection (recommended for Z-Wave JS):
         supports_push = True
         hard_refresh_interval = timedelta(hours=1)
+        connection_check_interval = None
         # Override subscribe_push_updates() to handle value events
 
     Poll with drift detection:
         supports_push = False
         usercode_scan_interval = timedelta(minutes=1)
         hard_refresh_interval = timedelta(hours=1)
+        connection_check_interval = timedelta(seconds=30)
 
     Exception Handling
     ------------------
@@ -213,6 +221,15 @@ class BaseLock:
         Returns None to disable periodic hard refreshes (default).
         """
         return None
+
+    @property
+    def connection_check_interval(self) -> timedelta | None:
+        """
+        Return interval for connection state checks.
+
+        Defaults to 30 seconds. Returns None to disable periodic checks.
+        """
+        return timedelta(seconds=30)
 
     @property
     def supports_push(self) -> bool:
