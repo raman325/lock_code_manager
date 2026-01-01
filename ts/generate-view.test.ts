@@ -746,7 +746,7 @@ describe('generateView', () => {
 
         const result = await generateView(hass, testConfigEntry, entities, false, true);
 
-        const card = result.cards[0] as { cards: Array<{ entities: unknown[] }> };
+        const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
         const entitiesCard = card.cards[1];
         const hasFoldRow = entitiesCard.entities.some(
             (e) => typeof e === 'object' && 'type' in e && e.type === 'custom:fold-entity-row'
