@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import timedelta
 import logging
 from typing import Any
 
@@ -49,8 +48,6 @@ from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
-# Default interval between hard refreshes (checksum-optimized full code refresh)
-DEFAULT_HARD_REFRESH_INTERVAL = timedelta(hours=1)
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
 ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
@@ -86,17 +83,6 @@ class ZWaveJSLock(BaseLock):
         return async_get_node_from_entity_id(
             self.hass, self.lock.entity_id, self.ent_reg
         )
-
-    @property
-    def hard_refresh_interval(self) -> timedelta | None:
-        """
-        Return interval between hard refreshes.
-
-        Z-Wave JS caches user codes and may get out of sync if codes are changed
-        at the lock's keypad. The hard refresh uses Z-Wave JS's checksum optimization
-        to minimize network traffic when codes haven't changed.
-        """
-        return DEFAULT_HARD_REFRESH_INTERVAL
 
     @property
     def supports_push(self) -> bool:
