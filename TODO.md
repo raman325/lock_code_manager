@@ -449,10 +449,10 @@ and integrate relevant new features.
 
 **Medium Priority** (brand-specific, popular):
 
-5. **August/Yale** (`august`, `yale`, `yalexs_ble`) - Popular smart lock brand
-6. **Nuki** - Popular in Europe
-7. **Schlage** - Popular in North America
-8. **SwitchBot** - Growing popularity
+1. **August/Yale** (`august`, `yale`, `yalexs_ble`) - Popular smart lock brand
+2. **Nuki** - Popular in Europe
+3. **Schlage** - Popular in North America
+4. **SwitchBot** - Growing popularity
 
 **Low Priority** (niche or less common):
 

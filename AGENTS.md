@@ -1,8 +1,9 @@
 # AGENTS.md
 
-This file provides guidance to non-Claude coding agents (e.g., GPT-4/4o/5 via Codex CLI)
-when working with code in this repository. `CLAUDE.md` points here so both assistants
-share a consistent view of the project.
+This file provides guidance to all coding agents (e.g., GPT-4/4o/5 via Codex
+CLI, Opus via Claude Code CLI, etc.) when working with code in this repository.
+`CLAUDE.md` points here so that Claude shares a consistent view of the project
+with other coding agents.
 
 ## Overview
 
@@ -222,11 +223,16 @@ yarn watch                     # Watch mode for development
 
 ### Startup Code Flapping Issue (2025-09-29)
 
-**Problem:** Integration flapped between clearing/setting codes on startup when codes were already synced, causing battery drain.
+**Problem:** Integration flapped between clearing/setting codes on startup when
+codes were already synced, causing battery drain.
 
-**Root Cause:** Race condition - in-sync entity checked status before coordinator had stable lock state data.
+**Root Cause:** Race condition - in-sync entity checked status before coordinator
+had stable lock state data.
 
-**Solution:** Added `_initial_state_loaded` flag to prevent sync operations on first load. On initial load, entity reads all states and sets in-sync status WITHOUT triggering operations. Normal sync executes only after initial state is stable.
+**Solution:** Added `_initial_state_loaded` flag to prevent sync operations on
+first load. On initial load, entity reads all states and sets in-sync status
+WITHOUT triggering operations. Normal sync executes only after initial state is
+stable.
 
 **Files:** `binary_sensor.py`, `tests/test_binary_sensor.py`
 **Tests:** `test_startup_no_code_flapping_when_synced`, `test_startup_detects_out_of_sync_code`
@@ -245,9 +251,11 @@ Fixed three critical compatibility issues for HA Core 2025.7-2025.11+:
 
 ### Python 3.13 Upgrade and Home Assistant 2025.10 Compatibility (2025-10-05)
 
-**Problem:** Test failures with outdated dependencies (Python 3.12, pytest-homeassistant 85 versions behind).
+**Problem:** Test failures with outdated dependencies (Python 3.12,
+pytest-homeassistant 85 versions behind).
 
-**Solution:** Upgraded to Python 3.13, pytest-homeassistant 0.13.286, zeroconf 0.147.2, zwave-js-server-python 0.67.1.
+**Solution:** Upgraded to Python 3.13, pytest-homeassistant 0.13.286, zeroconf
+0.147.2, zwave-js-server-python 0.67.1.
 
 **API Compatibility Fixes:**
 
@@ -262,35 +270,44 @@ Fixed three critical compatibility issues for HA Core 2025.7-2025.11+:
 
 ### Entity Creation Blocking Issue (2025-11-04)
 
-**Problem:** No entities created - integration blocked waiting for Z-Wave JS connection during startup.
+**Problem:** No entities created - integration blocked waiting for Z-Wave JS
+connection during startup.
 
-**Root Cause:** Infinite `while` loop blocked `async_update_listener()` waiting for lock connection, preventing dispatcher signals for entity creation.
+**Root Cause:** Infinite `while` loop blocked `async_update_listener()` waiting
+for lock connection, preventing dispatcher signals for entity creation.
 
 **Solution:**
 
 1. Removed blocking wait loop - create entities regardless of connection state
 2. Added `LockDisconnected` exception and connection checks in `async_internal_*` methods
 3. Added error handling in sync logic to catch `LockDisconnected` during startup
-4. Reverted defensive UI changes (PR #534, #594) that made entities optional - entities should always exist
+4. Reverted defensive UI changes (PR #534, #594) that made entities optional -
+   entities should always exist
 
-**Key Lessons:** Fix root causes not symptoms. Making entities optional masked the bug. Entities show "unavailable" until lock connects. UI fails fast if entities truly missing.
+**Key Lessons:** Fix root causes not symptoms. Making entities optional masked
+the bug. Entities show "unavailable" until lock connects. UI fails fast if
+entities truly missing.
 
 **Files:** `__init__.py`, `providers/_base.py`, `binary_sensor.py`, `ts/types.ts`, `ts/generate-view.ts`
 
 ### Rate Limiting and Network Flooding Prevention (2025-11-15)
 
-**Problem:** Integration flooded Z-Wave network with rapid operations during startup (10 slots = 20 operations in <5 seconds), causing communication failures and battery drain.
+**Problem:** Integration flooded Z-Wave network with rapid operations during
+startup (10 slots = 20 operations in <5 seconds), causing communication failures
+and battery drain.
 
 **Root Cause:** No serialization, no rate limiting, excessive coordinator refreshes after each operation.
 
-**Solution:** Decorator-based rate limiting system at `BaseLock` level using `@rate_limited_operation`:
+**Solution:** Decorator-based rate limiting system at `BaseLock` level using
+`@rate_limited_operation`:
 
 - Enforces 2-second minimum delay between ANY operations (`time.monotonic()`)
 - Single `_aio_lock` serializes all operations (get, set, clear, refresh)
 - Connection checking before write operations (raises `LockDisconnected`)
 - Type-safe with `Concatenate` and `ParamSpec` (passes mypy)
 
-**Impact:** 10 out-of-sync slots: Before 20 ops in ~5s → After 20 ops in ~40s. Network flooding prevented ✅, battery drain minimized ✅.
+**Impact:** 10 out-of-sync slots: Before 20 ops in ~5s → After 20 ops in ~40s.
+Network flooding prevented ✅, battery drain minimized ✅.
 
 **Files:** `providers/_base.py` (decorator + fields), `binary_sensor.py` (kept refresh, changed logs to DEBUG)
 **Tests:** 5 new tests in `tests/_base/test_provider.py` - all 37 tests passing, ~95% coverage

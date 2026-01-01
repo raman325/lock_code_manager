@@ -1,6 +1,8 @@
 # Provider State Management Guide
 
-This guide explains how to implement state management for Lock Code Manager providers. Providers are responsible for communicating with lock devices and keeping usercode state synchronized.
+This guide explains how to implement state management for Lock Code Manager
+providers. Providers are responsible for communicating with lock devices and
+keeping usercode state synchronized.
 
 ## Overview
 
@@ -14,11 +16,13 @@ The coordinator manages usercode state through three update modes:
 
 All modes include an initial poll to populate coordinator data.
 
-> **Note:** Even with push mode enabled, you must implement `get_usercodes()`. The coordinator always calls it for the initial data load and any manual refresh requests.
+> **Note:** Even with push mode enabled, you must implement `get_usercodes()`.
+> The coordinator always calls it for the initial data load and any manual
+> refresh requests.
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                    LockUsercodeUpdateCoordinator                │
 ├─────────────────────────────────────────────────────────────────┤
@@ -54,7 +58,8 @@ All modes include an initial poll to populate coordinator data.
 
 ### Poll-Only (Default)
 
-For integrations without real-time events. The coordinator polls at regular intervals.
+For integrations without real-time events. The coordinator polls at regular
+intervals.
 
 ```python
 class MyLock(BaseLock):
@@ -69,7 +74,8 @@ class MyLock(BaseLock):
 
 ### Push with Drift Detection
 
-For integrations with real-time events but potential sync issues (e.g., codes changed at the physical keypad).
+For integrations with real-time events but potential sync issues (e.g., codes
+changed at the physical keypad).
 
 ```python
 class MyLock(BaseLock):
@@ -82,7 +88,8 @@ class MyLock(BaseLock):
         return timedelta(hours=1)  # Check for drift hourly
 ```
 
-> **Note:** You still need to implement `get_usercodes()` - it's called for initial load and manual refreshes even when push is enabled.
+> **Note:** You still need to implement `get_usercodes()` - it's called for
+> initial load and manual refreshes even when push is enabled.
 
 ### Poll with Drift Detection
 
@@ -189,7 +196,8 @@ def unsubscribe_push_updates(self) -> None:
 
 ## Exception Handling
 
-Providers must raise `LockCodeManagerError` subclasses for lock communication failures:
+Providers must raise `LockCodeManagerError` subclasses for lock communication
+failures:
 
 ```python
 from ..exceptions import LockDisconnected
@@ -201,7 +209,8 @@ def get_usercodes(self) -> dict[int, int | str]:
         raise LockDisconnected from err
 ```
 
-The coordinator catches `LockCodeManagerError` and handles retry logic. Do NOT raise generic exceptions or `HomeAssistantError` directly.
+The coordinator catches `LockCodeManagerError` and handles retry logic. Do NOT
+raise generic exceptions or `HomeAssistantError` directly.
 
 ## Update Flow
 
@@ -228,14 +237,20 @@ The coordinator catches `LockCodeManagerError` and handles retry logic. Do NOT r
 
 ## Best Practices
 
-1. **Prefer push mode** when your integration supports events - it's more responsive and reduces device traffic.
+1. **Prefer push mode** when your integration supports events - it's more
+   responsive and reduces device traffic.
 
-2. **Use drift detection** if codes can be changed outside Home Assistant (e.g., at the lock's keypad).
+2. **Use drift detection** if codes can be changed outside Home Assistant
+   (e.g., at the lock's keypad).
 
-3. **Cache appropriately** - `get_usercodes()` can return cached data, but `hard_refresh_codes()` should always query the device.
+3. **Cache appropriately** - `get_usercodes()` can return cached data, but
+   `hard_refresh_codes()` should always query the device.
 
-4. **Handle disconnections gracefully** - raise `LockDisconnected` rather than letting exceptions bubble up.
+4. **Handle disconnections gracefully** - raise `LockDisconnected` rather than
+   letting exceptions bubble up.
 
 5. **Clean up subscriptions** - always implement `unsubscribe_push_updates()` to prevent memory leaks.
 
-6. **Use rate limiting** - the base class provides rate limiting through `_execute_rate_limited()`. Use the `async_internal_*` methods which apply rate limiting automatically.
+6. **Use rate limiting** - the base class provides rate limiting through
+   `_execute_rate_limited()`. Use the `async_internal_*` methods which apply
+   rate limiting automatically.

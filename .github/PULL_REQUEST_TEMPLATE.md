@@ -1,4 +1,4 @@
-## Breaking change
+# Breaking change
 
 <!--
   If your PR contains a breaking change for existing users, it is important
