@@ -9,5 +9,7 @@ venv
 .mypy_cache
 .ruff_cache
 .uv-cache
+coverage
+htmlcov
 node_modules
 .ha
