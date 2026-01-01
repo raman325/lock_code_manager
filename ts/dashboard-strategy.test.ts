@@ -15,6 +15,29 @@ function testConfig(
     return config as LockCodeManagerDashboardStrategyConfig;
 }
 
+// Helper to create mock that handles different WS message types
+function createDashboardMockHass(options: {
+    configEntries?: Array<{ entry_id: string; title: string }>;
+    locksPerEntry?: Record<string, string[]>;
+}) {
+    const { configEntries = [], locksPerEntry = {} } = options;
+    return createMockHass({
+        callWS: (msg) => {
+            if (msg.type === 'config_entries/get') {
+                return configEntries;
+            }
+            if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                const entryId = msg.config_entry_id as string;
+                return {
+                    locks: locksPerEntry[entryId] ?? [],
+                    slots: {}
+                };
+            }
+            return undefined;
+        }
+    });
+}
+
 describe('LockCodeManagerDashboardStrategy', () => {
     describe('generate', () => {
         it('returns error view when no config entries exist', async () => {
