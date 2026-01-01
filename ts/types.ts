@@ -7,6 +7,7 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 }
 
 export interface LockCodeManagerStrategyConfig {
+    include_code_data_view?: boolean;
     include_code_slot_sensors?: boolean;
     include_in_sync_sensors?: boolean;
 }
@@ -37,9 +38,40 @@ export interface LockCodeManagerEntitiesResponse {
     entities: EntityRegistryEntry[];
 }
 
+export interface LockCoordinatorSlotData {
+    code: number | string | null;
+    /** Present when masked (code is null but slot has a code) */
+    code_length?: number;
+    slot: number | string;
+}
+
+export interface LockCoordinatorData {
+    lock_entity_id: string;
+    lock_name: string;
+    slots: LockCoordinatorSlotData[];
+}
+
 export interface LockCodeManagerConfigEntryData {
     locks: string[];
     slots: { [key: number]: string | null };
+}
+
+export type CodeDisplayMode = 'masked' | 'unmasked' | 'masked_with_reveal';
+
+export interface LockCodeManagerLockDataCardConfig {
+    code_display?: CodeDisplayMode;
+    lock_entity_id: string;
+    title?: string;
+    type: 'custom:lock-code-manager-lock-data';
+}
+
+export interface LockInfo {
+    entity_id: string;
+    name: string;
+}
+
+export interface GetLocksResponse {
+    locks: LockInfo[];
 }
 
 export interface ConfigEntryJSONFragment {

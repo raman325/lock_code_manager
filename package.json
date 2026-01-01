@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@mdi/js": "^7.4.47",
     "home-assistant-js-websocket": "^9.6.0",
     "lit": "^3.3.2",
     "lit-html": "^3.3.2"
