@@ -65,6 +65,12 @@ repos:
       - id: yamllint
         types: [yaml]
 
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.44.0
+    hooks:
+      - id: markdownlint
+        args: ["--fix"]
+
   - repo: https://github.com/PyCQA/flake8
     rev: d93590f5be797aabb60e3b09f2f52dddb02f349f  # frozen: 7.3.0
     hooks:

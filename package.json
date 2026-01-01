@@ -49,6 +49,7 @@
     "eslint-plugin-typescript-sort-keys": "^3.3.0",
     "eslint-plugin-unused-imports": "^4.3.0",
     "jsdom": "^27.4.0",
+    "markdownlint-cli": "^0.47.0",
     "prettier": "^3.7.4",
     "prettier-plugin-package": "^2.0.0",
     "rollup": "^4.54.0",
