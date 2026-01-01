@@ -18,8 +18,16 @@ module.exports = {
             parserOptions: {
                 project: ['./tsconfig.json']
             }
+        },
+        {
+            files: ['**/*.test.ts', '**/test/**/*.ts', 'vitest.config.ts'],
+            rules: {
+                'import/no-extraneous-dependencies': 'off',
+                'sort-keys': 'off'
+            }
         }
     ],
+    ignorePatterns: ['vitest.config.ts'],
     parser: '@typescript-eslint/parser',
     parserOptions: {
         ecmaVersion: 2023,
