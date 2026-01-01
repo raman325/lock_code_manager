@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { DEFAULT_INCLUDE_CODE_DATA_VIEW } from './const';
 import {
     LockCodeManagerDashboardStrategy,
     NO_CONFIG_MESSAGE,
@@ -154,6 +155,110 @@ describe('LockCodeManagerDashboardStrategy', () => {
 
             const view = result.views[0] as { path: string };
             expect(view.path).toBe('my-special-lock');
+        });
+
+        describe('include_code_data_view', () => {
+            it('adds Lock Codes view by default when DEFAULT_INCLUDE_CODE_DATA_VIEW is true', async () => {
+                // Skip if default is false
+                if (!DEFAULT_INCLUDE_CODE_DATA_VIEW) return;
+
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
+                    locksPerEntry: { entry1: ['lock.front_door'] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({}),
+                    hass
+                );
+
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'lock-codes'
+                ) as { cards: Array<{ lock_entity_id?: string; type: string }>; title: string };
+                expect(lockCodesView).toBeDefined();
+                expect(lockCodesView.title).toBe('Lock Codes');
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('custom:lock-code-manager-lock-data');
+                expect(lockCodesView.cards[0].lock_entity_id).toBe('lock.front_door');
+            });
+
+            it('does not add Lock Codes view when include_code_data_view is false', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
+                    locksPerEntry: { entry1: ['lock.front_door'] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({ include_code_data_view: false }),
+                    hass
+                );
+
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'lock-codes'
+                );
+                expect(lockCodesView).toBeUndefined();
+            });
+
+            it('adds Lock Codes view when include_code_data_view is true', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
+                    locksPerEntry: { entry1: ['lock.front_door', 'lock.back_door'] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({ include_code_data_view: true }),
+                    hass
+                );
+
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'lock-codes'
+                ) as { cards: Array<{ lock_entity_id: string }> };
+                expect(lockCodesView).toBeDefined();
+                expect(lockCodesView.cards).toHaveLength(2);
+            });
+
+            it('deduplicates locks across multiple config entries', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [
+                        { entry_id: 'entry1', title: 'Config 1' },
+                        { entry_id: 'entry2', title: 'Config 2' }
+                    ],
+                    locksPerEntry: {
+                        entry1: ['lock.front_door', 'lock.shared'],
+                        entry2: ['lock.back_door', 'lock.shared']
+                    }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({ include_code_data_view: true }),
+                    hass
+                );
+
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'lock-codes'
+                ) as { cards: Array<{ lock_entity_id: string }> };
+                expect(lockCodesView.cards).toHaveLength(3);
+            });
+
+            it('shows "No locks found" message when no locks exist', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
+                    locksPerEntry: { entry1: [] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({ include_code_data_view: true }),
+                    hass
+                );
+
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'lock-codes'
+                ) as { cards: Array<{ content?: string; type: string }> };
+                expect(lockCodesView).toBeDefined();
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('markdown');
+                expect(lockCodesView.cards[0].content).toContain('No locks found');
+            });
         });
     });
 });
