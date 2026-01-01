@@ -2,17 +2,25 @@
 
 ## Dev Container Setup
 
-This project uses a VS Code Dev Container for development, which provides a consistent development environment with all necessary dependencies pre-installed. The container includes a debug-enabled Home Assistant instance with Lock Code Manager integration for testing and development purposes.
+This project uses a VS Code Dev Container for development, which provides a
+consistent development environment with all necessary dependencies
+pre-installed. The container includes a debug-enabled Home Assistant instance
+with Lock Code Manager integration for testing and development purposes.
 
-When set up, the container automatically runs `scripts/setup-devcontainer` to install dependencies into the container's system Python and creates a `.ha` folder containing the Lock Code Manager component and required configurations.
+When set up, the container automatically runs `scripts/setup-devcontainer` to
+install dependencies into the container's system Python and creates a `.ha`
+folder containing the Lock Code Manager component and required configurations.
 
 ### Getting Started
 
 1. Clone this repository to your local machine
 2. Open the project in Visual Studio Code
-3. When prompted, click "Reopen in Container" or select `Dev Containers: Open in Container` from the Command Palette (F1)
-4. Wait for the container to build and initialize (this may take a few minutes on first run)
-5. Once ready, open the Run and Debug panel (Ctrl+Shift+D) and select "Debug Home Assistant"
+3. When prompted, click "Reopen in Container" or select
+   `Dev Containers: Open in Container` from the Command Palette (F1)
+4. Wait for the container to build and initialize (this may take a few minutes
+   on first run)
+5. Once ready, open the Run and Debug panel (Ctrl+Shift+D) and select
+   "Debug Home Assistant"
 6. Complete the initial Home Assistant setup wizard
 
 ### Integration Setup
