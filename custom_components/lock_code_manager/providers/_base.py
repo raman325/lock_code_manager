@@ -118,6 +118,7 @@ class BaseLock:
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
+    _last_connection_up: bool | None = field(default=None, init=False)
     _config_entry_state_unsub: Callable[[], None] | None = field(
         default=None, init=False
     )
@@ -370,7 +371,21 @@ class BaseLock:
     @final
     async def async_internal_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        return await self.async_is_connection_up()
+        is_up = await self.async_is_connection_up()
+        if self.supports_push and self.lock_config_entry:
+            # Only react to connection transitions when the config entry is loaded.
+            if self.lock_config_entry.state == ConfigEntryState.LOADED:
+                if self._last_connection_up is False and is_up:
+                    if self.coordinator:
+                        self.hass.async_create_task(
+                            self.coordinator.async_refresh(),
+                            f"Refresh coordinator for {self.lock.entity_id} after reconnect",
+                        )
+                    self.subscribe_push_updates()
+                elif self._last_connection_up is True and not is_up:
+                    self.unsubscribe_push_updates()
+        self._last_connection_up = is_up
+        return is_up
 
     def hard_refresh_codes(self) -> dict[int, int | str]:
         """
