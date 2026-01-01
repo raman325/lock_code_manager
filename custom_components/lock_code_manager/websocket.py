@@ -244,7 +244,13 @@ async def get_locks(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Return LCM-managed locks, optionally scoped to a config entry."""
+    """
+    Return LCM-managed locks, optionally scoped to a config entry.
+
+    Security note: When called without params, this enumerates all LCM-managed
+    locks. This is acceptable since lock entity IDs are already visible via the
+    Home Assistant API, and no sensitive data (codes) is exposed here.
+    """
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
 
     # If config entry specified, filter to locks from that entry

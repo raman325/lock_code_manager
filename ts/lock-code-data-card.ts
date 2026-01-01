@@ -76,6 +76,7 @@ class LockCodeManagerLockDataCard extends LitElement {
     private _error?: string;
     private _revealed = false;
     private _unsub?: () => void;
+    private _subscribing = false;
 
     set hass(hass: HomeAssistant) {
         this._hass = hass;
@@ -171,7 +172,7 @@ class LockCodeManagerLockDataCard extends LitElement {
     }
 
     private async _subscribe(): Promise<void> {
-        if (!this._hass || !this._config || this._unsub) {
+        if (!this._hass || !this._config || this._unsub || this._subscribing) {
             return;
         }
         if (!this._hass.connection?.subscribeMessage) {
@@ -179,6 +180,7 @@ class LockCodeManagerLockDataCard extends LitElement {
             return;
         }
 
+        this._subscribing = true;
         try {
             this._unsub = await this._hass.connection.subscribeMessage<LockCoordinatorData>(
                 (event) => {
@@ -193,7 +195,11 @@ class LockCodeManagerLockDataCard extends LitElement {
                 }
             );
         } catch (err) {
+            this._data = undefined;
             this._error = err instanceof Error ? err.message : 'Failed to subscribe';
+            this.requestUpdate();
+        } finally {
+            this._subscribing = false;
         }
     }
 
