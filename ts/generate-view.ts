@@ -90,7 +90,8 @@ export async function generateView(
     };
 }
 
-function compareAndSortEntities(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function compareAndSortEntities(
     entityA: LockCodeManagerEntityEntry,
     entityB: LockCodeManagerEntityEntry
 ): -1 | 1 {
@@ -110,7 +111,10 @@ function compareAndSortEntities(
     return 1;
 }
 
-function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManagerEntityEntry {
+/** @internal - exported for testing via generate-view.internal.ts */
+export function createLockCodeManagerEntity(
+    entity: EntityRegistryEntry
+): LockCodeManagerEntityEntry {
     const split = entity.unique_id.split('|');
     return {
         ...entity,
@@ -141,7 +145,8 @@ function generateEntityCards(
     });
 }
 
-function getEntityDisplayName(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function getEntityDisplayName(
     configEntry: ConfigEntryJSONFragment,
     entity: LockCodeManagerEntityEntry
 ): string {

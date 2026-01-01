@@ -1,84 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+    compareAndSortEntities,
+    createLockCodeManagerEntity,
+    getEntityDisplayName
+} from './generate-view.internal';
 import { EntityRegistryEntry } from './ha_type_stubs';
 import { ConfigEntryJSONFragment, LockCodeManagerEntityEntry } from './types';
-
-// Import the functions we want to test
-// Note: These are currently private in generate-view.ts
-// We'll need to export them to test, or test through the public API
-
-// For now, we'll recreate the logic here to test in isolation
-// TODO: Export these functions from generate-view.ts for proper testing
-
-function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManagerEntityEntry {
-    const split = entity.unique_id.split('|');
-    return {
-        ...entity,
-        key: split[2],
-        lockEntityId: split[3],
-        slotNum: parseInt(split[1], 10)
-    };
-}
-
-function capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-}
-
-function getEntityDisplayName(
-    configEntry: ConfigEntryJSONFragment,
-    entity: LockCodeManagerEntityEntry
-): string {
-    const baseName = entity.name ?? entity.original_name ?? '';
-    const configTitle = configEntry.title ?? '';
-    let name = baseName.replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '').trim();
-    if (configTitle && name.toLowerCase().startsWith(configTitle.toLowerCase())) {
-        name = name.slice(configTitle.length).trim();
-    }
-    if (!name) {
-        name = baseName || entity.entity_id;
-    }
-    return capitalize(name);
-}
-
-const KEY_ORDER = [
-    'enabled',
-    'name',
-    'pin',
-    'active',
-    'code_slot',
-    'in_sync',
-    'code_slot_event',
-    'override',
-    'include_code_in_event_log',
-    'notify_on_use',
-    'number_of_uses',
-    'access_schedule',
-    'access_count'
-];
-
-const CODE_EVENT_KEY = 'code_slot_event';
-const CODE_SENSOR_KEY = 'code_slot';
-const IN_SYNC_KEY = 'in_sync';
-
-function compareAndSortEntities(
-    entityA: LockCodeManagerEntityEntry,
-    entityB: LockCodeManagerEntityEntry
-): -1 | 1 {
-    // sort by slot number
-    if (entityA.slotNum < entityB.slotNum) return -1;
-    if (entityA.slotNum > entityB.slotNum) return 1;
-    // sort by key order
-    if (KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)) return -1;
-    if (KEY_ORDER.indexOf(entityA.key) > KEY_ORDER.indexOf(entityB.key)) return 1;
-    // sort code sensors alphabetically based on the lock entity_id
-    if (
-        entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entityA.key) &&
-        entityA.lockEntityId < entityB.lockEntityId
-    )
-        return -1;
-    return 1;
-}
 
 describe('createLockCodeManagerEntity', () => {
     it('parses unique_id correctly', () => {
@@ -226,8 +154,9 @@ describe('compareAndSortEntities', () => {
     });
 
     it('sorts code sensors by lock entity_id', () => {
-        const entityA = createEntity(1, 'code_slot', 'lock.alpha');
-        const entityB = createEntity(1, 'code_slot', 'lock.beta');
+        // Note: CODE_SENSOR_KEY is 'code', not 'code_slot'
+        const entityA = createEntity(1, 'code', 'lock.alpha');
+        const entityB = createEntity(1, 'code', 'lock.beta');
 
         expect(compareAndSortEntities(entityA, entityB)).toBe(-1);
         expect(compareAndSortEntities(entityB, entityA)).toBe(1);
