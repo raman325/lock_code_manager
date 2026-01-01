@@ -142,28 +142,6 @@ has issues:
 
 ### Simplify Code
 
-#### Remove Dispatcher Complexity
-
-**Current Usage:** (`__init__.py` lines 27-30, various entity files)
-
-- Dispatcher signals used for: `add_lock_slot`, `update_lock_slot`,
-  `remove_lock_slot`
-- Each entity listens for dispatcher signals to handle dynamic config changes
-- Pattern: `{DOMAIN}_{entry_id}_action_type`
-
-**Questions to Answer:**
-
-1. Can we use `ConfigEntry.add_update_listener()` instead of dispatchers for
-   config changes?
-2. Would storing entity references in `ConfigEntry.runtime_data` allow more
-   direct updates?
-3. Is the dispatcher pattern necessary for the dynamic slot management, or is
-   there a simpler way?
-
-**Estimated Effort:** High (16+ hours)
-**Priority:** Medium
-**Status:** Not started
-
 #### Remove Other Unnecessary Complexity
 
 **Areas to Review:**
