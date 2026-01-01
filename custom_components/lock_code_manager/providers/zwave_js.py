@@ -262,13 +262,14 @@ class ZWaveJSLock(BaseLock):
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
         runtime_data = getattr(self.lock_config_entry, "runtime_data", None)
-        if not runtime_data:
+        client = getattr(runtime_data, "client", None) if runtime_data else None
+        if not client:
             return False
 
         return bool(
             self.lock_config_entry.state == ConfigEntryState.LOADED
-            and runtime_data.client.connected
-            and runtime_data.client.driver is not None
+            and client.connected
+            and client.driver is not None
         )
 
     async def async_hard_refresh_codes(self) -> dict[int, int | str]:
