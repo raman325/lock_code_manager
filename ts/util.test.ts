@@ -11,7 +11,7 @@ describe('capitalize', () => {
         expect(capitalize('Hello')).toBe('Hello');
     });
 
-    it('capitalizes first letter and keeps rest unchanged', () => {
+    it('capitalizes first letter without changing the rest', () => {
         expect(capitalize('hELLO')).toBe('HELLO');
     });
 

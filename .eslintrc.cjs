@@ -27,7 +27,6 @@ module.exports = {
             }
         }
     ],
-    ignorePatterns: ['vitest.config.ts'],
     parser: '@typescript-eslint/parser',
     parserOptions: {
         ecmaVersion: 2023,
