@@ -18,6 +18,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_STATE,
     CONF_NAME,
+    EVENT_CONFIG_ENTRY_STATE_CHANGED,
 )
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -117,6 +118,9 @@ class BaseLock:
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
+    _config_entry_state_unsub: Callable[[], None] | None = field(
+        default=None, init=False
+    )
 
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -266,6 +270,7 @@ class BaseLock:
         await self.hass.async_add_executor_job(self.setup)
 
         lock_entity_id = self.lock.entity_id
+        self._setup_config_entry_state_listener()
 
         # Reuse existing coordinator or create new one
         if self.coordinator is not None:
@@ -299,7 +304,16 @@ class BaseLock:
         # Subscribe to push updates after coordinator is set up
         # (out-of-order updates are fine since they merge into coordinator.data)
         if self.supports_push:
-            self.subscribe_push_updates()
+            if (
+                self.lock_config_entry
+                and self.lock_config_entry.state != ConfigEntryState.LOADED
+            ):
+                LOGGER.debug(
+                    "Lock %s: deferring push subscription until config entry is loaded",
+                    lock_entity_id,
+                )
+            else:
+                self.subscribe_push_updates()
 
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
@@ -307,6 +321,10 @@ class BaseLock:
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
+        if self._config_entry_state_unsub:
+            self._config_entry_state_unsub()
+            self._config_entry_state_unsub = None
+
         # Unsubscribe from push updates before unloading
         if self.supports_push:
             self.unsubscribe_push_updates()
@@ -316,6 +334,34 @@ class BaseLock:
     def is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
         raise NotImplementedError()
+
+    def _setup_config_entry_state_listener(self) -> None:
+        """Listen for lock config entry state changes to resubscribe."""
+        if not self.lock_config_entry or self._config_entry_state_unsub:
+            return
+
+        entry_id = self.lock_config_entry.entry_id
+
+        @callback
+        def _handle_state_change(event: Event) -> None:
+            if event.data.get("entry_id") != entry_id:
+                return
+
+            to_state = event.data.get("to_state")
+            if to_state == ConfigEntryState.LOADED:
+                if self.coordinator:
+                    self.hass.async_create_task(
+                        self.coordinator.async_refresh(),
+                        f"Refresh coordinator for {self.lock.entity_id} after reload",
+                    )
+                if self.supports_push:
+                    self.subscribe_push_updates()
+            elif self.supports_push:
+                self.unsubscribe_push_updates()
+
+        self._config_entry_state_unsub = self.hass.bus.async_listen(
+            EVENT_CONFIG_ENTRY_STATE_CHANGED, _handle_state_change
+        )
 
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
