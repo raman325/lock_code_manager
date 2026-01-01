@@ -138,6 +138,7 @@ code_display: masked_with_reveal
 ```
 
 **Code Display Modes:**
+
 - `masked` - Codes are always hidden (shown as bullets)
 - `unmasked` - Codes are always visible
 - `masked_with_reveal` - Codes are masked but can be revealed with a toggle button
