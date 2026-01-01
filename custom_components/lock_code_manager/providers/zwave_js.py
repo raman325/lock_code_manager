@@ -103,6 +103,24 @@ class ZWaveJSLock(BaseLock):
         """Z-Wave JS exposes config entry state changes, so skip polling."""
         return None
 
+    def _get_client_state(self) -> tuple[bool, str]:
+        """Return whether the Z-Wave JS client is ready and a retry reason."""
+        if self.lock_config_entry.state != ConfigEntryState.LOADED:
+            return False, "config entry not loaded"
+
+        runtime_data = getattr(self.lock_config_entry, "runtime_data", None)
+        client = getattr(runtime_data, "client", None) if runtime_data else None
+        if not client:
+            return False, "Z-Wave JS client not ready"
+
+        if not client.connected:
+            return False, "Z-Wave JS client not connected"
+
+        if client.driver is None:
+            return False, "Z-Wave JS driver not ready"
+
+        return True, ""
+
     @callback
     def subscribe_push_updates(self) -> None:
         """Subscribe to User Code CC value update events."""
@@ -110,14 +128,9 @@ class ZWaveJSLock(BaseLock):
         if self._value_update_unsub is not None:
             return
 
-        if self.lock_config_entry.state != ConfigEntryState.LOADED:
-            self._schedule_push_retry("config entry not loaded")
-            return
-
-        runtime_data = getattr(self.lock_config_entry, "runtime_data", None)
-        client = getattr(runtime_data, "client", None) if runtime_data else None
-        if not client or client.driver is None:
-            self._schedule_push_retry("Z-Wave JS client not ready")
+        ready, reason = self._get_client_state()
+        if not ready:
+            self._schedule_push_retry(reason)
             return
 
         @callback
@@ -267,17 +280,8 @@ class ZWaveJSLock(BaseLock):
 
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        runtime_data = getattr(self.lock_config_entry, "runtime_data", None)
-        client = getattr(runtime_data, "client", None) if runtime_data else None
-        # Config entry can be loaded before the Z-Wave JS client is fully ready.
-        if not client:
-            return False
-
-        return bool(
-            self.lock_config_entry.state == ConfigEntryState.LOADED
-            and client.connected
-            and client.driver is not None
-        )
+        ready, _reason = self._get_client_state()
+        return ready
 
     async def async_hard_refresh_codes(self) -> dict[int, int | str]:
         """
