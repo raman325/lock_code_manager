@@ -108,19 +108,6 @@ has issues:
 
 ## Refactors and Maintenance
 
-### Remove Commented Code
-
-**Scope:**
-
-- Python files: Look for `#` commented code blocks (not docstrings or inline
-  comments)
-- TypeScript files: Look for `//` or `/* */` commented code blocks
-- Configuration files
-
-**Estimated Effort:** Low (1-2 hours)
-**Priority:** Low
-**Status:** Not started
-
 ### Simplify Tests
 
 **Current Issues:**
