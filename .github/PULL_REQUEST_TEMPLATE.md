@@ -26,11 +26,11 @@
   split it into multiple PRs. This makes things easier and faster to code review.
 -->
 
--   [ ] Dependency upgrade
--   [ ] Bugfix (non-breaking change which fixes an issue)
--   [ ] New feature (which adds functionality)
--   [ ] Breaking change (fix/feature causing existing functionality to break)
--   [ ] Code quality improvements to existing code or addition of tests
+- [ ] Dependency upgrade
+- [ ] Bugfix (non-breaking change which fixes an issue)
+- [ ] New feature (which adds functionality)
+- [ ] Breaking change (fix/feature causing existing functionality to break)
+- [ ] Code quality improvements to existing code or addition of tests
 
 ## Additional information
 
@@ -39,5 +39,5 @@
   Please be sure to fill out additional details, if applicable.
 -->
 
--   This PR fixes or closes issue: fixes #
--   This PR is related to issue:
+- This PR fixes or closes issue: fixes #
+- This PR is related to issue:
