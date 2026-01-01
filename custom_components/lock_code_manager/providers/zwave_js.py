@@ -81,7 +81,7 @@ class ZWaveJSLock(BaseLock):
     lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
-    _push_retry_unsub: Callable[[], None] | None = field(init=False, default=None)
+    _push_retry_cancel: Callable[[], None] | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -136,6 +136,11 @@ class ZWaveJSLock(BaseLock):
 
         ready, reason = self._get_client_state()
         if not ready:
+            _LOGGER.debug(
+                "Lock %s: push subscription deferred (%s)",
+                self.lock.entity_id,
+                reason,
+            )
             self._schedule_push_retry(reason)
             return
 
@@ -191,7 +196,7 @@ class ZWaveJSLock(BaseLock):
 
     def _schedule_push_retry(self, reason: str) -> None:
         """Schedule a retry for push subscription if one isn't pending."""
-        if self._push_retry_unsub:
+        if self._push_retry_cancel:
             return
 
         _LOGGER.debug(
@@ -200,24 +205,24 @@ class ZWaveJSLock(BaseLock):
             PUSH_SUBSCRIBE_RETRY_DELAY,
             reason,
         )
-        self._push_retry_unsub = async_call_later(
+        self._push_retry_cancel = async_call_later(
             self.hass, PUSH_SUBSCRIBE_RETRY_DELAY, self._handle_push_retry
         )
 
     @callback
     def _handle_push_retry(self, _now: Any) -> None:
         """Retry push subscription after delay."""
-        if self._push_retry_unsub:
-            self._push_retry_unsub()
-            self._push_retry_unsub = None
+        if self._push_retry_cancel:
+            self._push_retry_cancel()
+            self._push_retry_cancel = None
         self.subscribe_push_updates()
 
     @callback
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from value update events."""
-        if self._push_retry_unsub:
-            self._push_retry_unsub()
-            self._push_retry_unsub = None
+        if self._push_retry_cancel:
+            self._push_retry_cancel()
+            self._push_retry_cancel = None
         if self._value_update_unsub:
             self._value_update_unsub()
             self._value_update_unsub = None

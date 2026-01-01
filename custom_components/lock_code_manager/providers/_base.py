@@ -400,7 +400,7 @@ class BaseLock:
                 if self._last_connection_up is False and is_up:
                     if self.coordinator:
                         self.hass.async_create_task(
-                            self.coordinator.async_refresh(),
+                            self.coordinator.async_request_refresh(),
                             f"Refresh coordinator for {self.lock.entity_id} after reconnect",
                         )
                     self.subscribe_push_updates()
