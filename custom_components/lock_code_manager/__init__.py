@@ -88,9 +88,12 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
 
     resources: ResourceStorageCollection | ResourceYAMLCollection | None = None
+    resources_in_yaml = False
     if lovelace_data := hass.data.get(LL_DOMAIN):
         resources = lovelace_data.resources
-    if resources:
+    if resources and not (
+        resources_in_yaml := isinstance(resources, ResourceYAMLCollection)
+    ):
         # Load resources if needed
         if not resources.loaded:
             await resources.async_load()
@@ -104,28 +107,25 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 if data[CONF_URL] == STRATEGY_PATH
             )
         except StopIteration:
-            if isinstance(resources, ResourceYAMLCollection):
-                _LOGGER.warning(
-                    "Strategy module can't automatically be registered because this "
-                    "Home Assistant instance is running in YAML mode for resources. "
-                    "Please add a new entry in the list under the resources key in "
-                    'the lovelace section of your config as follows:\n  - url: "%s"'
-                    "\n    type: module",
-                    STRATEGY_PATH,
-                )
-            else:
-                # Register strategy module
-                data = await resources.async_create_item(
-                    {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
-                )
-                _LOGGER.debug(
-                    "Registered strategy module (resource ID %s)", data[CONF_ID]
-                )
-                hass.data[DOMAIN]["resources"] = True
+            # Register strategy module
+            data = await resources.async_create_item(
+                {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
+            )
+            _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
+            hass.data[DOMAIN]["resources"] = True
         else:
             _LOGGER.debug(
                 "Strategy module already registered with resource ID %s", res_id
             )
+    elif resources_in_yaml:
+        _LOGGER.warning(
+            "Strategy module can't automatically be registered because this "
+            "Home Assistant instance is running in YAML mode for resources. "
+            "Please add a new entry in the list under the resources key in "
+            'the lovelace section of your config as follows:\n  - url: "%s"'
+            "\n    type: module",
+            STRATEGY_PATH,
+        )
 
     # Set up websocket API
     await async_websocket_setup(hass)

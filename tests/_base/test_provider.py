@@ -1,7 +1,6 @@
 """Test base class."""
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import timedelta
 import time
 from unittest.mock import AsyncMock, patch
@@ -9,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -17,53 +15,23 @@ from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers._base import BaseLock
 
-from ..common import LOCK_1_ENTITY_ID, LOCK_DATA
+from ..common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
 
 
-@dataclass(repr=False, eq=False)
-class MockLockWithPush(BaseLock):
+class MockLCMLockWithPush(MockLCMLock):
     """Mock lock with push subscription tracking."""
 
-    _connected: bool = field(default=True, init=False)
-    subscribe_calls: int = field(default=0, init=False)
-    unsubscribe_calls: int = field(default=0, init=False)
-
-    @property
-    def domain(self) -> str:
-        """Return integration domain."""
-        return "test"
+    def __init__(self, *args, **kwargs) -> None:
+        """Initialize mock lock."""
+        super().__init__(*args, **kwargs)
+        self.subscribe_calls = 0
+        self.unsubscribe_calls = 0
 
     @property
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
-        return True
-
-    def set_connected(self, connected: bool) -> None:
-        """Set connection state for testing."""
-        self._connected = connected
-
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
-        return self._connected
-
-    def get_usercodes(self) -> dict[int, int | str]:
-        """Return current usercodes."""
-        return {}
-
-    def hard_refresh_codes(self) -> dict[int, int | str]:
-        """Return current usercodes during hard refresh."""
-        return {}
-
-    def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
-    ) -> bool:
-        """Set a usercode on a code slot."""
-        return True
-
-    def clear_usercode(self, code_slot: int) -> bool:
-        """Clear a usercode on a code slot."""
         return True
 
     def subscribe_push_updates(self) -> None:
@@ -129,89 +97,74 @@ async def test_base(hass: HomeAssistant):
         await lock.async_internal_get_usercodes()
 
 
-async def test_config_entry_state_change_resubscribes(hass: HomeAssistant):
+async def test_config_entry_state_change_resubscribes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
     """Resubscribe and refresh when lock config entry reloads."""
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-    config_entry._async_set_state(hass, ConfigEntryState.NOT_LOADED, None)
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
 
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock",
-        config_entry=config_entry,
-    )
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock, MockLCMLockWithPush)
 
-    lock = MockLockWithPush(
-        hass,
-        dr.async_get(hass),
-        entity_reg,
-        config_entry,
-        lock_entity,
-    )
+        lock.subscribe_calls = 0
+        lock.unsubscribe_calls = 0
+        lock.coordinator.async_refresh = AsyncMock()
 
-    await lock.async_setup(config_entry)
-    assert lock.subscribe_calls == 0
+        await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+        await hass.async_block_till_done()
 
-    assert lock.coordinator is not None
-    lock.coordinator.async_refresh = AsyncMock()
+        assert lock.unsubscribe_calls == 1
+        assert lock.subscribe_calls == 1
+        lock.coordinator.async_refresh.assert_awaited()
 
-    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
-    await hass.async_block_till_done()
-
-    assert lock.subscribe_calls == 1
-    lock.coordinator.async_refresh.assert_awaited()
-
-    config_entry._async_set_state(hass, ConfigEntryState.NOT_LOADED, None)
-    await hass.async_block_till_done()
-    assert lock.unsubscribe_calls == 1
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
 
-async def test_connection_transition_resubscribes(hass: HomeAssistant):
+async def test_connection_transition_resubscribes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
     """Resubscribe on reconnect and unsubscribe on disconnect."""
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-    config_entry._async_set_state(hass, ConfigEntryState.NOT_LOADED, None)
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
 
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock",
-        config_entry=config_entry,
-    )
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock, MockLCMLockWithPush)
 
-    lock = MockLockWithPush(
-        hass,
-        dr.async_get(hass),
-        entity_reg,
-        config_entry,
-        lock_entity,
-    )
+        lock.subscribe_calls = 0
+        lock.unsubscribe_calls = 0
+        lock._min_operation_delay = 0.0
+        lock._last_operation_time = 0.0
 
-    await lock.async_setup(config_entry)
-    assert lock.coordinator is not None
-    lock.coordinator.async_refresh = AsyncMock()
+        await lock.coordinator.async_refresh()
 
-    lock.set_connected(False)
-    await lock.async_internal_is_connection_up()
-    assert lock.subscribe_calls == 0
-    assert lock.unsubscribe_calls == 0
+        lock.set_connected(False)
+        await lock.coordinator.async_refresh()
+        assert lock.unsubscribe_calls == 1
 
-    config_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
-    lock.subscribe_calls = 0
-    lock.unsubscribe_calls = 0
-    lock.coordinator.async_refresh.reset_mock()
-    lock.set_connected(True)
-    await lock.async_internal_is_connection_up()
+        lock.set_connected(True)
+        await lock.coordinator.async_refresh()
+        assert lock.subscribe_calls == 1
 
-    assert lock.subscribe_calls == 1
-    lock.coordinator.async_refresh.assert_awaited()
-
-    lock.set_connected(False)
-    await lock.async_internal_is_connection_up()
-    assert lock.unsubscribe_calls == 1
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
 
 async def test_set_usercode_when_disconnected(
