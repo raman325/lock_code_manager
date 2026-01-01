@@ -1,84 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
-import { EntityRegistryEntry } from './ha_type_stubs';
-import { ConfigEntryJSONFragment, LockCodeManagerEntityEntry } from './types';
-
-// Import the functions we want to test
-// Note: These are currently private in generate-view.ts
-// We'll need to export them to test, or test through the public API
-
-// For now, we'll recreate the logic here to test in isolation
-// TODO: Export these functions from generate-view.ts for proper testing
-
-function createLockCodeManagerEntity(entity: EntityRegistryEntry): LockCodeManagerEntityEntry {
-    const split = entity.unique_id.split('|');
-    return {
-        ...entity,
-        key: split[2],
-        lockEntityId: split[3],
-        slotNum: parseInt(split[1], 10)
-    };
-}
-
-function capitalize(str: string): string {
-    return str.charAt(0).toUpperCase() + str.slice(1);
-}
-
-function getEntityDisplayName(
-    configEntry: ConfigEntryJSONFragment,
-    entity: LockCodeManagerEntityEntry
-): string {
-    const baseName = entity.name ?? entity.original_name ?? '';
-    const configTitle = configEntry.title ?? '';
-    let name = baseName.replace(new RegExp(`^Code slot ${entity.slotNum}\\s*`, 'i'), '').trim();
-    if (configTitle && name.toLowerCase().startsWith(configTitle.toLowerCase())) {
-        name = name.slice(configTitle.length).trim();
-    }
-    if (!name) {
-        name = baseName || entity.entity_id;
-    }
-    return capitalize(name);
-}
-
-const KEY_ORDER = [
-    'enabled',
-    'name',
-    'pin',
-    'active',
-    'code_slot',
-    'in_sync',
-    'code_slot_event',
-    'override',
-    'include_code_in_event_log',
-    'notify_on_use',
-    'number_of_uses',
-    'access_schedule',
-    'access_count'
-];
-
-const CODE_EVENT_KEY = 'code_slot_event';
-const CODE_SENSOR_KEY = 'code_slot';
-const IN_SYNC_KEY = 'in_sync';
-
-function compareAndSortEntities(
-    entityA: LockCodeManagerEntityEntry,
-    entityB: LockCodeManagerEntityEntry
-): -1 | 1 {
-    // sort by slot number
-    if (entityA.slotNum < entityB.slotNum) return -1;
-    if (entityA.slotNum > entityB.slotNum) return 1;
-    // sort by key order
-    if (KEY_ORDER.indexOf(entityA.key) < KEY_ORDER.indexOf(entityB.key)) return -1;
-    if (KEY_ORDER.indexOf(entityA.key) > KEY_ORDER.indexOf(entityB.key)) return 1;
-    // sort code sensors alphabetically based on the lock entity_id
-    if (
-        entityA.key === entityB.key &&
-        [CODE_EVENT_KEY, CODE_SENSOR_KEY, IN_SYNC_KEY].includes(entityA.key) &&
-        entityA.lockEntityId < entityB.lockEntityId
-    )
-        return -1;
-    return 1;
-}
+import { generateView } from './generate-view';
+import {
+    ACTIVE_KEY,
+    CODE_EVENT_KEY,
+    CODE_SENSOR_KEY,
+    CONDITION_KEYS,
+    DIVIDER_CARD,
+    IN_SYNC_KEY,
+    compareAndSortEntities,
+    createLockCodeManagerEntity,
+    generateEntityCards,
+    generateSlotCard,
+    getEntityDisplayName,
+    getSlotMapping,
+    maybeGenerateFoldEntityRowCard,
+    maybeGenerateFoldEntityRowConditionCard
+} from './generate-view.internal';
+import { EntityRegistryEntry, LovelaceResource } from './ha_type_stubs';
+import { createMockHass } from './test/mock-hass';
+import {
+    ConfigEntryJSONFragment,
+    LockCodeManagerConfigEntryData,
+    LockCodeManagerEntityEntry,
+    SlotMapping
+} from './types';
 
 describe('createLockCodeManagerEntity', () => {
     it('parses unique_id correctly', () => {
@@ -226,8 +172,9 @@ describe('compareAndSortEntities', () => {
     });
 
     it('sorts code sensors by lock entity_id', () => {
-        const entityA = createEntity(1, 'code_slot', 'lock.alpha');
-        const entityB = createEntity(1, 'code_slot', 'lock.beta');
+        // Note: CODE_SENSOR_KEY is 'code', not 'code_slot'
+        const entityA = createEntity(1, 'code', 'lock.alpha');
+        const entityB = createEntity(1, 'code', 'lock.beta');
 
         expect(compareAndSortEntities(entityA, entityB)).toBe(-1);
         expect(compareAndSortEntities(entityB, entityA)).toBe(1);
@@ -239,5 +186,600 @@ describe('compareAndSortEntities', () => {
 
         expect(compareAndSortEntities(entityA, entityB)).toBe(1);
         expect(compareAndSortEntities(entityB, entityA)).toBe(-1);
+    });
+});
+
+// Shared test helpers and fixtures
+const mockConfigEntry: ConfigEntryJSONFragment = {
+    disabled_by: '',
+    domain: 'lock_code_manager',
+    entry_id: 'test123',
+    pref_disable_new_entities: false,
+    pref_disable_polling: false,
+    reason: null,
+    source: 'user',
+    state: 'loaded',
+    supports_options: true,
+    supports_remove_device: false,
+    supports_unload: true,
+    title: 'Test Config'
+};
+
+function createTestEntity(
+    slotNum: number,
+    key: string,
+    entityId: string,
+    lockEntityId?: string
+): LockCodeManagerEntityEntry {
+    return {
+        entity_id: entityId,
+        key,
+        lockEntityId,
+        name: `Code slot ${slotNum} ${key}`,
+        original_name: `Code slot ${slotNum} ${key}`,
+        slotNum,
+        unique_id: `config|${slotNum}|${key}${lockEntityId ? `|${lockEntityId}` : ''}`
+    } as LockCodeManagerEntityEntry;
+}
+
+describe('generateEntityCards', () => {
+    it('returns entity cards with names from getEntityDisplayName', () => {
+        const hass = createMockHass();
+        const entities = [createTestEntity(1, 'enabled', 'switch.slot_1_enabled')];
+
+        const result = generateEntityCards(hass, mockConfigEntry, entities);
+
+        expect(result).toHaveLength(1);
+        expect(result[0]).toEqual({
+            entity: 'switch.slot_1_enabled',
+            name: 'Enabled'
+        });
+    });
+
+    it('uses lock friendly_name for code sensor entities', () => {
+        const hass = createMockHass({
+            states: {
+                'lock.front_door': {
+                    attributes: { friendly_name: 'Front Door Lock' },
+                    state: 'locked'
+                }
+            }
+        });
+        const entities = [
+            createTestEntity(1, CODE_SENSOR_KEY, 'sensor.slot_1_code', 'lock.front_door')
+        ];
+
+        const result = generateEntityCards(hass, mockConfigEntry, entities);
+
+        expect(result[0].name).toBe('Front Door Lock');
+    });
+
+    it('uses lock friendly_name for in_sync entities', () => {
+        const hass = createMockHass({
+            states: {
+                'lock.back_door': {
+                    attributes: { friendly_name: 'Back Door' },
+                    state: 'locked'
+                }
+            }
+        });
+        const entities = [
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.slot_1_in_sync', 'lock.back_door')
+        ];
+
+        const result = generateEntityCards(hass, mockConfigEntry, entities);
+
+        expect(result[0].name).toBe('Back Door');
+    });
+
+    it('falls back to lock entity_id when friendly_name is missing', () => {
+        const hass = createMockHass({ states: {} });
+        const entities = [
+            createTestEntity(1, CODE_SENSOR_KEY, 'sensor.slot_1_code', 'lock.front_door')
+        ];
+
+        const result = generateEntityCards(hass, mockConfigEntry, entities);
+
+        expect(result[0].name).toBe('lock.front_door');
+    });
+
+    it('handles multiple entities', () => {
+        const hass = createMockHass();
+        const entities = [
+            createTestEntity(1, 'enabled', 'switch.slot_1_enabled'),
+            createTestEntity(1, 'pin', 'text.slot_1_pin'),
+            createTestEntity(1, 'name', 'text.slot_1_name')
+        ];
+
+        const result = generateEntityCards(hass, mockConfigEntry, entities);
+
+        expect(result).toHaveLength(3);
+        expect(result.map((c) => c.entity)).toEqual([
+            'switch.slot_1_enabled',
+            'text.slot_1_pin',
+            'text.slot_1_name'
+        ]);
+    });
+});
+
+describe('getSlotMapping', () => {
+    const configEntryData: LockCodeManagerConfigEntryData = {
+        locks: ['lock.front', 'lock.back'],
+        slots: { 1: 'calendar.slot_1', 2: null }
+    };
+
+    it('separates entities by category', () => {
+        const entities: LockCodeManagerEntityEntry[] = [
+            createTestEntity(1, 'enabled', 'switch.enabled'),
+            createTestEntity(1, 'pin', 'text.pin'),
+            createTestEntity(1, ACTIVE_KEY, 'binary_sensor.active'),
+            createTestEntity(1, CODE_EVENT_KEY, 'event.code_used'),
+            createTestEntity(1, CODE_SENSOR_KEY, 'sensor.code', 'lock.front'),
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
+            createTestEntity(1, CONDITION_KEYS[0], 'switch.condition')
+        ];
+        const hass = createMockHass();
+
+        const result = getSlotMapping(hass, 1, entities, configEntryData);
+
+        expect(result.slotNum).toBe(1);
+        expect(result.mainEntities).toHaveLength(2);
+        expect(result.conditionEntities).toHaveLength(1);
+        expect(result.codeSensorEntities).toHaveLength(1);
+        expect(result.inSyncEntities).toHaveLength(1);
+        expect(result.pinActiveEntity?.key).toBe(ACTIVE_KEY);
+        expect(result.codeEventEntity?.key).toBe(CODE_EVENT_KEY);
+        expect(result.calendarEntityId).toBe('calendar.slot_1');
+    });
+
+    it('returns null calendar for slots without calendar', () => {
+        const entities: LockCodeManagerEntityEntry[] = [
+            createTestEntity(2, ACTIVE_KEY, 'binary_sensor.active'),
+            createTestEntity(2, CODE_EVENT_KEY, 'event.code')
+        ];
+        const hass = createMockHass();
+
+        const result = getSlotMapping(hass, 2, entities, configEntryData);
+
+        expect(result.calendarEntityId).toBeNull();
+    });
+
+    it('only includes entities for the specified slot', () => {
+        const entities: LockCodeManagerEntityEntry[] = [
+            createTestEntity(1, 'enabled', 'switch.slot_1_enabled'),
+            createTestEntity(2, 'enabled', 'switch.slot_2_enabled'),
+            createTestEntity(1, ACTIVE_KEY, 'binary_sensor.active_1'),
+            createTestEntity(1, CODE_EVENT_KEY, 'event.code_1')
+        ];
+        const hass = createMockHass();
+
+        const result = getSlotMapping(hass, 1, entities, configEntryData);
+
+        expect(result.mainEntities).toHaveLength(1);
+        expect(result.mainEntities[0].entity_id).toBe('switch.slot_1_enabled');
+    });
+});
+
+describe('maybeGenerateFoldEntityRowCard', () => {
+    it('returns empty array when entities are empty', () => {
+        const hass = createMockHass();
+
+        const result = maybeGenerateFoldEntityRowCard(hass, mockConfigEntry, [], 'Test', false);
+
+        expect(result).toEqual([]);
+    });
+
+    it('returns section with entities when not using fold-entity-row', () => {
+        const hass = createMockHass();
+        const entities = [createTestEntity(1, 'enabled', 'switch.enabled')];
+
+        const result = maybeGenerateFoldEntityRowCard(
+            hass,
+            mockConfigEntry,
+            entities,
+            'Test Section',
+            false
+        );
+
+        expect(result).toEqual([
+            { label: 'Test Section', type: 'section' },
+            { entity: 'switch.enabled', name: 'Enabled' }
+        ]);
+    });
+
+    it('returns fold-entity-row when useFoldEntityRow is true', () => {
+        const hass = createMockHass();
+        const entities = [createTestEntity(1, 'enabled', 'switch.enabled')];
+
+        const result = maybeGenerateFoldEntityRowCard(
+            hass,
+            mockConfigEntry,
+            entities,
+            'Test Section',
+            true
+        );
+
+        expect(result).toEqual([
+            DIVIDER_CARD,
+            {
+                entities: [{ entity: 'switch.enabled', name: 'Enabled' }],
+                head: { label: 'Test Section', type: 'section' },
+                type: 'custom:fold-entity-row'
+            }
+        ]);
+    });
+});
+
+describe('maybeGenerateFoldEntityRowConditionCard', () => {
+    it('returns empty array when no conditions and no calendar', () => {
+        const hass = createMockHass();
+
+        const result = maybeGenerateFoldEntityRowConditionCard(
+            hass,
+            mockConfigEntry,
+            [],
+            null,
+            'Conditions',
+            false
+        );
+
+        expect(result).toEqual([]);
+    });
+
+    it('includes calendar entity at the start when provided', () => {
+        const hass = createMockHass();
+        const entities = [createTestEntity(1, CONDITION_KEYS[0], 'switch.condition')];
+
+        const result = maybeGenerateFoldEntityRowConditionCard(
+            hass,
+            mockConfigEntry,
+            entities,
+            'calendar.slot_1',
+            'Conditions',
+            false
+        );
+
+        expect(result[0]).toEqual({ label: 'Conditions', type: 'section' });
+        expect(result[1]).toEqual({ entity: 'calendar.slot_1' });
+    });
+
+    it('works with only calendar (no condition entities)', () => {
+        const hass = createMockHass();
+
+        const result = maybeGenerateFoldEntityRowConditionCard(
+            hass,
+            mockConfigEntry,
+            [],
+            'calendar.slot_1',
+            'Conditions',
+            false
+        );
+
+        expect(result).toHaveLength(2);
+        expect(result[1]).toEqual({ entity: 'calendar.slot_1' });
+    });
+
+    it('uses fold-entity-row when useFoldEntityRow is true', () => {
+        const hass = createMockHass();
+
+        const result = maybeGenerateFoldEntityRowConditionCard(
+            hass,
+            mockConfigEntry,
+            [],
+            'calendar.slot_1',
+            'Conditions',
+            true
+        );
+
+        expect(result[0]).toEqual(DIVIDER_CARD);
+        expect(result[1]).toMatchObject({
+            entities: [{ entity: 'calendar.slot_1' }],
+            head: { label: 'Conditions', type: 'section' },
+            type: 'custom:fold-entity-row'
+        });
+    });
+});
+
+describe('generateSlotCard', () => {
+    function createMinimalSlotMapping(slotNum: number): SlotMapping {
+        return {
+            calendarEntityId: null,
+            codeEventEntity: createTestEntity(slotNum, CODE_EVENT_KEY, `event.slot_${slotNum}`),
+            codeSensorEntities: [],
+            conditionEntities: [],
+            inSyncEntities: [],
+            mainEntities: [createTestEntity(slotNum, 'enabled', `switch.slot_${slotNum}_enabled`)],
+            pinActiveEntity: createTestEntity(slotNum, ACTIVE_KEY, `binary_sensor.slot_${slotNum}`),
+            slotNum
+        };
+    }
+
+    it('generates vertical-stack card with markdown header and entities', () => {
+        const hass = createMockHass();
+        const slotMapping = createMinimalSlotMapping(1);
+
+        const result = generateSlotCard(hass, mockConfigEntry, slotMapping, false, false, false);
+
+        expect(result.type).toBe('vertical-stack');
+        expect(result.cards).toHaveLength(2);
+        expect(result.cards[0]).toEqual({
+            content: '## Code Slot 1',
+            type: 'markdown'
+        });
+        expect(result.cards[1].type).toBe('entities');
+    });
+
+    it('includes PIN active and code event entities', () => {
+        const hass = createMockHass();
+        const slotMapping = createMinimalSlotMapping(1);
+
+        const result = generateSlotCard(hass, mockConfigEntry, slotMapping, false, false, false);
+
+        const entitiesCard = result.cards[1] as {
+            entities: Array<{ entity: string; name: string }>;
+        };
+        const entityIds = entitiesCard.entities
+            .filter((e) => typeof e === 'object' && 'entity' in e)
+            .map((e) => (e as { entity: string }).entity);
+
+        expect(entityIds).toContain('binary_sensor.slot_1');
+        expect(entityIds).toContain('event.slot_1');
+    });
+
+    it('includes in_sync sensors when include_in_sync_sensors is true', () => {
+        const hass = createMockHass({
+            states: {
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
+            }
+        });
+        const slotMapping = createMinimalSlotMapping(1);
+        slotMapping.inSyncEntities = [
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front')
+        ];
+
+        const result = generateSlotCard(hass, mockConfigEntry, slotMapping, false, false, true);
+
+        const entitiesCard = result.cards[1] as { entities: unknown[] };
+        const hasInSync = entitiesCard.entities.some(
+            (e) => typeof e === 'object' && 'entity' in e && e.entity === 'binary_sensor.in_sync'
+        );
+        expect(hasInSync).toBe(true);
+    });
+
+    it('excludes in_sync sensors when include_in_sync_sensors is false', () => {
+        const hass = createMockHass();
+        const slotMapping = createMinimalSlotMapping(1);
+        slotMapping.inSyncEntities = [
+            createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front')
+        ];
+
+        const result = generateSlotCard(hass, mockConfigEntry, slotMapping, false, false, false);
+
+        const entitiesCard = result.cards[1] as { entities: unknown[] };
+        const hasInSync = entitiesCard.entities.some(
+            (e) => typeof e === 'object' && 'entity' in e && e.entity === 'binary_sensor.in_sync'
+        );
+        expect(hasInSync).toBe(false);
+    });
+
+    it('includes code slot sensors when include_code_slot_sensors is true', () => {
+        const hass = createMockHass({
+            states: {
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
+            }
+        });
+        const slotMapping = createMinimalSlotMapping(1);
+        slotMapping.codeSensorEntities = [
+            createTestEntity(1, CODE_SENSOR_KEY, 'sensor.code', 'lock.front')
+        ];
+
+        const result = generateSlotCard(hass, mockConfigEntry, slotMapping, false, true, false);
+
+        const entitiesCard = result.cards[1] as { entities: unknown[] };
+        const hasCodeSensor = entitiesCard.entities.some(
+            (e) => typeof e === 'object' && 'entity' in e && e.entity === 'sensor.code'
+        );
+        expect(hasCodeSensor).toBe(true);
+    });
+});
+
+describe('generateView', () => {
+    function createEntityRegistryEntry(
+        slotNum: number,
+        key: string,
+        lockEntityId?: string
+    ): EntityRegistryEntry {
+        const suffix = lockEntityId ? `_${lockEntityId.replace('.', '_')}` : '';
+        return {
+            entity_id: `switch.slot_${slotNum}_${key}${suffix}`,
+            name: `Code slot ${slotNum} ${key}`,
+            original_name: `Code slot ${slotNum} ${key}`,
+            unique_id: `config|${slotNum}|${key}${lockEntityId ? `|${lockEntityId}` : ''}`
+        } as EntityRegistryEntry;
+    }
+
+    const testConfigEntry: ConfigEntryJSONFragment = {
+        disabled_by: '',
+        domain: 'lock_code_manager',
+        entry_id: 'entry123',
+        pref_disable_new_entities: false,
+        pref_disable_polling: false,
+        reason: null,
+        source: 'user',
+        state: 'loaded',
+        supports_options: true,
+        supports_remove_device: false,
+        supports_unload: true,
+        title: 'Test Lock'
+    };
+
+    it('generates a view with badges and cards', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY)
+        ];
+        const lovelaceResources: LovelaceResource[] = [];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return lovelaceResources;
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, entities, false, false);
+
+        expect(result.title).toBe('Test Lock');
+        expect(result.path).toBe('test-lock');
+        expect(result.panel).toBe(false);
+        expect(result.badges).toContain('lock.front');
+        expect(result.cards).toHaveLength(1);
+    });
+
+    it('includes slot active badges', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front'],
+            slots: { 1: null, 2: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY),
+            createEntityRegistryEntry(2, 'enabled'),
+            createEntityRegistryEntry(2, ACTIVE_KEY),
+            createEntityRegistryEntry(2, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, entities, false, false);
+
+        const stateBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'state-label'
+        );
+        expect(stateBadges).toHaveLength(2);
+    });
+
+    it('generates one card per slot', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front'],
+            slots: { 1: null, 2: null, 3: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY),
+            createEntityRegistryEntry(2, 'enabled'),
+            createEntityRegistryEntry(2, ACTIVE_KEY),
+            createEntityRegistryEntry(2, CODE_EVENT_KEY),
+            createEntityRegistryEntry(3, 'enabled'),
+            createEntityRegistryEntry(3, ACTIVE_KEY),
+            createEntityRegistryEntry(3, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, entities, false, false);
+
+        expect(result.cards).toHaveLength(3);
+    });
+
+    it('uses fold-entity-row when available in lovelace resources', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY),
+            createEntityRegistryEntry(1, IN_SYNC_KEY, 'lock.front')
+        ];
+        const lovelaceResources: LovelaceResource[] = [
+            { id: '1', type: 'module', url: '/local/fold-entity-row.js' }
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return lovelaceResources;
+                }
+                return undefined;
+            },
+            states: {
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, entities, false, true);
+
+        const card = result.cards[0] as { cards: Array<{ entities: unknown[] }> };
+        const entitiesCard = card.cards[1];
+        const hasFoldRow = entitiesCard.entities.some(
+            (e) => typeof e === 'object' && 'type' in e && e.type === 'custom:fold-entity-row'
+        );
+        expect(hasFoldRow).toBe(true);
+    });
+
+    it('sorts locks alphabetically in badges', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.z_back', 'lock.a_front'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, entities, false, false);
+
+        const lockBadges = result.badges.filter((badge) => typeof badge === 'string');
+        expect(lockBadges).toEqual(['lock.a_front', 'lock.z_back']);
     });
 });
