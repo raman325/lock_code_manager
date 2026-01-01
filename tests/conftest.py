@@ -63,10 +63,6 @@ def disable_rate_limiting(request: pytest.FixtureRequest):
 
     We patch __post_init__ to set _min_operation_delay=0.0 on new instances.
     """
-    if request.fspath and "tests/_base/test_provider.py" in str(request.fspath):
-        yield
-        return
-
     original_post_init = getattr(BaseLock, "__post_init__", None)
 
     def patched_post_init(self):
