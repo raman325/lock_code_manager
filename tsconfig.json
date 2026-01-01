@@ -10,11 +10,5 @@
     "rootDir": ".",
     "target": "es2022"
   },
-  "include": [
-    "ts/**/*",
-    ".eslintrc.cjs",
-    "tsconfig.json",
-    "rollup.config.js",
-    "vitest.config.ts"
-  ]
+  "include": ["ts/**/*", ".eslintrc.cjs", "tsconfig.json", "rollup.config.js"]
 }
