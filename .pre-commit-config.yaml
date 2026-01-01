@@ -68,7 +68,6 @@ repos:
     rev: v0.44.0
     hooks:
       - id: markdownlint
-        files: ^README\.md$
         args: ["--fix"]
 
   - repo: https://github.com/PyCQA/flake8
