@@ -18,6 +18,13 @@ module.exports = {
             parserOptions: {
                 project: ['./tsconfig.json']
             }
+        },
+        {
+            files: ['**/*.test.ts', '**/test/**/*.ts', 'vitest.config.ts'],
+            rules: {
+                'import/no-extraneous-dependencies': 'off',
+                'sort-keys': 'off'
+            }
         }
     ],
     parser: '@typescript-eslint/parser',
