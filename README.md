@@ -37,6 +37,51 @@ The [Wiki](https://github.com/raman325/lock_code_manager/wiki) is a WIP but has 
 
 See [this wiki article](https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management#dashboard) for more details
 
+### Dashboard Strategy Configuration
+
+The dashboard strategy supports the following configuration options:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `include_code_slot_sensors` | `false` | Show code slot sensor entities in each slot's card |
+| `include_in_sync_sensors` | `true` | Show in-sync sensor entities in each slot's card |
+| `include_code_data_view` | `false` | Add a "Lock Codes" view with cards showing all lock codes |
+
+Example dashboard configuration:
+
+```yaml
+strategy:
+  type: custom:lock-code-manager
+  include_code_data_view: true
+  include_in_sync_sensors: true
+```
+
+### Lock Code Data Card
+
+The `lock-code-manager-lock-data` card displays all code slots for a specific lock. It can be added manually or is automatically included when `include_code_data_view` is enabled.
+
+#### Card Configuration
+
+| Option | Required | Default | Description |
+|--------|----------|---------|-------------|
+| `lock_entity_id` | Yes | - | The entity ID of the lock to display codes for |
+| `title` | No | Lock name | Custom title for the card |
+| `code_display` | No | `masked_with_reveal` | How to display codes: `masked`, `unmasked`, or `masked_with_reveal` |
+
+Example card configuration:
+
+```yaml
+type: custom:lock-code-manager-lock-data
+lock_entity_id: lock.front_door
+title: Front Door Codes
+code_display: masked_with_reveal
+```
+
+**Code Display Modes:**
+- `masked` - Codes are always hidden (shown as bullets)
+- `unmasked` - Codes are always visible
+- `masked_with_reveal` - Codes are masked but can be revealed with a toggle button
+
 ## Inspiration
 
 I spent some time contributing to [keymaster](https://github.com/FutureTense/keymaster), and what I learned working on it, and the regular complaints users had about it generating too many automations, entities, etc. led me to take a different approach. This isn't a knock on `keymaster`, unfortunately a lot of what is built in this integration wasn't possible for most of `keymaster`'s life. I briefly considered implementing this into `keymaster` but:
