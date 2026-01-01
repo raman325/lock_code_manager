@@ -124,11 +124,12 @@ export function createLockCodeManagerEntity(
     };
 }
 
-function generateEntityCards(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function generateEntityCards(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     entities: LockCodeManagerEntityEntry[]
-): { entity: string }[] {
+): { entity: string; name?: string }[] {
     return entities.map((entity) => {
         if ([IN_SYNC_KEY, CODE_SENSOR_KEY].includes(entity.key)) {
             return {
@@ -162,7 +163,8 @@ export function getEntityDisplayName(
     return capitalize(name);
 }
 
-function generateSlotCard(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function generateSlotCard(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     slotMapping: SlotMapping,
@@ -223,7 +225,8 @@ function generateSlotCard(
     };
 }
 
-function getSlotMapping(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function getSlotMapping(
     hass: HomeAssistant,
     slotNum: number,
     lockCodeManagerEntities: LockCodeManagerEntityEntry[],
@@ -266,7 +269,8 @@ function getSlotMapping(
     };
 }
 
-function maybeGenerateFoldEntityRowCard(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function maybeGenerateFoldEntityRowCard(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     entities: LockCodeManagerEntityEntry[],
@@ -296,7 +300,8 @@ function maybeGenerateFoldEntityRowCard(
           ];
 }
 
-function maybeGenerateFoldEntityRowConditionCard(
+/** @internal - exported for testing via generate-view.internal.ts */
+export function maybeGenerateFoldEntityRowConditionCard(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     conditionEntities: LockCodeManagerEntityEntry[],
