@@ -8,6 +8,8 @@
       "module": "homeassistant",
       "args": ["--debug", "--config", "${workspaceFolder}/.ha"],
       "cwd": "${workspaceFolder}/.ha",
+      "python": "${workspaceFolder}/.ha/venv/bin/python",
+      "pythonPath": "${workspaceFolder}/.ha/venv/bin/python",
       "subProcess": false,
       "justMyCode": false
     }

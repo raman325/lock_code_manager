@@ -57,9 +57,17 @@ uv pip install -r requirements_dev.txt
 pre-commit install
 yarn install
 
-# Setup directories for HA and linking
-ensure_link "${PWD}/dev/configuration.yaml" "${PWD}/.ha/configuration.yaml"
-ensure_link "${PWD}/dev/virtual.yaml" "${PWD}/.ha/virtual.yaml"
+# Setup directories for HA config
+mkdir -p "${PWD}/.ha/custom_components"
+
+# Copy yaml config files to .ha (makes .ha self-contained for volume mounting)
+for yaml_file in "${PWD}"/dev/*.yaml; do
+    if [ -f "$yaml_file" ]; then
+        cp "$yaml_file" "${PWD}/.ha/"
+    fi
+done
+
+# Link the component being developed
 ensure_link "${PWD}/custom_components/lock_code_manager" "${PWD}/.ha/custom_components/lock_code_manager"
 
 # Download and extract Virtual component if not already present
