@@ -306,6 +306,14 @@ async def async_unload_entry(
         if lovelace_data := hass.data.get(LL_DOMAIN):
             resources = lovelace_data.resources
         if resources:
+            if isinstance(resources, ResourceYAMLCollection):
+                _LOGGER.debug(
+                    "Resources switched to YAML mode after registration, skipping "
+                    "automatic removal for %s",
+                    STRATEGY_PATH,
+                )
+                hass.data.pop(DOMAIN)
+                return unload_ok
             if hass_data["resources"]:
                 try:
                     resource_id = next(
@@ -318,15 +326,6 @@ async def async_unload_entry(
                         "Strategy module not found so there is nothing to remove"
                     )
                 else:
-                    if isinstance(resources, ResourceYAMLCollection):
-                        _LOGGER.debug(
-                            "Resources switched to YAML mode after registration, "
-                            "skipping automatic removal for %s",
-                            STRATEGY_PATH,
-                        )
-                        hass.data.pop(DOMAIN)
-                        return unload_ok
-
                     await resources.async_delete_item(resource_id)
                     _LOGGER.debug(
                         "Removed strategy module (resource ID %s)", resource_id
