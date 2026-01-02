@@ -42,23 +42,26 @@ The best way to install this integration is via HACS.
 The [Wiki](https://github.com/raman325/lock_code_manager/wiki) is a WIP but has some
 content that might be helpful for you!
 
-## Add a UI for lock management
+## UI & Dashboards
 
-`Lock Code Manager` makes it easy for you to generate a UI for managing and monitoring
-your PINs.
+Lock Code Manager can generate Lovelace dashboards for managing and monitoring PINs. You
+can use the dashboard strategy (full dashboard), the view strategy (single view for a
+config entry), or the custom card directly.
 
 See [this wiki article](https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management#dashboard)
-for more details
+for more details.
 
-### Dashboard Strategy Configuration
+### Dashboard Strategy
 
-The dashboard strategy supports the following configuration options:
+Use the dashboard strategy to build a full dashboard with one view per config entry, and
+an optional "User Codes" view that shows lock code data cards across all managed locks.
 
-| Option                       | Default | Description                                               |
-| ---------------------------- | ------- | --------------------------------------------------------- |
-| `include_code_slot_sensors`  | `false` | Show code slot sensor entities in each slot's card        |
-| `include_in_sync_sensors`    | `true`  | Show in-sync sensor entities in each slot's card          |
-| `include_code_data_view`     | `false` | Add a "Lock Codes" view with cards showing all lock codes |
+| Option                          | Default   | Description                                                        |
+| ------------------------------- | --------- | ------------------------------------------------------------------ |
+| `include_code_slot_sensors`     | `false`   | Show code slot sensor entities in each slot's card                 |
+| `include_in_sync_sensors`       | `true`    | Show in-sync sensor entities in each slot's card                   |
+| `include_code_data_view`        | `false`   | Add a "User Codes" view with cards showing all lock codes          |
+| `code_data_view_code_display`   | `unmasked`| Code visibility mode for the "User Codes" lock data cards          |
 
 Example dashboard configuration:
 
@@ -66,21 +69,47 @@ Example dashboard configuration:
 strategy:
   type: custom:lock-code-manager
   include_code_data_view: true
+  code_data_view_code_display: masked_with_reveal
   include_in_sync_sensors: true
+```
+
+### View Strategy
+
+Use the view strategy when you want a single view for one config entry. If
+`include_code_data_view` is true, the "User Codes" section is appended below the slot
+cards within the same view (no extra view is created).
+
+| Option                          | Default   | Description                                                       |
+| ------------------------------- | --------- | ----------------------------------------------------------------- |
+| `config_entry_id`               | -         | Config entry ID to render                                         |
+| `config_entry_title`            | -         | Config entry title to render (alternative to ID)                  |
+| `include_code_slot_sensors`     | `false`   | Show code slot sensor entities in each slot's card                |
+| `include_in_sync_sensors`       | `true`    | Show in-sync sensor entities in each slot's card                  |
+| `include_code_data_view`        | `false`   | Append a "User Codes" section below the slot cards                |
+| `code_data_view_code_display`   | `unmasked`| Code visibility mode for the "User Codes" lock data cards         |
+
+Example view configuration:
+
+```yaml
+strategy:
+  type: custom:lock-code-manager
+  config_entry_id: 1234567890abcdef
+  include_code_data_view: true
+  code_data_view_code_display: masked
 ```
 
 ### Lock Code Data Card
 
 The `lock-code-manager-lock-data` card displays all code slots for a specific lock. It can
-be added manually or is automatically included when `include_code_data_view` is enabled.
+be added manually or included by the strategies above.
 
 #### Card Configuration
 
-| Option           | Required | Default              | Description                                     |
-| ---------------- | -------- | -------------------- | ----------------------------------------------- |
-| `lock_entity_id` | Yes      | -                    | The entity ID of the lock to display codes for  |
-| `title`          | No       | Lock name            | Custom title for the card                       |
-| `code_display`   | No       | `masked_with_reveal` | How to display codes: see modes below           |
+| Option           | Required | Default    | Description                                    |
+| ---------------- | -------- | ---------- | ---------------------------------------------- |
+| `lock_entity_id` | Yes      | -          | The entity ID of the lock to display codes for |
+| `title`          | No       | Lock name  | Custom title for the card                      |
+| `code_display`   | No       | `unmasked` | How to display codes: see modes below          |
 
 Example card configuration:
 
