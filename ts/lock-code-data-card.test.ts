@@ -6,7 +6,7 @@ import { CodeDisplayMode, LockCoordinatorSlotData } from './types';
 
 describe('LockCodeManagerLockDataCard logic', () => {
     describe('shouldReveal logic', () => {
-        const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
+        const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'unmasked';
 
         function shouldReveal(mode: CodeDisplayMode | undefined, revealed: boolean): boolean {
             const effectiveMode = mode ?? DEFAULT_CODE_DISPLAY;
@@ -30,8 +30,8 @@ describe('LockCodeManagerLockDataCard logic', () => {
             expect(shouldReveal('masked_with_reveal', true)).toBe(true);
         });
 
-        it('defaults to masked_with_reveal when mode is undefined', () => {
-            expect(shouldReveal(undefined, false)).toBe(false);
+        it('defaults to unmasked when mode is undefined', () => {
+            expect(shouldReveal(undefined, false)).toBe(true);
             expect(shouldReveal(undefined, true)).toBe(true);
         });
     });

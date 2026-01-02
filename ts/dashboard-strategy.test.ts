@@ -209,10 +209,10 @@ describe('LockCodeManagerDashboardStrategy', () => {
                     locksPerEntry: { entry1: ['lock.front_door', 'lock.back_door'] }
                 });
 
-                const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ include_code_data_view: true }),
-                    hass
-                );
+                const config = DEFAULT_INCLUDE_CODE_DATA_VIEW
+                    ? testConfig({})
+                    : testConfig({ include_code_data_view: true });
+                const result = await LockCodeManagerDashboardStrategy.generate(config, hass);
 
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'user-codes'

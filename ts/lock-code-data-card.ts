@@ -331,7 +331,6 @@ class LockCodeManagerLockDataCard extends LitElement {
         const lockName =
             this._data?.lock_name ?? hassLockName ?? this._config?.lock_entity_id ?? '';
         const title = this._config?.title ?? (lockName || DEFAULT_TITLE);
-        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const summary = this._getSummary();
 
         return html`

@@ -355,9 +355,7 @@ async def get_locks(
             "locks": [
                 {
                     "entity_id": lock_id,
-                    "name": lock.lock.name
-                    or lock.lock.original_name
-                    or lock.lock.entity_id,
+                    "name": _get_lock_friendly_name(hass, lock),
                 }
                 for lock_id, lock in locks.items()
             ]
