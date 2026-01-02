@@ -5,6 +5,17 @@ set -e
 cd "$(dirname "$0")/.."
 
 export DEVCONTAINER=1
+VENV_PATH="${PWD}/.ha/venv"
+STAMP_FILE="${VENV_PATH}/.devcontainer_setup_stamp"
+REQ_HASH="$(
+    python3 - <<'PY'
+import hashlib
+from pathlib import Path
+
+requirements = Path("requirements_dev.txt").read_bytes()
+print(hashlib.sha256(requirements).hexdigest())
+PY
+)"
 
 get_virtual_release_tag() {
     python3 - <<'PY' "https://api.github.com/repos/twrecked/hass-virtual/releases/latest"
@@ -41,16 +52,84 @@ ensure_link() {
     ln -s "$target" "$link"
 }
 
-# Install dependencies into the container's system Python environment.
-python3 -m pip install --upgrade uv
-uv pip install --system -r requirements_dev.txt
+# Install dependencies into a writable venv so HA can manage extras on demand.
+if [ ! -d "${VENV_PATH}" ]; then
+    python3 -m venv "${VENV_PATH}"
+fi
+
+source "${VENV_PATH}/bin/activate"
+if [ ! -f "${STAMP_FILE}" ] || [ "$(cat "${STAMP_FILE}")" != "${REQ_HASH}" ]; then
+    python -m pip install --upgrade pip "uv==0.9.6"
+    uv pip install -r requirements_dev.txt
+    echo "${REQ_HASH}" > "${STAMP_FILE}"
+fi
+
+python - <<'PY'
+import ast
+import importlib.metadata as metadata
+import inspect
+import json
+import pathlib
+import subprocess
+import sys
+
+from packaging.requirements import Requirement
+
+import homeassistant.helpers.service as ha_service
+
+source = inspect.getsource(ha_service._base_components)
+tree = ast.parse(source)
+
+component_names = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.ImportFrom) and node.module == "homeassistant.components":
+        component_names.extend(alias.name for alias in node.names)
+
+if not component_names:
+    print(
+        "Warning: Unable to determine base component imports; skipping extra deps.",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
+base = pathlib.Path(ha_service.__file__).resolve().parent.parent
+requirements = set()
+for name in component_names:
+    manifest = base / "components" / name / "manifest.json"
+    if not manifest.exists():
+        continue
+    data = json.loads(manifest.read_text())
+    requirements.update(data.get("requirements", []))
+
+to_install = []
+for req_str in sorted(requirements):
+    req = Requirement(req_str)
+    try:
+        installed = metadata.version(req.name)
+    except metadata.PackageNotFoundError:
+        to_install.append(req_str)
+        continue
+    if req.specifier and installed not in req.specifier:
+        to_install.append(req_str)
+
+if to_install:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", *to_install])
+PY
 
 pre-commit install
 yarn install
 
-# Setup directories for HA and linking
-ensure_link "${PWD}/dev/configuration.yaml" "${PWD}/.ha/configuration.yaml"
-ensure_link "${PWD}/dev/virtual.yaml" "${PWD}/.ha/virtual.yaml"
+# Setup directories for HA config
+mkdir -p "${PWD}/.ha/custom_components"
+
+# Copy yaml config files to .ha (makes .ha self-contained for volume mounting)
+for yaml_file in "${PWD}"/dev/*.yaml; do
+    if [ -f "$yaml_file" ]; then
+        cp "$yaml_file" "${PWD}/.ha/"
+    fi
+done
+
+# Link the component being developed
 ensure_link "${PWD}/custom_components/lock_code_manager" "${PWD}/.ha/custom_components/lock_code_manager"
 
 # Download and extract Virtual component if not already present

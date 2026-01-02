@@ -14,7 +14,18 @@ export default {
     plugins: [
         nodeResolve(),
         typescript(),
-        getBabelOutputPlugin({ presets: ['@babel/preset-env'] }),
+        getBabelOutputPlugin({
+            presets: [
+                [
+                    '@babel/preset-env',
+                    {
+                        // Target modern browsers that support ES6+ natively
+                        // This avoids class transpilation that causes variable conflicts
+                        targets: { esmodules: true }
+                    }
+                ]
+            ]
+        }),
         !dev && terser({ format: { comments: false } })
     ]
 };
