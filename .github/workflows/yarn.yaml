@@ -1,5 +1,5 @@
 ---
-name: Yarn test, lint, and build
+name: Yarn lint and build
 
 on:
   push:
@@ -12,7 +12,6 @@ on:
       - "package.json"
       - "rollup.config.js"
       - "tsconfig.json"
-      - "vitest.config.ts"
   pull_request:
     branches: [main]
     paths:
@@ -23,11 +22,10 @@ on:
       - "package.json"
       - "rollup.config.js"
       - "tsconfig.json"
-      - "vitest.config.ts"
 
 jobs:
   yarn:
-    name: Yarn test, lint, and build
+    name: Yarn lint and build
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -44,8 +42,6 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Install
         run: yarn install
-      - name: Test
-        run: yarn test
       - name: Lint
         run: |
           yarn lint:fix

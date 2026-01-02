@@ -90,7 +90,9 @@ describe('LockCodeManagerViewStrategy', () => {
                 mockConfigEntry,
                 mockEntities,
                 false,
-                true
+                true,
+                false,
+                'unmasked'
             );
         });
 
@@ -114,7 +116,9 @@ describe('LockCodeManagerViewStrategy', () => {
                 expect.anything(),
                 expect.anything(),
                 true,
-                true
+                true,
+                false,
+                'unmasked'
             );
         });
 
@@ -138,7 +142,9 @@ describe('LockCodeManagerViewStrategy', () => {
                 expect.anything(),
                 expect.anything(),
                 false,
-                false
+                false,
+                false,
+                'unmasked'
             );
         });
 

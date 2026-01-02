@@ -1,9 +1,14 @@
 import { ReactiveElement } from 'lit';
 
+import { DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY, DEFAULT_INCLUDE_CODE_DATA_VIEW } from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import { slugify } from './slugify';
 import { createErrorView } from './strategy-utils';
-import { GetConfigEntriesResponse, LockCodeManagerDashboardStrategyConfig } from './types';
+import {
+    GetConfigEntriesResponse,
+    LockCodeManagerConfigEntryData,
+    LockCodeManagerDashboardStrategyConfig
+} from './types';
 
 /** Message shown when no LCM configurations exist */
 export const NO_CONFIG_MESSAGE = '# No Lock Code Manager configurations found!';
@@ -37,6 +42,64 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                 title: configEntry.title
             };
         });
+
+        const includeCodeDataView = config.include_code_data_view ?? DEFAULT_INCLUDE_CODE_DATA_VIEW;
+        if (includeCodeDataView) {
+            const lockEntityIds = new Set<string>();
+            await Promise.all(
+                configEntries.map(async (configEntry) => {
+                    const data = await hass.callWS<LockCodeManagerConfigEntryData>({
+                        config_entry_id: configEntry.entry_id,
+                        type: 'lock_code_manager/get_slot_calendar_data'
+                    });
+                    data.locks.forEach((lockEntityId) => lockEntityIds.add(lockEntityId));
+                })
+            );
+
+            const sortedLockEntityIds = Array.from(lockEntityIds).sort((a, b) => {
+                const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
+                const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
+                return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+            });
+
+            const lockCards = sortedLockEntityIds.map((lockEntityId) => {
+                return {
+                    code_display:
+                        config.code_data_view_code_display ?? DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY,
+                    lock_entity_id: lockEntityId,
+                    type: 'custom:lock-code-manager-lock-data'
+                };
+            });
+
+            // Wrap in a grid for responsive multi-column layout
+            const cards =
+                lockCards.length > 0
+                    ? [
+                          {
+                              content: '# <ha-icon icon="mdi:lock-smart"></ha-icon> User Codes',
+                              type: 'markdown'
+                          },
+                          {
+                              cards: lockCards,
+                              columns: Math.min(lockCards.length, 3),
+                              square: false,
+                              type: 'grid'
+                          }
+                      ]
+                    : [
+                          {
+                              content: '# No locks found to display.',
+                              type: 'markdown'
+                          }
+                      ];
+
+            views.push({
+                cards,
+                icon: 'mdi:lock-smart',
+                path: 'user-codes',
+                title: 'User Codes'
+            });
+        }
 
         // Single view hack: add placeholder to force tab visibility
         if (views.length === 1) {
