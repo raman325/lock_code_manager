@@ -5,6 +5,7 @@ venv
 .claude
 .codex
 .coverage
+coverage/
 .pytest_cache
 .mypy_cache
 .ruff_cache

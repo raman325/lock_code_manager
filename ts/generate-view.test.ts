@@ -240,7 +240,8 @@ describe('generateEntityCards', () => {
         const hass = createMockHass({
             states: {
                 'lock.front_door': {
-                    attributes: { friendly_name: 'Front Door Lock' }
+                    attributes: { friendly_name: 'Front Door Lock' },
+                    state: 'locked'
                 }
             }
         });
@@ -257,7 +258,8 @@ describe('generateEntityCards', () => {
         const hass = createMockHass({
             states: {
                 'lock.back_door': {
-                    attributes: { friendly_name: 'Back Door' }
+                    attributes: { friendly_name: 'Back Door' },
+                    state: 'locked'
                 }
             }
         });
@@ -527,7 +529,7 @@ describe('generateSlotCard', () => {
     it('includes in_sync sensors when include_in_sync_sensors is true', () => {
         const hass = createMockHass({
             states: {
-                'lock.front': { attributes: { friendly_name: 'Front Lock' } }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
         const slotMapping = createMinimalSlotMapping(1);
@@ -563,7 +565,7 @@ describe('generateSlotCard', () => {
     it('includes code slot sensors when include_code_slot_sensors is true', () => {
         const hass = createMockHass({
             states: {
-                'lock.front': { attributes: { friendly_name: 'Front Lock' } }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
         const slotMapping = createMinimalSlotMapping(1);
@@ -635,7 +637,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         expect(result.title).toBe('Test Lock');
         expect(result.path).toBe('test-lock');
@@ -670,7 +680,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         const stateBadges = result.badges.filter(
             (badge) => typeof badge === 'object' && badge.type === 'state-label'
@@ -707,7 +725,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         expect(result.cards).toHaveLength(3);
     });
@@ -738,14 +764,22 @@ describe('generateView', () => {
                 return undefined;
             },
             states: {
-                'lock.front': { attributes: { friendly_name: 'Front Lock' } }
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' }
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, true);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            true,
+            false,
+            'unmasked'
+        );
 
-        const card = result.cards[0] as { cards: Array<{ entities: unknown[] }> };
-        const entitiesCard = card.cards[1];
+        const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
+        const [, entitiesCard] = card.cards;
         const hasFoldRow = entitiesCard.entities.some(
             (e) => typeof e === 'object' && 'type' in e && e.type === 'custom:fold-entity-row'
         );
@@ -775,7 +809,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         const lockBadges = result.badges.filter((badge) => typeof badge === 'string');
         expect(lockBadges).toEqual(['lock.a_front', 'lock.z_back']);

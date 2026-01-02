@@ -29,7 +29,9 @@ export async function generateView(
     configEntry: ConfigEntryJSONFragment,
     entities: EntityRegistryEntry[],
     include_code_slot_sensors: boolean,
-    include_in_sync_sensors: boolean
+    include_in_sync_sensors: boolean,
+    include_code_data_view: boolean,
+    code_data_view_code_display: string
 ): Promise<LovelaceViewConfig> {
     const callData = {
         type: 'lock_code_manager/get_config_entry_entities'
@@ -80,6 +82,35 @@ export async function generateView(
             include_in_sync_sensors
         )
     );
+
+    if (include_code_data_view) {
+        const sortedLockIds = [...configEntryData.locks].sort((a, b) => {
+            const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
+            const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
+            return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+        });
+        const lockCards = sortedLockIds.map((lockEntityId) => {
+            return {
+                code_display: code_data_view_code_display,
+                lock_entity_id: lockEntityId,
+                type: 'custom:lock-code-manager-lock-data'
+            };
+        });
+        if (lockCards.length > 0) {
+            cards.push(
+                {
+                    content: '## <ha-icon icon="mdi:lock-smart"></ha-icon> User Codes',
+                    type: 'markdown'
+                },
+                {
+                    cards: lockCards,
+                    columns: Math.min(lockCards.length, 3),
+                    square: false,
+                    type: 'grid'
+                }
+            );
+        }
+    }
 
     return {
         badges,
