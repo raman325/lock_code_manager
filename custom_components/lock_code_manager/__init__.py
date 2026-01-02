@@ -74,6 +74,88 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
+def _get_lovelace_resources(
+    hass: HomeAssistant,
+) -> ResourceStorageCollection | ResourceYAMLCollection | None:
+    """Return the Lovelace resource collection if available."""
+    if lovelace_data := hass.data.get(LL_DOMAIN):
+        return lovelace_data.resources
+    return None
+
+
+async def _async_register_strategy_resource(hass: HomeAssistant) -> None:
+    """Register the Lovelace strategy resource when supported."""
+    resources = _get_lovelace_resources(hass)
+    if not resources:
+        return
+
+    if not resources.loaded:
+        await resources.async_load()
+        _LOGGER.debug("Manually loaded resources")
+        resources.loaded = True
+
+    try:
+        res_id = next(
+            data[CONF_ID]
+            for data in resources.async_items()
+            if data[CONF_URL] == STRATEGY_PATH
+        )
+    except StopIteration:
+        if isinstance(resources, ResourceYAMLCollection):
+            _LOGGER.warning(
+                "Strategy module can't automatically be registered because this "
+                "Home Assistant instance is running in YAML mode for resources. "
+                "Please add a new entry in the list under the resources key in "
+                'the lovelace section of your config as follows:\n  - url: "%s"'
+                "\n    type: module",
+                STRATEGY_PATH,
+            )
+            return
+
+        data = await resources.async_create_item(
+            {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
+        )
+        _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
+        hass.data[DOMAIN]["resources"] = True
+        return
+
+    _LOGGER.debug("Strategy module already registered with resource ID %s", res_id)
+
+
+async def _async_cleanup_strategy_resource(
+    hass: HomeAssistant, hass_data: dict[str, Any]
+) -> None:
+    """Remove the Lovelace strategy resource if we registered it."""
+    resources = _get_lovelace_resources(hass)
+    if not resources:
+        return
+
+    if isinstance(resources, ResourceYAMLCollection) and hass_data["resources"]:
+        _LOGGER.debug(
+            "Resources switched to YAML mode after registration, "
+            "skipping automatic removal for %s",
+            STRATEGY_PATH,
+        )
+        return
+
+    if not hass_data["resources"]:
+        _LOGGER.debug("Strategy module not automatically registered, skipping removal")
+        return
+
+    try:
+        resource_id = next(
+            data[CONF_ID]
+            for data in resources.async_items()
+            if data[CONF_URL] == STRATEGY_PATH
+        )
+    except StopIteration:
+        _LOGGER.debug("Strategy module not found so there is nothing to remove")
+        return
+
+    await resources.async_delete_item(resource_id)
+    _LOGGER.debug("Removed strategy module (resource ID %s)", resource_id)
+
+
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
@@ -87,45 +169,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     )
     _LOGGER.debug("Exposed strategy module at %s", STRATEGY_PATH)
 
-    resources: ResourceStorageCollection | ResourceYAMLCollection | None = None
-    if lovelace_data := hass.data.get(LL_DOMAIN):
-        resources = lovelace_data.resources
-    if resources:
-        # Load resources if needed
-        if not resources.loaded:
-            await resources.async_load()
-            _LOGGER.debug("Manually loaded resources")
-            resources.loaded = True
-
-        try:
-            res_id = next(
-                data.get(CONF_ID)
-                for data in resources.async_items()
-                if data[CONF_URL] == STRATEGY_PATH
-            )
-        except StopIteration:
-            if isinstance(resources, ResourceYAMLCollection):
-                _LOGGER.warning(
-                    "Strategy module can't automatically be registered because this "
-                    "Home Assistant instance is running in YAML mode for resources. "
-                    "Please add a new entry in the list under the resources key in "
-                    'the lovelace section of your config as follows:\n  - url: "%s"'
-                    "\n    type: module",
-                    STRATEGY_PATH,
-                )
-            else:
-                # Register strategy module
-                data = await resources.async_create_item(
-                    {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
-                )
-                _LOGGER.debug(
-                    "Registered strategy module (resource ID %s)", data[CONF_ID]
-                )
-                hass.data[DOMAIN]["resources"] = True
-        else:
-            _LOGGER.debug(
-                "Strategy module already registered with resource ID %s", res_id
-            )
+    await _async_register_strategy_resource(hass)
 
     # Set up websocket API
     await async_websocket_setup(hass)
@@ -302,39 +346,7 @@ async def async_unload_entry(
     if {k: v for k, v in hass_data.items() if k != "resources"} == {
         CONF_LOCKS: {},
     }:
-        resources: ResourceStorageCollection | ResourceYAMLCollection | None = None
-        if lovelace_data := hass.data.get(LL_DOMAIN):
-            resources = lovelace_data.resources
-        if resources:
-            if isinstance(resources, ResourceYAMLCollection):
-                _LOGGER.debug(
-                    "Resources switched to YAML mode after registration, skipping "
-                    "automatic removal for %s",
-                    STRATEGY_PATH,
-                )
-                hass.data.pop(DOMAIN)
-                return unload_ok
-            if hass_data["resources"]:
-                try:
-                    resource_id = next(
-                        data[CONF_ID]
-                        for data in resources.async_items()
-                        if data[CONF_URL] == STRATEGY_PATH
-                    )
-                except StopIteration:
-                    _LOGGER.debug(
-                        "Strategy module not found so there is nothing to remove"
-                    )
-                else:
-                    await resources.async_delete_item(resource_id)
-                    _LOGGER.debug(
-                        "Removed strategy module (resource ID %s)", resource_id
-                    )
-            else:
-                _LOGGER.debug(
-                    "Strategy module not automatically registered, skipping removal"
-                )
-
+        await _async_cleanup_strategy_resource(hass, hass_data)
         hass.data.pop(DOMAIN)
 
     return unload_ok
@@ -352,8 +364,8 @@ async def async_update_listener(
     hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
     ent_reg = er.async_get(hass)
-    entities_to_remove: dict[str, bool] = {}
-    entities_to_add: dict[str, bool] = {}
+    entities_to_remove: set[str] = set()
+    entities_to_add: set[str] = set()
 
     entry_id = config_entry.entry_id
     entry_title = config_entry.title
@@ -492,26 +504,15 @@ async def async_update_listener(
         # First we store the set of entities we are adding so we can track when they are
         # done
         entities_to_add = {
-            CONF_ENABLED: True,
-            CONF_NAME: True,
-            CONF_PIN: True,
-            EVENT_PIN_USED: True,
+            CONF_ENABLED,
+            CONF_NAME,
+            CONF_PIN,
+            EVENT_PIN_USED,
         }
-        for lock_entity_id, lock in runtime_data.locks.items():
-            if lock_entity_id in locks_to_add:
-                continue
-            _LOGGER.debug(
-                "%s (%s): Adding lock %s slot %s sensor",
-                entry_id,
-                entry_title,
-                lock_entity_id,
-                slot_num,
-            )
-            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
         # Check if we need to add a number of uses entity
         if slot_config.get(CONF_NUMBER_OF_USES) not in (None, ""):
-            entities_to_add[CONF_NUMBER_OF_USES] = True
+            entities_to_add.add(CONF_NUMBER_OF_USES)
 
         _LOGGER.debug(
             "%s (%s): Adding PIN enabled binary sensor for slot %s",
@@ -559,11 +560,11 @@ async def async_update_listener(
         # If number of uses value has been removed, fire a signal to remove
         # corresponding entity
         if old_val not in (None, "") and new_val in (None, ""):
-            entities_to_remove[CONF_NUMBER_OF_USES] = True
+            entities_to_remove.add(CONF_NUMBER_OF_USES)
         # If number of uses value has been added, fire a signal to add
         # corresponding entity
         elif old_val in (None, "") and new_val not in (None, ""):
-            entities_to_add[CONF_NUMBER_OF_USES] = True
+            entities_to_add.add(CONF_NUMBER_OF_USES)
 
         for key in entities_to_remove:
             _LOGGER.debug(
