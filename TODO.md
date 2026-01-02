@@ -140,6 +140,14 @@ has issues:
 4. **Internal method wrappers** - `async_internal_*` methods with locks - are
    all necessary?
 
+#### Clarify Config Entry Data vs Options Usage
+
+Document and standardize when to read from `config_entry.data` vs
+`config_entry.options`. Current understanding: prefer `options` only within the
+config entry update listener during options updates; elsewhere use `data` to
+avoid mid-update inconsistencies. Add helper(s) or guidance to reduce ambiguity
+and prevent regressions.
+
 **Specific Items:**
 
 - Review if all `_get_entity_state()` calls can be simplified
