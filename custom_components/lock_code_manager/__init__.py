@@ -96,7 +96,7 @@ async def _async_register_strategy_resource(hass: HomeAssistant) -> None:
 
     try:
         res_id = next(
-            data.get(CONF_ID)
+            data[CONF_ID]
             for data in resources.async_items()
             if data[CONF_URL] == STRATEGY_PATH
         )
