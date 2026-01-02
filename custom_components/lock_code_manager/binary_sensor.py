@@ -326,14 +326,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 continue
             ent_id = self.ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)
             if not ent_id:
-                _LOGGER.debug(
-                    "%s (%s): Missing %s entity for %s slot %s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    key,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                )
                 missing = True
                 continue
             self._entity_id_map[key] = ent_id
