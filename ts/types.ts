@@ -40,9 +40,23 @@ export interface LockCodeManagerEntitiesResponse {
 }
 
 export interface LockCoordinatorSlotData {
+    /**
+     * Whether the slot is currently active (enabled + conditions met).
+     * True = active, False = inactive (conditions blocking), undefined = unknown
+     */
+    active?: boolean;
     code: number | string | null;
     /** Present when masked (code is null but slot has a code) */
     code_length?: number;
+    /** Configured PIN from LCM (for disabled slots with no code on lock) */
+    configured_code?: string;
+    /** Length of configured PIN when masked */
+    configured_code_length?: number;
+    /**
+     * Whether the enabled switch is ON.
+     * True = enabled, False = disabled by user, undefined = unknown
+     */
+    enabled?: boolean;
     /** True if slot is managed by LCM */
     managed?: boolean;
     /** Slot name from LCM configuration, if set */

@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from functools import wraps
 from typing import Any
 
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
-from .const import CONF_CALENDAR, CONF_LOCKS, CONF_NAME, CONF_SLOTS, DOMAIN
+from .const import ATTR_ACTIVE, CONF_CALENDAR, CONF_LOCKS, CONF_NAME, CONF_SLOTS, DOMAIN
 from .data import get_entry_data
 from .providers import BaseLock
 
@@ -166,19 +170,43 @@ def _serialize_slot(
     reveal: bool,
     name: str | None = None,
     managed: bool | None = None,
+    configured_code: str | None = None,
+    active: bool | None = None,
+    enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """Serialize a single slot, optionally masking the code."""
+    """Serialize a single slot, optionally masking the code.
+
+    - code/code_length: What's actually on the lock (actual state)
+    - configured_code/configured_code_length: What LCM has configured (desired state)
+      Always included for managed slots, even if code is active on lock.
+    - active: True if enabled + conditions met, False if inactive, None if unknown
+    - enabled: True if enabled switch is ON, False if OFF, None if unknown
+    """
     result: dict[str, Any] = {"slot": slot}
     if name:
         result["name"] = name
     if managed is not None:
         result["managed"] = managed
+    if active is not None:
+        result["active"] = active
+    if enabled is not None:
+        result["enabled"] = enabled
+
+    # Code on the lock (actual state)
     if reveal or code is None:
         result["code"] = code
     else:
         # Masked: send code_length instead of actual code
         result["code"] = None
         result["code_length"] = len(str(code))
+
+    # Configured code from LCM (desired state) - always include for managed slots
+    if configured_code is not None:
+        if reveal:
+            result["configured_code"] = configured_code
+        else:
+            result["configured_code_length"] = len(configured_code)
+
     return result
 
 
@@ -206,25 +234,81 @@ def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
     return managed_slots
 
 
-def _get_slot_names(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str]:
-    """Get slot names from LCM text entities for a lock."""
-    slot_names: dict[int, str] = {}
+@dataclass
+class SlotMetadata:
+    """Metadata for a single slot from LCM entities."""
+
+    name: str | None = None
+    configured_pin: str | None = None
+    active: bool | None = None
+    enabled: bool | None = None
+
+
+def _get_slot_metadata(
+    hass: HomeAssistant, lock_entity_id: str
+) -> dict[int, SlotMetadata]:
+    """Get all slot metadata from LCM entities for a lock in one pass.
+
+    Returns a dict mapping slot number to SlotMetadata containing:
+    - name: From text entity
+    - configured_pin: From text entity
+    - active: From binary sensor (True=on, False=off, None=unknown)
+    - enabled: From switch (True=on, False=off, None=unknown)
+    """
+    slot_metadata: dict[int, SlotMetadata] = {}
     ent_reg = er.async_get(hass)
+
+    def _get_text_state(entity_id: str | None) -> str | None:
+        if not entity_id:
+            return None
+        if state := hass.states.get(entity_id):
+            if state.state and state.state not in ("unknown", "unavailable"):
+                return state.state
+        return None
+
+    def _get_bool_state(entity_id: str | None) -> bool | None:
+        if not entity_id:
+            return None
+        if state := hass.states.get(entity_id):
+            if state.state == "on":
+                return True
+            if state.state == "off":
+                return False
+        return None
 
     # Find config entries that manage this lock
     for entry in hass.config_entries.async_entries(DOMAIN):
         if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
             continue
 
-        # Get slot names from text entities
+        # Get all metadata for each slot
         for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
-            unique_id = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
-            if entity_id := ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, unique_id):
-                if state := hass.states.get(entity_id):
-                    if state.state and state.state not in ("unknown", "unavailable"):
-                        slot_names[int(slot_num)] = state.state
+            slot_int = int(slot_num)
 
-    return slot_names
+            # Build unique IDs for each entity type
+            name_uid = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
+            pin_uid = f"{entry.entry_id}|{slot_num}|{CONF_PIN}"
+            active_uid = f"{entry.entry_id}|{slot_num}|{ATTR_ACTIVE}"
+            enabled_uid = f"{entry.entry_id}|{slot_num}|{CONF_ENABLED}"
+
+            # Look up entity IDs
+            name_eid = ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, name_uid)
+            pin_eid = ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, pin_uid)
+            active_eid = ent_reg.async_get_entity_id(
+                BINARY_SENSOR_DOMAIN, DOMAIN, active_uid
+            )
+            enabled_eid = ent_reg.async_get_entity_id(
+                SWITCH_DOMAIN, DOMAIN, enabled_uid
+            )
+
+            slot_metadata[slot_int] = SlotMetadata(
+                name=_get_text_state(name_eid),
+                configured_pin=_get_text_state(pin_eid),
+                active=_get_bool_state(active_eid),
+                enabled=_get_bool_state(enabled_eid),
+            )
+
+    return slot_metadata
 
 
 def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
@@ -243,23 +327,34 @@ def _serialize_lock_coordinator(
     """Serialize coordinator data for a lock."""
     coordinator = lock.coordinator
     data = coordinator.data if coordinator is not None else {}
-    slot_names = _get_slot_names(hass, lock.lock.entity_id)
     managed_slots = _get_managed_slots(hass, lock.lock.entity_id)
-    return {
-        "lock_entity_id": lock.lock.entity_id,
-        "lock_name": _get_lock_friendly_name(hass, lock),
-        "slots": [
+    slot_metadata = _get_slot_metadata(hass, lock.lock.entity_id)
+
+    def _get_metadata(slot: Any) -> SlotMetadata | None:
+        if str(slot).isdigit():
+            return slot_metadata.get(int(slot))
+        return None
+
+    slots = []
+    for slot, code in sorted(data.items(), key=lambda item: _slot_sort_key(item[0])):
+        meta = _get_metadata(slot)
+        slots.append(
             _serialize_slot(
                 slot,
                 code,
                 reveal=reveal,
-                name=slot_names.get(int(slot)) if str(slot).isdigit() else None,
+                name=meta.name if meta else None,
                 managed=slot in managed_slots or str(slot) in managed_slots,
+                configured_code=meta.configured_pin if meta else None,
+                active=meta.active if meta else None,
+                enabled=meta.enabled if meta else None,
             )
-            for slot, code in sorted(
-                data.items(), key=lambda item: _slot_sort_key(item[0])
-            )
-        ],
+        )
+
+    return {
+        "lock_entity_id": lock.lock.entity_id,
+        "lock_name": _get_lock_friendly_name(hass, lock),
+        "slots": slots,
     }
 
 

@@ -267,6 +267,66 @@ class LCMConfig:
 - Coordinator `self.data` structure
 - Lock provider internal state
 
+### Handle Disabled Lock Slots
+
+**Context:** Z-Wave locks have `userIdStatus` which can be `Enabled`, `Available`,
+or `Disabled`. Currently the coordinator only stores the code value, not the status.
+
+**Investigation Needed:**
+
+1. Test what happens when LCM tries to set a user code on a slot with
+   `userIdStatus=Disabled`
+2. Determine if we need to explicitly enable the slot before setting a code
+3. Check if different lock brands handle disabled slots differently
+
+**Related:** See "Enhance Coordinator Data Model" below.
+
+**Estimated Effort:** Medium (4-8 hours)
+**Priority:** Medium
+**Status:** Not started
+
+### Enhance Coordinator Data Model with Slot Status
+
+**Current State:** Coordinator stores `{slot: code}` mapping only.
+
+**Proposed Change:** Store `{slot: {code, status}}` where status is a generic
+LCM enum that providers map to.
+
+**Generic Status Enum:**
+
+```python
+class SlotStatus(StrEnum):
+    ENABLED = "enabled"    # Slot has active code
+    AVAILABLE = "available"  # Slot can be used but is empty
+    DISABLED = "disabled"  # Slot cannot be used (locked out)
+```
+
+**Provider Mapping:**
+
+- Z-Wave JS: Maps `userIdStatus` (Enabled/Available/Disabled) → `SlotStatus`
+- Other providers: Map their equivalent states to the generic enum
+
+**Benefits:**
+
+- Frontend can distinguish between "slot is empty" vs "slot is disabled"
+- Better handling of disabled slots in sync logic
+- More accurate representation of lock state
+- Provider-agnostic data model
+
+**Implementation:**
+
+1. Define `SlotStatus` enum in `const.py`
+2. Update Z-Wave JS provider to track userIdStatus and map to `SlotStatus`
+   (currently filtered out in `on_value_updated`)
+3. Change coordinator data schema from `dict[int, str]` to
+   `dict[int, SlotData]` where `SlotData` includes code and status
+4. Update all consumers of coordinator data (binary_sensor, sensor, websocket)
+5. Update frontend types and rendering
+
+**Estimated Effort:** High (12-16 hours)
+**Priority:** Medium
+**Status:** Not started
+
 ### Entity Registry Change Detection
 
 Track entity registry updates and warn if LCM entities change entity IDs (reload

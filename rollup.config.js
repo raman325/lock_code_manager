@@ -27,5 +27,8 @@ export default {
             ]
         }),
         !dev && terser({ format: { comments: false } })
-    ]
+    ],
+    watch: {
+        include: 'ts/**'
+    }
 };

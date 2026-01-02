@@ -102,6 +102,68 @@ entities.
 - **Dispatcher signals**: Heavily used for dynamic entity management without tight coupling
 - **Reauth flow**: Automatically triggered if configured lock entities are removed
 
+### User Codes Data Card - Slot State Logic
+
+The `lock-code-manager-lock-data` card displays lock slot states with the following data model:
+
+**Data Fields from Websocket:**
+
+| Field | Source | Description |
+|-------|--------|-------------|
+| `code` / `code_length` | Lock coordinator | Actual code on the lock (current state) |
+| `configured_code` / `configured_code_length` | LCM text entities | Desired code from LCM config |
+| `managed` | LCM config | Whether LCM manages this slot |
+| `name` | LCM text entities | Slot name configured in LCM |
+
+**Frontend State Decision Table:**
+
+| `code` | `configured_code` | Result | UI Treatment |
+|--------|-------------------|--------|--------------|
+| ✓ | ✓ | Active (LCM managed) | Show code, LCM badge, primary border |
+| ✓ | ✗ | Active (unmanaged) | Show code, MANUAL badge, subtle border |
+| ✗ | ✓ | Disabled | Show configured code with strikethrough, warning border |
+| ✗ | ✗ | Collapsed | Slot appears in "Empty slots X-Y" summary row |
+
+**Key Insight:** The presence of `configured_code` determines LCM management. If a slot has
+`code` but no `configured_code`, it's an unmanaged/manual code set outside of LCM.
+
+### Future: Slot Status Enum (TODO)
+
+Currently, the coordinator only stores `{slot: code}` and we infer status from code presence.
+Z-Wave locks provide richer status via `userIdStatus`:
+
+- **Enabled**: Slot has active code
+- **Available**: Slot can be used but is empty
+- **Disabled**: Slot cannot be used (locked out by lock firmware)
+
+**Planned Enhancement:**
+
+1. Define generic `SlotStatus` enum in `const.py`:
+
+   ```python
+   class SlotStatus(StrEnum):
+       ENABLED = "enabled"
+       AVAILABLE = "available"
+       DISABLED = "disabled"
+   ```
+
+2. Providers map their native status to this enum:
+   - Z-Wave JS: `userIdStatus` → `SlotStatus`
+   - Other providers: Infer from their equivalent states
+
+3. Change coordinator data schema from `dict[int, str]` to `dict[int, SlotData]`
+
+**Provider Guidance for Status Inference:**
+
+| Provider State | Maps To |
+|----------------|---------|
+| Code exists on lock | `ENABLED` |
+| Slot empty but usable | `AVAILABLE` |
+| Slot programmatically disabled | `DISABLED` |
+| Unknown/unsupported | Default to `AVAILABLE` if no code, `ENABLED` if code |
+
+See `TODO.md` for implementation details.
+
 ## Development Commands
 
 ### Setup

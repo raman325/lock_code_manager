@@ -180,10 +180,10 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 };
                 expect(lockCodesView).toBeDefined();
                 expect(lockCodesView.title).toBe('User Codes');
-                expect(lockCodesView.cards).toHaveLength(2);
-                expect(lockCodesView.cards[1].type).toBe('grid');
-                expect(lockCodesView.cards[1].cards).toHaveLength(1);
-                expect(lockCodesView.cards[1].cards?.[0].lock_entity_id).toBe('lock.front_door');
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('grid');
+                expect(lockCodesView.cards[0].cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].cards?.[0].lock_entity_id).toBe('lock.front_door');
             });
 
             it('does not add Lock Codes view when include_code_data_view is false', async () => {
@@ -218,10 +218,9 @@ describe('LockCodeManagerDashboardStrategy', () => {
                     (v) => 'path' in v && v.path === 'user-codes'
                 ) as { cards: Array<{ cards?: Array<{ lock_entity_id: string }>; type: string }> };
                 expect(lockCodesView).toBeDefined();
-                // Cards are wrapped in markdown + grid
-                expect(lockCodesView.cards).toHaveLength(2);
-                expect(lockCodesView.cards[1].type).toBe('grid');
-                expect(lockCodesView.cards[1].cards).toHaveLength(2);
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('grid');
+                expect(lockCodesView.cards[0].cards).toHaveLength(2);
             });
 
             it('deduplicates locks across multiple config entries', async () => {
@@ -244,10 +243,9 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'user-codes'
                 ) as { cards: Array<{ cards?: Array<{ lock_entity_id: string }>; type: string }> };
-                // Cards are wrapped in markdown + grid
-                expect(lockCodesView.cards).toHaveLength(2);
-                expect(lockCodesView.cards[1].type).toBe('grid');
-                expect(lockCodesView.cards[1].cards).toHaveLength(3);
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('grid');
+                expect(lockCodesView.cards[0].cards).toHaveLength(3);
             });
 
             it('shows "No locks found" message when no locks exist', async () => {

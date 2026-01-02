@@ -76,10 +76,6 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                 lockCards.length > 0
                     ? [
                           {
-                              content: '# <ha-icon icon="mdi:lock-smart"></ha-icon> User Codes',
-                              type: 'markdown'
-                          },
-                          {
                               cards: lockCards,
                               columns: Math.min(lockCards.length, 3),
                               square: false,
