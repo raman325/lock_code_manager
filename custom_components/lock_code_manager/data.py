@@ -32,8 +32,12 @@ type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]
 
 
 def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
-    """Get data from config entry."""
-    return config_entry.data.get(key, config_entry.options.get(key, default))
+    """Get data from config entry.
+
+    Prefers options over data because during options flow updates, the new
+    configuration is in options while data still contains the old configuration.
+    """
+    return config_entry.options.get(key, config_entry.data.get(key, default))
 
 
 def get_slot_data(config_entry, slot_num: int) -> dict[str, Any]:
