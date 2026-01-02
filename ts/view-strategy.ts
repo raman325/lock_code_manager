@@ -1,7 +1,12 @@
 import { STATE_NOT_RUNNING } from 'home-assistant-js-websocket';
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_INCLUDE_CODE_SLOT_SENSORS, DEFAULT_INCLUDE_IN_SYNC_SENSORS } from './const';
+import {
+    DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY,
+    DEFAULT_INCLUDE_CODE_DATA_VIEW,
+    DEFAULT_INCLUDE_CODE_SLOT_SENSORS,
+    DEFAULT_INCLUDE_IN_SYNC_SENSORS
+} from './const';
 import { generateView } from './generate-view';
 import { HomeAssistant } from './ha_type_stubs';
 import {
@@ -39,7 +44,9 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                 config_entry,
                 entities,
                 config.include_code_slot_sensors ?? DEFAULT_INCLUDE_CODE_SLOT_SENSORS,
-                config.include_in_sync_sensors ?? DEFAULT_INCLUDE_IN_SYNC_SENSORS
+                config.include_in_sync_sensors ?? DEFAULT_INCLUDE_IN_SYNC_SENSORS,
+                config.include_code_data_view ?? DEFAULT_INCLUDE_CODE_DATA_VIEW,
+                config.code_data_view_code_display ?? DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY
             );
         } catch {
             return createErrorView(

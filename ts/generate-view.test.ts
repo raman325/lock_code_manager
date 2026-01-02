@@ -637,7 +637,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         expect(result.title).toBe('Test Lock');
         expect(result.path).toBe('test-lock');
@@ -672,7 +680,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         const stateBadges = result.badges.filter(
             (badge) => typeof badge === 'object' && badge.type === 'state-label'
@@ -709,7 +725,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         expect(result.cards).toHaveLength(3);
     });
@@ -744,10 +768,18 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, true);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            true,
+            false,
+            'unmasked'
+        );
 
         const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
-        const entitiesCard = card.cards[1];
+        const [, entitiesCard] = card.cards;
         const hasFoldRow = entitiesCard.entities.some(
             (e) => typeof e === 'object' && 'type' in e && e.type === 'custom:fold-entity-row'
         );
@@ -777,7 +809,15 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(hass, testConfigEntry, entities, false, false);
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            false,
+            'unmasked'
+        );
 
         const lockBadges = result.badges.filter((badge) => typeof badge === 'string');
         expect(lockBadges).toEqual(['lock.a_front', 'lock.z_back']);

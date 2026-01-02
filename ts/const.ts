@@ -20,6 +20,7 @@ export const DOMAIN = 'lock_code_manager';
 export const DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false;
 export const DEFAULT_INCLUDE_CODE_DATA_VIEW = false;
 export const DEFAULT_INCLUDE_IN_SYNC_SENSORS = true;
+export const DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'unmasked';
 
 export const FOLD_ENTITY_ROW_SEARCH_STRING = 'fold-entity-row.js';
 export const FOLD_ENTITY_ROW_REPO_NAME = 'thomasloven/lovelace-fold-entity-row';

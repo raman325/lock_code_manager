@@ -1,6 +1,6 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_INCLUDE_CODE_DATA_VIEW } from './const';
+import { DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY, DEFAULT_INCLUDE_CODE_DATA_VIEW } from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import { slugify } from './slugify';
 import { createErrorView } from './strategy-utils';
@@ -56,24 +56,48 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                 })
             );
 
-            const cards = Array.from(lockEntityIds).map((lockEntityId) => {
+            const sortedLockEntityIds = Array.from(lockEntityIds).sort((a, b) => {
+                const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
+                const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
+                return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+            });
+
+            const lockCards = sortedLockEntityIds.map((lockEntityId) => {
                 return {
+                    code_display:
+                        config.code_data_view_code_display ?? DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY,
                     lock_entity_id: lockEntityId,
                     type: 'custom:lock-code-manager-lock-data'
                 };
             });
+
+            // Wrap in a grid for responsive multi-column layout
+            const cards =
+                lockCards.length > 0
+                    ? [
+                          {
+                              content: '# <ha-icon icon="mdi:lock-smart"></ha-icon> User Codes',
+                              type: 'markdown'
+                          },
+                          {
+                              cards: lockCards,
+                              columns: Math.min(lockCards.length, 3),
+                              square: false,
+                              type: 'grid'
+                          }
+                      ]
+                    : [
+                          {
+                              content: '# No locks found to display.',
+                              type: 'markdown'
+                          }
+                      ];
+
             views.push({
-                cards:
-                    cards.length > 0
-                        ? cards
-                        : [
-                              {
-                                  content: '# No locks found to display.',
-                                  type: 'markdown'
-                              }
-                          ],
-                path: 'lock-codes',
-                title: 'Lock Codes'
+                cards,
+                icon: 'mdi:lock-smart',
+                path: 'user-codes',
+                title: 'User Codes'
             });
         }
 

@@ -76,6 +76,130 @@ describe('LockCodeManagerLockDataCard logic', () => {
         });
     });
 
+    describe('slot grouping logic', () => {
+        interface SlotGroup {
+            rangeLabel?: string;
+            slots: LockCoordinatorSlotData[];
+            type: 'active' | 'empty';
+        }
+
+        function groupSlots(slots: LockCoordinatorSlotData[]): SlotGroup[] {
+            const groups: SlotGroup[] = [];
+            let currentEmpty: LockCoordinatorSlotData[] = [];
+
+            const flushEmpty = (): void => {
+                if (currentEmpty.length > 0) {
+                    groups.push({
+                        type: 'empty',
+                        slots: currentEmpty,
+                        rangeLabel: formatSlotRange(currentEmpty)
+                    });
+                    currentEmpty = [];
+                }
+            };
+
+            for (const slot of slots) {
+                const hasCode = slot.code !== null || slot.code_length;
+                if (hasCode) {
+                    flushEmpty();
+                    groups.push({ type: 'active', slots: [slot] });
+                } else {
+                    currentEmpty.push(slot);
+                }
+            }
+            flushEmpty();
+
+            return groups;
+        }
+
+        function formatSlotRange(slots: LockCoordinatorSlotData[]): string {
+            if (slots.length === 0) return '';
+            if (slots.length === 1) return `Slot ${slots[0].slot}`;
+
+            const nums = slots.map((s) => Number(s.slot)).filter((n) => !isNaN(n));
+            if (nums.length !== slots.length) {
+                return `Slots ${slots.map((s) => s.slot).join(', ')}`;
+            }
+
+            const ranges: string[] = [];
+            const [startValue] = nums;
+            let start = startValue;
+            let end = startValue;
+
+            for (let i = 1; i < nums.length; i++) {
+                if (nums[i] === end + 1) {
+                    end = nums[i];
+                } else {
+                    ranges.push(start === end ? `${start}` : `${start}-${end}`);
+                    start = nums[i];
+                    end = nums[i];
+                }
+            }
+            ranges.push(start === end ? `${start}` : `${start}-${end}`);
+
+            return `Slots ${ranges.join(', ')}`;
+        }
+
+        it('groups active slots individually', () => {
+            const slots: LockCoordinatorSlotData[] = [
+                { slot: 1, code: '1234' },
+                { slot: 2, code: '5678' }
+            ];
+            const groups = groupSlots(slots);
+            expect(groups).toHaveLength(2);
+            expect(groups[0].type).toBe('active');
+            expect(groups[1].type).toBe('active');
+        });
+
+        it('groups consecutive empty slots together', () => {
+            const slots: LockCoordinatorSlotData[] = [
+                { slot: 1, code: null },
+                { slot: 2, code: null },
+                { slot: 3, code: null }
+            ];
+            const groups = groupSlots(slots);
+            expect(groups).toHaveLength(1);
+            expect(groups[0].type).toBe('empty');
+            expect(groups[0].rangeLabel).toBe('Slots 1-3');
+        });
+
+        it('interleaves active and empty groups correctly', () => {
+            const slots: LockCoordinatorSlotData[] = [
+                { slot: 1, code: '1234' },
+                { slot: 2, code: null },
+                { slot: 3, code: null },
+                { slot: 4, code: '5678' },
+                { slot: 5, code: null }
+            ];
+            const groups = groupSlots(slots);
+            expect(groups).toHaveLength(4);
+            expect(groups[0].type).toBe('active');
+            expect(groups[1].type).toBe('empty');
+            expect(groups[1].rangeLabel).toBe('Slots 2-3');
+            expect(groups[2].type).toBe('active');
+            expect(groups[3].type).toBe('empty');
+            expect(groups[3].rangeLabel).toBe('Slot 5');
+        });
+
+        it('handles non-consecutive empty slots', () => {
+            const slots: LockCoordinatorSlotData[] = [
+                { slot: 1, code: null },
+                { slot: 3, code: null },
+                { slot: 5, code: null }
+            ];
+            const groups = groupSlots(slots);
+            expect(groups).toHaveLength(1);
+            expect(groups[0].rangeLabel).toBe('Slots 1, 3, 5');
+        });
+
+        it('treats masked codes as active', () => {
+            const slots: LockCoordinatorSlotData[] = [{ slot: 1, code: null, code_length: 4 }];
+            const groups = groupSlots(slots);
+            expect(groups).toHaveLength(1);
+            expect(groups[0].type).toBe('active');
+        });
+    });
+
     describe('config validation', () => {
         function validateConfig(config: { lock_entity_id?: string }): {
             error?: string;

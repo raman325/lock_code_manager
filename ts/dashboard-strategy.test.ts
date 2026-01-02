@@ -212,9 +212,12 @@ describe('LockCodeManagerDashboardStrategy', () => {
 
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'lock-codes'
-                ) as { cards: Array<{ lock_entity_id: string }> };
+                ) as { cards: Array<{ cards?: Array<{ lock_entity_id: string }>; type: string }> };
                 expect(lockCodesView).toBeDefined();
-                expect(lockCodesView.cards).toHaveLength(2);
+                // Cards are now wrapped in a grid
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('grid');
+                expect(lockCodesView.cards[0].cards).toHaveLength(2);
             });
 
             it('deduplicates locks across multiple config entries', async () => {
@@ -236,8 +239,11 @@ describe('LockCodeManagerDashboardStrategy', () => {
 
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'lock-codes'
-                ) as { cards: Array<{ lock_entity_id: string }> };
-                expect(lockCodesView.cards).toHaveLength(3);
+                ) as { cards: Array<{ cards?: Array<{ lock_entity_id: string }>; type: string }> };
+                // Cards are now wrapped in a grid
+                expect(lockCodesView.cards).toHaveLength(1);
+                expect(lockCodesView.cards[0].type).toBe('grid');
+                expect(lockCodesView.cards[0].cards).toHaveLength(3);
             });
 
             it('shows "No locks found" message when no locks exist', async () => {

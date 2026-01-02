@@ -87,7 +87,7 @@ class LockCodeDataCardEditor extends LitElement {
             <div class="editor-row">
                 <ha-select
                     .label=${'Code Display'}
-                    .value=${this._config.code_display ?? 'masked_with_reveal'}
+                    .value=${this._config.code_display ?? 'unmasked'}
                     @selected=${this._displayModeChanged}
                     @closed=${this._stopPropagation}
                     fixedMenuPosition

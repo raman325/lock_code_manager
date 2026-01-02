@@ -7,6 +7,7 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 }
 
 export interface LockCodeManagerStrategyConfig {
+    code_data_view_code_display?: CodeDisplayMode;
     include_code_data_view?: boolean;
     include_code_slot_sensors?: boolean;
     include_in_sync_sensors?: boolean;
@@ -42,6 +43,10 @@ export interface LockCoordinatorSlotData {
     code: number | string | null;
     /** Present when masked (code is null but slot has a code) */
     code_length?: number;
+    /** True if slot is managed by LCM */
+    managed?: boolean;
+    /** Slot name from LCM configuration, if set */
+    name?: string;
     slot: number | string;
 }
 
