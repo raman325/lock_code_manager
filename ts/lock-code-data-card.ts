@@ -653,18 +653,20 @@ class LockCodeManagerLockDataCard extends LitElement {
 
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
         if (slot.code !== null && slot.code !== '') return '';
         if (slot.code_length) return 'masked';
 
         // No active code - check for configured code (disabled LCM slot)
-        if (slot.configured_code || slot.configured_code_length) {
-            // Show as masked if in masked mode, otherwise show with disabled styling
-            if (mode === 'masked' && slot.configured_code_length) {
-                return 'disabled masked';
-            }
-            return 'disabled';
+        if (slot.configured_code) {
+            // We have the actual code - choose class based on display mode
+            return shouldMask ? 'disabled masked' : 'disabled';
+        }
+        if (slot.configured_code_length) {
+            // Only have length (always masked)
+            return 'disabled masked';
         }
 
         return 'no-code';
@@ -730,8 +732,11 @@ class LockCodeManagerLockDataCard extends LitElement {
                 } else if (slot.enabled === false) {
                     // User explicitly disabled via LCM switch
                     managedDisabled += 1;
+                } else if (hasCode) {
+                    // Fallback: has code on lock but no state info - treat as active
+                    managedActive += 1;
                 } else {
-                    // Fallback for managed slots without state info
+                    // Fallback: no code and no state info - treat as inactive
                     managedInactive += 1;
                 }
             } else if (hasCode) {

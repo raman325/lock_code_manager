@@ -112,20 +112,26 @@ The `lock-code-manager-lock-data` card displays lock slot states with the follow
 |-------|--------|-------------|
 | `code` / `code_length` | Lock coordinator | Actual code on the lock (current state) |
 | `configured_code` / `configured_code_length` | LCM text entities | Desired code from LCM config |
-| `managed` | LCM config | Whether LCM manages this slot |
+| `managed` | LCM config entries | Whether LCM manages this slot (authoritative field) |
 | `name` | LCM text entities | Slot name configured in LCM |
+| `active` | LCM binary sensor | True if enabled + conditions met, False if blocked |
+| `enabled` | LCM switch entity | True if user enabled the slot, False if disabled |
 
-**Frontend State Decision Table:**
+**Frontend State Decision Table (for managed slots):**
 
-| `code` | `configured_code` | Result | UI Treatment |
-|--------|-------------------|--------|--------------|
-| ✓ | ✓ | Active (LCM managed) | Show code, LCM badge, primary border |
-| ✓ | ✗ | Active (unmanaged) | Show code, MANUAL badge, subtle border |
-| ✗ | ✓ | Disabled | Show configured code with strikethrough, warning border |
-| ✗ | ✗ | Collapsed | Slot appears in "Empty slots X-Y" summary row |
+| `active` | `enabled` | Result | UI Treatment |
+|----------|-----------|--------|--------------|
+| true | true | Active | Blue solid border, "Active" badge |
+| false | true | Inactive | Blue dotted border, "Inactive" badge (conditions blocking) |
+| false | false | Disabled | Blue dotted border, "Disabled" badge (user disabled) |
+| undefined | undefined | Fallback | Uses `code` presence to determine Active vs Inactive |
 
-**Key Insight:** The presence of `configured_code` determines LCM management. If a slot has
-`code` but no `configured_code`, it's an unmanaged/manual code set outside of LCM.
+**Unmanaged Slots:** Only have Active (has code) or Inactive (no code) states. They appear
+with gray borders and "Unmanaged" badge.
+
+**Key Insight:** The `managed` field (from config entries) determines LCM management status.
+The `configured_code` field indicates whether a PIN is configured, but a slot can be managed
+even without a configured code if the PIN text entity is empty.
 
 ### Future: Slot Status Enum (TODO)
 
