@@ -29,6 +29,8 @@ class LockCodeManagerLockDataCard extends LitElement {
 
         .header-card {
             background: var(--ha-card-background, var(--card-background-color, #fff));
+            border: var(--ha-card-border-width, 1px) solid
+                var(--ha-card-border-color, var(--divider-color, #e0e0e0));
             border-radius: var(--ha-card-border-radius, 12px);
             box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0, 0, 0, 0.1));
             padding: 16px;
