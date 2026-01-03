@@ -56,10 +56,12 @@ export async function generateView(
         getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
     );
 
-    // Build summary/alert oriented badges
+    // Build badges - lock state badges only
+    // Note: Template badges are not supported by HA, so we only use entity badges
+    // The slot cards already show detailed status (active, sync, conditions)
     const badges: Array<string | object> = [];
 
-    // 1. Lock state badges - show each lock with its current state
+    // Lock state badges - show each lock with its current state
     // Entity badges automatically show friendly name and lock/unlock state
     configEntryData.locks
         .sort((a, b) => a.localeCompare(b))
@@ -69,41 +71,6 @@ export async function generateView(
                 type: 'entity'
             });
         });
-
-    // 2. Active codes summary using template badge
-    const activeEntities = sortedEntities.filter((entity) => entity.key === 'active');
-    const activeEntityIds = activeEntities.map((e) => e.entity_id);
-
-    if (activeEntityIds.length > 0) {
-        // Template badge that counts active codes dynamically
-        const activeCountTemplate = activeEntityIds
-            .map((id) => `(1 if is_state('${id}', 'on') else 0)`)
-            .join(' + ');
-        badges.push({
-            color: `{{ 'green' if (${activeCountTemplate}) > 0 else 'grey' }}`,
-            content: `{{ ${activeCountTemplate} }} of ${activeEntityIds.length} Active`,
-            icon: 'mdi:check-circle',
-            type: 'template'
-        });
-    }
-
-    // 3. Sync alert badge - only shows when there are out-of-sync codes
-    const inSyncEntities = sortedEntities.filter((entity) => entity.key === IN_SYNC_KEY);
-    const inSyncEntityIds = inSyncEntities.map((e) => e.entity_id);
-
-    if (inSyncEntityIds.length > 0) {
-        // Template badge that counts out-of-sync codes and only shows when > 0
-        const outOfSyncCountTemplate = inSyncEntityIds
-            .map((id) => `(1 if is_state('${id}', 'off') else 0)`)
-            .join(' + ');
-        badges.push({
-            color: 'red',
-            content: `{{ ${outOfSyncCountTemplate} }} Out of Sync`,
-            display_type: `{{ 'complete' if (${outOfSyncCountTemplate}) > 0 else 'none' }}`,
-            icon: 'mdi:sync-alert',
-            type: 'template'
-        });
-    }
 
     const useFoldEntityRow =
         lovelaceResources.filter((resource) => resource.url.includes(FOLD_ENTITY_ROW_SEARCH_STRING))

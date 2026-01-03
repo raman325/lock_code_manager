@@ -663,7 +663,7 @@ describe('generateView', () => {
         expect(result.cards).toHaveLength(1);
     });
 
-    it('includes active summary badge with template', async () => {
+    it('only includes lock entity badges (no template badges)', async () => {
         const configEntryData: LockCodeManagerConfigEntryData = {
             locks: ['lock.front'],
             slots: { 1: null, 2: null }
@@ -701,19 +701,18 @@ describe('generateView', () => {
             false
         );
 
-        // Should have template badge for active summary
+        // Should only have entity badges for locks (no template badges)
+        const entityBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'entity'
+        );
+        expect(entityBadges).toHaveLength(1);
+        expect(entityBadges[0].entity).toBe('lock.front');
+
+        // No template badges (not supported by HA)
         const templateBadges = result.badges.filter(
             (badge) => typeof badge === 'object' && badge.type === 'template'
         );
-        expect(templateBadges.length).toBeGreaterThanOrEqual(1);
-
-        // Active summary badge should show "X of 2 Active"
-        const activeBadge = templateBadges.find(
-            (badge) => badge.content && badge.content.includes('Active')
-        );
-        expect(activeBadge).toBeDefined();
-        expect(activeBadge.content).toContain('of 2 Active');
-        expect(activeBadge.icon).toBe('mdi:check-circle');
+        expect(templateBadges).toHaveLength(0);
     });
 
     it('generates one card per slot', async () => {
