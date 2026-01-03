@@ -55,7 +55,8 @@ async def test_get_locks_from_targets_warns_for_non_lock_entity(
     locks = get_locks_from_targets(hass, target_data)
 
     assert len(locks) == 0
-    assert "switch.not_a_lock is not a lock entity" in caplog.text
+    assert "invalid lock entities" in caplog.text
+    assert "switch.not_a_lock" in caplog.text
 
 
 async def test_get_locks_from_targets_warns_when_lock_not_in_lcm(
@@ -72,7 +73,8 @@ async def test_get_locks_from_targets_warns_when_lock_not_in_lcm(
     locks = get_locks_from_targets(hass, target_data)
 
     assert len(locks) == 0
-    assert "does not have a Lock Code Manager entry" in caplog.text
+    assert "not managed by Lock Code Manager" in caplog.text
+    assert "lock.unmanaged_lock" in caplog.text
 
 
 async def test_get_locks_from_targets_with_area_id(hass: HomeAssistant):
