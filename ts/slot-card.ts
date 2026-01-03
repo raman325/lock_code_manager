@@ -455,10 +455,18 @@ class LockCodeManagerSlotCard extends LitElement {
     protected updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
 
-        // Focus the input when entering edit mode
-        if (this._editingName || this._editingPin) {
-            const input = this.shadowRoot?.querySelector<HTMLInputElement>('.edit-input');
-            if (input && document.activeElement !== input) {
+        // Focus the appropriate input when entering edit mode
+        if (this._editingName) {
+            const input = this.shadowRoot?.querySelector<HTMLInputElement>(
+                '.control-row .edit-input:not(.pin-edit-input)'
+            );
+            if (input && this.shadowRoot?.activeElement !== input) {
+                input.focus();
+                input.select();
+            }
+        } else if (this._editingPin) {
+            const input = this.shadowRoot?.querySelector<HTMLInputElement>('.pin-edit-input');
+            if (input && this.shadowRoot?.activeElement !== input) {
                 input.focus();
                 input.select();
             }
@@ -788,6 +796,8 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     private _startEditingName(): void {
+        // Exit PIN editing if active
+        this._editingPin = false;
         this._editingName = true;
     }
 
@@ -822,6 +832,9 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     private _startEditingPin(): void {
+        // Exit name editing if active
+        this._editingName = false;
+
         // When starting to edit PIN, reveal it first to show current value
         if (!this._revealed) {
             this._revealed = true;
