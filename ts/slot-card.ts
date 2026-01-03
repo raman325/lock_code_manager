@@ -481,7 +481,7 @@ class LockCodeManagerSlotCard extends LitElement {
         } else if (active === true) {
             statusClass = 'active';
             statusText = 'Active';
-            statusDetail = 'Code is set on all locks';
+            statusDetail = '';
         } else if (active === false) {
             statusClass = 'inactive';
             statusText = 'Inactive';
@@ -499,7 +499,7 @@ class LockCodeManagerSlotCard extends LitElement {
                     <span class="status-indicator ${statusClass}"></span>
                     <span class="status-text">${statusText}</span>
                 </div>
-                <div class="status-detail">${statusDetail}</div>
+                ${statusDetail ? html`<div class="status-detail">${statusDetail}</div>` : nothing}
             </div>
         `;
     }
