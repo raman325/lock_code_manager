@@ -644,17 +644,26 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         expect(result.title).toBe('Test Lock');
         expect(result.path).toBe('test-lock');
         expect(result.panel).toBe(false);
-        expect(result.badges).toContain('lock.front');
+        // Lock badges are now entity objects
+        const lockBadge = result.badges.find(
+            (badge) =>
+                typeof badge === 'object' &&
+                badge.type === 'entity' &&
+                badge.entity === 'lock.front'
+        );
+        expect(lockBadge).toBeDefined();
         expect(result.cards).toHaveLength(1);
     });
 
-    it('includes slot active badges', async () => {
+    it('only includes lock entity badges (no template badges)', async () => {
         const configEntryData: LockCodeManagerConfigEntryData = {
             locks: ['lock.front'],
             slots: { 1: null, 2: null }
@@ -687,13 +696,23 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
-        const stateBadges = result.badges.filter(
-            (badge) => typeof badge === 'object' && badge.type === 'state-label'
+        // Should only have entity badges for locks (no template badges)
+        const entityBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'entity'
         );
-        expect(stateBadges).toHaveLength(2);
+        expect(entityBadges).toHaveLength(1);
+        expect(entityBadges[0].entity).toBe('lock.front');
+
+        // No template badges (not supported by HA)
+        const templateBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'template'
+        );
+        expect(templateBadges).toHaveLength(0);
     });
 
     it('generates one card per slot', async () => {
@@ -732,7 +751,9 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         expect(result.cards).toHaveLength(3);
@@ -775,7 +796,9 @@ describe('generateView', () => {
             false,
             true,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
@@ -816,10 +839,16 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
-        const lockBadges = result.badges.filter((badge) => typeof badge === 'string');
-        expect(lockBadges).toEqual(['lock.a_front', 'lock.z_back']);
+        // Lock badges are now entity objects, not strings
+        const lockBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'entity'
+        );
+        const lockEntityIds = lockBadges.map((badge) => badge.entity);
+        expect(lockEntityIds).toEqual(['lock.a_front', 'lock.z_back']);
     });
 });
