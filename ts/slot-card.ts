@@ -914,36 +914,46 @@ class LockCodeManagerSlotCard extends LitElement {
 
         const hasConditions = hasNumberOfUses || hasCalendar;
 
+        // Count conditions: met vs total
+        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasCalendar ? 1 : 0);
+        const metConditions =
+            (hasNumberOfUses && !usesBlocking ? 1 : 0) + (hasCalendar && !calendarBlocking ? 1 : 0);
+
         return html`
             <div class="collapsible-section">
                 <div class="collapsible-header" @click=${this._toggleConditions}>
                     <div class="collapsible-title">
                         Conditions
                         ${hasConditions
-                            ? html`<span class="condition-blocking-icons">
-                                  ${hasNumberOfUses
-                                      ? html`<ha-svg-icon
-                                            class="condition-icon ${usesBlocking ? 'blocking' : ''}"
-                                            .path=${mdiPound}
-                                            title="${usesBlocking
-                                                ? 'No uses remaining'
-                                                : `${number_of_uses} uses remaining`}"
-                                        ></ha-svg-icon>`
-                                      : nothing}
-                                  ${hasCalendar
-                                      ? html`<ha-svg-icon
-                                            class="condition-icon ${calendarBlocking
-                                                ? 'blocking'
-                                                : ''}"
-                                            .path=${calendarBlocking
-                                                ? mdiCalendarRemove
-                                                : mdiCalendar}
-                                            title="${calendarBlocking
-                                                ? 'Calendar blocking access'
-                                                : 'Calendar allowing access'}"
-                                        ></ha-svg-icon>`
-                                      : nothing}
-                              </span>`
+                            ? html`<span class="collapsible-badge"
+                                      >${metConditions}/${totalConditions}</span
+                                  >
+                                  <span class="condition-blocking-icons">
+                                      ${hasNumberOfUses
+                                          ? html`<ha-svg-icon
+                                                class="condition-icon ${usesBlocking
+                                                    ? 'blocking'
+                                                    : ''}"
+                                                .path=${mdiPound}
+                                                title="${usesBlocking
+                                                    ? 'No uses remaining'
+                                                    : `${number_of_uses} uses remaining`}"
+                                            ></ha-svg-icon>`
+                                          : nothing}
+                                      ${hasCalendar
+                                          ? html`<ha-svg-icon
+                                                class="condition-icon ${calendarBlocking
+                                                    ? 'blocking'
+                                                    : ''}"
+                                                .path=${calendarBlocking
+                                                    ? mdiCalendarRemove
+                                                    : mdiCalendar}
+                                                title="${calendarBlocking
+                                                    ? 'Calendar blocking access'
+                                                    : 'Calendar allowing access'}"
+                                            ></ha-svg-icon>`
+                                          : nothing}
+                                  </span>`
                             : nothing}
                     </div>
                     <ha-svg-icon
