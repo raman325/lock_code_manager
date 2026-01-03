@@ -189,6 +189,11 @@ class LockCodeManagerSlotCard extends LitElement {
                 padding: 2px 8px;
             }
 
+            .collapsible-badge.warning {
+                background: var(--warning-color, #ffa600);
+                color: var(--text-primary-color, #fff);
+            }
+
             .condition-blocking-icons {
                 align-items: center;
                 display: flex;
@@ -914,10 +919,9 @@ class LockCodeManagerSlotCard extends LitElement {
 
         const hasConditions = hasNumberOfUses || hasCalendar;
 
-        // Count conditions: met vs total
+        // Count conditions: blocking vs total
         const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasCalendar ? 1 : 0);
-        const metConditions =
-            (hasNumberOfUses && !usesBlocking ? 1 : 0) + (hasCalendar && !calendarBlocking ? 1 : 0);
+        const blockingConditions = (usesBlocking ? 1 : 0) + (calendarBlocking ? 1 : 0);
 
         return html`
             <div class="collapsible-section">
@@ -925,8 +929,11 @@ class LockCodeManagerSlotCard extends LitElement {
                     <div class="collapsible-title">
                         Conditions
                         ${hasConditions
-                            ? html`<span class="collapsible-badge"
-                                      >${metConditions}/${totalConditions}</span
+                            ? html`<span
+                                      class="collapsible-badge ${blockingConditions > 0
+                                          ? 'warning'
+                                          : ''}"
+                                      >${blockingConditions}/${totalConditions}</span
                                   >
                                   <span class="condition-blocking-icons">
                                       ${hasNumberOfUses
