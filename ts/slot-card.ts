@@ -231,6 +231,12 @@ class LockCodeManagerSlotCard extends LitElement {
             box-shadow: 0 0 0 1px var(--primary-color);
         }
 
+        .edit-help {
+            color: var(--secondary-text-color);
+            font-size: 11px;
+            margin-top: 4px;
+        }
+
         .pin-edit-input {
             font-family: 'Roboto Mono', monospace;
             font-size: 16px;
@@ -445,6 +451,19 @@ class LockCodeManagerSlotCard extends LitElement {
         this._unsubscribe();
     }
 
+    protected updated(changedProperties: Map<string, unknown>): void {
+        super.updated(changedProperties);
+
+        // Focus the input when entering edit mode
+        if (this._editingName || this._editingPin) {
+            const input = this.shadowRoot?.querySelector<HTMLInputElement>('.edit-input');
+            if (input && document.activeElement !== input) {
+                input.focus();
+                input.select();
+            }
+        }
+    }
+
     protected render(): TemplateResult {
         if (!this._hass || !this._config) {
             return html`<ha-card><div class="message">Loading...</div></ha-card>`;
@@ -529,50 +548,58 @@ class LockCodeManagerSlotCard extends LitElement {
 
                 <div class="control-row">
                     <span class="control-label">Name</span>
-                    ${this._editingName
-                        ? html`<input
-                              class="edit-input"
-                              type="text"
-                              .value=${name ?? ''}
-                              @blur=${this._handleNameBlur}
-                              @keydown=${this._handleNameKeydown}
-                              autofocus
-                          />`
-                        : html`<span
-                              class="control-value editable ${name ? '' : 'unnamed'}"
-                              @click=${this._startEditingName}
-                          >
-                              ${name ?? 'Unnamed'}
-                          </span>`}
+                    <div style="flex: 1;">
+                        ${this._editingName
+                            ? html`<input
+                                      class="edit-input"
+                                      type="text"
+                                      .value=${name ?? ''}
+                                      @blur=${this._handleNameBlur}
+                                      @keydown=${this._handleNameKeydown}
+                                  />
+                                  <div class="edit-help">Enter to save, Esc to cancel</div>`
+                            : html`<span
+                                  class="control-value editable ${name ? '' : 'unnamed'}"
+                                  @click=${this._startEditingName}
+                              >
+                                  ${name ?? 'Unnamed'}
+                              </span>`}
+                    </div>
                 </div>
 
                 <div class="control-row">
                     <span class="control-label">PIN</span>
-                    <div class="pin-field">
+                    <div style="flex: 1;">
+                        <div class="pin-field">
+                            ${this._editingPin
+                                ? html`<input
+                                      class="edit-input pin-edit-input"
+                                      type="text"
+                                      inputmode="numeric"
+                                      pattern="[0-9]*"
+                                      .value=${pin ?? ''}
+                                      @blur=${this._handlePinBlur}
+                                      @keydown=${this._handlePinKeydown}
+                                  />`
+                                : html`<span
+                                      class="pin-value editable ${shouldMask && hasPin
+                                          ? 'masked'
+                                          : ''}"
+                                      @click=${this._startEditingPin}
+                                  >
+                                      ${displayPin}
+                                  </span>`}
+                            ${mode === 'masked_with_reveal' && hasPin && !this._editingPin
+                                ? html`<ha-icon-button
+                                      class="pin-reveal"
+                                      .path=${this._revealed ? mdiEyeOff : mdiEye}
+                                      @click=${this._toggleReveal}
+                                      .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
+                                  ></ha-icon-button>`
+                                : nothing}
+                        </div>
                         ${this._editingPin
-                            ? html`<input
-                                  class="edit-input pin-edit-input"
-                                  type="text"
-                                  inputmode="numeric"
-                                  pattern="[0-9]*"
-                                  .value=${pin ?? ''}
-                                  @blur=${this._handlePinBlur}
-                                  @keydown=${this._handlePinKeydown}
-                                  autofocus
-                              />`
-                            : html`<span
-                                  class="pin-value editable ${shouldMask && hasPin ? 'masked' : ''}"
-                                  @click=${this._startEditingPin}
-                              >
-                                  ${displayPin}
-                              </span>`}
-                        ${mode === 'masked_with_reveal' && hasPin && !this._editingPin
-                            ? html`<ha-icon-button
-                                  class="pin-reveal"
-                                  .path=${this._revealed ? mdiEyeOff : mdiEye}
-                                  @click=${this._toggleReveal}
-                                  .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
-                              ></ha-icon-button>`
+                            ? html`<div class="edit-help">Enter to save, Esc to cancel</div>`
                             : nothing}
                     </div>
                 </div>
