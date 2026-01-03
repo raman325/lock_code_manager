@@ -524,3 +524,288 @@ async def test_set_lock_usercode_lock_not_found(
     msg = await ws_client.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "not_found"
+
+
+async def test_subscribe_lock_codes_lock_not_found(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_lock_codes WS API with invalid lock entity ID."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+
+
+async def test_subscribe_code_slot_state_change(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_code_slot triggers updates on entity state changes."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe to slot 1
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Receive initial event
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+
+    # Change an entity state (enabled switch for slot 1)
+    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    hass.states.async_set(enabled_entity_id, "off")
+    await hass.async_block_till_done()
+
+    # Should receive an update event
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    assert updated["event"][ATTR_SLOT_NUM] == 1
+    assert updated["event"][CONF_ENABLED] is False
+
+
+async def test_subscribe_code_slot_coordinator_update(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_code_slot triggers updates on coordinator changes."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe to slot 1
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Receive initial event
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    initial_locks = event["event"][CONF_LOCKS]
+    assert len(initial_locks) > 0
+
+    # Update the lock coordinator
+    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock.coordinator.push_update({1: "9999"})
+    await hass.async_block_till_done()
+
+    # Should receive an update event with new code
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    # Find lock 1 in the locks data
+    lock_1_data = next(
+        (
+            lock_data
+            for lock_data in updated["event"][CONF_LOCKS]
+            if lock_data["entity_id"] == LOCK_1_ENTITY_ID
+        ),
+        None,
+    )
+    assert lock_1_data is not None
+    assert lock_1_data[ATTR_CODE] == "9999"
+
+
+async def test_subscribe_code_slot_ignores_metadata_changes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_code_slot ignores metadata-only state changes."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe to slot 1
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Receive initial event
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+
+    # Change only metadata (same state value, different attributes)
+    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    current_state = hass.states.get(enabled_entity_id)
+    hass.states.async_set(
+        enabled_entity_id,
+        current_state.state,  # Same state
+        {"updated_attr": "new_value"},  # Different attributes
+    )
+    await hass.async_block_till_done()
+
+    # Should NOT receive an update (metadata-only change filtered out)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(ws_client.receive_json(), timeout=0.1)
+
+
+async def test_subscribe_code_slot_with_title(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_code_slot WS API with config entry title."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe using config entry title
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_title": "mock-title",
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    assert event["event"][ATTR_SLOT_NUM] == 1
+
+
+async def test_subscribe_code_slot_invalid_title(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_code_slot WS API with invalid config entry title."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_title": "nonexistent-title",
+            ATTR_SLOT: 1,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+    assert "title" in msg["error"]["message"]
+
+
+async def test_get_slot_calendar_data_invalid_title(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test get_slot_calendar_data WS API with invalid config entry title."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/get_slot_calendar_data",
+            "config_entry_title": "nonexistent-title",
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+    assert "title" in msg["error"]["message"]
+
+
+async def test_subscribe_code_slot_slot_2_with_calendar(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_code_slot WS API for slot 2 which has a calendar."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe to slot 2 (has calendar configured)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 2,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    data = event["event"]
+    assert data[ATTR_SLOT_NUM] == 2
+    # Slot 2 should have calendar in conditions
+    assert CONF_CONDITIONS in data
+
+
+async def test_subscribe_lock_codes_slot_metadata(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_lock_codes includes slot metadata."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+
+    # Check that slots have metadata
+    slots = event["event"][CONF_SLOTS]
+    assert len(slots) >= 2
+
+    # Find slot 1 - should have name and be managed
+    slot_1 = next((s for s in slots if s[ATTR_SLOT] == 1), None)
+    assert slot_1 is not None
+    assert slot_1.get(CONF_NAME) == "test1"
+    assert slot_1.get("managed") is True
