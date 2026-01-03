@@ -12,6 +12,19 @@ usercodes across multiple locks. It reduces entity/automation sprawl compared to
 alternatives by handling logic internally rather than generating numerous Home Assistant
 entities.
 
+## Follow these rules always
+
+- `git` and `gh` commands are automatically approved
+- When making changes to ts files, before handing it back over to me, run yarn test and build and fix any issues.
+- When making changes to python files, before handing it back over to me, run pytest in the venv and fix any issues.
+- When creating a PR, ALWAYS use the PULL_REQUEST_TEMPLATE.md template
+- When submitting a PR, note that Copilot will eventually add review comments which you must review -
+  either make changes as needed or explain why you are not addressing a comment (comments that you make
+  code changes for don't need a response). Resolve all comments as you address them or respond to them.
+  Provide a summary of what was done or not done and ask for confirmation before committing the changes.
+- When running hass, pre-commit, or any other python driven commands, always run from the venv
+-
+
 ## Codex Agent Context (2025-02 Session)
 
 - `BaseLock` now performs its own rate limiting + connection checks without Tenacity.

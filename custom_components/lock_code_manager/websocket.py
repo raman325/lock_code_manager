@@ -254,6 +254,10 @@ def _get_slot_metadata(
     - configured_pin: From text entity
     - active: From binary sensor (True=on, False=off, None=unknown)
     - enabled: From switch (True=on, False=off, None=unknown)
+
+    Note: If multiple config entries manage the same lock with overlapping slot
+    numbers (which shouldn't happen in normal use), the last entry wins. This is
+    expected behavior since slot conflicts are validated during config flow.
     """
     slot_metadata: dict[int, SlotMetadata] = {}
     ent_reg = er.async_get(hass)

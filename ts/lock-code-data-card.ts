@@ -90,9 +90,9 @@ class LockCodeManagerLockDataCard extends LitElement {
         }
 
         /* Inactive/Disabled Managed: Muted blue dotted, slightly faded */
-        /* Keeping as separate classes for future styling differentiation */
-        .slot-chip.inactive,
-        .slot-chip.disabled {
+        /* Only managed slots can be inactive/disabled (unmanaged are active or empty) */
+        .slot-chip.inactive.managed,
+        .slot-chip.disabled.managed {
             background: linear-gradient(
                 135deg,
                 rgba(var(--rgb-primary-color), 0.04),
