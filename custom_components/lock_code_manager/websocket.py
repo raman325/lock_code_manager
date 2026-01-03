@@ -40,6 +40,7 @@ from .const import (
     ATTR_IN_SYNC,
     ATTR_LAST_SYNCED,
     ATTR_LAST_USED,
+    ATTR_LAST_USED_LOCK,
     ATTR_LOCK_ENTITY_ID,
     ATTR_LOCK_NAME,
     ATTR_MANAGED,
@@ -858,7 +859,7 @@ def _serialize_slot_card_data(
     if last_used:
         result[ATTR_LAST_USED] = last_used
         if last_used_lock_name:
-            result["last_used_lock"] = last_used_lock_name
+            result[ATTR_LAST_USED_LOCK] = last_used_lock_name
 
     # PIN (masked or revealed)
     if reveal:

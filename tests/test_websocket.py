@@ -12,10 +12,12 @@ from homeassistant.core import HomeAssistant
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_CODE_LENGTH,
+    ATTR_CODE_SLOT,
     ATTR_LOCK_ENTITY_ID,
     ATTR_PIN_LENGTH,
     ATTR_SLOT,
     ATTR_SLOT_NUM,
+    ATTR_USERCODE,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
     CONF_ENABLED,
@@ -423,6 +425,100 @@ async def test_subscribe_code_slot_invalid_slot(
             "type": "lock_code_manager/subscribe_code_slot",
             "config_entry_id": lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 999,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+
+
+async def test_set_lock_usercode(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API for setting a code."""
+    ws_client = await hass_ws_client(hass)
+
+    # Set a usercode
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/set_lock_usercode",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            ATTR_CODE_SLOT: 3,
+            ATTR_USERCODE: "9999",
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+    assert msg["result"]["success"] is True
+
+
+async def test_set_lock_usercode_clear(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API for clearing a code."""
+    ws_client = await hass_ws_client(hass)
+
+    # Clear a usercode (empty string)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/set_lock_usercode",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            ATTR_CODE_SLOT: 3,
+            ATTR_USERCODE: "",
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+    assert msg["result"]["success"] is True
+
+
+async def test_set_lock_usercode_clear_no_usercode(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API clears when usercode not provided."""
+    ws_client = await hass_ws_client(hass)
+
+    # Clear a usercode (no usercode key provided)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/set_lock_usercode",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            ATTR_CODE_SLOT: 3,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+    assert msg["result"]["success"] is True
+
+
+async def test_set_lock_usercode_lock_not_found(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API with invalid lock entity ID."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/set_lock_usercode",
+            ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
+            ATTR_CODE_SLOT: 3,
+            ATTR_USERCODE: "1234",
         }
     )
     msg = await ws_client.receive_json()
