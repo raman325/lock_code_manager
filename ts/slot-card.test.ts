@@ -17,8 +17,8 @@ describe('LockCodeManagerSlotCard logic', () => {
             if (!config.config_entry_id) {
                 return { valid: false, error: 'config_entry_id is required' };
             }
-            if (!config.slot) {
-                return { valid: false, error: 'slot is required' };
+            if (typeof config.slot !== 'number' || config.slot < 1) {
+                return { valid: false, error: 'slot must be a positive number' };
             }
             return { valid: true };
         }
@@ -37,17 +37,24 @@ describe('LockCodeManagerSlotCard logic', () => {
             });
         });
 
-        it('requires slot', () => {
+        it('requires slot to be a number', () => {
             expect(validateConfig({ config_entry_id: 'abc123' })).toEqual({
                 valid: false,
-                error: 'slot is required'
+                error: 'slot must be a positive number'
             });
         });
 
         it('rejects slot of 0', () => {
             expect(validateConfig({ config_entry_id: 'abc123', slot: 0 })).toEqual({
                 valid: false,
-                error: 'slot is required'
+                error: 'slot must be a positive number'
+            });
+        });
+
+        it('rejects negative slot', () => {
+            expect(validateConfig({ config_entry_id: 'abc123', slot: -1 })).toEqual({
+                valid: false,
+                error: 'slot must be a positive number'
             });
         });
 
@@ -571,8 +578,8 @@ describe('LockCodeManagerSlotCard logic', () => {
 
         it('transforms lock data correctly', () => {
             const locks: SlotCardData['locks'] = [
-                { entity_id: 'lock.front_door', name: 'Front Door', in_sync: true },
-                { entity_id: 'lock.back_door', name: 'Back Door', in_sync: false }
+                { entity_id: 'lock.front_door', name: 'Front Door', in_sync: true, code: '1234' },
+                { entity_id: 'lock.back_door', name: 'Back Door', in_sync: false, code: null }
             ];
 
             expect(transformLocks(locks)).toEqual([

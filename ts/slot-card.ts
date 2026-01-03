@@ -415,8 +415,8 @@ class LockCodeManagerSlotCard extends LitElement {
         if (!config.config_entry_id) {
             throw new Error('config_entry_id is required');
         }
-        if (!config.slot) {
-            throw new Error('slot is required');
+        if (typeof config.slot !== 'number' || config.slot < 1) {
+            throw new Error('slot must be a positive number');
         }
         // If config changed, unsubscribe and resubscribe
         if (
