@@ -644,7 +644,9 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         expect(result.title).toBe('Test Lock');
@@ -687,7 +689,9 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         const stateBadges = result.badges.filter(
@@ -732,7 +736,9 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         expect(result.cards).toHaveLength(3);
@@ -775,7 +781,9 @@ describe('generateView', () => {
             false,
             true,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
@@ -816,7 +824,9 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         const lockBadges = result.badges.filter((badge) => typeof badge === 'string');

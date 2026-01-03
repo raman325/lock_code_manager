@@ -13,7 +13,7 @@ export default {
     },
     plugins: [
         nodeResolve(),
-        typescript(),
+        typescript({ tsconfig: './tsconfig.build.json' }),
         getBabelOutputPlugin({
             presets: [
                 [
@@ -21,12 +21,14 @@ export default {
                     {
                         // Target modern browsers that support ES6+ natively
                         // This avoids class transpilation that causes variable conflicts
-                        targets: { esmodules: true }
+                        targets: { esmodules: true },
+                        modules: false,
+                        exclude: ['@babel/plugin-transform-dynamic-import']
                     }
                 ]
             ]
         }),
-        !dev && terser({ format: { comments: false } })
+        !dev && terser({ format: { comments: false }, maxWorkers: 1, module: true })
     ],
     // Watch all TypeScript sources during development (only applies in watch mode).
     // Note: unlike the `!dev` condition on terser, this config is always present

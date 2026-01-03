@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.event import EventEntity
+from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
+from .const import ATTR_LOCK_ENTITY_ID, EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
 from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
 
@@ -63,6 +64,19 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
             self, hass, ent_reg, config_entry, slot_num, key
         )
         self._attr_name = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """Return extra state attributes.
+
+        The lock entity ID is extracted from the event data which is
+        automatically stored and restored by EventEntity.
+        """
+        # state_attributes contains the event data passed to _trigger_event
+        # which includes ATTR_ENTITY_ID (the lock that triggered the event)
+        return {
+            ATTR_LOCK_ENTITY_ID: self.state_attributes.get(ATTR_ENTITY_ID),
+        }
 
     @callback
     def _handle_event(self, event: Event) -> None:

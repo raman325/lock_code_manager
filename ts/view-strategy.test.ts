@@ -85,6 +85,8 @@ describe('LockCodeManagerViewStrategy', () => {
 
             // DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false
             // DEFAULT_INCLUDE_IN_SYNC_SENSORS = true
+            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
+            // DEFAULT_USE_SLOT_CARDS = true
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 mockConfigEntry,
@@ -92,7 +94,8 @@ describe('LockCodeManagerViewStrategy', () => {
                 false,
                 true,
                 false,
-                'unmasked'
+                'masked_with_reveal',
+                true
             );
         });
 
@@ -111,6 +114,8 @@ describe('LockCodeManagerViewStrategy', () => {
             );
 
             // include_code_slot_sensors = true, DEFAULT_INCLUDE_IN_SYNC_SENSORS = true
+            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
+            // DEFAULT_USE_SLOT_CARDS = true
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
@@ -118,7 +123,8 @@ describe('LockCodeManagerViewStrategy', () => {
                 true,
                 true,
                 false,
-                'unmasked'
+                'masked_with_reveal',
+                true
             );
         });
 
@@ -137,6 +143,8 @@ describe('LockCodeManagerViewStrategy', () => {
             );
 
             // DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false, include_in_sync_sensors = false
+            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
+            // DEFAULT_USE_SLOT_CARDS = true
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
@@ -144,7 +152,8 @@ describe('LockCodeManagerViewStrategy', () => {
                 false,
                 false,
                 false,
-                'unmasked'
+                'masked_with_reveal',
+                true
             );
         });
 

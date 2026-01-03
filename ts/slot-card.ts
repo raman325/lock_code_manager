@@ -1,17 +1,45 @@
-import { mdiChevronDown, mdiChevronUp, mdiEye, mdiEyeOff, mdiKey } from '@mdi/js';
+import {
+    mdiCalendar,
+    mdiCalendarRemove,
+    mdiChevronDown,
+    mdiChevronUp,
+    mdiClock,
+    mdiEye,
+    mdiEyeOff,
+    mdiKey,
+    mdiLock,
+    mdiPound
+} from '@mdi/js';
 import { UnsubscribeFunc } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { CodeDisplayMode, LockCodeManagerSlotCardConfig, SlotCardData } from './types';
+import {
+    lcmCssVars,
+    lcmRevealButtonStyles,
+    lcmSectionStyles,
+    lcmStatusIndicatorStyles
+} from './shared-styles';
+import {
+    CodeDisplayMode,
+    LockCodeManagerSlotCardConfig,
+    SlotCardConditions,
+    SlotCardData
+} from './types';
 
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
 /** Internal interface for lock sync status display */
 interface LockSyncStatus {
+    /** Current code on the lock (actual or masked) */
+    code: string | null;
+    /** Code length when masked */
+    codeLength?: number;
     entityId: string;
     inSync: boolean | null;
+    /** Last synced timestamp (ISO) */
+    lastSynced?: string;
     lockEntityId: string;
     name: string;
 }
@@ -22,368 +50,521 @@ interface LockSyncStatus {
  * Phase 3: Uses websocket subscription for real-time updates.
  */
 class LockCodeManagerSlotCard extends LitElement {
-    static styles = css`
-        :host {
-            display: block;
-        }
+    static styles = [
+        lcmCssVars,
+        lcmSectionStyles,
+        lcmStatusIndicatorStyles,
+        lcmRevealButtonStyles,
+        css`
+            :host {
+                display: block;
+            }
 
-        ha-card {
-            overflow: hidden;
-        }
+            ha-card {
+                overflow: hidden;
+            }
 
-        /* Header Section */
-        .header {
-            align-items: center;
-            background: var(--ha-card-background, var(--card-background-color, #fff));
-            border-bottom: 1px solid var(--ha-card-border-color, var(--divider-color, #e0e0e0));
-            display: flex;
-            gap: 12px;
-            padding: 16px;
-        }
+            /* Header Section */
+            .header {
+                align-items: center;
+                background: var(--ha-card-background, var(--card-background-color, #fff));
+                border-bottom: 1px solid var(--lcm-border-color);
+                display: flex;
+                gap: 12px;
+                padding: 16px;
+            }
 
-        .header-icon {
-            align-items: center;
-            background: rgba(var(--rgb-primary-color), 0.1);
-            border-radius: 50%;
-            color: var(--primary-color);
-            display: flex;
-            height: 40px;
-            justify-content: center;
-            width: 40px;
-        }
+            .header-icon {
+                align-items: center;
+                background: var(--lcm-active-bg);
+                border-radius: 50%;
+                color: var(--primary-color);
+                display: flex;
+                height: 40px;
+                justify-content: center;
+                width: 40px;
+            }
 
-        .header-icon ha-svg-icon {
-            --mdc-icon-size: 24px;
-        }
+            .header-icon ha-svg-icon {
+                --mdc-icon-size: 24px;
+            }
 
-        .header-title {
-            color: var(--primary-text-color);
-            font-size: 1.25em;
-            font-weight: 500;
-        }
+            .header-info {
+                display: flex;
+                flex: 1;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;
+            }
 
-        /* Content Sections */
-        .content {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            padding: 16px;
-        }
+            .header-title {
+                color: var(--primary-text-color);
+                font-size: 18px;
+                font-weight: 500;
+            }
 
-        .section {
-            background: rgba(var(--rgb-primary-text-color), 0.03);
-            border-radius: 12px;
-            padding: 16px;
-        }
+            .header-subtitle {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
 
-        .section-header {
-            color: var(--secondary-text-color);
-            font-size: 11px;
-            font-weight: 600;
-            letter-spacing: 0.05em;
-            margin-bottom: 12px;
-            text-transform: uppercase;
-        }
+            .header-badges {
+                align-items: center;
+                display: flex;
+                flex-shrink: 0;
+                gap: 8px;
+            }
 
-        /* Collapsible Section */
-        .collapsible-section {
-            background: rgba(var(--rgb-primary-text-color), 0.03);
-            border-radius: 12px;
-            overflow: hidden;
-        }
+            .header-badge {
+                align-items: center;
+                background: var(--lcm-section-bg);
+                border-radius: 12px;
+                color: var(--secondary-text-color);
+                display: flex;
+                font-size: 11px;
+                gap: 4px;
+                padding: 4px 8px;
+            }
 
-        .collapsible-header {
-            align-items: center;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            padding: 12px 16px;
-            user-select: none;
-        }
+            .header-badge ha-svg-icon {
+                --mdc-icon-size: 14px;
+            }
 
-        .collapsible-header:hover {
-            background: rgba(var(--rgb-primary-text-color), 0.03);
-        }
+            .header-badge.clickable {
+                cursor: pointer;
+                transition: background-color 0.2s;
+            }
 
-        .collapsible-title {
-            align-items: center;
-            color: var(--secondary-text-color);
-            display: flex;
-            font-size: 11px;
-            font-weight: 600;
-            gap: 8px;
-            letter-spacing: 0.05em;
-            text-transform: uppercase;
-        }
+            .header-badge.clickable:hover {
+                background: var(--lcm-section-bg-hover);
+            }
 
-        .collapsible-badge {
-            background: rgba(var(--rgb-primary-color), 0.1);
-            border-radius: 10px;
-            color: var(--primary-color);
-            font-size: 10px;
-            padding: 2px 8px;
-        }
+            /* Content Sections */
+            .content {
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+                padding: 16px;
+            }
 
-        .collapsible-chevron {
-            --mdc-icon-size: 20px;
-            color: var(--secondary-text-color);
-            transition: transform 0.2s ease;
-        }
+            /* Collapsible Section */
+            .collapsible-section {
+                background: var(--lcm-section-bg);
+                border-radius: 12px;
+                overflow: hidden;
+            }
 
-        .collapsible-content {
-            max-height: 0;
-            opacity: 0;
-            overflow: hidden;
-            padding: 0 16px;
-            transition:
-                max-height 0.3s ease,
-                opacity 0.2s ease,
-                padding 0.3s ease;
-        }
+            .collapsible-header {
+                align-items: center;
+                cursor: pointer;
+                display: flex;
+                justify-content: space-between;
+                padding: 12px 16px;
+                user-select: none;
+            }
 
-        .collapsible-content.expanded {
-            max-height: 500px;
-            opacity: 1;
-            padding: 0 16px 16px;
-        }
+            .collapsible-header:hover {
+                background: var(--lcm-section-bg-hover);
+            }
 
-        /* Primary Controls Section */
-        .control-row {
-            align-items: center;
-            display: flex;
-            gap: 16px;
-            margin-bottom: 12px;
-        }
+            .collapsible-title {
+                align-items: center;
+                color: var(--secondary-text-color);
+                display: flex;
+                font-size: var(--lcm-section-header-size);
+                font-weight: var(--lcm-section-header-weight);
+                gap: 8px;
+                letter-spacing: var(--lcm-section-header-spacing);
+                text-transform: uppercase;
+            }
 
-        .control-row:last-child {
-            margin-bottom: 0;
-        }
+            .collapsible-badge {
+                background: var(--lcm-active-bg);
+                border-radius: 10px;
+                color: var(--primary-color);
+                font-size: var(--lcm-badge-font-size);
+                padding: 2px 8px;
+            }
 
-        .control-label {
-            color: var(--secondary-text-color);
-            font-size: 14px;
-            min-width: 60px;
-        }
+            .condition-blocking-icons {
+                align-items: center;
+                display: flex;
+                gap: 4px;
+            }
 
-        .control-value {
-            align-items: center;
-            color: var(--primary-text-color);
-            display: flex;
-            flex: 1;
-            font-size: 14px;
-            gap: 8px;
-        }
+            .condition-icon {
+                --mdc-icon-size: 16px;
+                color: var(--lcm-disabled-color);
+            }
 
-        .control-value.unnamed {
-            color: var(--secondary-text-color);
-            font-style: italic;
-        }
+            .condition-icon.blocking {
+                color: var(--lcm-warning-color);
+            }
 
-        .pin-field {
-            align-items: center;
-            display: flex;
-            flex: 1;
-            gap: 8px;
-        }
+            .condition-row-icon {
+                --mdc-icon-size: 18px;
+                color: var(--lcm-disabled-color);
+                flex-shrink: 0;
+            }
 
-        .pin-value {
-            font-family: 'Roboto Mono', monospace;
-            font-size: 16px;
-            font-weight: 600;
-            letter-spacing: 2px;
-        }
+            .condition-row-icon.blocking {
+                color: var(--lcm-warning-color);
+            }
 
-        .pin-value.masked {
-            color: var(--secondary-text-color);
-        }
+            .collapsible-chevron {
+                --mdc-icon-size: 20px;
+                color: var(--secondary-text-color);
+                transition: transform 0.2s ease;
+            }
 
-        .pin-reveal {
-            --mdc-icon-button-size: 32px;
-            --mdc-icon-size: 18px;
-        }
+            .collapsible-content {
+                max-height: 0;
+                opacity: 0;
+                overflow: hidden;
+                padding: 0 16px;
+                transition:
+                    max-height 0.3s ease,
+                    opacity 0.2s ease,
+                    padding 0.3s ease;
+            }
 
-        /* Inline editing */
-        .editable {
-            cursor: pointer;
-            border-radius: 4px;
-            padding: 4px 8px;
-            margin: -4px -8px;
-            transition: background-color 0.2s;
-        }
+            .collapsible-content.expanded {
+                max-height: 500px;
+                opacity: 1;
+                padding: 0 16px 16px;
+            }
 
-        .editable:hover {
-            background: rgba(var(--rgb-primary-color), 0.1);
-        }
+            /* Primary Controls Section */
+            .control-row {
+                align-items: center;
+                display: flex;
+                gap: 16px;
+                margin-bottom: 12px;
+            }
 
-        .edit-input {
-            background: var(--card-background-color, #fff);
-            border: 1px solid var(--primary-color);
-            border-radius: 4px;
-            color: var(--primary-text-color);
-            font-family: inherit;
-            font-size: inherit;
-            outline: none;
-            padding: 4px 8px;
-            width: 100%;
-        }
+            .control-row:last-child {
+                margin-bottom: 0;
+            }
 
-        .edit-input:focus {
-            box-shadow: 0 0 0 1px var(--primary-color);
-        }
+            .control-label {
+                color: var(--secondary-text-color);
+                font-size: 14px;
+                min-width: 60px;
+            }
 
-        .edit-help {
-            color: var(--secondary-text-color);
-            font-size: 11px;
-            margin-top: 4px;
-        }
+            .control-value {
+                align-items: center;
+                color: var(--primary-text-color);
+                display: flex;
+                flex: 1;
+                font-size: 14px;
+                gap: 8px;
+            }
 
-        .pin-edit-input {
-            font-family: 'Roboto Mono', monospace;
-            font-size: 16px;
-            font-weight: 600;
-            letter-spacing: 2px;
-        }
+            .control-value.unnamed {
+                color: var(--secondary-text-color);
+                font-style: italic;
+            }
 
-        .enabled-row {
-            align-items: center;
-            display: flex;
-            gap: 16px;
-            justify-content: space-between;
-        }
+            .pin-field {
+                align-items: center;
+                display: flex;
+                flex: 1;
+                gap: 8px;
+            }
 
-        .enabled-label {
-            color: var(--secondary-text-color);
-            font-size: 14px;
-        }
+            .pin-value {
+                font-family: var(--lcm-code-font);
+                font-size: var(--lcm-code-font-size);
+                font-weight: var(--lcm-code-font-weight);
+                letter-spacing: 2px;
+            }
 
-        /* Status Section */
-        .status-row {
-            align-items: center;
-            display: flex;
-            gap: 12px;
-        }
+            .pin-value.masked {
+                color: var(--secondary-text-color);
+            }
 
-        .status-indicator {
-            border-radius: 50%;
-            height: 12px;
-            width: 12px;
-        }
+            .pin-reveal {
+                --mdc-icon-button-size: 32px;
+                --mdc-icon-size: 18px;
+            }
 
-        .status-indicator.active {
-            background-color: var(--success-color, #4caf50);
-        }
+            /* Inline editing */
+            .editable {
+                border-radius: 4px;
+                cursor: pointer;
+                margin: -4px -8px;
+                padding: 4px 8px;
+                transition: background-color 0.2s;
+            }
 
-        .status-indicator.inactive {
-            background-color: var(--warning-color, #ff9800);
-        }
+            .editable:hover {
+                background: var(--lcm-active-bg);
+            }
 
-        .status-indicator.disabled {
-            background-color: var(--disabled-text-color, #9e9e9e);
-        }
+            .edit-input {
+                background: var(--card-background-color, #fff);
+                border: 1px solid var(--primary-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-family: inherit;
+                font-size: inherit;
+                outline: none;
+                padding: 4px 8px;
+                width: 100%;
+            }
 
-        .status-text {
-            color: var(--primary-text-color);
-            font-size: 14px;
-            font-weight: 500;
-        }
+            .edit-input:focus {
+                box-shadow: 0 0 0 1px var(--primary-color);
+            }
 
-        .status-detail {
-            color: var(--secondary-text-color);
-            font-size: 13px;
-            margin-left: 24px;
-            margin-top: 4px;
-        }
+            .edit-help {
+                color: var(--secondary-text-color);
+                font-size: var(--lcm-section-header-size);
+                margin-top: 4px;
+            }
 
-        /* Conditions Section */
-        .condition-row {
-            align-items: center;
-            display: flex;
-            gap: 12px;
-            padding: 8px 0;
-        }
+            .pin-edit-input {
+                font-family: var(--lcm-code-font);
+                font-size: var(--lcm-code-font-size);
+                font-weight: var(--lcm-code-font-weight);
+                letter-spacing: 2px;
+            }
 
-        .condition-row:first-child {
-            padding-top: 0;
-        }
+            .enabled-row {
+                align-items: center;
+                display: flex;
+                gap: 16px;
+                justify-content: space-between;
+            }
 
-        .condition-row:last-child {
-            padding-bottom: 0;
-        }
+            .enabled-label {
+                color: var(--secondary-text-color);
+                font-size: 14px;
+            }
 
-        .condition-label {
-            color: var(--secondary-text-color);
-            font-size: 13px;
-            min-width: 100px;
-        }
+            /* Status Section */
+            .status-row {
+                align-items: center;
+                display: flex;
+                gap: 12px;
+            }
 
-        .condition-value {
-            color: var(--primary-text-color);
-            font-size: 14px;
-        }
+            .status-text {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                font-weight: 500;
+            }
 
-        .no-conditions {
-            color: var(--secondary-text-color);
-            font-size: 13px;
-            font-style: italic;
-        }
+            .status-detail {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                margin-left: 24px;
+                margin-top: 4px;
+            }
 
-        /* Lock Status Section */
-        .lock-row {
-            align-items: center;
-            border-bottom: 1px solid rgba(var(--rgb-primary-text-color), 0.06);
-            display: flex;
-            gap: 12px;
-            padding: 10px 0;
-        }
+            /* Conditions Section */
+            .condition-row {
+                align-items: center;
+                display: flex;
+                gap: 12px;
+                padding: 8px 0;
+            }
 
-        .lock-row:last-child {
-            border-bottom: none;
-            padding-bottom: 0;
-        }
+            .condition-row:first-child {
+                padding-top: 0;
+            }
 
-        .lock-row:first-child {
-            padding-top: 0;
-        }
+            .condition-row:last-child {
+                padding-bottom: 0;
+            }
 
-        .lock-sync-icon {
-            --mdc-icon-size: 18px;
-        }
+            .condition-label {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                min-width: 100px;
+            }
 
-        .lock-sync-icon.synced {
-            color: var(--success-color, #4caf50);
-        }
+            .condition-value {
+                color: var(--primary-text-color);
+                font-size: 14px;
+            }
 
-        .lock-sync-icon.pending {
-            color: var(--warning-color, #ff9800);
-        }
+            .no-conditions {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                font-style: italic;
+            }
 
-        .lock-sync-icon.unknown {
-            color: var(--disabled-text-color, #9e9e9e);
-        }
+            /* Calendar condition */
+            .calendar-condition {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                padding: 8px 0;
+            }
 
-        .lock-name {
-            color: var(--primary-text-color);
-            flex: 1;
-            font-size: 14px;
-        }
+            .calendar-condition.clickable {
+                border-radius: 8px;
+                cursor: pointer;
+                margin: 8px -8px 0;
+                padding: 8px;
+                transition: background-color 0.2s;
+            }
 
-        .lock-status-text {
-            color: var(--secondary-text-color);
-            font-size: 12px;
-        }
+            .calendar-condition.clickable:hover {
+                background: var(--lcm-active-bg);
+            }
 
-        /* Message states */
-        .message {
-            color: var(--secondary-text-color);
-            font-style: italic;
-            padding: 16px;
-            text-align: center;
-        }
+            .calendar-condition:first-child {
+                padding-top: 0;
+            }
 
-        .error {
-            color: var(--error-color);
-        }
-    `;
+            .calendar-condition.clickable:first-child {
+                margin-top: 0;
+            }
+
+            .calendar-header {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+            }
+
+            .calendar-status {
+                align-items: center;
+                display: flex;
+                gap: 6px;
+            }
+
+            .calendar-status-icon {
+                --mdc-icon-size: 18px;
+            }
+
+            .calendar-status-icon.active {
+                color: var(--lcm-disabled-color);
+            }
+
+            .calendar-status-icon.inactive {
+                color: var(--lcm-warning-color);
+            }
+
+            .calendar-status-text {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            .calendar-event-summary {
+                color: var(--primary-text-color);
+                font-size: 13px;
+                margin-left: 22px;
+            }
+
+            .calendar-event-time {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                margin-left: 22px;
+            }
+
+            .calendar-next-event {
+                border-top: 1px solid var(--lcm-border-color);
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                margin-left: 22px;
+                margin-top: 8px;
+                padding-top: 8px;
+            }
+
+            .calendar-next-event-label {
+                font-weight: 500;
+                text-transform: uppercase;
+                font-size: 10px;
+                letter-spacing: 0.05em;
+                margin-bottom: 2px;
+            }
+
+            /* Lock Status Section */
+            .lock-row {
+                align-items: center;
+                border-bottom: 1px solid var(--lcm-border-color);
+                display: flex;
+                gap: 12px;
+                padding: 10px 0;
+            }
+
+            .lock-row:last-child {
+                border-bottom: none;
+                padding-bottom: 0;
+            }
+
+            .lock-row:first-child {
+                padding-top: 0;
+            }
+
+            .lock-name {
+                color: var(--primary-text-color);
+                cursor: pointer;
+                flex: 1;
+                font-size: 14px;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .lock-name:hover {
+                color: var(--primary-color);
+                text-decoration: underline;
+            }
+
+            .lock-info {
+                display: flex;
+                flex: 1;
+                flex-direction: column;
+                gap: 2px;
+                min-width: 0;
+            }
+
+            .lock-synced-time {
+                color: var(--secondary-text-color);
+                font-size: 11px;
+            }
+
+            .lock-status-text {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+            }
+
+            .lock-code-field {
+                align-items: center;
+                display: flex;
+                gap: 4px;
+            }
+
+            .lock-code-value {
+                color: var(--primary-text-color);
+                font-family: var(--lcm-code-font);
+                font-size: 13px;
+                font-weight: 500;
+                letter-spacing: var(--lcm-code-letter-spacing);
+            }
+
+            /* Message states */
+            .message {
+                color: var(--secondary-text-color);
+                font-style: italic;
+                padding: 16px;
+                text-align: center;
+            }
+
+            .error {
+                color: var(--error-color);
+            }
+        `
+    ];
 
     @state() private _config?: LockCodeManagerSlotCardConfig;
     @state() private _revealed = false;
@@ -393,6 +574,7 @@ class LockCodeManagerSlotCard extends LitElement {
     @state() private _error?: string;
     @state() private _editingName = false;
     @state() private _editingPin = false;
+    @state() private _editingNumberOfUses = false;
 
     private _hass?: HomeAssistant;
     private _unsub?: UnsubscribeFunc;
@@ -470,6 +652,14 @@ class LockCodeManagerSlotCard extends LitElement {
                 input.focus();
                 input.select();
             }
+        } else if (this._editingNumberOfUses) {
+            const input = this.shadowRoot?.querySelector<HTMLInputElement>(
+                '.condition-row .edit-input[type="number"]'
+            );
+            if (input && this.shadowRoot?.activeElement !== input) {
+                input.focus();
+                input.select();
+            }
         }
     }
 
@@ -497,17 +687,22 @@ class LockCodeManagerSlotCard extends LitElement {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const { name, pin, enabled, active, conditions, locks } = data;
         const pinLength = data.pin_length;
-        const numberOfUses = conditions.number_of_uses ?? null;
 
         // Transform locks to the expected format
         const lockStatuses = locks.map((lock) => {
             return {
+                code: lock.code,
+                codeLength: lock.code_length,
                 entityId: lock.entity_id,
                 inSync: lock.in_sync,
+                lastSynced: lock.last_synced,
                 lockEntityId: lock.entity_id,
                 name: lock.name
             };
         });
+
+        const showConditions = this._config.show_conditions !== false;
+        const showLockStatus = this._config.show_lock_status !== false;
 
         return html`
             <ha-card>
@@ -515,22 +710,70 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="content">
                     ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
-                    ${this._renderConditionsSection(numberOfUses)}
-                    ${this._renderLockStatusSection(lockStatuses)}
+                    ${showConditions ? this._renderConditionsSection(conditions) : nothing}
+                    ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
             </ha-card>
         `;
     }
 
     private _renderHeader(): TemplateResult {
+        const lockCount = this._data?.locks?.length ?? 0;
+        const configEntryTitle = this._data?.config_entry_title;
+        const lastUsed = this._data?.last_used;
+
         return html`
             <div class="header">
                 <div class="header-icon">
                     <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
                 </div>
-                <span class="header-title">Code Slot ${this._config?.slot}</span>
+                <div class="header-info">
+                    <span class="header-title">Code Slot ${this._config?.slot}</span>
+                    ${configEntryTitle
+                        ? html`<span class="header-subtitle">${configEntryTitle}</span>`
+                        : nothing}
+                </div>
+                <div class="header-badges">
+                    ${lockCount > 0
+                        ? html`<span
+                              class="header-badge clickable"
+                              title=${this._data?.locks?.map((l) => l.name).join(', ') ?? ''}
+                              @click=${this._toggleLockStatus}
+                          >
+                              <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
+                              ${lockCount}
+                          </span>`
+                        : nothing}
+                    <span
+                        class="header-badge ${lastUsed ? 'clickable' : ''}"
+                        title=${lastUsed
+                            ? this._data?.last_used_lock
+                                ? `Used on ${this._data.last_used_lock} - Click to view history`
+                                : 'Click to view PIN usage history'
+                            : 'This PIN has never been used'}
+                        @click=${lastUsed ? this._navigateToEventHistory : nothing}
+                    >
+                        <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
+                        ${lastUsed
+                            ? html`${this._data?.last_used_lock ?? 'Used'}
+                                  <ha-relative-time
+                                      .hass=${this._hass}
+                                      .datetime=${lastUsed}
+                                  ></ha-relative-time>`
+                            : 'Never used'}
+                    </span>
+                </div>
             </div>
         `;
+    }
+
+    private _navigateToEventHistory(): void {
+        const eventEntityId = this._data?.event_entity_id;
+        if (!eventEntityId) return;
+        // Navigate to entity history
+        const url = `/history?entity_id=${encodeURIComponent(eventEntityId)}`;
+        history.pushState(null, '', url);
+        window.dispatchEvent(new CustomEvent('location-changed'));
     }
 
     private _renderPrimaryControls(
@@ -552,8 +795,8 @@ class LockCodeManagerSlotCard extends LitElement {
               : '—';
 
         return html`
-            <div class="section">
-                <div class="section-header">Primary Controls</div>
+            <div class="lcm-section">
+                <div class="lcm-section-header">Primary Controls</div>
 
                 <div class="control-row">
                     <span class="control-label">Name</span>
@@ -649,10 +892,10 @@ class LockCodeManagerSlotCard extends LitElement {
         }
 
         return html`
-            <div class="section">
-                <div class="section-header">Status</div>
+            <div class="lcm-section">
+                <div class="lcm-section-header">Status</div>
                 <div class="status-row">
-                    <span class="status-indicator ${statusClass}"></span>
+                    <span class="lcm-status-dot ${statusClass}"></span>
                     <span class="status-text">${statusText}</span>
                 </div>
                 ${statusDetail ? html`<div class="status-detail">${statusDetail}</div>` : nothing}
@@ -660,17 +903,47 @@ class LockCodeManagerSlotCard extends LitElement {
         `;
     }
 
-    private _renderConditionsSection(numberOfUses: number | null): TemplateResult {
-        const hasConditions = numberOfUses !== null;
-        const conditionCount = hasConditions ? 1 : 0;
+    private _renderConditionsSection(conditions: SlotCardConditions): TemplateResult {
+        const { number_of_uses, calendar, calendar_next } = conditions;
+        const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
+        const hasCalendar = calendar !== undefined;
+
+        // Determine which conditions are blocking access
+        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
+        const calendarBlocking = hasCalendar && calendar.active === false;
+
+        const hasConditions = hasNumberOfUses || hasCalendar;
 
         return html`
             <div class="collapsible-section">
                 <div class="collapsible-header" @click=${this._toggleConditions}>
                     <div class="collapsible-title">
                         Conditions
-                        ${conditionCount > 0
-                            ? html`<span class="collapsible-badge">${conditionCount}</span>`
+                        ${hasConditions
+                            ? html`<span class="condition-blocking-icons">
+                                  ${hasNumberOfUses
+                                      ? html`<ha-svg-icon
+                                            class="condition-icon ${usesBlocking ? 'blocking' : ''}"
+                                            .path=${mdiPound}
+                                            title="${usesBlocking
+                                                ? 'No uses remaining'
+                                                : `${number_of_uses} uses remaining`}"
+                                        ></ha-svg-icon>`
+                                      : nothing}
+                                  ${hasCalendar
+                                      ? html`<ha-svg-icon
+                                            class="condition-icon ${calendarBlocking
+                                                ? 'blocking'
+                                                : ''}"
+                                            .path=${calendarBlocking
+                                                ? mdiCalendarRemove
+                                                : mdiCalendar}
+                                            title="${calendarBlocking
+                                                ? 'Calendar blocking access'
+                                                : 'Calendar allowing access'}"
+                                        ></ha-svg-icon>`
+                                      : nothing}
+                              </span>`
                             : nothing}
                     </div>
                     <ha-svg-icon
@@ -681,17 +954,104 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="collapsible-content ${this._conditionsExpanded ? 'expanded' : ''}">
                     ${hasConditions
                         ? html`
-                              ${numberOfUses !== null
+                              ${hasNumberOfUses
                                   ? html`<div class="condition-row">
+                                        <ha-svg-icon
+                                            class="condition-row-icon ${usesBlocking
+                                                ? 'blocking'
+                                                : ''}"
+                                            .path=${mdiPound}
+                                        ></ha-svg-icon>
                                         <span class="condition-label">Uses remaining</span>
-                                        <span class="condition-value">${numberOfUses}</span>
+                                        <div style="flex: 1;">
+                                            ${this._editingNumberOfUses
+                                                ? html`<input
+                                                          class="edit-input"
+                                                          type="number"
+                                                          inputmode="numeric"
+                                                          min="0"
+                                                          .value=${String(number_of_uses ?? 0)}
+                                                          @blur=${this._handleNumberOfUsesBlur}
+                                                          @keydown=${this
+                                                              ._handleNumberOfUsesKeydown}
+                                                      />
+                                                      <div class="edit-help">
+                                                          Enter to save, Esc to cancel
+                                                      </div>`
+                                                : html`<span
+                                                      class="condition-value editable"
+                                                      @click=${this._startEditingNumberOfUses}
+                                                  >
+                                                      ${number_of_uses}
+                                                  </span>`}
+                                        </div>
                                     </div>`
+                                  : nothing}
+                              ${hasCalendar
+                                  ? this._renderCalendarCondition(
+                                        calendar,
+                                        calendar_next,
+                                        conditions.calendar_entity_id
+                                    )
                                   : nothing}
                           `
                         : html`<div class="no-conditions">
                               No conditions configured for this slot
                           </div>`}
                 </div>
+            </div>
+        `;
+    }
+
+    private _renderCalendarCondition(
+        calendar: NonNullable<SlotCardConditions['calendar']>,
+        nextEvent?: SlotCardConditions['calendar_next'],
+        calendarEntityId?: string | null
+    ): TemplateResult {
+        const isActive = calendar.active;
+        const statusIcon = isActive ? mdiCalendar : mdiCalendarRemove;
+        const statusText = isActive ? 'Access allowed' : 'Access blocked';
+        const statusClass = isActive ? 'active' : 'inactive';
+        const isClickable = !!calendarEntityId;
+
+        return html`
+            <div
+                class="calendar-condition ${isClickable ? 'clickable' : ''}"
+                @click=${isClickable ? () => this._navigateToCalendar(calendarEntityId) : nothing}
+            >
+                <div class="calendar-header">
+                    <div class="calendar-status">
+                        <ha-svg-icon
+                            class="calendar-status-icon ${statusClass}"
+                            .path=${statusIcon}
+                        ></ha-svg-icon>
+                        <span class="calendar-status-text">${statusText}</span>
+                    </div>
+                </div>
+                ${isActive && calendar.summary
+                    ? html`<div class="calendar-event-summary">${calendar.summary}</div>`
+                    : nothing}
+                ${isActive && calendar.end_time
+                    ? html`<div class="calendar-event-time">
+                          Ends
+                          <ha-relative-time
+                              .hass=${this._hass}
+                              .datetime=${calendar.end_time}
+                          ></ha-relative-time>
+                      </div>`
+                    : nothing}
+                ${!isActive && nextEvent
+                    ? html`<div class="calendar-next-event">
+                          <div class="calendar-next-event-label">Next access</div>
+                          <div>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${nextEvent.start_time}
+                              ></ha-relative-time
+                              >${nextEvent.summary ? ` — ${nextEvent.summary}` : ''}
+                          </div>
+                      </div>`
+                    : nothing}
             </div>
         `;
     }
@@ -726,6 +1086,11 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     private _renderLockRow(lock: LockSyncStatus): TemplateResult {
+        const showSync = this._config?.show_lock_sync !== false;
+        const showCodeSensors = this._config?.show_code_sensors !== false;
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const showRevealButton = showCodeSensors && mode === 'masked_with_reveal';
+
         let iconClass: string;
         let statusText: string;
 
@@ -740,13 +1105,65 @@ class LockCodeManagerSlotCard extends LitElement {
             statusText = 'Unknown';
         }
 
+        // Format code display
+        const codeDisplay = this._formatLockCode(lock);
+
         return html`
             <div class="lock-row">
-                <ha-icon class="lock-sync-icon ${iconClass}" icon="mdi:check-circle"></ha-icon>
-                <span class="lock-name">${lock.name}</span>
-                <span class="lock-status-text">${statusText}</span>
+                ${showSync
+                    ? html`<ha-icon
+                          class="lcm-sync-icon ${iconClass}"
+                          icon="mdi:check-circle"
+                      ></ha-icon>`
+                    : nothing}
+                <div class="lock-info">
+                    <span
+                        class="lock-name"
+                        title="View lock codes"
+                        @click=${() => this._navigateToLock(lock.lockEntityId)}
+                    >
+                        ${lock.name}
+                    </span>
+                    ${showSync && lock.lastSynced
+                        ? html`<span class="lock-synced-time">
+                              ${statusText}
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${lock.lastSynced}
+                              ></ha-relative-time>
+                          </span>`
+                        : showSync
+                          ? html`<span class="lock-synced-time">${statusText}</span>`
+                          : nothing}
+                </div>
+                ${showCodeSensors && codeDisplay
+                    ? html`<div class="lock-code-field">
+                          <span class="lock-code-value">${codeDisplay}</span>
+                          ${showRevealButton
+                              ? html`<ha-icon-button
+                                    class="lcm-reveal-button"
+                                    .path=${this._revealed ? mdiEyeOff : mdiEye}
+                                    @click=${this._toggleReveal}
+                                    .label=${this._revealed ? 'Hide codes' : 'Reveal codes'}
+                                ></ha-icon-button>`
+                              : nothing}
+                      </div>`
+                    : nothing}
             </div>
         `;
+    }
+
+    private _formatLockCode(lock: LockSyncStatus): string | null {
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
+
+        if (lock.code !== null && lock.code !== '') {
+            return shouldMask ? '•'.repeat(String(lock.code).length) : String(lock.code);
+        }
+        if (lock.codeLength) {
+            return '•'.repeat(lock.codeLength);
+        }
+        return null;
     }
 
     private _toggleReveal(): void {
@@ -768,30 +1185,12 @@ class LockCodeManagerSlotCard extends LitElement {
         const target = e.target as HTMLInputElement;
         const newState = target.checked;
 
-        if (!this._hass || !this._config) return;
+        if (!this._hass) return;
+        const enabledEntityId = this._data?.entities?.enabled ?? undefined;
+        if (!enabledEntityId) return;
 
-        const { slot } = this._config;
-
-        // Find the enabled switch entity using correct pattern
-        const enabledEntityId = this._findEntityBySlotKey('switch', slot, 'enabled');
-
-        if (enabledEntityId) {
-            void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
-                entity_id: enabledEntityId
-            });
-        }
-    }
-
-    private _findEntityBySlotKey(domain: string, slot: number, key: string): string | undefined {
-        if (!this._hass) return undefined;
-        const { states } = this._hass;
-
-        // Pattern: {domain}.{entry_title_slug}_code_slot_{slot}_{key}
-        const pattern = new RegExp(`^${domain}\\.(.+)_code_slot_(\\d+)_${key}$`);
-
-        return Object.keys(states).find((entityId) => {
-            const match = entityId.match(pattern);
-            return match && parseInt(match[2], 10) === slot;
+        void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
+            entity_id: enabledEntityId
         });
     }
 
@@ -820,15 +1219,14 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     private _saveNameValue(value: string): void {
-        if (!this._hass || !this._config) return;
+        if (!this._hass) return;
+        const nameEntityId = this._data?.entities?.name ?? undefined;
+        if (!nameEntityId) return;
 
-        const nameEntityId = this._findEntityBySlotKey('text', this._config.slot, 'name');
-        if (nameEntityId) {
-            void this._hass.callService('text', 'set_value', {
-                entity_id: nameEntityId,
-                value
-            });
-        }
+        void this._hass.callService('text', 'set_value', {
+            entity_id: nameEntityId,
+            value
+        });
     }
 
     private _startEditingPin(): void {
@@ -867,15 +1265,72 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     private _savePinValue(value: string): void {
-        if (!this._hass || !this._config) return;
+        if (!this._hass) return;
+        const pinEntityId = this._data?.entities?.pin ?? undefined;
+        if (!pinEntityId) return;
 
-        const pinEntityId = this._findEntityBySlotKey('text', this._config.slot, 'pin');
-        if (pinEntityId) {
-            void this._hass.callService('text', 'set_value', {
-                entity_id: pinEntityId,
-                value
-            });
+        void this._hass.callService('text', 'set_value', {
+            entity_id: pinEntityId,
+            value
+        });
+    }
+
+    private _startEditingNumberOfUses(): void {
+        // Exit other editing modes
+        this._editingName = false;
+        this._editingPin = false;
+        this._editingNumberOfUses = true;
+    }
+
+    private _handleNumberOfUsesBlur(e: Event): void {
+        const target = e.target as HTMLInputElement;
+        const newValue = parseInt(target.value, 10);
+        if (!isNaN(newValue) && newValue >= 0) {
+            this._saveNumberOfUsesValue(newValue);
         }
+        this._editingNumberOfUses = false;
+    }
+
+    private _handleNumberOfUsesKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Enter') {
+            const target = e.target as HTMLInputElement;
+            const newValue = parseInt(target.value, 10);
+            if (!isNaN(newValue) && newValue >= 0) {
+                this._saveNumberOfUsesValue(newValue);
+            }
+            this._editingNumberOfUses = false;
+        } else if (e.key === 'Escape') {
+            this._editingNumberOfUses = false;
+        }
+    }
+
+    private _saveNumberOfUsesValue(value: number): void {
+        if (!this._hass) return;
+        const numberOfUsesEntityId = this._data?.entities?.number_of_uses ?? undefined;
+        if (!numberOfUsesEntityId) return;
+
+        void this._hass.callService('number', 'set_value', {
+            entity_id: numberOfUsesEntityId,
+            value
+        });
+    }
+
+    private _navigateToCalendar(calendarEntityId: string): void {
+        // Navigate to Home Assistant calendar view with this entity
+        // The calendar dashboard URL format is /calendar?entity_id=calendar.xxx
+        const url = `/calendar?entity_id=${encodeURIComponent(calendarEntityId)}`;
+        history.pushState(null, '', url);
+        window.dispatchEvent(new CustomEvent('location-changed'));
+    }
+
+    private _navigateToLock(lockEntityId: string): void {
+        // Open the more-info dialog for this lock entity
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: lockEntityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _unsubscribe(): void {
@@ -902,10 +1357,16 @@ class LockCodeManagerSlotCard extends LitElement {
         this._subscribing = true;
         try {
             // Build subscription message with either config_entry_id or config_entry_title
-            const subscribeMsg: Record<string, unknown> = {
+            const subscribeMsg: {
+                config_entry_id?: string;
+                config_entry_title?: string;
+                reveal: boolean;
+                slot: number;
+                type: 'lock_code_manager/subscribe_code_slot';
+            } = {
                 reveal: this._shouldReveal(),
                 slot: this._config.slot,
-                type: 'lock_code_manager/subscribe_slot_data'
+                type: 'lock_code_manager/subscribe_code_slot'
             };
             if (this._config.config_entry_id) {
                 subscribeMsg.config_entry_id = this._config.config_entry_id;
