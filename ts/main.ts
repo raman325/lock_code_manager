@@ -1,6 +1,7 @@
 import { LockCodeManagerDashboardStrategy } from './dashboard-strategy';
 import './lock-code-data-card';
 import './lock-code-data-card-editor';
+import './slot-card';
 import { LockCodeManagerViewStrategy } from './view-strategy';
 
 declare global {

@@ -18,6 +18,7 @@ export interface HomeAssistant {
     connection: Connection;
     resources: object;
     states: HassEntities;
+    callService(domain: string, service: string, data?: object): Promise<void>; // eslint-disable-line typescript-sort-keys/interface
     callWS<T>(msg: MessageBase): Promise<T>; // eslint-disable-line typescript-sort-keys/interface
 }
 
