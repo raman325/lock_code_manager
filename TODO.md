@@ -1,5 +1,17 @@
 # TODO
 
+## New Items
+
+- Unify design across slot and lock data cards, with a preference towards the slot card design.
+- Use both custom cards in strategy instead of entities card.
+- Refactor websocket module to promote code reuse. Consider refactoring websocket commands to avoid
+  overlap/duplication in logic and have better separation of responsibilities (balanced against
+  making excessive WS calls).
+- Test visual editor for both cards.
+- Go through `.ha/zwave_reconnect_test_plan.md` for PR 704.
+- Complete phase 4 of `docs/SLOT_CARD_DESIGN.md`.
+- Fix subscription error with current slot card implementation (we just finished phase 3 of `docs/SLOT_CARD_DESIGN.md`).
+
 ## High Priority Investigation
 
 ### Fix Locks Out of Sync Issue
