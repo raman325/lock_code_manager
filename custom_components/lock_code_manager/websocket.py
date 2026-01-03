@@ -15,8 +15,9 @@ from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_ENABLED, CONF_PIN
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import slugify
 
 from .const import ATTR_ACTIVE, CONF_CALENDAR, CONF_LOCKS, CONF_NAME, CONF_SLOTS, DOMAIN
@@ -91,7 +92,7 @@ async def async_setup(hass: HomeAssistant) -> bool:
     """Enable the websocket_commands."""
     websocket_api.async_register_command(hass, get_slot_calendar_data)
     websocket_api.async_register_command(hass, get_config_entry_entities)
-    websocket_api.async_register_command(hass, subscribe_lock_coordinator_data)
+    websocket_api.async_register_command(hass, subscribe_lock_slot_data)
     websocket_api.async_register_command(hass, get_locks)
 
     return True
@@ -235,6 +236,21 @@ def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
 
 
 @dataclass
+class SlotEntityIds:
+    """Entity IDs for a single slot's LCM entities."""
+
+    slot_num: int
+    name: str | None = None
+    pin: str | None = None
+    active: str | None = None
+    enabled: str | None = None
+
+    def all_ids(self) -> list[str]:
+        """Return all non-None entity IDs."""
+        return [eid for eid in (self.name, self.pin, self.active, self.enabled) if eid]
+
+
+@dataclass
 class SlotMetadata:
     """Metadata for a single slot from LCM entities."""
 
@@ -242,6 +258,47 @@ class SlotMetadata:
     configured_pin: str | None = None
     active: bool | None = None
     enabled: bool | None = None
+
+
+def _get_slot_entity_ids(
+    hass: HomeAssistant, lock_entity_id: str
+) -> dict[int, SlotEntityIds]:
+    """Get entity IDs for all slots managed by LCM for a lock.
+
+    Returns a dict mapping slot number to SlotEntityIds containing the entity IDs
+    for name, PIN, active, and enabled entities.
+
+    Note: If multiple config entries manage the same lock with overlapping slot
+    numbers (which shouldn't happen in normal use), the last entry wins. This is
+    expected behavior since slot conflicts are validated during config flow.
+    """
+    slot_entities: dict[int, SlotEntityIds] = {}
+    ent_reg = er.async_get(hass)
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
+            continue
+
+        for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
+            slot_int = int(slot_num)
+
+            # Build unique IDs for each entity type
+            name_uid = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
+            pin_uid = f"{entry.entry_id}|{slot_num}|{CONF_PIN}"
+            active_uid = f"{entry.entry_id}|{slot_num}|{ATTR_ACTIVE}"
+            enabled_uid = f"{entry.entry_id}|{slot_num}|{CONF_ENABLED}"
+
+            slot_entities[slot_int] = SlotEntityIds(
+                slot_num=slot_int,
+                name=ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, name_uid),
+                pin=ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, pin_uid),
+                active=ent_reg.async_get_entity_id(
+                    BINARY_SENSOR_DOMAIN, DOMAIN, active_uid
+                ),
+                enabled=ent_reg.async_get_entity_id(SWITCH_DOMAIN, DOMAIN, enabled_uid),
+            )
+
+    return slot_entities
 
 
 def _get_slot_metadata(
@@ -254,13 +311,7 @@ def _get_slot_metadata(
     - configured_pin: From text entity
     - active: From binary sensor (True=on, False=off, None=unknown)
     - enabled: From switch (True=on, False=off, None=unknown)
-
-    Note: If multiple config entries manage the same lock with overlapping slot
-    numbers (which shouldn't happen in normal use), the last entry wins. This is
-    expected behavior since slot conflicts are validated during config flow.
     """
-    slot_metadata: dict[int, SlotMetadata] = {}
-    ent_reg = er.async_get(hass)
 
     def _get_text_state(entity_id: str | None) -> str | None:
         if not entity_id:
@@ -280,39 +331,29 @@ def _get_slot_metadata(
                 return False
         return None
 
-    # Find config entries that manage this lock
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
-            continue
+    slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
+    return {
+        slot_num: SlotMetadata(
+            name=_get_text_state(ids.name),
+            configured_pin=_get_text_state(ids.pin),
+            active=_get_bool_state(ids.active),
+            enabled=_get_bool_state(ids.enabled),
+        )
+        for slot_num, ids in slot_entities.items()
+    }
 
-        # Get all metadata for each slot
-        for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
-            slot_int = int(slot_num)
 
-            # Build unique IDs for each entity type
-            name_uid = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
-            pin_uid = f"{entry.entry_id}|{slot_num}|{CONF_PIN}"
-            active_uid = f"{entry.entry_id}|{slot_num}|{ATTR_ACTIVE}"
-            enabled_uid = f"{entry.entry_id}|{slot_num}|{CONF_ENABLED}"
+def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list[str]:
+    """Get entity IDs for slot state tracking (enabled, active, name, PIN).
 
-            # Look up entity IDs
-            name_eid = ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, name_uid)
-            pin_eid = ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, pin_uid)
-            active_eid = ent_reg.async_get_entity_id(
-                BINARY_SENSOR_DOMAIN, DOMAIN, active_uid
-            )
-            enabled_eid = ent_reg.async_get_entity_id(
-                SWITCH_DOMAIN, DOMAIN, enabled_uid
-            )
-
-            slot_metadata[slot_int] = SlotMetadata(
-                name=_get_text_state(name_eid),
-                configured_pin=_get_text_state(pin_eid),
-                active=_get_bool_state(active_eid),
-                enabled=_get_bool_state(enabled_eid),
-            )
-
-    return slot_metadata
+    Returns the specific LCM entity IDs whose state changes should trigger
+    websocket subscription updates for this lock's slots.
+    """
+    slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
+    entity_ids: list[str] = []
+    for ids in slot_entities.values():
+        entity_ids.extend(ids.all_ids())
+    return entity_ids
 
 
 def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
@@ -364,18 +405,23 @@ def _serialize_lock_coordinator(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/subscribe_lock_coordinator_data",
+        vol.Required("type"): "lock_code_manager/subscribe_lock_slot_data",
         vol.Required("lock_entity_id"): str,
         vol.Optional("reveal", default=False): bool,
     }
 )
 @websocket_api.async_response
-async def subscribe_lock_coordinator_data(
+async def subscribe_lock_slot_data(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Subscribe to coordinator data updates for a lock."""
+    """Subscribe to coordinator data and LCM entity state updates for a lock.
+
+    Triggers updates when:
+    - Lock coordinator data changes (codes on lock)
+    - LCM entity states change (enabled, active, name, configured PIN)
+    """
     lock_entity_id = msg["lock_entity_id"]
     reveal = msg["reveal"]
     lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
@@ -389,20 +435,40 @@ async def subscribe_lock_coordinator_data(
 
     coordinator = lock.coordinator
 
+    @callback
     def _send_update() -> None:
         connection.send_event(
             msg["id"], _serialize_lock_coordinator(hass, lock, reveal=reveal)
         )
 
-    def _noop() -> None:
-        pass
+    @callback
+    def _on_state_change(event: Event[EventStateChangedData]) -> None:
+        """Handle LCM entity state changes."""
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
 
-    if coordinator is not None:
-        unsub = coordinator.async_add_listener(_send_update)
-    else:
-        unsub = _noop
+        # Only send update if actual state value changed or entity created/removed
+        if old_state is None or new_state is None or old_state.state != new_state.state:
+            _send_update()
 
-    connection.subscriptions[msg["id"]] = unsub
+    # Track coordinator updates (lock code changes)
+    unsub_coordinator = (
+        coordinator.async_add_listener(_send_update) if coordinator else lambda: None
+    )
+
+    # Track LCM entity state changes (enabled, active, name, PIN)
+    slot_entity_ids = _get_slot_state_entity_ids(hass, lock_entity_id)
+    unsub_state = (
+        async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
+        if slot_entity_ids
+        else lambda: None
+    )
+
+    def _unsub_all() -> None:
+        unsub_coordinator()
+        unsub_state()
+
+    connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
     _send_update()
 
