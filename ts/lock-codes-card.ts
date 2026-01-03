@@ -1,16 +1,22 @@
 import { mdiEye, mdiEyeOff } from '@mdi/js';
+import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
+import { property } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
+import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
-    LockCodeManagerLockDataCardConfig,
+    LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData
 } from './types';
 
 const DEFAULT_TITLE = 'Lock Codes';
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'unmasked';
+
+// Base class with subscription mixin
+const LockCodesCardBase = LcmSubscriptionMixin(LitElement);
 
 interface SlotGroup {
     /** For empty groups, the range string like "4-10" or "4, 6, 8" */
@@ -19,7 +25,7 @@ interface SlotGroup {
     type: 'active' | 'empty';
 }
 
-class LockCodeManagerLockDataCard extends LitElement {
+class LockCodesCard extends LockCodesCardBase {
     static styles = css`
         :host {
             display: flex;
@@ -353,13 +359,11 @@ class LockCodeManagerLockDataCard extends LitElement {
         }
     `;
 
-    private _hass?: HomeAssistant;
-    private _config?: LockCodeManagerLockDataCardConfig;
-    private _data?: LockCoordinatorData;
-    private _error?: string;
-    private _revealed = false;
-    private _unsub?: () => void;
-    private _subscribing = false;
+    // Note: _revealed, _unsub, _subscribing provided by LcmSubscriptionMixin
+    @property({ attribute: false }) _hass?: HomeAssistant;
+    _config?: LockCodesCardConfig;
+    _data?: LockCoordinatorData;
+    _error?: string;
 
     set hass(hass: HomeAssistant) {
         this._hass = hass;
@@ -367,14 +371,14 @@ class LockCodeManagerLockDataCard extends LitElement {
     }
 
     static getConfigElement(): HTMLElement {
-        return document.createElement('lock-code-data-card-editor');
+        return document.createElement('lcm-lock-codes-card-editor');
     }
 
-    static getStubConfig(): Partial<LockCodeManagerLockDataCardConfig> {
+    static getStubConfig(): Partial<LockCodesCardConfig> {
         return { lock_entity_id: '' };
     }
 
-    setConfig(config: LockCodeManagerLockDataCardConfig): void {
+    setConfig(config: LockCodesCardConfig): void {
         if (!config.lock_entity_id) {
             throw new Error('lock_entity_id is required');
         }
@@ -386,15 +390,27 @@ class LockCodeManagerLockDataCard extends LitElement {
         void this._subscribe();
     }
 
-    connectedCallback(): void {
-        super.connectedCallback();
-        void this._subscribe();
+    // Mixin abstract method implementations
+    protected _getDefaultCodeDisplay(): CodeDisplayMode {
+        return DEFAULT_CODE_DISPLAY;
     }
 
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._unsubscribe();
+    protected _buildSubscribeMessage(): MessageBase {
+        if (!this._config) {
+            throw new Error('Config not set');
+        }
+        return {
+            lock_entity_id: this._config.lock_entity_id,
+            reveal: this._shouldReveal(),
+            type: 'lock_code_manager/subscribe_lock_slot_data'
+        };
     }
+
+    protected _handleSubscriptionData(data: unknown): void {
+        this._data = data as LockCoordinatorData;
+    }
+
+    // connectedCallback and disconnectedCallback provided by mixin
 
     protected render(): TemplateResult {
         const hassLockName =
@@ -419,55 +435,7 @@ class LockCodeManagerLockDataCard extends LitElement {
         `;
     }
 
-    private _toggleReveal(): void {
-        this._revealed = !this._revealed;
-        this._unsubscribe();
-        void this._subscribe();
-    }
-
-    private _unsubscribe(): void {
-        if (this._unsub) {
-            this._unsub();
-            this._unsub = undefined;
-        }
-    }
-
-    private _shouldReveal(): boolean {
-        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        return mode === 'unmasked' || (mode === 'masked_with_reveal' && this._revealed);
-    }
-
-    private async _subscribe(): Promise<void> {
-        if (!this._hass || !this._config || this._unsub || this._subscribing) {
-            return;
-        }
-        if (!this._hass.connection?.subscribeMessage) {
-            this._error = 'Websocket connection unavailable';
-            return;
-        }
-
-        this._subscribing = true;
-        try {
-            this._unsub = await this._hass.connection.subscribeMessage<LockCoordinatorData>(
-                (event) => {
-                    this._data = event;
-                    this._error = undefined;
-                    this.requestUpdate();
-                },
-                {
-                    lock_entity_id: this._config.lock_entity_id,
-                    reveal: this._shouldReveal(),
-                    type: 'lock_code_manager/subscribe_lock_slot_data'
-                }
-            );
-        } catch (err) {
-            this._data = undefined;
-            this._error = err instanceof Error ? err.message : 'Failed to subscribe';
-            this.requestUpdate();
-        } finally {
-            this._subscribing = false;
-        }
-    }
+    // _toggleReveal, _unsubscribe, _shouldReveal, _subscribe inherited from mixin
 
     private _renderSlots(): TemplateResult {
         const slots = this._data?.slots ?? [];
@@ -806,7 +774,7 @@ class LockCodeManagerLockDataCard extends LitElement {
     }
 }
 
-customElements.define('lock-code-manager-lock-data', LockCodeManagerLockDataCard);
+customElements.define('lcm-lock-codes-card', LockCodesCard);
 
 declare global {
     interface Window {
@@ -817,6 +785,6 @@ declare global {
 window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
-    name: 'Lock Code Manager Lock Data',
-    type: 'custom:lock-code-manager-lock-data'
+    name: 'LCM Lock Codes Card',
+    type: 'custom:lcm-lock-codes-card'
 });

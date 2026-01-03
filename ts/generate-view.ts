@@ -93,7 +93,7 @@ export async function generateView(
             return {
                 code_display: code_data_view_code_display,
                 lock_entity_id: lockEntityId,
-                type: 'custom:lock-code-manager-lock-data'
+                type: 'custom:lcm-lock-codes-card'
             };
         });
         if (lockCards.length > 0) {

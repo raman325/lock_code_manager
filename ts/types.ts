@@ -81,11 +81,11 @@ export interface LockCodeManagerConfigEntryData {
 
 export type CodeDisplayMode = 'masked' | 'unmasked' | 'masked_with_reveal';
 
-export interface LockCodeManagerLockDataCardConfig {
+export interface LockCodesCardConfig {
     code_display?: CodeDisplayMode;
     lock_entity_id: string;
     title?: string;
-    type: 'custom:lock-code-manager-lock-data';
+    type: 'custom:lcm-lock-codes-card';
 }
 
 export interface LockCodeManagerSlotCardConfig {
@@ -107,7 +107,7 @@ export interface LockCodeManagerSlotCardConfig {
     show_lock_sync?: boolean;
     /** Slot number to display */
     slot: number;
-    type: 'custom:lock-code-manager-slot';
+    type: 'custom:lcm-slot-card';
 }
 
 export interface SlotCardLockStatus {
