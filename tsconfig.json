@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "baseUrl": ".",
+    "experimentalDecorators": true,
     "module": "ESNext",
     "moduleResolution": "node",
     "paths": {
@@ -8,7 +9,8 @@
     },
     "resolveJsonModule": true,
     "rootDir": ".",
-    "target": "es2022"
+    "target": "es2022",
+    "useDefineForClassFields": false
   },
   "include": [
     "ts/**/*",

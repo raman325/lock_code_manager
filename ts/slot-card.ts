@@ -1,5 +1,6 @@
-import { mdiEye, mdiEyeOff, mdiKey } from '@mdi/js';
+import { mdiChevronDown, mdiChevronUp, mdiEye, mdiEyeOff, mdiKey } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
+import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { CodeDisplayMode, LockCodeManagerSlotCardConfig } from './types';
@@ -10,13 +11,21 @@ interface SlotEntityData {
     active: boolean | null;
     enabled: boolean | null;
     name: string | null;
+    numberofUses: number | null;
     pin: string | null;
+}
+
+interface LockSyncStatus {
+    entityId: string;
+    inSync: boolean | null;
+    lockEntityId: string;
+    name: string;
 }
 
 /**
  * Streamlined slot card for Lock Code Manager.
  *
- * Phase 1: Core card with header, primary controls, and status section.
+ * Phase 2: Adds collapsible conditions and lock status sections.
  * Uses existing LCM entities via Home Assistant state.
  */
 class LockCodeManagerSlotCard extends LitElement {
@@ -81,6 +90,68 @@ class LockCodeManagerSlotCard extends LitElement {
             letter-spacing: 0.05em;
             margin-bottom: 12px;
             text-transform: uppercase;
+        }
+
+        /* Collapsible Section */
+        .collapsible-section {
+            background: rgba(var(--rgb-primary-text-color), 0.03);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .collapsible-header {
+            align-items: center;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 16px;
+            user-select: none;
+        }
+
+        .collapsible-header:hover {
+            background: rgba(var(--rgb-primary-text-color), 0.03);
+        }
+
+        .collapsible-title {
+            align-items: center;
+            color: var(--secondary-text-color);
+            display: flex;
+            font-size: 11px;
+            font-weight: 600;
+            gap: 8px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .collapsible-badge {
+            background: rgba(var(--rgb-primary-color), 0.1);
+            border-radius: 10px;
+            color: var(--primary-color);
+            font-size: 10px;
+            padding: 2px 8px;
+        }
+
+        .collapsible-chevron {
+            --mdc-icon-size: 20px;
+            color: var(--secondary-text-color);
+            transition: transform 0.2s ease;
+        }
+
+        .collapsible-content {
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            padding: 0 16px;
+            transition:
+                max-height 0.3s ease,
+                opacity 0.2s ease,
+                padding 0.3s ease;
+        }
+
+        .collapsible-content.expanded {
+            max-height: 500px;
+            opacity: 1;
+            padding: 0 16px 16px;
         }
 
         /* Primary Controls Section */
@@ -188,10 +259,82 @@ class LockCodeManagerSlotCard extends LitElement {
             margin-top: 4px;
         }
 
-        .last-used {
+        /* Conditions Section */
+        .condition-row {
+            align-items: center;
+            display: flex;
+            gap: 12px;
+            padding: 8px 0;
+        }
+
+        .condition-row:first-child {
+            padding-top: 0;
+        }
+
+        .condition-row:last-child {
+            padding-bottom: 0;
+        }
+
+        .condition-label {
             color: var(--secondary-text-color);
             font-size: 13px;
-            margin-left: auto;
+            min-width: 100px;
+        }
+
+        .condition-value {
+            color: var(--primary-text-color);
+            font-size: 14px;
+        }
+
+        .no-conditions {
+            color: var(--secondary-text-color);
+            font-size: 13px;
+            font-style: italic;
+        }
+
+        /* Lock Status Section */
+        .lock-row {
+            align-items: center;
+            border-bottom: 1px solid rgba(var(--rgb-primary-text-color), 0.06);
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+        }
+
+        .lock-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .lock-row:first-child {
+            padding-top: 0;
+        }
+
+        .lock-sync-icon {
+            --mdc-icon-size: 18px;
+        }
+
+        .lock-sync-icon.synced {
+            color: var(--success-color, #4caf50);
+        }
+
+        .lock-sync-icon.pending {
+            color: var(--warning-color, #ff9800);
+        }
+
+        .lock-sync-icon.unknown {
+            color: var(--disabled-text-color, #9e9e9e);
+        }
+
+        .lock-name {
+            color: var(--primary-text-color);
+            flex: 1;
+            font-size: 14px;
+        }
+
+        .lock-status-text {
+            color: var(--secondary-text-color);
+            font-size: 12px;
         }
 
         /* Message states */
@@ -207,14 +350,11 @@ class LockCodeManagerSlotCard extends LitElement {
         }
     `;
 
-    private _hass?: HomeAssistant;
-    private _config?: LockCodeManagerSlotCardConfig;
-    private _revealed = false;
-
-    set hass(hass: HomeAssistant) {
-        this._hass = hass;
-        this.requestUpdate();
-    }
+    @property({ attribute: false }) hass?: HomeAssistant;
+    @state() private _config?: LockCodeManagerSlotCardConfig;
+    @state() private _revealed = false;
+    @state() private _conditionsExpanded = false;
+    @state() private _lockStatusExpanded = false;
 
     static getConfigElement(): HTMLElement {
         // TODO: Create editor component
@@ -233,11 +373,15 @@ class LockCodeManagerSlotCard extends LitElement {
             throw new Error('slot is required');
         }
         this._config = config;
-        this.requestUpdate();
+
+        // Set initial collapsed state from config
+        const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
+        this._conditionsExpanded = !collapsed.includes('conditions');
+        this._lockStatusExpanded = !collapsed.includes('lock_status');
     }
 
     protected render(): TemplateResult {
-        if (!this._hass || !this._config) {
+        if (!this.hass || !this._config) {
             return html`<ha-card><div class="message">Loading...</div></ha-card>`;
         }
 
@@ -248,8 +392,9 @@ class LockCodeManagerSlotCard extends LitElement {
             </ha-card>`;
         }
 
-        const { name, pin, enabled, active } = slotData;
+        const { name, pin, enabled, active, numberofUses } = slotData;
         const mode = this._config.code_display ?? DEFAULT_CODE_DISPLAY;
+        const lockStatuses = this._getLockSyncStatuses();
 
         return html`
             <ha-card>
@@ -257,6 +402,8 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="content">
                     ${this._renderPrimaryControls(name, pin, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
+                    ${this._renderConditionsSection(numberofUses)}
+                    ${this._renderLockStatusSection(lockStatuses)}
                 </div>
             </ha-card>
         `;
@@ -357,14 +504,101 @@ class LockCodeManagerSlotCard extends LitElement {
         `;
     }
 
+    private _renderConditionsSection(numberofUses: number | null): TemplateResult {
+        const hasConditions = numberofUses !== null;
+        const conditionCount = hasConditions ? 1 : 0;
+
+        return html`
+            <div class="collapsible-section">
+                <div class="collapsible-header" @click=${this._toggleConditions}>
+                    <div class="collapsible-title">
+                        Conditions
+                        ${conditionCount > 0
+                            ? html`<span class="collapsible-badge">${conditionCount}</span>`
+                            : nothing}
+                    </div>
+                    <ha-svg-icon
+                        class="collapsible-chevron"
+                        .path=${this._conditionsExpanded ? mdiChevronUp : mdiChevronDown}
+                    ></ha-svg-icon>
+                </div>
+                <div class="collapsible-content ${this._conditionsExpanded ? 'expanded' : ''}">
+                    ${hasConditions
+                        ? html`
+                              ${numberofUses !== null
+                                  ? html`<div class="condition-row">
+                                        <span class="condition-label">Uses remaining</span>
+                                        <span class="condition-value">${numberofUses}</span>
+                                    </div>`
+                                  : nothing}
+                          `
+                        : html`<div class="no-conditions">No conditions configured</div>`}
+                </div>
+            </div>
+        `;
+    }
+
+    private _renderLockStatusSection(lockStatuses: LockSyncStatus[]): TemplateResult {
+        const syncedCount = lockStatuses.filter((l) => l.inSync === true).length;
+        const totalCount = lockStatuses.length;
+
+        return html`
+            <div class="collapsible-section">
+                <div class="collapsible-header" @click=${this._toggleLockStatus}>
+                    <div class="collapsible-title">
+                        Lock Status
+                        ${totalCount > 0
+                            ? html`<span class="collapsible-badge"
+                                  >${syncedCount}/${totalCount}</span
+                              >`
+                            : nothing}
+                    </div>
+                    <ha-svg-icon
+                        class="collapsible-chevron"
+                        .path=${this._lockStatusExpanded ? mdiChevronUp : mdiChevronDown}
+                    ></ha-svg-icon>
+                </div>
+                <div class="collapsible-content ${this._lockStatusExpanded ? 'expanded' : ''}">
+                    ${lockStatuses.length > 0
+                        ? lockStatuses.map((lock) => this._renderLockRow(lock))
+                        : html`<div class="no-conditions">No locks found</div>`}
+                </div>
+            </div>
+        `;
+    }
+
+    private _renderLockRow(lock: LockSyncStatus): TemplateResult {
+        let iconClass: string;
+        let statusText: string;
+
+        if (lock.inSync === true) {
+            iconClass = 'synced';
+            statusText = 'Synced';
+        } else if (lock.inSync === false) {
+            iconClass = 'pending';
+            statusText = 'Pending';
+        } else {
+            iconClass = 'unknown';
+            statusText = 'Unknown';
+        }
+
+        return html`
+            <div class="lock-row">
+                <ha-icon class="lock-sync-icon ${iconClass}" icon="mdi:check-circle"></ha-icon>
+                <span class="lock-name">${lock.name}</span>
+                <span class="lock-status-text">${statusText}</span>
+            </div>
+        `;
+    }
+
     private _getSlotData(): SlotEntityData | null {
-        if (!this._hass || !this._config) return null;
+        if (!this.hass || !this._config) return null;
 
         const { slot } = this._config;
-        const { states } = this._hass;
+        const { states } = this.hass;
 
         // Collect matching LCM entities for this slot
-        const entityPattern = /^(text|switch|binary_sensor)\.lcm_(.+)_(\d+)_(\w+)$/;
+        const slotEntityPattern = /^(text|switch|binary_sensor|number)\.lcm_(.+)_(\d+)_(\w+)$/;
         const matchingEntities: Array<{
             domain: string;
             key: string;
@@ -372,25 +606,24 @@ class LockCodeManagerSlotCard extends LitElement {
         }> = [];
 
         for (const entityId of Object.keys(states)) {
-            const state = states[entityId];
-            if (!state) {
+            const entityState = states[entityId];
+            if (!entityState) {
                 // Skip null/undefined states
             } else {
-                const match = entityId.match(entityPattern);
+                const match = entityId.match(slotEntityPattern);
                 if (match) {
                     const [, domain, , slotStr, key] = match;
                     if (parseInt(slotStr, 10) === slot) {
                         matchingEntities.push({
                             domain,
                             key,
-                            stateValue: state.state
+                            stateValue: entityState.state
                         });
                     }
                 }
             }
         }
 
-        // Process collected entities outside the loop
         return this._processMatchingEntities(matchingEntities);
     }
 
@@ -401,6 +634,7 @@ class LockCodeManagerSlotCard extends LitElement {
         let pinValue: string | null = null;
         let enabledValue: boolean | null = null;
         let activeValue: boolean | null = null;
+        let numberofUsesValue: number | null = null;
 
         for (const { domain, key, stateValue } of entities) {
             const isValidTextState =
@@ -414,6 +648,11 @@ class LockCodeManagerSlotCard extends LitElement {
                 enabledValue = stateValue === 'on';
             } else if (key === 'active' && domain === 'binary_sensor') {
                 activeValue = stateValue === 'on';
+            } else if (key === 'number_of_uses' && domain === 'number' && isValidTextState) {
+                const parsed = parseFloat(stateValue);
+                if (!isNaN(parsed)) {
+                    numberofUsesValue = parsed;
+                }
             }
         }
 
@@ -431,23 +670,73 @@ class LockCodeManagerSlotCard extends LitElement {
             active: activeValue,
             enabled: enabledValue,
             name: nameValue,
+            numberofUses: numberofUsesValue,
             pin: pinValue
         };
     }
 
+    private _getLockSyncStatuses(): LockSyncStatus[] {
+        if (!this.hass || !this._config) return [];
+
+        const { slot } = this._config;
+        const { states } = this.hass;
+        const lockStatuses: LockSyncStatus[] = [];
+
+        // Pattern for in_sync entities: binary_sensor.lcm_{slug}_{slot}_in_sync_{lock_slug}
+        // The unique_id is: {entry_id}|{slot}|in_sync|{lock_entity_id}
+        const inSyncPattern = new RegExp(`^binary_sensor\\.lcm_.+_${slot}_in_sync_(.+)$`);
+
+        for (const entityId of Object.keys(states)) {
+            const match = entityId.match(inSyncPattern);
+            if (match) {
+                const entityState = states[entityId];
+                if (entityState) {
+                    // Try to get the friendly name from state attributes
+                    const friendlyName =
+                        entityState.attributes?.friendly_name ??
+                        `Lock ${match[1].replace(/_/g, ' ')}`;
+
+                    // Extract lock entity id from friendly name or entity id
+                    const lockEntityId = entityState.attributes?.lock_entity_id ?? match[1];
+
+                    lockStatuses.push({
+                        entityId,
+                        inSync:
+                            entityState.state === 'on'
+                                ? true
+                                : entityState.state === 'off'
+                                  ? false
+                                  : null,
+                        lockEntityId,
+                        name: friendlyName.replace(/^.* - /, '').replace(/ in sync$/i, '')
+                    });
+                }
+            }
+        }
+
+        return lockStatuses;
+    }
+
     private _toggleReveal(): void {
         this._revealed = !this._revealed;
-        this.requestUpdate();
+    }
+
+    private _toggleConditions(): void {
+        this._conditionsExpanded = !this._conditionsExpanded;
+    }
+
+    private _toggleLockStatus(): void {
+        this._lockStatusExpanded = !this._lockStatusExpanded;
     }
 
     private _handleEnabledToggle(e: Event): void {
         const target = e.target as HTMLInputElement;
         const newState = target.checked;
 
-        if (!this._hass || !this._config) return;
+        if (!this.hass || !this._config) return;
 
         const { slot } = this._config;
-        const { states } = this._hass;
+        const { states } = this.hass;
 
         // Find the enabled switch entity
         const enabledEntityId = Object.keys(states).find((entityId) => {
@@ -456,7 +745,7 @@ class LockCodeManagerSlotCard extends LitElement {
         });
 
         if (enabledEntityId) {
-            void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
+            void this.hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
                 entity_id: enabledEntityId
             });
         }
