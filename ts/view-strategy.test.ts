@@ -85,6 +85,7 @@ describe('LockCodeManagerViewStrategy', () => {
 
             // DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false
             // DEFAULT_INCLUDE_IN_SYNC_SENSORS = true
+            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 mockConfigEntry,
@@ -92,7 +93,7 @@ describe('LockCodeManagerViewStrategy', () => {
                 false,
                 true,
                 false,
-                'unmasked'
+                'masked_with_reveal'
             );
         });
 
@@ -118,7 +119,7 @@ describe('LockCodeManagerViewStrategy', () => {
                 true,
                 true,
                 false,
-                'unmasked'
+                'masked_with_reveal'
             );
         });
 
@@ -144,7 +145,7 @@ describe('LockCodeManagerViewStrategy', () => {
                 false,
                 false,
                 false,
-                'unmasked'
+                'masked_with_reveal'
             );
         });
 

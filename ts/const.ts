@@ -2,7 +2,11 @@ export const CODE_SENSOR_KEY = 'code';
 export const CODE_EVENT_KEY = 'pin_used';
 export const ACTIVE_KEY = 'active';
 export const IN_SYNC_KEY = 'in_sync';
-export const CONDITION_KEYS = ['number_of_uses'];
+
+// Condition keys
+export const CONDITION_NUMBER_OF_USES = 'number_of_uses';
+export const CONDITION_CALENDAR = 'calendar';
+export const CONDITION_KEYS = [CONDITION_NUMBER_OF_USES, CONDITION_CALENDAR];
 export const DIVIDER_CARD = {
     type: 'divider'
 };
@@ -20,7 +24,8 @@ export const DOMAIN = 'lock_code_manager';
 export const DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false;
 export const DEFAULT_INCLUDE_CODE_DATA_VIEW = false;
 export const DEFAULT_INCLUDE_IN_SYNC_SENSORS = true;
-export const DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'unmasked';
+export const DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal';
+export const DEFAULT_USE_SLOT_CARDS = true;
 
 export const FOLD_ENTITY_ROW_SEARCH_STRING = 'fold-entity-row.js';
 export const FOLD_ENTITY_ROW_REPO_NAME = 'thomasloven/lovelace-fold-entity-row';

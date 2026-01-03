@@ -1,12 +1,7 @@
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 
 import { HomeAssistant } from './ha_type_stubs';
-import {
-    CodeDisplayMode,
-    GetLocksResponse,
-    LockCodeManagerLockDataCardConfig,
-    LockInfo
-} from './types';
+import { CodeDisplayMode, GetLocksResponse, LockCodesCardConfig, LockInfo } from './types';
 
 const CODE_DISPLAY_OPTIONS: Array<{ label: string; value: CodeDisplayMode }> = [
     { label: 'Masked with Reveal', value: 'masked_with_reveal' },
@@ -14,7 +9,7 @@ const CODE_DISPLAY_OPTIONS: Array<{ label: string; value: CodeDisplayMode }> = [
     { label: 'Always Visible', value: 'unmasked' }
 ];
 
-class LockCodeDataCardEditor extends LitElement {
+class LockCodesCardEditor extends LitElement {
     static styles = css`
         .editor-row {
             margin-bottom: 16px;
@@ -34,7 +29,7 @@ class LockCodeDataCardEditor extends LitElement {
     `;
 
     private _hass?: HomeAssistant;
-    private _config?: LockCodeManagerLockDataCardConfig;
+    private _config?: LockCodesCardConfig;
     private _locks: LockInfo[] = [];
     private _loading = true;
 
@@ -46,7 +41,7 @@ class LockCodeDataCardEditor extends LitElement {
         }
     }
 
-    setConfig(config: LockCodeManagerLockDataCardConfig): void {
+    setConfig(config: LockCodesCardConfig): void {
         this._config = config;
     }
 
@@ -172,4 +167,4 @@ class LockCodeDataCardEditor extends LitElement {
     }
 }
 
-customElements.define('lock-code-data-card-editor', LockCodeDataCardEditor);
+customElements.define('lcm-lock-codes-card-editor', LockCodesCardEditor);

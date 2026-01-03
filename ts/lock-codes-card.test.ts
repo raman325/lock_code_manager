@@ -4,7 +4,7 @@ import { CodeDisplayMode, LockCoordinatorSlotData } from './types';
 
 // Test the logic that can be unit tested without full component instantiation
 
-describe('LockCodeManagerLockDataCard logic', () => {
+describe('LockCodesCard logic', () => {
     describe('shouldReveal logic', () => {
         const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'unmasked';
 
