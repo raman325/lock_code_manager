@@ -724,7 +724,14 @@ class LockCodeManagerSlotCard extends LitElement {
             );
         } catch (err) {
             this._data = undefined;
-            this._error = err instanceof Error ? err.message : 'Failed to subscribe';
+            // Show detailed error for debugging
+            if (err instanceof Error) {
+                this._error = err.message;
+            } else if (typeof err === 'object' && err !== null && 'message' in err) {
+                this._error = String((err as { message: unknown }).message);
+            } else {
+                this._error = `Failed to subscribe: ${JSON.stringify(err)}`;
+            }
             this.requestUpdate();
         } finally {
             this._subscribing = false;
