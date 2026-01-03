@@ -202,6 +202,42 @@ class LockCodeManagerSlotCard extends LitElement {
             --mdc-icon-size: 18px;
         }
 
+        /* Inline editing */
+        .editable {
+            cursor: pointer;
+            border-radius: 4px;
+            padding: 4px 8px;
+            margin: -4px -8px;
+            transition: background-color 0.2s;
+        }
+
+        .editable:hover {
+            background: rgba(var(--rgb-primary-color), 0.1);
+        }
+
+        .edit-input {
+            background: var(--card-background-color, #fff);
+            border: 1px solid var(--primary-color);
+            border-radius: 4px;
+            color: var(--primary-text-color);
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+            padding: 4px 8px;
+            width: 100%;
+        }
+
+        .edit-input:focus {
+            box-shadow: 0 0 0 1px var(--primary-color);
+        }
+
+        .pin-edit-input {
+            font-family: 'Roboto Mono', monospace;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 2px;
+        }
+
         .enabled-row {
             align-items: center;
             display: flex;
@@ -349,6 +385,8 @@ class LockCodeManagerSlotCard extends LitElement {
     @state() private _lockStatusExpanded = false;
     @state() private _data?: SlotCardData;
     @state() private _error?: string;
+    @state() private _editingName = false;
+    @state() private _editingPin = false;
 
     private _hass?: HomeAssistant;
     private _unsub?: UnsubscribeFunc;
@@ -491,18 +529,44 @@ class LockCodeManagerSlotCard extends LitElement {
 
                 <div class="control-row">
                     <span class="control-label">Name</span>
-                    <span class="control-value ${name ? '' : 'unnamed'}">
-                        ${name ?? 'Unnamed'}
-                    </span>
+                    ${this._editingName
+                        ? html`<input
+                              class="edit-input"
+                              type="text"
+                              .value=${name ?? ''}
+                              @blur=${this._handleNameBlur}
+                              @keydown=${this._handleNameKeydown}
+                              autofocus
+                          />`
+                        : html`<span
+                              class="control-value editable ${name ? '' : 'unnamed'}"
+                              @click=${this._startEditingName}
+                          >
+                              ${name ?? 'Unnamed'}
+                          </span>`}
                 </div>
 
                 <div class="control-row">
                     <span class="control-label">PIN</span>
                     <div class="pin-field">
-                        <span class="pin-value ${shouldMask && hasPin ? 'masked' : ''}">
-                            ${displayPin}
-                        </span>
-                        ${mode === 'masked_with_reveal' && hasPin
+                        ${this._editingPin
+                            ? html`<input
+                                  class="edit-input pin-edit-input"
+                                  type="text"
+                                  inputmode="numeric"
+                                  pattern="[0-9]*"
+                                  .value=${pin ?? ''}
+                                  @blur=${this._handlePinBlur}
+                                  @keydown=${this._handlePinKeydown}
+                                  autofocus
+                              />`
+                            : html`<span
+                                  class="pin-value editable ${shouldMask && hasPin ? 'masked' : ''}"
+                                  @click=${this._startEditingPin}
+                              >
+                                  ${displayPin}
+                              </span>`}
+                        ${mode === 'masked_with_reveal' && hasPin && !this._editingPin
                             ? html`<ha-icon-button
                                   class="pin-reveal"
                                   .path=${this._revealed ? mdiEyeOff : mdiEye}
@@ -671,17 +735,104 @@ class LockCodeManagerSlotCard extends LitElement {
         if (!this._hass || !this._config) return;
 
         const { slot } = this._config;
-        const { states } = this._hass;
 
-        // Find the enabled switch entity
-        const enabledEntityId = Object.keys(states).find((entityId) => {
-            const match = entityId.match(/^switch\.lcm_(.+)_(\d+)_enabled$/);
-            return match && parseInt(match[2], 10) === slot;
-        });
+        // Find the enabled switch entity using correct pattern
+        const enabledEntityId = this._findEntityBySlotKey('switch', slot, 'enabled');
 
         if (enabledEntityId) {
             void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
                 entity_id: enabledEntityId
+            });
+        }
+    }
+
+    private _findEntityBySlotKey(domain: string, slot: number, key: string): string | undefined {
+        if (!this._hass) return undefined;
+        const { states } = this._hass;
+
+        // Pattern: {domain}.{entry_title_slug}_code_slot_{slot}_{key}
+        const pattern = new RegExp(`^${domain}\\.(.+)_code_slot_(\\d+)_${key}$`);
+
+        return Object.keys(states).find((entityId) => {
+            const match = entityId.match(pattern);
+            return match && parseInt(match[2], 10) === slot;
+        });
+    }
+
+    private _startEditingName(): void {
+        this._editingName = true;
+    }
+
+    private _handleNameBlur(e: Event): void {
+        const target = e.target as HTMLInputElement;
+        const newValue = target.value.trim();
+        this._saveNameValue(newValue);
+        this._editingName = false;
+    }
+
+    private _handleNameKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Enter') {
+            const target = e.target as HTMLInputElement;
+            const newValue = target.value.trim();
+            this._saveNameValue(newValue);
+            this._editingName = false;
+        } else if (e.key === 'Escape') {
+            this._editingName = false;
+        }
+    }
+
+    private _saveNameValue(value: string): void {
+        if (!this._hass || !this._config) return;
+
+        const nameEntityId = this._findEntityBySlotKey('text', this._config.slot, 'name');
+        if (nameEntityId) {
+            void this._hass.callService('text', 'set_value', {
+                entity_id: nameEntityId,
+                value
+            });
+        }
+    }
+
+    private _startEditingPin(): void {
+        // When starting to edit PIN, reveal it first to show current value
+        if (!this._revealed) {
+            this._revealed = true;
+            // Resubscribe to get unmasked PIN, then enter edit mode
+            this._unsubscribe();
+            void this._subscribe().then(() => {
+                this._editingPin = true;
+            });
+        } else {
+            this._editingPin = true;
+        }
+    }
+
+    private _handlePinBlur(e: Event): void {
+        const target = e.target as HTMLInputElement;
+        const newValue = target.value.trim();
+        this._savePinValue(newValue);
+        this._editingPin = false;
+    }
+
+    private _handlePinKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Enter') {
+            const target = e.target as HTMLInputElement;
+            const newValue = target.value.trim();
+            this._savePinValue(newValue);
+            this._editingPin = false;
+        } else if (e.key === 'Escape') {
+            this._editingPin = false;
+        }
+    }
+
+    private _savePinValue(value: string): void {
+        if (!this._hass || !this._config) return;
+
+        const pinEntityId = this._findEntityBySlotKey('text', this._config.slot, 'pin');
+        if (pinEntityId) {
+            void this._hass.callService('text', 'set_value', {
+                entity_id: pinEntityId,
+                value
             });
         }
     }
