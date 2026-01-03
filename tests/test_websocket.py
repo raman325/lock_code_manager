@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
@@ -809,3 +810,65 @@ async def test_subscribe_lock_codes_slot_metadata(
     assert slot_1 is not None
     assert slot_1.get(CONF_NAME) == "test1"
     assert slot_1.get("managed") is True
+
+
+async def test_set_lock_usercode_operation_failure(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API when operation fails."""
+    ws_client = await hass_ws_client(hass)
+
+    # Mock the lock's set_usercode to raise an exception
+    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    with patch.object(
+        lock,
+        "async_internal_set_usercode",
+        AsyncMock(side_effect=Exception("Test error")),
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/set_lock_usercode",
+                ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+                ATTR_CODE_SLOT: 3,
+                ATTR_USERCODE: "1234",
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert not msg["success"]
+        assert msg["error"]["code"] == "unknown_error"
+        assert "Test error" in msg["error"]["message"]
+
+
+async def test_set_lock_usercode_clear_operation_failure(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API when clear operation fails."""
+    ws_client = await hass_ws_client(hass)
+
+    # Mock the lock's clear_usercode to raise an exception
+    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    with patch.object(
+        lock,
+        "async_internal_clear_usercode",
+        AsyncMock(side_effect=Exception("Clear failed")),
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/set_lock_usercode",
+                ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+                ATTR_CODE_SLOT: 3,
+                ATTR_USERCODE: "",  # Empty string triggers clear
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert not msg["success"]
+        assert msg["error"]["code"] == "unknown_error"
+        assert "Clear failed" in msg["error"]["message"]
