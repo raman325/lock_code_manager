@@ -68,7 +68,7 @@ class LockCodeManagerLockDataCard extends LitElement {
             position: relative;
         }
 
-        /* Active Managed: Primary blue with tinted background */
+        /* Active LCM Managed: Primary blue with tinted background */
         .slot-chip.active.managed {
             background: linear-gradient(
                 135deg,
@@ -78,7 +78,7 @@ class LockCodeManagerLockDataCard extends LitElement {
             border-color: var(--primary-color);
         }
 
-        /* Active Unmanaged: Neutral gray, plain background */
+        /* Active Unmanaged (not LCM): Neutral gray, plain background */
         .slot-chip.active.unmanaged {
             background: linear-gradient(
                 135deg,
@@ -89,8 +89,8 @@ class LockCodeManagerLockDataCard extends LitElement {
             border-style: solid;
         }
 
-        /* Inactive/Disabled Managed: Muted blue dotted, slightly faded */
-        /* Only managed slots can be inactive/disabled (unmanaged are active or empty) */
+        /* Inactive/Disabled LCM Managed: Muted blue dotted, slightly faded */
+        /* Only LCM managed slots can be inactive/disabled (unmanaged are active or empty) */
         .slot-chip.inactive.managed,
         .slot-chip.disabled.managed {
             background: linear-gradient(
@@ -240,10 +240,7 @@ class LockCodeManagerLockDataCard extends LitElement {
 
         .slot-code.disabled {
             color: var(--primary-text-color);
-            opacity: 0.85;
-            text-decoration: line-through;
-            text-decoration-color: var(--warning-color, #ff9800);
-            text-decoration-thickness: 1px;
+            opacity: 0.6;
         }
 
         .slot-code.disabled.masked {
