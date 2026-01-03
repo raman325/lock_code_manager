@@ -61,6 +61,8 @@ export interface LockCoordinatorSlotData {
      * True = enabled, False = disabled by user, undefined = unknown
      */
     enabled?: boolean;
+    /** Whether the code is in sync with the lock */
+    in_sync?: boolean;
     /** True if slot is managed by LCM */
     managed?: boolean;
     /** Slot name from LCM configuration, if set */
