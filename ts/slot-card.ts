@@ -613,8 +613,8 @@ class LockCodeManagerSlotCard extends LitElement {
         if (!config.config_entry_id && !config.config_entry_title) {
             throw new Error('config_entry_id or config_entry_title is required');
         }
-        if (typeof config.slot !== 'number' || config.slot < 1) {
-            throw new Error('slot must be a positive number');
+        if (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999) {
+            throw new Error('slot must be a number between 1 and 9999');
         }
         // If config changed, unsubscribe and resubscribe
         if (
@@ -1203,7 +1203,7 @@ class LockCodeManagerSlotCard extends LitElement {
         this._lockStatusExpanded = !this._lockStatusExpanded;
     }
 
-    private _handleEnabledToggle(e: Event): void {
+    private async _handleEnabledToggle(e: Event): Promise<void> {
         const target = e.target as HTMLInputElement;
         const newState = target.checked;
 
@@ -1211,9 +1211,13 @@ class LockCodeManagerSlotCard extends LitElement {
         const enabledEntityId = this._data?.entities?.enabled ?? undefined;
         if (!enabledEntityId) return;
 
-        void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
-            entity_id: enabledEntityId
-        });
+        try {
+            await this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
+                entity_id: enabledEntityId
+            });
+        } catch (err) {
+            console.error('Failed to toggle slot enabled state:', err);
+        }
     }
 
     private _startEditingName(): void {
@@ -1240,15 +1244,19 @@ class LockCodeManagerSlotCard extends LitElement {
         }
     }
 
-    private _saveNameValue(value: string): void {
+    private async _saveNameValue(value: string): Promise<void> {
         if (!this._hass) return;
         const nameEntityId = this._data?.entities?.name ?? undefined;
         if (!nameEntityId) return;
 
-        void this._hass.callService('text', 'set_value', {
-            entity_id: nameEntityId,
-            value
-        });
+        try {
+            await this._hass.callService('text', 'set_value', {
+                entity_id: nameEntityId,
+                value
+            });
+        } catch (err) {
+            console.error('Failed to save name:', err);
+        }
     }
 
     private _startEditingPin(): void {
@@ -1286,15 +1294,19 @@ class LockCodeManagerSlotCard extends LitElement {
         }
     }
 
-    private _savePinValue(value: string): void {
+    private async _savePinValue(value: string): Promise<void> {
         if (!this._hass) return;
         const pinEntityId = this._data?.entities?.pin ?? undefined;
         if (!pinEntityId) return;
 
-        void this._hass.callService('text', 'set_value', {
-            entity_id: pinEntityId,
-            value
-        });
+        try {
+            await this._hass.callService('text', 'set_value', {
+                entity_id: pinEntityId,
+                value
+            });
+        } catch (err) {
+            console.error('Failed to save PIN:', err);
+        }
     }
 
     private _startEditingNumberOfUses(): void {
@@ -1326,15 +1338,19 @@ class LockCodeManagerSlotCard extends LitElement {
         }
     }
 
-    private _saveNumberOfUsesValue(value: number): void {
+    private async _saveNumberOfUsesValue(value: number): Promise<void> {
         if (!this._hass) return;
         const numberOfUsesEntityId = this._data?.entities?.number_of_uses ?? undefined;
         if (!numberOfUsesEntityId) return;
 
-        void this._hass.callService('number', 'set_value', {
-            entity_id: numberOfUsesEntityId,
-            value
-        });
+        try {
+            await this._hass.callService('number', 'set_value', {
+                entity_id: numberOfUsesEntityId,
+                value
+            });
+        } catch (err) {
+            console.error('Failed to save number of uses:', err);
+        }
     }
 
     private _navigateToCalendar(calendarEntityId: string): void {

@@ -17,8 +17,8 @@ describe('LockCodeManagerSlotCard logic', () => {
             if (!config.config_entry_id && !config.config_entry_title) {
                 return { valid: false, error: 'config_entry_id or config_entry_title is required' };
             }
-            if (typeof config.slot !== 'number' || config.slot < 1) {
-                return { valid: false, error: 'slot must be a positive number' };
+            if (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999) {
+                return { valid: false, error: 'slot must be a number between 1 and 9999' };
             }
             return { valid: true };
         }
@@ -50,22 +50,39 @@ describe('LockCodeManagerSlotCard logic', () => {
         it('requires slot to be a number', () => {
             expect(validateConfig({ config_entry_id: 'abc123' })).toEqual({
                 valid: false,
-                error: 'slot must be a positive number'
+                error: 'slot must be a number between 1 and 9999'
             });
         });
 
         it('rejects slot of 0', () => {
             expect(validateConfig({ config_entry_id: 'abc123', slot: 0 })).toEqual({
                 valid: false,
-                error: 'slot must be a positive number'
+                error: 'slot must be a number between 1 and 9999'
             });
         });
 
         it('rejects negative slot', () => {
             expect(validateConfig({ config_entry_id: 'abc123', slot: -1 })).toEqual({
                 valid: false,
-                error: 'slot must be a positive number'
+                error: 'slot must be a number between 1 and 9999'
             });
+        });
+
+        it('rejects slot exceeding 9999', () => {
+            expect(validateConfig({ config_entry_id: 'abc123', slot: 10000 })).toEqual({
+                valid: false,
+                error: 'slot must be a number between 1 and 9999'
+            });
+        });
+
+        it('accepts slot at upper boundary (9999)', () => {
+            expect(
+                validateConfig({
+                    config_entry_id: 'abc123',
+                    slot: 9999,
+                    type: 'custom:lock-code-manager-slot'
+                })
+            ).toEqual({ valid: true });
         });
 
         it('accepts valid config', () => {
