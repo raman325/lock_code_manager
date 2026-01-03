@@ -11,6 +11,7 @@ import {
     compareAndSortEntities,
     createLockCodeManagerEntity,
     generateEntityCards,
+    generateNewSlotCard,
     generateSlotCard,
     getEntityDisplayName,
     getSlotMapping,
@@ -644,17 +645,26 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         expect(result.title).toBe('Test Lock');
         expect(result.path).toBe('test-lock');
         expect(result.panel).toBe(false);
-        expect(result.badges).toContain('lock.front');
+        // Lock badges are now entity objects
+        const lockBadge = result.badges.find(
+            (badge) =>
+                typeof badge === 'object' &&
+                badge.type === 'entity' &&
+                badge.entity === 'lock.front'
+        );
+        expect(lockBadge).toBeDefined();
         expect(result.cards).toHaveLength(1);
     });
 
-    it('includes slot active badges', async () => {
+    it('only includes lock entity badges (no template badges)', async () => {
         const configEntryData: LockCodeManagerConfigEntryData = {
             locks: ['lock.front'],
             slots: { 1: null, 2: null }
@@ -687,13 +697,23 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
-        const stateBadges = result.badges.filter(
-            (badge) => typeof badge === 'object' && badge.type === 'state-label'
+        // Should only have entity badges for locks (no template badges)
+        const entityBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'entity'
         );
-        expect(stateBadges).toHaveLength(2);
+        expect(entityBadges).toHaveLength(1);
+        expect(entityBadges[0].entity).toBe('lock.front');
+
+        // No template badges (not supported by HA)
+        const templateBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'template'
+        );
+        expect(templateBadges).toHaveLength(0);
     });
 
     it('generates one card per slot', async () => {
@@ -732,7 +752,9 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         expect(result.cards).toHaveLength(3);
@@ -775,7 +797,9 @@ describe('generateView', () => {
             false,
             true,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
         const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
@@ -816,10 +840,109 @@ describe('generateView', () => {
             false,
             false,
             false,
-            'unmasked'
+            'unmasked',
+            // use legacy entities cards for test
+            false
         );
 
-        const lockBadges = result.badges.filter((badge) => typeof badge === 'string');
-        expect(lockBadges).toEqual(['lock.a_front', 'lock.z_back']);
+        // Lock badges are now entity objects, not strings
+        const lockBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'entity'
+        );
+        const lockEntityIds = lockBadges.map((badge) => badge.entity);
+        expect(lockEntityIds).toEqual(['lock.a_front', 'lock.z_back']);
+    });
+
+    it('uses new slot cards when use_slot_cards is true', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front'],
+            slots: { 1: null, 2: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY),
+            createEntityRegistryEntry(2, 'enabled'),
+            createEntityRegistryEntry(2, ACTIVE_KEY),
+            createEntityRegistryEntry(2, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            true,
+            false,
+            'masked_with_reveal',
+            // use_slot_cards = true
+            true
+        );
+
+        expect(result.cards).toHaveLength(2);
+        // Verify cards are new slot cards, not vertical-stack with entities
+        expect(result.cards[0].type).toBe('custom:lock-code-manager-slot');
+        expect(result.cards[0].slot).toBe(1);
+        expect(result.cards[0].config_entry_id).toBe('entry123');
+        expect(result.cards[1].type).toBe('custom:lock-code-manager-slot');
+        expect(result.cards[1].slot).toBe(2);
+    });
+});
+
+describe('generateNewSlotCard', () => {
+    const testConfigEntry: ConfigEntryJSONFragment = {
+        disabled_by: '',
+        domain: 'lock_code_manager',
+        entry_id: 'entry456',
+        pref_disable_new_entities: false,
+        pref_disable_polling: false,
+        reason: null,
+        source: 'user',
+        state: 'loaded',
+        supports_options: true,
+        supports_remove_device: false,
+        supports_unload: true,
+        title: 'Test Config'
+    };
+
+    it('generates slot card with correct type and slot number', () => {
+        const result = generateNewSlotCard(testConfigEntry, 3, false, false);
+
+        expect(result.type).toBe('custom:lock-code-manager-slot');
+        expect(result.slot).toBe(3);
+        expect(result.config_entry_id).toBe('entry456');
+    });
+
+    it('passes show_code_sensors option', () => {
+        const result = generateNewSlotCard(testConfigEntry, 1, true, false);
+
+        expect(result.show_code_sensors).toBe(true);
+    });
+
+    it('passes show_lock_sync option', () => {
+        const result = generateNewSlotCard(testConfigEntry, 1, false, true);
+
+        expect(result.show_lock_sync).toBe(true);
+    });
+
+    it('passes both options when enabled', () => {
+        const result = generateNewSlotCard(testConfigEntry, 5, true, true);
+
+        expect(result.type).toBe('custom:lock-code-manager-slot');
+        expect(result.slot).toBe(5);
+        expect(result.show_code_sensors).toBe(true);
+        expect(result.show_lock_sync).toBe(true);
     });
 });

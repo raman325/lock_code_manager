@@ -31,7 +31,8 @@ export async function generateView(
     include_code_slot_sensors: boolean,
     include_in_sync_sensors: boolean,
     include_code_data_view: boolean,
-    code_data_view_code_display: string
+    code_data_view_code_display: string,
+    use_slot_cards: boolean
 ): Promise<LovelaceViewConfig> {
     const callData = {
         type: 'lock_code_manager/get_config_entry_entities'
@@ -55,33 +56,46 @@ export async function generateView(
         getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
     );
 
-    const badges = [
-        ...configEntryData.locks.sort((a, b) => a.localeCompare(b)),
-        ...sortedEntities
-            .filter((entity) => entity.key === 'active')
-            .map((entity) => {
-                return {
-                    entity: entity.entity_id,
-                    name: `Slot ${entity.slotNum.toString()} active`,
-                    type: 'state-label'
-                };
-            })
-    ];
+    // Build badges - lock state badges only
+    // Note: Template badges are not supported by HA, so we only use entity badges
+    // The slot cards already show detailed status (active, sync, conditions)
+    const badges: Array<string | object> = [];
+
+    // Lock state badges - show each lock with its current state
+    // Entity badges automatically show friendly name and lock/unlock state
+    configEntryData.locks
+        .sort((a, b) => a.localeCompare(b))
+        .forEach((lockEntityId) => {
+            badges.push({
+                entity: lockEntityId,
+                type: 'entity'
+            });
+        });
 
     const useFoldEntityRow =
         lovelaceResources.filter((resource) => resource.url.includes(FOLD_ENTITY_ROW_SEARCH_STRING))
             .length > 0;
 
-    const cards = slotMappings.map((slotMapping) =>
-        generateSlotCard(
-            hass,
-            configEntry,
-            slotMapping,
-            useFoldEntityRow,
-            include_code_slot_sensors,
-            include_in_sync_sensors
-        )
-    );
+    // Generate slot cards using either the new streamlined cards or legacy entities cards
+    const cards = use_slot_cards
+        ? slotMappings.map((slotMapping) =>
+              generateNewSlotCard(
+                  configEntry,
+                  slotMapping.slotNum,
+                  include_code_slot_sensors,
+                  include_in_sync_sensors
+              )
+          )
+        : slotMappings.map((slotMapping) =>
+              generateSlotCard(
+                  hass,
+                  configEntry,
+                  slotMapping,
+                  useFoldEntityRow,
+                  include_code_slot_sensors,
+                  include_in_sync_sensors
+              )
+          );
 
     if (include_code_data_view) {
         const sortedLockIds = [...configEntryData.locks].sort((a, b) => {
@@ -247,6 +261,23 @@ export function generateSlotCard(
             }
         ],
         type: 'vertical-stack'
+    };
+}
+
+/** @internal - exported for testing via generate-view.internal.ts */
+export function generateNewSlotCard(
+    configEntry: ConfigEntryJSONFragment,
+    slotNum: number,
+    include_code_slot_sensors: boolean,
+    include_in_sync_sensors: boolean
+): LovelaceCardConfig {
+    // Use the new slot card with built-in header, inline editing, and websocket updates
+    return {
+        config_entry_id: configEntry.entry_id,
+        show_code_sensors: include_code_slot_sensors,
+        show_lock_sync: include_in_sync_sensors,
+        slot: slotNum,
+        type: 'custom:lock-code-manager-slot'
     };
 }
 

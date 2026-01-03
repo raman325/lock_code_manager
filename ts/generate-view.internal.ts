@@ -18,6 +18,7 @@ export {
     compareAndSortEntities,
     createLockCodeManagerEntity,
     generateEntityCards,
+    generateNewSlotCard,
     generateSlotCard,
     getEntityDisplayName,
     getSlotMapping,
