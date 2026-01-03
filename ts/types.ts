@@ -84,6 +84,56 @@ export interface LockCodeManagerLockDataCardConfig {
     type: 'custom:lock-code-manager-lock-data';
 }
 
+export interface LockCodeManagerSlotCardConfig {
+    /** How to display code/PIN values (consistent with lock-data card) */
+    code_display?: CodeDisplayMode;
+    /** Sections to show collapsed by default */
+    collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Config entry ID for the LCM instance */
+    config_entry_id: string;
+    /** Show code sensors in lock status section */
+    show_code_sensors?: boolean;
+    /** Slot number to display */
+    slot: number;
+    type: 'custom:lock-code-manager-slot';
+}
+
+export interface SlotCardLockStatus {
+    /** Current code on the lock */
+    code: string | null;
+    /** Code length when masked */
+    code_length?: number;
+    entity_id: string;
+    /** Whether code is synced to lock */
+    in_sync: boolean;
+    /** Last sync timestamp (ISO) */
+    last_synced?: string;
+    name: string;
+}
+
+export interface SlotCardConditions {
+    calendar_entity_id?: string;
+    number_of_uses?: number;
+}
+
+export interface SlotCardData {
+    /** Whether conditions are met and code is active */
+    active: boolean;
+    conditions: SlotCardConditions;
+    /** Whether the slot is enabled by user */
+    enabled: boolean;
+    /** Last PIN used timestamp (ISO) */
+    last_used?: string;
+    /** Per-lock sync status */
+    locks: SlotCardLockStatus[];
+    name: string;
+    /** The PIN value (actual or masked) */
+    pin: string | null;
+    /** PIN length when masked */
+    pin_length?: number;
+    slot_num: number;
+}
+
 export interface LockInfo {
     entity_id: string;
     name: string;
