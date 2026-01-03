@@ -9,8 +9,6 @@
   making excessive WS calls).
 - Test visual editor for both cards.
 - Go through `.ha/zwave_reconnect_test_plan.md` for PR 704.
-- Complete phase 4 of `docs/SLOT_CARD_DESIGN.md`.
-- Fix subscription error with current slot card implementation (we just finished phase 3 of `docs/SLOT_CARD_DESIGN.md`).
 
 ## High Priority Investigation
 
