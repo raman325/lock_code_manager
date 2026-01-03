@@ -6,7 +6,8 @@ import { CodeDisplayMode, LockCoordinatorSlotData } from './types';
 
 describe('LockCodeManagerLockDataCard logic', () => {
     describe('shouldReveal logic', () => {
-        const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'unmasked';
+        // Default changed from 'unmasked' to 'masked_with_reveal' for better security UX
+        const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
         function shouldReveal(mode: CodeDisplayMode | undefined, revealed: boolean): boolean {
             const effectiveMode = mode ?? DEFAULT_CODE_DISPLAY;
@@ -30,9 +31,86 @@ describe('LockCodeManagerLockDataCard logic', () => {
             expect(shouldReveal('masked_with_reveal', true)).toBe(true);
         });
 
-        it('defaults to unmasked when mode is undefined', () => {
-            expect(shouldReveal(undefined, false)).toBe(true);
+        it('defaults to masked_with_reveal when mode is undefined', () => {
+            // With new default, codes are hidden until user clicks reveal
+            expect(shouldReveal(undefined, false)).toBe(false);
             expect(shouldReveal(undefined, true)).toBe(true);
+        });
+    });
+
+    describe('sync status logic', () => {
+        type SyncState = 'synced' | 'not_synced' | 'unknown';
+
+        function getSyncState(slot: LockCoordinatorSlotData): SyncState {
+            if (slot.in_sync === true) return 'synced';
+            if (slot.in_sync === false) return 'not_synced';
+            return 'unknown';
+        }
+
+        it('returns synced when in_sync is true', () => {
+            const slot: LockCoordinatorSlotData = { slot: 1, code: '1234', in_sync: true };
+            expect(getSyncState(slot)).toBe('synced');
+        });
+
+        it('returns not_synced when in_sync is false', () => {
+            const slot: LockCoordinatorSlotData = { slot: 1, code: '1234', in_sync: false };
+            expect(getSyncState(slot)).toBe('not_synced');
+        });
+
+        it('returns unknown when in_sync is undefined', () => {
+            const slot: LockCoordinatorSlotData = { slot: 1, code: '1234' };
+            expect(getSyncState(slot)).toBe('unknown');
+        });
+    });
+
+    describe('slot status classification', () => {
+        type SlotStatus = 'active' | 'inactive' | 'disabled' | 'empty';
+
+        function getSlotStatus(slot: LockCoordinatorSlotData): SlotStatus {
+            const hasCode = slot.code !== null || (slot.code_length ?? 0) > 0;
+            const hasConfiguredCode =
+                slot.configured_code !== undefined || (slot.configured_code_length ?? 0) > 0;
+
+            if (!hasCode && !hasConfiguredCode) return 'empty';
+            if (slot.enabled === false) return 'disabled';
+            if (hasCode) return 'active';
+            // has configured code but not on lock yet
+            return 'inactive';
+        }
+
+        it('returns active when slot has code on lock', () => {
+            const slot: LockCoordinatorSlotData = { slot: 1, code: '1234', enabled: true };
+            expect(getSlotStatus(slot)).toBe('active');
+        });
+
+        it('returns active when slot has masked code', () => {
+            const slot: LockCoordinatorSlotData = {
+                slot: 1,
+                code: null,
+                code_length: 4,
+                enabled: true
+            };
+            expect(getSlotStatus(slot)).toBe('active');
+        });
+
+        it('returns disabled when enabled is false', () => {
+            const slot: LockCoordinatorSlotData = { slot: 1, code: '1234', enabled: false };
+            expect(getSlotStatus(slot)).toBe('disabled');
+        });
+
+        it('returns inactive when has configured code but not on lock', () => {
+            const slot: LockCoordinatorSlotData = {
+                slot: 1,
+                code: null,
+                configured_code: '1234',
+                enabled: true
+            };
+            expect(getSlotStatus(slot)).toBe('inactive');
+        });
+
+        it('returns empty when no code configured or on lock', () => {
+            const slot: LockCoordinatorSlotData = { slot: 1, code: null };
+            expect(getSlotStatus(slot)).toBe('empty');
         });
     });
 
