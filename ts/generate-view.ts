@@ -277,7 +277,7 @@ export function generateNewSlotCard(
         show_code_sensors: include_code_slot_sensors,
         show_lock_sync: include_in_sync_sensors,
         slot: slotNum,
-        type: 'custom:lock-code-manager-slot'
+        type: 'custom:lcm-slot-card'
     };
 }
 

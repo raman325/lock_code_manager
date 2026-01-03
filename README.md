@@ -54,14 +54,15 @@ for more details.
 ### Dashboard Strategy
 
 Use the dashboard strategy to build a full dashboard with one view per config entry, and
-an optional "User Codes" view that shows lock code data cards across all managed locks.
+an optional "User Codes" view that shows lock codes cards across all managed locks.
 
-| Option                          | Default   | Description                                                        |
-| ------------------------------- | --------- | ------------------------------------------------------------------ |
-| `include_code_slot_sensors`     | `false`   | Show code slot sensor entities in each slot's card                 |
-| `include_in_sync_sensors`       | `true`    | Show in-sync sensor entities in each slot's card                   |
-| `include_code_data_view`        | `false`   | Add a "User Codes" view with cards showing all lock codes          |
-| `code_data_view_code_display`   | `unmasked`| Code visibility mode for the "User Codes" lock data cards          |
+| Option                          | Default              | Description                                                        |
+| ------------------------------- | -------------------- | ------------------------------------------------------------------ |
+| `use_slot_cards`                | `true`               | Use streamlined slot cards instead of legacy entities cards        |
+| `include_code_slot_sensors`     | `false`              | Show code slot sensor entities in each slot's card                 |
+| `include_in_sync_sensors`       | `true`               | Show in-sync sensor entities in each slot's card                   |
+| `include_code_data_view`        | `false`              | Add a "User Codes" view with cards showing all lock codes          |
+| `code_data_view_code_display`   | `masked_with_reveal` | Code visibility mode for the "User Codes" lock codes cards         |
 
 Example dashboard configuration:
 
@@ -79,14 +80,15 @@ Use the view strategy when you want a single view for one config entry. If
 `include_code_data_view` is true, the "User Codes" section is appended below the slot
 cards within the same view (no extra view is created).
 
-| Option                          | Default   | Description                                                       |
-| ------------------------------- | --------- | ----------------------------------------------------------------- |
-| `config_entry_id`               | -         | Config entry ID to render                                         |
-| `config_entry_title`            | -         | Config entry title to render (alternative to ID)                  |
-| `include_code_slot_sensors`     | `false`   | Show code slot sensor entities in each slot's card                |
-| `include_in_sync_sensors`       | `true`    | Show in-sync sensor entities in each slot's card                  |
-| `include_code_data_view`        | `false`   | Append a "User Codes" section below the slot cards                |
-| `code_data_view_code_display`   | `unmasked`| Code visibility mode for the "User Codes" lock data cards         |
+| Option                          | Default              | Description                                                       |
+| ------------------------------- | -------------------- | ----------------------------------------------------------------- |
+| `config_entry_id`               | -                    | Config entry ID to render                                         |
+| `config_entry_title`            | -                    | Config entry title to render (alternative to ID)                  |
+| `use_slot_cards`                | `true`               | Use streamlined slot cards instead of legacy entities cards       |
+| `include_code_slot_sensors`     | `false`              | Show code slot sensor entities in each slot's card                |
+| `include_in_sync_sensors`       | `true`               | Show in-sync sensor entities in each slot's card                  |
+| `include_code_data_view`        | `false`              | Append a "User Codes" section below the slot cards                |
+| `code_data_view_code_display`   | `masked_with_reveal` | Code visibility mode for the "User Codes" lock codes cards        |
 
 Example view configuration:
 
@@ -98,23 +100,52 @@ strategy:
   code_data_view_code_display: masked
 ```
 
-### Lock Code Data Card
+### Slot Card
 
-The `lock-code-manager-lock-data` card displays all code slots for a specific lock. It can
-be added manually or included by the strategies above.
+The `lcm-slot-card` displays a single code slot with inline editing, real-time WebSocket
+updates, and collapsible sections for conditions and lock status. This is the default card
+used by the strategies when `use_slot_cards: true` (the default).
 
-#### Card Configuration
+| Option               | Required | Default              | Description                                              |
+| -------------------- | -------- | -------------------- | -------------------------------------------------------- |
+| `config_entry_id`    | Yes*     | -                    | Config entry ID for the LCM instance                     |
+| `config_entry_title` | Yes*     | -                    | Config entry title (alternative to ID)                   |
+| `slot`               | Yes      | -                    | Slot number to display                                   |
+| `code_display`       | No       | `masked_with_reveal` | How to display codes: see modes below                    |
+| `show_conditions`    | No       | `true`               | Show the conditions section                              |
+| `show_lock_status`   | No       | `true`               | Show the lock status section                             |
+| `show_code_sensors`  | No       | `true`               | Show code sensors in lock status                         |
+| `show_lock_sync`     | No       | `true`               | Show sync status per lock                                |
+| `collapsed_sections` | No       | `[]`                 | Sections to collapse by default: `conditions`, `lock_status` |
 
-| Option           | Required | Default    | Description                                    |
-| ---------------- | -------- | ---------- | ---------------------------------------------- |
-| `lock_entity_id` | Yes      | -          | The entity ID of the lock to display codes for |
-| `title`          | No       | Lock name  | Custom title for the card                      |
-| `code_display`   | No       | `unmasked` | How to display codes: see modes below          |
+*Either `config_entry_id` or `config_entry_title` is required, but not both.
 
 Example card configuration:
 
 ```yaml
-type: custom:lock-code-manager-lock-data
+type: custom:lcm-slot-card
+config_entry_id: 1234567890abcdef
+slot: 1
+code_display: masked_with_reveal
+collapsed_sections:
+  - lock_status
+```
+
+### Lock Codes Card
+
+The `lcm-lock-codes-card` displays all code slots for a specific lock with status badges,
+inline editing for unmanaged slots, and click-to-navigate for LCM-managed slots.
+
+| Option           | Required | Default              | Description                                    |
+| ---------------- | -------- | -------------------- | ---------------------------------------------- |
+| `lock_entity_id` | Yes      | -                    | The entity ID of the lock to display codes for |
+| `title`          | No       | Lock name            | Custom title for the card                      |
+| `code_display`   | No       | `masked_with_reveal` | How to display codes: see modes below          |
+
+Example card configuration:
+
+```yaml
+type: custom:lcm-lock-codes-card
 lock_entity_id: lock.front_door
 title: Front Door Codes
 code_display: masked_with_reveal
@@ -124,7 +155,7 @@ code_display: masked_with_reveal
 
 - `masked` - Codes are always hidden (shown as bullets)
 - `unmasked` - Codes are always visible
-- `masked_with_reveal` - Codes are masked but can be revealed with a toggle button
+- `masked_with_reveal` - Codes are masked but can be revealed with a toggle button (default)
 
 ## Inspiration
 
