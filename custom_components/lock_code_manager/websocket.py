@@ -75,13 +75,20 @@ def async_get_entry(
             return
 
         if not config_entry:
+            if config_entry_title:
+                error_msg = (
+                    f"No lock code manager config entry with title "
+                    f"`{config_entry_title}` found"
+                )
+            else:
+                error_msg = (
+                    f"No lock code manager config entry with ID "
+                    f"`{config_entry_id}` found"
+                )
             connection.send_error(
                 msg["id"],
                 websocket_api.const.ERR_NOT_FOUND,
-                (
-                    "No lock code manager config entry with title "
-                    f"`{config_entry_title}` found"
-                ),
+                error_msg,
             )
             return
 

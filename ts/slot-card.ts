@@ -469,7 +469,7 @@ class LockCodeManagerSlotCard extends LitElement {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const { name, pin, enabled, active, conditions, locks } = data;
         const pinLength = data.pin_length;
-        const numberofUses = conditions.number_of_uses ?? null;
+        const numberOfUses = conditions.number_of_uses ?? null;
 
         // Transform locks to the expected format
         const lockStatuses = locks.map((lock) => {
@@ -487,7 +487,7 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="content">
                     ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
-                    ${this._renderConditionsSection(numberofUses)}
+                    ${this._renderConditionsSection(numberOfUses)}
                     ${this._renderLockStatusSection(lockStatuses)}
                 </div>
             </ha-card>
@@ -624,8 +624,8 @@ class LockCodeManagerSlotCard extends LitElement {
         `;
     }
 
-    private _renderConditionsSection(numberofUses: number | null): TemplateResult {
-        const hasConditions = numberofUses !== null;
+    private _renderConditionsSection(numberOfUses: number | null): TemplateResult {
+        const hasConditions = numberOfUses !== null;
         const conditionCount = hasConditions ? 1 : 0;
 
         return html`
@@ -645,10 +645,10 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="collapsible-content ${this._conditionsExpanded ? 'expanded' : ''}">
                     ${hasConditions
                         ? html`
-                              ${numberofUses !== null
+                              ${numberOfUses !== null
                                   ? html`<div class="condition-row">
                                         <span class="condition-label">Uses remaining</span>
-                                        <span class="condition-value">${numberofUses}</span>
+                                        <span class="condition-value">${numberOfUses}</span>
                                     </div>`
                                   : nothing}
                           `
