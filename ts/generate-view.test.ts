@@ -652,11 +652,18 @@ describe('generateView', () => {
         expect(result.title).toBe('Test Lock');
         expect(result.path).toBe('test-lock');
         expect(result.panel).toBe(false);
-        expect(result.badges).toContain('lock.front');
+        // Lock badges are now entity objects
+        const lockBadge = result.badges.find(
+            (badge) =>
+                typeof badge === 'object' &&
+                badge.type === 'entity' &&
+                badge.entity === 'lock.front'
+        );
+        expect(lockBadge).toBeDefined();
         expect(result.cards).toHaveLength(1);
     });
 
-    it('includes slot active badges', async () => {
+    it('includes active summary badge with template', async () => {
         const configEntryData: LockCodeManagerConfigEntryData = {
             locks: ['lock.front'],
             slots: { 1: null, 2: null }
@@ -694,10 +701,19 @@ describe('generateView', () => {
             false
         );
 
-        const stateBadges = result.badges.filter(
-            (badge) => typeof badge === 'object' && badge.type === 'state-label'
+        // Should have template badge for active summary
+        const templateBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'template'
         );
-        expect(stateBadges).toHaveLength(2);
+        expect(templateBadges.length).toBeGreaterThanOrEqual(1);
+
+        // Active summary badge should show "X of 2 Active"
+        const activeBadge = templateBadges.find(
+            (badge) => badge.content && badge.content.includes('Active')
+        );
+        expect(activeBadge).toBeDefined();
+        expect(activeBadge.content).toContain('of 2 Active');
+        expect(activeBadge.icon).toBe('mdi:check-circle');
     });
 
     it('generates one card per slot', async () => {
@@ -829,7 +845,11 @@ describe('generateView', () => {
             false
         );
 
-        const lockBadges = result.badges.filter((badge) => typeof badge === 'string');
-        expect(lockBadges).toEqual(['lock.a_front', 'lock.z_back']);
+        // Lock badges are now entity objects, not strings
+        const lockBadges = result.badges.filter(
+            (badge) => typeof badge === 'object' && badge.type === 'entity'
+        );
+        const lockEntityIds = lockBadges.map((badge) => badge.entity);
+        expect(lockEntityIds).toEqual(['lock.a_front', 'lock.z_back']);
     });
 });
