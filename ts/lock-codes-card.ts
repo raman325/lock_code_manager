@@ -1,18 +1,23 @@
 import { mdiCheck, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js';
+import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
-import { state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from './shared-styles';
+import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
-    LockCodeManagerLockDataCardConfig,
+    LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData
 } from './types';
 
 const DEFAULT_TITLE = 'Lock Codes';
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
+
+// Base class with subscription mixin
+const LockCodesCardBase = LcmSubscriptionMixin(LitElement);
 
 interface SlotGroup {
     /** For empty groups, the range string like "4-10" or "4, 6, 8" */
@@ -21,7 +26,7 @@ interface SlotGroup {
     type: 'active' | 'empty';
 }
 
-class LockCodeManagerLockDataCard extends LitElement {
+class LockCodesCard extends LockCodesCardBase {
     static styles = [
         lcmCssVars,
         lcmBadgeStyles,
@@ -365,6 +370,9 @@ class LockCodeManagerLockDataCard extends LitElement {
         `
     ];
 
+    // Note: _revealed, _unsub, _subscribing provided by LcmSubscriptionMixin
+    @property({ attribute: false }) _hass?: HomeAssistant;
+
     /** Slot currently being edited (for unmanaged slots) */
     @state() private _editingSlot: number | string | null = null;
     /** Current edit value */
@@ -372,13 +380,9 @@ class LockCodeManagerLockDataCard extends LitElement {
     /** Whether we're saving (to prevent double-submit) */
     @state() private _saving = false;
 
-    private _hass?: HomeAssistant;
-    private _config?: LockCodeManagerLockDataCardConfig;
-    private _data?: LockCoordinatorData;
-    private _error?: string;
-    private _revealed = false;
-    private _unsub?: () => void;
-    private _subscribing = false;
+    _config?: LockCodesCardConfig;
+    _data?: LockCoordinatorData;
+    _error?: string;
 
     set hass(hass: HomeAssistant) {
         this._hass = hass;
@@ -386,14 +390,14 @@ class LockCodeManagerLockDataCard extends LitElement {
     }
 
     static getConfigElement(): HTMLElement {
-        return document.createElement('lock-code-data-card-editor');
+        return document.createElement('lcm-lock-codes-card-editor');
     }
 
-    static getStubConfig(): Partial<LockCodeManagerLockDataCardConfig> {
+    static getStubConfig(): Partial<LockCodesCardConfig> {
         return { lock_entity_id: '' };
     }
 
-    setConfig(config: LockCodeManagerLockDataCardConfig): void {
+    setConfig(config: LockCodesCardConfig): void {
         if (!config.lock_entity_id) {
             throw new Error('lock_entity_id is required');
         }
@@ -405,15 +409,27 @@ class LockCodeManagerLockDataCard extends LitElement {
         void this._subscribe();
     }
 
-    connectedCallback(): void {
-        super.connectedCallback();
-        void this._subscribe();
+    // Mixin abstract method implementations
+    protected _getDefaultCodeDisplay(): CodeDisplayMode {
+        return DEFAULT_CODE_DISPLAY;
     }
 
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._unsubscribe();
+    protected _buildSubscribeMessage(): MessageBase {
+        if (!this._config) {
+            throw new Error('Config not set');
+        }
+        return {
+            lock_entity_id: this._config.lock_entity_id,
+            reveal: this._shouldReveal(),
+            type: 'lock_code_manager/subscribe_lock_slot_data'
+        };
     }
+
+    protected _handleSubscriptionData(data: unknown): void {
+        this._data = data as LockCoordinatorData;
+    }
+
+    // connectedCallback and disconnectedCallback provided by mixin
 
     protected render(): TemplateResult {
         const hassLockName =
@@ -440,12 +456,7 @@ class LockCodeManagerLockDataCard extends LitElement {
         `;
     }
 
-    private _toggleReveal(): void {
-        this._revealed = !this._revealed;
-        this._unsubscribe();
-        void this._subscribe();
-    }
-
+    // Editing methods for unmanaged slots
     private _startEditing(e: Event, slot: LockCoordinatorSlotData): void {
         e.stopPropagation();
         // For editing, we need the actual code - trigger reveal if masked
@@ -501,7 +512,6 @@ class LockCodeManagerLockDataCard extends LitElement {
             this._editingSlot = null;
             this._editValue = '';
         } catch (err) {
-            // Show error to user
             // eslint-disable-next-line no-console
             console.error('Failed to set usercode:', err);
         } finally {
@@ -509,49 +519,15 @@ class LockCodeManagerLockDataCard extends LitElement {
         }
     }
 
-    private _unsubscribe(): void {
-        if (this._unsub) {
-            this._unsub();
-            this._unsub = undefined;
-        }
+    private _navigateToSlot(configEntryId: string | undefined): void {
+        if (!configEntryId) return;
+        // Navigate to the LCM config entry page
+        const url = `/config/integrations/integration/lock_code_manager#config_entry=${configEntryId}`;
+        history.pushState(null, '', url);
+        window.dispatchEvent(new CustomEvent('location-changed'));
     }
 
-    private _shouldReveal(): boolean {
-        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        return mode === 'unmasked' || (mode === 'masked_with_reveal' && this._revealed);
-    }
-
-    private async _subscribe(): Promise<void> {
-        if (!this._hass || !this._config || this._unsub || this._subscribing) {
-            return;
-        }
-        if (!this._hass.connection?.subscribeMessage) {
-            this._error = 'Websocket connection unavailable';
-            return;
-        }
-
-        this._subscribing = true;
-        try {
-            this._unsub = await this._hass.connection.subscribeMessage<LockCoordinatorData>(
-                (event) => {
-                    this._data = event;
-                    this._error = undefined;
-                    this.requestUpdate();
-                },
-                {
-                    lock_entity_id: this._config.lock_entity_id,
-                    reveal: this._shouldReveal(),
-                    type: 'lock_code_manager/subscribe_lock_codes'
-                }
-            );
-        } catch (err) {
-            this._data = undefined;
-            this._error = err instanceof Error ? err.message : 'Failed to subscribe';
-            this.requestUpdate();
-        } finally {
-            this._subscribing = false;
-        }
-    }
+    // _toggleReveal, _unsubscribe, _shouldReveal, _subscribe inherited from mixin
 
     private _renderSlots(): TemplateResult {
         const slots = this._data?.slots ?? [];
@@ -650,13 +626,6 @@ class LockCodeManagerLockDataCard extends LitElement {
         return `${ranges.join(', ')}`;
     }
 
-    private _navigateToSlot(configEntryId: string, slotNum: number | string): void {
-        // Navigate to the LCM config entry page
-        const url = `/config/integrations/integration/lock_code_manager#config_entry=${configEntryId}`;
-        history.pushState(null, '', url);
-        window.dispatchEvent(new CustomEvent('location-changed'));
-    }
-
     private _renderSlotChip(slot: LockCoordinatorSlotData, isAlone: boolean): TemplateResult {
         const hasCode = this._hasCode(slot);
         const slotName = slot.name?.trim();
@@ -697,9 +666,9 @@ class LockCodeManagerLockDataCard extends LitElement {
             statusClass = 'active';
         } else if (hasConfiguredCode) {
             // Fallback: has configured code but unknown state
-            stateClass = 'disabled';
-            statusText = 'Disabled';
-            statusClass = 'disabled';
+            stateClass = 'inactive';
+            statusText = 'Inactive';
+            statusClass = 'inactive';
         } else {
             stateClass = 'empty';
             statusText = 'Empty';
@@ -716,9 +685,7 @@ class LockCodeManagerLockDataCard extends LitElement {
                     ? 'full-width'
                     : ''}"
                 title=${isClickable ? 'Click to manage this slot' : nothing}
-                @click=${isClickable
-                    ? () => this._navigateToSlot(slot.config_entry_id, slot.slot)
-                    : nothing}
+                @click=${isClickable ? () => this._navigateToSlot(slot.config_entry_id) : nothing}
             >
                 <div class="slot-top">
                     <span class="slot-label">Slot ${slot.slot}</span>
@@ -900,8 +867,8 @@ class LockCodeManagerLockDataCard extends LitElement {
                     // Fallback: has code on lock but no state info - treat as active
                     managedActive += 1;
                 } else if (hasConfiguredCode) {
-                    // Fallback: configured code but unknown state - treat as disabled
-                    managedDisabled += 1;
+                    // Fallback: configured code but unknown state - treat as inactive
+                    managedInactive += 1;
                 } else {
                     // Fallback: no code and no state info - treat as inactive
                     managedInactive += 1;
@@ -974,7 +941,7 @@ class LockCodeManagerLockDataCard extends LitElement {
     }
 }
 
-customElements.define('lock-code-manager-lock-data', LockCodeManagerLockDataCard);
+customElements.define('lcm-lock-codes-card', LockCodesCard);
 
 declare global {
     interface Window {
@@ -985,6 +952,6 @@ declare global {
 window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
-    name: 'Lock Code Manager Lock Data',
-    type: 'custom:lock-code-manager-lock-data'
+    name: 'LCM Lock Codes Card',
+    type: 'custom:lcm-lock-codes-card'
 });

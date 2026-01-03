@@ -13,12 +13,7 @@ from typing import Any, Literal, NoReturn, final
 from homeassistant.components.lock import LockState
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import (
-    ATTR_DEVICE_ID,
-    ATTR_ENTITY_ID,
-    ATTR_STATE,
-    CONF_NAME,
-)
+from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_STATE, CONF_NAME
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -79,22 +74,30 @@ class BaseLock:
        - Runs regardless of push/poll mode
        - Set hard_refresh_interval = None to disable
 
+    4. Poll connection state:
+       - Periodic async_internal_is_connection_up() at connection_check_interval
+       - Helps detect reconnects for integrations without config entry state signals
+       - Set connection_check_interval = None to disable
+
     Configuration Examples
     ----------------------
     Poll-only (default):
         supports_push = False
         usercode_scan_interval = timedelta(minutes=1)
         hard_refresh_interval = None
+        connection_check_interval = timedelta(seconds=30)
 
     Push with drift detection (recommended for Z-Wave JS):
         supports_push = True
         hard_refresh_interval = timedelta(hours=1)
+        connection_check_interval = None
         # Override subscribe_push_updates() to handle value events
 
     Poll with drift detection:
         supports_push = False
         usercode_scan_interval = timedelta(minutes=1)
         hard_refresh_interval = timedelta(hours=1)
+        connection_check_interval = timedelta(seconds=30)
 
     Exception Handling
     ------------------
@@ -117,6 +120,11 @@ class BaseLock:
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
+    _last_connection_up: bool | None = field(default=None, init=False)
+    _config_entry_state_unsub: Callable[[], None] | None = field(
+        default=None, init=False
+    )
+    _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
 
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -215,6 +223,15 @@ class BaseLock:
         return None
 
     @property
+    def connection_check_interval(self) -> timedelta | None:
+        """
+        Return interval for connection state checks.
+
+        Defaults to 30 seconds. Returns None to disable periodic checks.
+        """
+        return timedelta(seconds=30)
+
+    @property
     def supports_push(self) -> bool:
         """
         Return whether this lock supports push-based updates.
@@ -248,6 +265,8 @@ class BaseLock:
         """
         Unsubscribe from push-based value updates.
 
+        Implementations MUST be idempotent (no-op if already unsubscribed).
+
         Override in subclasses that support push. Called during async_unload()
         when supports_push is True.
         """
@@ -266,6 +285,9 @@ class BaseLock:
         await self.hass.async_add_executor_job(self.setup)
 
         lock_entity_id = self.lock.entity_id
+        # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
+        # when that integration reloads or reconnects.
+        self._setup_config_entry_state_listener()
 
         # Reuse existing coordinator or create new one
         if self.coordinator is not None:
@@ -296,10 +318,19 @@ class BaseLock:
                     self.coordinator.last_exception,
                 )
 
-        # Subscribe to push updates after coordinator is set up
-        # (out-of-order updates are fine since they merge into coordinator.data)
+        # Subscribe to push updates after coordinator is ready. If the provider's
+        # config entry isn't loaded yet, defer and let the state listener resubscribe.
         if self.supports_push:
-            self.subscribe_push_updates()
+            if (
+                self.lock_config_entry
+                and self.lock_config_entry.state != ConfigEntryState.LOADED
+            ):
+                LOGGER.debug(
+                    "Lock %s: deferring push subscription until config entry is loaded",
+                    lock_entity_id,
+                )
+            else:
+                self.subscribe_push_updates()
 
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
@@ -307,6 +338,10 @@ class BaseLock:
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
+        if self._config_entry_state_unsub:
+            self._config_entry_state_unsub()
+            self._config_entry_state_unsub = None
+
         # Unsubscribe from push updates before unloading
         if self.supports_push:
             self.unsubscribe_push_updates()
@@ -317,6 +352,39 @@ class BaseLock:
         """Return whether connection to lock is up."""
         raise NotImplementedError()
 
+    def _setup_config_entry_state_listener(self) -> None:
+        """Listen for provider config entry state changes to resubscribe."""
+        lock_entry = self.lock_config_entry
+        if not lock_entry or self._config_entry_state_unsub:
+            return
+
+        self._last_entry_state = lock_entry.state
+
+        @callback
+        def _handle_state_change() -> None:
+            to_state = lock_entry.state
+            if to_state == self._last_entry_state:
+                return
+
+            if to_state == ConfigEntryState.LOADED:
+                if self.coordinator:
+                    self.hass.async_create_task(
+                        self.coordinator.async_request_refresh(),
+                        f"Refresh coordinator for {self.lock.entity_id} after reload",
+                    )
+                if self.supports_push:
+                    self.subscribe_push_updates()
+            elif (
+                self.supports_push and self._last_entry_state == ConfigEntryState.LOADED
+            ):
+                self.unsubscribe_push_updates()
+
+            self._last_entry_state = to_state
+
+        self._config_entry_state_unsub = lock_entry.async_on_state_change(
+            _handle_state_change
+        )
+
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
         return await self._async_executor_call(self.is_connection_up)
@@ -324,7 +392,22 @@ class BaseLock:
     @final
     async def async_internal_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        return await self.async_is_connection_up()
+        is_up = await self.async_is_connection_up()
+        lock_entry = self.lock_config_entry
+        if self.supports_push and lock_entry:
+            # Only react to connection transitions when the config entry is loaded.
+            if lock_entry.state == ConfigEntryState.LOADED:
+                if self._last_connection_up is False and is_up:
+                    if self.coordinator:
+                        self.hass.async_create_task(
+                            self.coordinator.async_request_refresh(),
+                            f"Refresh coordinator for {self.lock.entity_id} after reconnect",
+                        )
+                    self.subscribe_push_updates()
+                elif self._last_connection_up is True and not is_up:
+                    self.unsubscribe_push_updates()
+        self._last_connection_up = is_up
+        return is_up
 
     def hard_refresh_codes(self) -> dict[int, int | str]:
         """

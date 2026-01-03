@@ -4,9 +4,9 @@ import { CodeDisplayMode, LockCoordinatorSlotData } from './types';
 
 // Test the logic that can be unit tested without full component instantiation
 
-describe('LockCodeManagerLockDataCard logic', () => {
+describe('LockCodesCard logic', () => {
     describe('shouldReveal logic', () => {
-        // Default changed from 'unmasked' to 'masked_with_reveal' for better security UX
+        // Default changed to 'masked_with_reveal' for better security UX
         const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
         function shouldReveal(mode: CodeDisplayMode | undefined, revealed: boolean): boolean {

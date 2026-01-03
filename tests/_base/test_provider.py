@@ -3,7 +3,7 @@
 import asyncio
 from datetime import timedelta
 import time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -15,9 +15,32 @@ from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers._base import BaseLock
 
-from ..common import LOCK_1_ENTITY_ID, LOCK_DATA
+from ..common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
+
+
+class MockLCMLockWithPush(MockLCMLock):
+    """Mock lock with push subscription tracking."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Initialize mock lock."""
+        super().__init__(*args, **kwargs)
+        self.subscribe_calls = 0
+        self.unsubscribe_calls = 0
+
+    @property
+    def supports_push(self) -> bool:
+        """Return whether this lock supports push-based updates."""
+        return True
+
+    def subscribe_push_updates(self) -> None:
+        """Subscribe to push-based value updates."""
+        self.subscribe_calls += 1
+
+    def unsubscribe_push_updates(self) -> None:
+        """Unsubscribe from push-based value updates."""
+        self.unsubscribe_calls += 1
 
 
 async def test_base(hass: HomeAssistant):
@@ -72,6 +95,76 @@ async def test_base(hass: HomeAssistant):
         await lock.async_internal_set_usercode(1, 1)
     with pytest.raises(NotImplementedError):
         await lock.async_internal_get_usercodes()
+
+
+async def test_config_entry_state_change_resubscribes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Resubscribe and refresh when lock config entry reloads."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock, MockLCMLockWithPush)
+
+        lock.subscribe_calls = 0
+        lock.unsubscribe_calls = 0
+        lock.coordinator.async_refresh = AsyncMock()
+
+        await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        assert lock.unsubscribe_calls == 1
+        assert lock.subscribe_calls == 1
+        lock.coordinator.async_refresh.assert_awaited()
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_connection_transition_resubscribes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Resubscribe on reconnect and unsubscribe on disconnect."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock, MockLCMLockWithPush)
+
+        lock.subscribe_calls = 0
+        lock.unsubscribe_calls = 0
+        lock._min_operation_delay = 0.0
+        lock._last_operation_time = 0.0
+
+        await lock.coordinator.async_refresh()
+
+        lock.set_connected(False)
+        await lock.coordinator.async_refresh()
+        assert lock.unsubscribe_calls == 1
+
+        lock.set_connected(True)
+        await lock.coordinator.async_refresh()
+        assert lock.subscribe_calls == 1
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
 
 async def test_set_usercode_when_disconnected(

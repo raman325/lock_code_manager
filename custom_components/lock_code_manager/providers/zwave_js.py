@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 import logging
 from typing import Any
 
+from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
 from zwave_js_server.const.command_class.notification import (
@@ -31,6 +33,7 @@ from homeassistant.components.zwave_js.const import (
     ZWAVE_JS_NOTIFICATION_EVENT,
 )
 from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
+from homeassistant.components.zwave_js.models import ZwaveJSData
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DEVICE_ID,
@@ -40,6 +43,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import Event, callback
+from homeassistant.helpers.event import async_call_later
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
@@ -47,6 +51,7 @@ from ..exceptions import LockDisconnected
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
+PUSH_SUBSCRIBE_RETRY_DELAY = 10
 
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
@@ -76,6 +81,7 @@ class ZWaveJSLock(BaseLock):
     lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
+    _push_retry_cancel: Callable[[], None] | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -94,11 +100,48 @@ class ZWaveJSLock(BaseLock):
         """
         return True
 
+    @property
+    def connection_check_interval(self) -> timedelta | None:
+        """Z-Wave JS exposes config entry state changes, so skip polling."""
+        return None
+
+    def _get_client_state(self) -> tuple[bool, str]:
+        """Return whether the Z-Wave JS client is ready and a retry reason."""
+        if self.lock_config_entry.state != ConfigEntryState.LOADED:
+            return False, "config entry not loaded"
+
+        runtime_data: ZwaveJSData | None = getattr(
+            self.lock_config_entry, "runtime_data", None
+        )
+        client: Client | None = (
+            getattr(runtime_data, "client", None) if runtime_data else None
+        )
+        if not client:
+            return False, "Z-Wave JS client not ready"
+
+        if not client.connected:
+            return False, "Z-Wave JS client not connected"
+
+        if client.driver is None:
+            return False, "Z-Wave JS driver not ready"
+
+        return True, ""
+
     @callback
     def subscribe_push_updates(self) -> None:
         """Subscribe to User Code CC value update events."""
         # Idempotent - skip if already subscribed
         if self._value_update_unsub is not None:
+            return
+
+        ready, reason = self._get_client_state()
+        if not ready:
+            _LOGGER.debug(
+                "Lock %s: push subscription deferred (%s)",
+                self.lock.entity_id,
+                reason,
+            )
+            self._schedule_push_retry(reason)
             return
 
         @callback
@@ -143,11 +186,43 @@ class ZWaveJSLock(BaseLock):
             if self.coordinator:
                 self.coordinator.push_update({code_slot: value})
 
-        self._value_update_unsub = self.node.on("value updated", on_value_updated)
+        try:
+            self._value_update_unsub = self.node.on("value updated", on_value_updated)
+        except ValueError as err:
+            _LOGGER.debug(
+                "Lock %s push subscription deferred: %s", self.lock.entity_id, err
+            )
+            self._schedule_push_retry("node not ready")
+
+    def _schedule_push_retry(self, reason: str) -> None:
+        """Schedule a retry for push subscription if one isn't pending."""
+        if self._push_retry_cancel:
+            return
+
+        _LOGGER.debug(
+            "Lock %s: scheduling push subscription retry in %ss (%s)",
+            self.lock.entity_id,
+            PUSH_SUBSCRIBE_RETRY_DELAY,
+            reason,
+        )
+        self._push_retry_cancel = async_call_later(
+            self.hass, PUSH_SUBSCRIBE_RETRY_DELAY, self._handle_push_retry
+        )
+
+    @callback
+    def _handle_push_retry(self, _now: Any) -> None:
+        """Retry push subscription after delay."""
+        if self._push_retry_cancel:
+            self._push_retry_cancel()
+            self._push_retry_cancel = None
+        self.subscribe_push_updates()
 
     @callback
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from value update events."""
+        if self._push_retry_cancel:
+            self._push_retry_cancel()
+            self._push_retry_cancel = None
         if self._value_update_unsub:
             self._value_update_unsub()
             self._value_update_unsub = None
@@ -216,14 +291,8 @@ class ZWaveJSLock(BaseLock):
 
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        if not (runtime_data := self.lock_config_entry.runtime_data):
-            return False
-
-        return bool(
-            self.lock_config_entry.state == ConfigEntryState.LOADED
-            and runtime_data.client.connected
-            and runtime_data.client.driver is not None
-        )
+        ready, _reason = self._get_client_state()
+        return ready
 
     async def async_hard_refresh_codes(self) -> dict[int, int | str]:
         """
