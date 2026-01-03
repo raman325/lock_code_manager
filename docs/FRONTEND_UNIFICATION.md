@@ -357,10 +357,16 @@ export const lcmBadgeStyles = css`
 ### Milestone 2: Strategy Integration
 
 - [ ] Add slot card generation to strategy
-- [ ] Add config option to choose strategy (classic = just the markdown and entities cards for slots, modern
-      (default) = custom cards for slots, lock data included by default with PINs masked -> this will change
-      some defaults but we haven't released any of this yet so we can make breaking changes, we just have to
-      document it in the Breaking Changes section of the PR template)
+- [ ] Create two different "sub" strategies which can be configured with an optional strategy_mode parameter (or some other
+      parameter name that maes sense): one "classic" which is the same as the release before custom cards were
+      introduced - no custom cards, just slots using the markdown and entities card. Second can be called modern
+      (default): custom cards for slots, lock data included by default with PINs masked. In the modern view, everything
+      is opt out, so we display all information (lock level slot sensor data on the slot card, masked_with_reveal, etc.)
+      with configuration options to disable things. For users who have any "include" configuration parameters in their strategy
+      definition, fallback to the classic strategy so the configuration options continue to work, but send a one time
+      persistent notification announcing this change so the user knows to take a look. This allows us to make changes to
+      defaults without breaking any existing dashboards. We should document these changes in the Breaking Changes
+      section of the PR template just in case.
 - [ ] Update documentation
 
 ### Milestone 3: Shared Styles
