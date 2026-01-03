@@ -1,20 +1,14 @@
 import { mdiChevronDown, mdiChevronUp, mdiEye, mdiEyeOff, mdiKey } from '@mdi/js';
+import { UnsubscribeFunc } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { CodeDisplayMode, LockCodeManagerSlotCardConfig } from './types';
+import { CodeDisplayMode, LockCodeManagerSlotCardConfig, SlotCardData } from './types';
 
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
-interface SlotEntityData {
-    active: boolean | null;
-    enabled: boolean | null;
-    name: string | null;
-    numberofUses: number | null;
-    pin: string | null;
-}
-
+/** Internal interface for lock sync status display */
 interface LockSyncStatus {
     entityId: string;
     inSync: boolean | null;
@@ -25,8 +19,7 @@ interface LockSyncStatus {
 /**
  * Streamlined slot card for Lock Code Manager.
  *
- * Phase 2: Adds collapsible conditions and lock status sections.
- * Uses existing LCM entities via Home Assistant state.
+ * Phase 3: Uses websocket subscription for real-time updates.
  */
 class LockCodeManagerSlotCard extends LitElement {
     static styles = css`
@@ -350,11 +343,26 @@ class LockCodeManagerSlotCard extends LitElement {
         }
     `;
 
-    @property({ attribute: false }) hass?: HomeAssistant;
     @state() private _config?: LockCodeManagerSlotCardConfig;
     @state() private _revealed = false;
     @state() private _conditionsExpanded = false;
     @state() private _lockStatusExpanded = false;
+    @state() private _data?: SlotCardData;
+    @state() private _error?: string;
+
+    private _hass?: HomeAssistant;
+    private _unsub?: UnsubscribeFunc;
+    private _subscribing = false;
+
+    get hass(): HomeAssistant | undefined {
+        return this._hass;
+    }
+
+    @property({ attribute: false })
+    set hass(hass: HomeAssistant) {
+        this._hass = hass;
+        void this._subscribe();
+    }
 
     static getConfigElement(): HTMLElement {
         // TODO: Create editor component
@@ -372,35 +380,74 @@ class LockCodeManagerSlotCard extends LitElement {
         if (!config.slot) {
             throw new Error('slot is required');
         }
+        // If config changed, unsubscribe and resubscribe
+        if (
+            this._config?.config_entry_id !== config.config_entry_id ||
+            this._config?.slot !== config.slot
+        ) {
+            this._unsubscribe();
+            this._data = undefined;
+        }
         this._config = config;
 
         // Set initial collapsed state from config
         const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
         this._conditionsExpanded = !collapsed.includes('conditions');
         this._lockStatusExpanded = !collapsed.includes('lock_status');
+        void this._subscribe();
+    }
+
+    connectedCallback(): void {
+        super.connectedCallback();
+        void this._subscribe();
+    }
+
+    disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this._unsubscribe();
     }
 
     protected render(): TemplateResult {
-        if (!this.hass || !this._config) {
+        if (!this._hass || !this._config) {
             return html`<ha-card><div class="message">Loading...</div></ha-card>`;
         }
 
-        const slotData = this._getSlotData();
-        if (!slotData) {
+        if (this._error) {
             return html`<ha-card>
-                <div class="message error">Slot entities not found</div>
+                <div class="message error">${this._error}</div>
             </ha-card>`;
         }
 
-        const { name, pin, enabled, active, numberofUses } = slotData;
-        const mode = this._config.code_display ?? DEFAULT_CODE_DISPLAY;
-        const lockStatuses = this._getLockSyncStatuses();
+        // Use websocket data if available
+        if (this._data) {
+            return this._renderFromData(this._data);
+        }
+
+        // Fallback to state-based approach (initial load before subscription)
+        return html`<ha-card><div class="message">Connecting...</div></ha-card>`;
+    }
+
+    private _renderFromData(data: SlotCardData): TemplateResult {
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const { name, pin, enabled, active, conditions, locks } = data;
+        const pinLength = data.pin_length;
+        const numberofUses = conditions.number_of_uses ?? null;
+
+        // Transform locks to the expected format
+        const lockStatuses = locks.map((lock) => {
+            return {
+                entityId: lock.entity_id,
+                inSync: lock.in_sync,
+                lockEntityId: lock.entity_id,
+                name: lock.name
+            };
+        });
 
         return html`
             <ha-card>
                 ${this._renderHeader()}
                 <div class="content">
-                    ${this._renderPrimaryControls(name, pin, enabled, mode)}
+                    ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
                     ${this._renderConditionsSection(numberofUses)}
                     ${this._renderLockStatusSection(lockStatuses)}
@@ -423,11 +470,20 @@ class LockCodeManagerSlotCard extends LitElement {
     private _renderPrimaryControls(
         name: string | null,
         pin: string | null,
+        pinLength: number | undefined,
         enabled: boolean | null,
         mode: CodeDisplayMode
     ): TemplateResult {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
-        const displayPin = pin ? (shouldMask ? '•'.repeat(pin.length) : pin) : '—';
+        // Use pin if revealed, otherwise show masked dots based on pin or pinLength
+        const hasPin = pin !== null || pinLength !== undefined;
+        const displayPin = pin
+            ? shouldMask
+                ? '•'.repeat(pin.length)
+                : pin
+            : pinLength !== undefined
+              ? '•'.repeat(pinLength)
+              : '—';
 
         return html`
             <div class="section">
@@ -443,10 +499,10 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="control-row">
                     <span class="control-label">PIN</span>
                     <div class="pin-field">
-                        <span class="pin-value ${shouldMask && pin ? 'masked' : ''}">
+                        <span class="pin-value ${shouldMask && hasPin ? 'masked' : ''}">
                             ${displayPin}
                         </span>
-                        ${mode === 'masked_with_reveal' && pin
+                        ${mode === 'masked_with_reveal' && hasPin
                             ? html`<ha-icon-button
                                   class="pin-reveal"
                                   .path=${this._revealed ? mdiEyeOff : mdiEye}
@@ -593,132 +649,11 @@ class LockCodeManagerSlotCard extends LitElement {
         `;
     }
 
-    private _getSlotData(): SlotEntityData | null {
-        if (!this.hass || !this._config) return null;
-
-        const { slot } = this._config;
-        const { states } = this.hass;
-
-        // Collect matching LCM entities for this slot
-        const slotEntityPattern = /^(text|switch|binary_sensor|number)\.lcm_(.+)_(\d+)_(\w+)$/;
-        const matchingEntities: Array<{
-            domain: string;
-            key: string;
-            stateValue: string;
-        }> = [];
-
-        for (const entityId of Object.keys(states)) {
-            const entityState = states[entityId];
-            if (!entityState) {
-                // Skip null/undefined states
-            } else {
-                const match = entityId.match(slotEntityPattern);
-                if (match) {
-                    const [, domain, , slotStr, key] = match;
-                    if (parseInt(slotStr, 10) === slot) {
-                        matchingEntities.push({
-                            domain,
-                            key,
-                            stateValue: entityState.state
-                        });
-                    }
-                }
-            }
-        }
-
-        return this._processMatchingEntities(matchingEntities);
-    }
-
-    private _processMatchingEntities(
-        entities: Array<{ domain: string; key: string; stateValue: string }>
-    ): SlotEntityData | null {
-        let nameValue: string | null = null;
-        let pinValue: string | null = null;
-        let enabledValue: boolean | null = null;
-        let activeValue: boolean | null = null;
-        let numberofUsesValue: number | null = null;
-
-        for (const { domain, key, stateValue } of entities) {
-            const isValidTextState =
-                stateValue && stateValue !== 'unknown' && stateValue !== 'unavailable';
-
-            if (key === 'name' && domain === 'text' && isValidTextState) {
-                nameValue = stateValue;
-            } else if (key === 'pin' && domain === 'text' && isValidTextState) {
-                pinValue = stateValue;
-            } else if (key === 'enabled' && domain === 'switch') {
-                enabledValue = stateValue === 'on';
-            } else if (key === 'active' && domain === 'binary_sensor') {
-                activeValue = stateValue === 'on';
-            } else if (key === 'number_of_uses' && domain === 'number' && isValidTextState) {
-                const parsed = parseFloat(stateValue);
-                if (!isNaN(parsed)) {
-                    numberofUsesValue = parsed;
-                }
-            }
-        }
-
-        // Return null only if we found no entities at all
-        if (
-            nameValue === null &&
-            pinValue === null &&
-            enabledValue === null &&
-            activeValue === null
-        ) {
-            return null;
-        }
-
-        return {
-            active: activeValue,
-            enabled: enabledValue,
-            name: nameValue,
-            numberofUses: numberofUsesValue,
-            pin: pinValue
-        };
-    }
-
-    private _getLockSyncStatuses(): LockSyncStatus[] {
-        if (!this.hass || !this._config) return [];
-
-        const { slot } = this._config;
-        const { states } = this.hass;
-        const lockStatuses: LockSyncStatus[] = [];
-
-        // Pattern for in_sync entities: binary_sensor.{lock_device}_code_slot_{slot}_in_sync
-        // Examples: binary_sensor.test_1_code_slot_1_in_sync, binary_sensor.front_door_code_slot_2_in_sync
-        const inSyncPattern = new RegExp(`^binary_sensor\\.(.+)_code_slot_${slot}_in_sync$`);
-
-        for (const entityId of Object.keys(states)) {
-            const match = entityId.match(inSyncPattern);
-            if (match) {
-                const [, lockDeviceName] = match;
-                const entityState = states[entityId];
-                if (entityState) {
-                    // Try to get the friendly name from state attributes
-                    const friendlyName =
-                        entityState.attributes?.friendly_name ??
-                        `${lockDeviceName.replace(/_/g, ' ')} Lock`;
-
-                    lockStatuses.push({
-                        entityId,
-                        inSync:
-                            entityState.state === 'on'
-                                ? true
-                                : entityState.state === 'off'
-                                  ? false
-                                  : null,
-                        lockEntityId: lockDeviceName,
-                        name: friendlyName.replace(/ code slot \d+ in sync$/i, '').trim()
-                    });
-                }
-            }
-        }
-
-        return lockStatuses;
-    }
-
     private _toggleReveal(): void {
         this._revealed = !this._revealed;
+        // Resubscribe to get masked/unmasked PIN based on new reveal state
+        this._unsubscribe();
+        void this._subscribe();
     }
 
     private _toggleConditions(): void {
@@ -733,10 +668,10 @@ class LockCodeManagerSlotCard extends LitElement {
         const target = e.target as HTMLInputElement;
         const newState = target.checked;
 
-        if (!this.hass || !this._config) return;
+        if (!this._hass || !this._config) return;
 
         const { slot } = this._config;
-        const { states } = this.hass;
+        const { states } = this._hass;
 
         // Find the enabled switch entity
         const enabledEntityId = Object.keys(states).find((entityId) => {
@@ -745,9 +680,54 @@ class LockCodeManagerSlotCard extends LitElement {
         });
 
         if (enabledEntityId) {
-            void this.hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
+            void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
                 entity_id: enabledEntityId
             });
+        }
+    }
+
+    private _unsubscribe(): void {
+        if (this._unsub) {
+            this._unsub();
+            this._unsub = undefined;
+        }
+    }
+
+    private _shouldReveal(): boolean {
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        return mode === 'unmasked' || (mode === 'masked_with_reveal' && this._revealed);
+    }
+
+    private async _subscribe(): Promise<void> {
+        if (!this._hass || !this._config || this._unsub || this._subscribing) {
+            return;
+        }
+        if (!this._hass.connection?.subscribeMessage) {
+            this._error = 'Websocket connection unavailable';
+            return;
+        }
+
+        this._subscribing = true;
+        try {
+            this._unsub = await this._hass.connection.subscribeMessage<SlotCardData>(
+                (event) => {
+                    this._data = event;
+                    this._error = undefined;
+                    this.requestUpdate();
+                },
+                {
+                    config_entry_id: this._config.config_entry_id,
+                    reveal: this._shouldReveal(),
+                    slot: this._config.slot,
+                    type: 'lock_code_manager/subscribe_slot_data'
+                }
+            );
+        } catch (err) {
+            this._data = undefined;
+            this._error = err instanceof Error ? err.message : 'Failed to subscribe';
+            this.requestUpdate();
+        } finally {
+            this._subscribing = false;
         }
     }
 }
