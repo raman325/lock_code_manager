@@ -353,10 +353,11 @@ export const lcmBadgeStyles = css`
 - [ ] Fix badge layout (slot label on own line)
 - [ ] Improve disabled styling (strikethrough + opacity)
 - [ ] Remove header/content gap
+- [ ] Switch data card to use opt out parameters instead of opt in (switch to masked_with_reveal, show all data by
+      default, etc.). Do the same with the slot card. Strategy configuration doesn't ahve to change
 
 ### Milestone 2: Strategy Integration
 
-- [ ] Add slot card generation to strategy
 - [ ] Create two different "sub" strategies which can be configured with an optional strategy_mode parameter (or some other
       parameter name that maes sense): one "classic" which is the same as the release before custom cards were
       introduced - no custom cards, just slots using the markdown and entities card. Second can be called modern
@@ -367,6 +368,7 @@ export const lcmBadgeStyles = css`
       persistent notification announcing this change so the user knows to take a look. This allows us to make changes to
       defaults without breaking any existing dashboards. We should document these changes in the Breaking Changes
       section of the PR template just in case.
+- [ ] Add slot card generation to strategy
 - [ ] Update documentation
 
 ### Milestone 3: Shared Styles
