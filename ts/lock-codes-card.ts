@@ -666,9 +666,9 @@ class LockCodesCard extends LockCodesCardBase {
             statusClass = 'active';
         } else if (hasConfiguredCode) {
             // Fallback: has configured code but unknown state
-            stateClass = 'disabled';
-            statusText = 'Disabled';
-            statusClass = 'disabled';
+            stateClass = 'inactive';
+            statusText = 'Inactive';
+            statusClass = 'inactive';
         } else {
             stateClass = 'empty';
             statusText = 'Empty';
@@ -867,8 +867,8 @@ class LockCodesCard extends LockCodesCardBase {
                     // Fallback: has code on lock but no state info - treat as active
                     managedActive += 1;
                 } else if (hasConfiguredCode) {
-                    // Fallback: configured code but unknown state - treat as disabled
-                    managedDisabled += 1;
+                    // Fallback: configured code but unknown state - treat as inactive
+                    managedInactive += 1;
                 } else {
                     // Fallback: no code and no state info - treat as inactive
                     managedInactive += 1;
