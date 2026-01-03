@@ -682,22 +682,20 @@ class LockCodeManagerSlotCard extends LitElement {
         const { states } = this.hass;
         const lockStatuses: LockSyncStatus[] = [];
 
-        // Pattern for in_sync entities: binary_sensor.lcm_{slug}_{slot}_in_sync_{lock_slug}
-        // The unique_id is: {entry_id}|{slot}|in_sync|{lock_entity_id}
-        const inSyncPattern = new RegExp(`^binary_sensor\\.lcm_.+_${slot}_in_sync_(.+)$`);
+        // Pattern for in_sync entities: binary_sensor.{lock_device}_code_slot_{slot}_in_sync
+        // Examples: binary_sensor.test_1_code_slot_1_in_sync, binary_sensor.front_door_code_slot_2_in_sync
+        const inSyncPattern = new RegExp(`^binary_sensor\\.(.+)_code_slot_${slot}_in_sync$`);
 
         for (const entityId of Object.keys(states)) {
             const match = entityId.match(inSyncPattern);
             if (match) {
+                const [, lockDeviceName] = match;
                 const entityState = states[entityId];
                 if (entityState) {
                     // Try to get the friendly name from state attributes
                     const friendlyName =
                         entityState.attributes?.friendly_name ??
-                        `Lock ${match[1].replace(/_/g, ' ')}`;
-
-                    // Extract lock entity id from friendly name or entity id
-                    const lockEntityId = entityState.attributes?.lock_entity_id ?? match[1];
+                        `${lockDeviceName.replace(/_/g, ' ')} Lock`;
 
                     lockStatuses.push({
                         entityId,
@@ -707,8 +705,8 @@ class LockCodeManagerSlotCard extends LitElement {
                                 : entityState.state === 'off'
                                   ? false
                                   : null,
-                        lockEntityId,
-                        name: friendlyName.replace(/^.* - /, '').replace(/ in sync$/i, '')
+                        lockEntityId: lockDeviceName,
+                        name: friendlyName.replace(/ code slot \d+ in sync$/i, '').trim()
                     });
                 }
             }
