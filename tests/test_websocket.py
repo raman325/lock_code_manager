@@ -324,3 +324,86 @@ async def test_get_locks(
     msg = await ws_client.receive_json()
     assert msg["success"]
     assert msg["result"]["locks"] == []
+
+
+async def test_subscribe_slot_data(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_slot_data WS API."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe with reveal=True to get actual PIN
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_slot_data",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            "slot": 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"], msg
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    data = event["event"]
+    assert data["slot_num"] == 1
+    assert data["name"] == "test1"
+    assert data["pin"] == "1234"
+    assert data["enabled"] is True
+    assert "locks" in data
+    assert "conditions" in data
+
+
+async def test_subscribe_slot_data_masked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_slot_data WS API with masked PIN."""
+    ws_client = await hass_ws_client(hass)
+
+    # Default (reveal=False) returns masked PIN
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_slot_data",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            "slot": 1,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    data = event["event"]
+    assert data["pin"] is None
+    assert data["pin_length"] == 4
+
+
+async def test_subscribe_slot_data_invalid_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test subscribe_slot_data WS API with invalid slot number."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_slot_data",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            "slot": 999,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"

@@ -532,7 +532,9 @@ class LockCodeManagerSlotCard extends LitElement {
                                     </div>`
                                   : nothing}
                           `
-                        : html`<div class="no-conditions">No conditions configured</div>`}
+                        : html`<div class="no-conditions">
+                              No conditions configured for this slot
+                          </div>`}
                 </div>
             </div>
         `;
