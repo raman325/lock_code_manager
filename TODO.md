@@ -604,8 +604,8 @@ For each new provider:
 ### Additional Feature Notes
 
 - Better out-of-sync visibility in the UI.
-- Websocket commands already expose coordinator data via
-  `lock_code_manager/subscribe_lock_coordinator_data`, and the
+- Websocket commands already expose slot data via
+  `lock_code_manager/subscribe_lock_slot_data`, and the
   `lock-code-data-card` frontend subscribes to it; follow-up is to document the
   API and card usage.
 

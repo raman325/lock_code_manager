@@ -457,7 +457,7 @@ class LockCodeManagerLockDataCard extends LitElement {
                 {
                     lock_entity_id: this._config.lock_entity_id,
                     reveal: this._shouldReveal(),
-                    type: 'lock_code_manager/subscribe_lock_coordinator_data'
+                    type: 'lock_code_manager/subscribe_lock_slot_data'
                 }
             );
         } catch (err) {
