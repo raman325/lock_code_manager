@@ -14,8 +14,8 @@ describe('LockCodeManagerSlotCard logic', () => {
         }
 
         function validateConfig(config: Partial<LockCodeManagerSlotCardConfig>): ValidationResult {
-            if (!config.config_entry_id) {
-                return { valid: false, error: 'config_entry_id is required' };
+            if (!config.config_entry_id && !config.config_entry_title) {
+                return { valid: false, error: 'config_entry_id or config_entry_title is required' };
             }
             if (typeof config.slot !== 'number' || config.slot < 1) {
                 return { valid: false, error: 'slot must be a positive number' };
@@ -23,18 +23,28 @@ describe('LockCodeManagerSlotCard logic', () => {
             return { valid: true };
         }
 
-        it('requires config_entry_id', () => {
+        it('requires config_entry_id or config_entry_title', () => {
             expect(validateConfig({ slot: 1 })).toEqual({
                 valid: false,
-                error: 'config_entry_id is required'
+                error: 'config_entry_id or config_entry_title is required'
             });
         });
 
-        it('rejects empty config_entry_id', () => {
+        it('rejects empty config_entry_id without config_entry_title', () => {
             expect(validateConfig({ config_entry_id: '', slot: 1 })).toEqual({
                 valid: false,
-                error: 'config_entry_id is required'
+                error: 'config_entry_id or config_entry_title is required'
             });
+        });
+
+        it('accepts config_entry_title instead of config_entry_id', () => {
+            expect(
+                validateConfig({
+                    config_entry_title: 'My Lock Manager',
+                    slot: 1,
+                    type: 'custom:lock-code-manager-slot'
+                })
+            ).toEqual({ valid: true });
         });
 
         it('requires slot to be a number', () => {

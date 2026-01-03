@@ -418,8 +418,8 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {
-        if (!config.config_entry_id) {
-            throw new Error('config_entry_id is required');
+        if (!config.config_entry_id && !config.config_entry_title) {
+            throw new Error('config_entry_id or config_entry_title is required');
         }
         if (typeof config.slot !== 'number' || config.slot < 1) {
             throw new Error('slot must be a positive number');
@@ -427,6 +427,7 @@ class LockCodeManagerSlotCard extends LitElement {
         // If config changed, unsubscribe and resubscribe
         if (
             this._config?.config_entry_id !== config.config_entry_id ||
+            this._config?.config_entry_title !== config.config_entry_title ||
             this._config?.slot !== config.slot
         ) {
             this._unsubscribe();
@@ -887,19 +888,23 @@ class LockCodeManagerSlotCard extends LitElement {
 
         this._subscribing = true;
         try {
-            this._unsub = await this._hass.connection.subscribeMessage<SlotCardData>(
-                (event) => {
-                    this._data = event;
-                    this._error = undefined;
-                    this.requestUpdate();
-                },
-                {
-                    config_entry_id: this._config.config_entry_id,
-                    reveal: this._shouldReveal(),
-                    slot: this._config.slot,
-                    type: 'lock_code_manager/subscribe_slot_data'
-                }
-            );
+            // Build subscription message with either config_entry_id or config_entry_title
+            const subscribeMsg: Record<string, unknown> = {
+                reveal: this._shouldReveal(),
+                slot: this._config.slot,
+                type: 'lock_code_manager/subscribe_slot_data'
+            };
+            if (this._config.config_entry_id) {
+                subscribeMsg.config_entry_id = this._config.config_entry_id;
+            } else if (this._config.config_entry_title) {
+                subscribeMsg.config_entry_title = this._config.config_entry_title;
+            }
+
+            this._unsub = await this._hass.connection.subscribeMessage<SlotCardData>((event) => {
+                this._data = event;
+                this._error = undefined;
+                this.requestUpdate();
+            }, subscribeMsg);
         } catch (err) {
             this._data = undefined;
             // Show detailed error for debugging

@@ -89,8 +89,10 @@ export interface LockCodeManagerSlotCardConfig {
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
     collapsed_sections?: ('conditions' | 'lock_status')[];
-    /** Config entry ID for the LCM instance */
-    config_entry_id: string;
+    /** Config entry ID for the LCM instance (use this OR config_entry_title) */
+    config_entry_id?: string;
+    /** Config entry title for the LCM instance (use this OR config_entry_id) */
+    config_entry_title?: string;
     /** Show code sensors in lock status section */
     show_code_sensors?: boolean;
     /** Slot number to display */
