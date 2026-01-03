@@ -189,6 +189,11 @@ class LockCodeManagerSlotCard extends LitElement {
                 padding: 2px 8px;
             }
 
+            .collapsible-badge.primary {
+                background: var(--primary-color);
+                color: var(--text-primary-color, #fff);
+            }
+
             .collapsible-badge.warning {
                 background: var(--warning-color, #ffa600);
                 color: var(--text-primary-color, #fff);
@@ -932,7 +937,7 @@ class LockCodeManagerSlotCard extends LitElement {
                             ? html`<span
                                       class="collapsible-badge ${blockingConditions > 0
                                           ? 'warning'
-                                          : ''}"
+                                          : 'primary'}"
                                       >${blockingConditions}/${totalConditions}</span
                                   >
                                   <span class="condition-blocking-icons">
