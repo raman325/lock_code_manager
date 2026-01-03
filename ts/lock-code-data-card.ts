@@ -21,80 +21,35 @@ interface SlotGroup {
 
 class LockCodeManagerLockDataCard extends LitElement {
     static styles = css`
-        ha-card {
+        :host {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .header-card {
+            background: var(--ha-card-background, var(--card-background-color, #fff));
+            border-radius: var(--ha-card-border-radius, 12px);
+            box-shadow: var(--ha-card-box-shadow, 0 2px 2px rgba(0, 0, 0, 0.1));
             padding: 16px;
         }
 
-        .card-header {
-            align-items: center;
-            display: grid;
-            gap: 8px 12px;
-            grid-template-columns: minmax(0, 1fr) auto;
-        }
-
-        .title-row {
+        .header-title {
             align-items: center;
             display: flex;
-            gap: 8px;
-            min-width: 0;
-        }
-
-        .title {
-            font-size: 18px;
-            font-weight: 600;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: normal;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-        }
-
-        .reveal-toggle {
-            align-items: center;
-            color: var(--secondary-text-color);
-            cursor: pointer;
-            display: inline-flex;
-            font-size: 13px;
-            gap: 4px;
-        }
-
-        .reveal-toggle:hover {
-            color: var(--primary-text-color);
-        }
-
-        .reveal-toggle ha-icon-button {
-            --mdc-icon-button-size: 32px;
-            --mdc-icon-size: 18px;
-        }
-
-        .summary-row {
-            align-items: center;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin: 12px 0 16px;
-        }
-
-        .summary-left {
-            display: flex;
-            gap: 8px;
-        }
-
-        .summary-chip {
-            background: rgba(var(--rgb-primary-text-color), 0.04);
-            border: 1px solid rgba(var(--rgb-primary-text-color), 0.08);
-            border-radius: 999px;
-            color: var(--secondary-text-color);
-            font-size: 12px;
+            font-size: 1.25em;
             font-weight: 500;
-            padding: 4px 10px;
+            gap: 8px;
+            margin: 0;
         }
 
-        .summary-chip strong {
-            color: var(--primary-text-color);
-            font-weight: 600;
-            margin-right: 4px;
+        .header-title ha-icon {
+            --mdc-icon-size: 24px;
+            color: var(--primary-color);
+        }
+
+        ha-card {
+            padding: 16px;
         }
 
         .slots-grid {
@@ -104,12 +59,7 @@ class LockCodeManagerLockDataCard extends LitElement {
         }
 
         .slot-chip {
-            background: linear-gradient(
-                135deg,
-                rgba(var(--rgb-primary-text-color), 0.03),
-                rgba(var(--rgb-primary-text-color), 0.01)
-            );
-            border: 1px solid rgba(var(--rgb-primary-text-color), 0.06);
+            border: 2px solid rgba(var(--rgb-primary-text-color), 0.06);
             border-radius: 12px;
             display: flex;
             flex-direction: column;
@@ -118,21 +68,55 @@ class LockCodeManagerLockDataCard extends LitElement {
             position: relative;
         }
 
-        .slot-chip.active {
-            border-color: rgba(var(--rgb-primary-color), 0.6);
-            box-shadow: 0 0 0 1px rgba(var(--rgb-primary-color), 0.2);
+        /* Active LCM Managed: Primary blue with tinted background */
+        .slot-chip.active.managed {
+            background: linear-gradient(
+                135deg,
+                rgba(var(--rgb-primary-color), 0.08),
+                rgba(var(--rgb-primary-color), 0.03)
+            );
+            border-color: var(--primary-color);
+        }
+
+        /* Active Unmanaged (not LCM): Neutral gray, plain background */
+        .slot-chip.active.unmanaged {
+            background: linear-gradient(
+                135deg,
+                rgba(var(--rgb-primary-text-color), 0.04),
+                rgba(var(--rgb-primary-text-color), 0.01)
+            );
+            border-color: rgba(var(--rgb-primary-text-color), 0.25);
+            border-style: solid;
+        }
+
+        /* Inactive/Disabled LCM Managed: Muted blue dotted, slightly faded */
+        /* Only LCM managed slots can be inactive/disabled (unmanaged are active or empty) */
+        .slot-chip.inactive.managed,
+        .slot-chip.disabled.managed {
+            background: linear-gradient(
+                135deg,
+                rgba(var(--rgb-primary-color), 0.04),
+                rgba(var(--rgb-primary-color), 0.01)
+            );
+            border-color: var(--primary-color);
+            border-style: dotted;
+            opacity: 0.75;
         }
 
         .slot-chip.empty {
+            background: linear-gradient(
+                135deg,
+                rgba(var(--rgb-primary-text-color), 0.03),
+                rgba(var(--rgb-primary-text-color), 0.01)
+            );
             opacity: 0.7;
         }
 
-        .slot-chip.manual {
-            background: rgba(var(--rgb-primary-text-color), 0.03);
-            border-color: rgba(var(--rgb-primary-text-color), 0.12);
-            border-width: 0.5px;
-            border-style: solid;
-            box-shadow: none;
+        .slot-chip.full-width {
+            grid-column: 1 / -1;
+            justify-self: center;
+            max-width: 360px;
+            width: 100%;
         }
 
         .slot-top {
@@ -172,6 +156,16 @@ class LockCodeManagerLockDataCard extends LitElement {
         .slot-status.empty {
             background: rgba(var(--rgb-primary-text-color), 0.08);
             color: var(--secondary-text-color);
+        }
+
+        .slot-status.inactive {
+            background: rgba(var(--rgb-primary-color), 0.12);
+            color: var(--primary-color);
+        }
+
+        .slot-status.disabled {
+            background: rgba(var(--rgb-warning-color, 255, 152, 0), 0.12);
+            color: var(--warning-color, #ff9800);
         }
 
         .slot-origin {
@@ -244,6 +238,15 @@ class LockCodeManagerLockDataCard extends LitElement {
             letter-spacing: normal;
         }
 
+        .slot-code.disabled {
+            color: var(--primary-text-color);
+            opacity: 0.6;
+        }
+
+        .slot-code.disabled.masked {
+            color: var(--secondary-text-color);
+        }
+
         .empty-summary {
             align-items: center;
             background: rgba(var(--rgb-primary-text-color), 0.03);
@@ -279,6 +282,72 @@ class LockCodeManagerLockDataCard extends LitElement {
         .message {
             color: var(--secondary-text-color);
             font-style: italic;
+        }
+
+        /* Summary table */
+        .summary-table {
+            border-collapse: collapse;
+            font-size: 12px;
+            margin-top: 16px;
+            width: 100%;
+        }
+
+        .summary-table th,
+        .summary-table td {
+            padding: 6px 8px;
+            text-align: center;
+        }
+
+        .summary-table th {
+            background: rgba(var(--rgb-primary-text-color), 0.04);
+            color: var(--secondary-text-color);
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .summary-table th:first-child {
+            border-radius: 6px 0 0 0;
+            text-align: left;
+        }
+
+        .summary-table th:last-child {
+            border-radius: 0 6px 0 0;
+        }
+
+        .summary-table td {
+            border-top: 1px solid rgba(var(--rgb-primary-text-color), 0.06);
+            color: var(--primary-text-color);
+            font-weight: 500;
+        }
+
+        .summary-table td:first-child {
+            color: var(--secondary-text-color);
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-align: left;
+            text-transform: uppercase;
+        }
+
+        .summary-table tr:last-child td:first-child {
+            border-radius: 0 0 0 6px;
+        }
+
+        .summary-table tr:last-child td:last-child {
+            border-radius: 0 0 6px 0;
+        }
+
+        .summary-table .total-row td {
+            background: rgba(var(--rgb-primary-text-color), 0.02);
+            border-top: 2px solid rgba(var(--rgb-primary-text-color), 0.08);
+            font-weight: 600;
+        }
+
+        .summary-cell-zero {
+            color: var(--disabled-text-color) !important;
+            font-weight: 400 !important;
         }
     `;
 
@@ -330,28 +399,20 @@ class LockCodeManagerLockDataCard extends LitElement {
             this._hass?.states[this._config?.lock_entity_id ?? '']?.attributes?.friendly_name;
         const lockName =
             this._data?.lock_name ?? hassLockName ?? this._config?.lock_entity_id ?? '';
-        const title = this._config?.title ?? (lockName || DEFAULT_TITLE);
-        const summary = this._getSummary();
+        const headerTitle = this._config?.title ?? lockName ?? DEFAULT_TITLE;
 
         return html`
+            <div class="header-card">
+                <h2 class="header-title">
+                    <ha-icon icon="mdi:lock-smart"></ha-icon>
+                    ${headerTitle} – User Codes
+                </h2>
+            </div>
             <ha-card>
-                <div class="card-header">
-                    <div class="title-row">
-                        <div class="title">${title}</div>
-                    </div>
-                </div>
-                ${summary
-                    ? html`<div class="summary-row">
-                          <div class="summary-left">
-                              <div class="summary-chip">
-                                  <strong>${summary.active}/${summary.total}</strong> Active
-                              </div>
-                          </div>
-                      </div>`
-                    : nothing}
                 ${this._error
                     ? html`<div class="message">${this._error}</div>`
                     : this._renderSlots()}
+                ${this._renderSummaryTable()}
             </ha-card>
         `;
     }
@@ -417,7 +478,9 @@ class LockCodeManagerLockDataCard extends LitElement {
             <div class="slots-grid">
                 ${groups.map((group) =>
                     group.type === 'active'
-                        ? group.slots.map((slot) => this._renderSlotChip(slot))
+                        ? group.slots.map((slot) =>
+                              this._renderSlotChip(slot, group.slots.length === 1)
+                          )
                         : this._renderEmptySummary(group)
                 )}
             </div>
@@ -427,6 +490,7 @@ class LockCodeManagerLockDataCard extends LitElement {
     private _groupSlots(slots: LockCoordinatorSlotData[]): SlotGroup[] {
         const groups: SlotGroup[] = [];
         let currentEmpty: LockCoordinatorSlotData[] = [];
+        let currentActive: LockCoordinatorSlotData[] = [];
 
         const flushEmpty = (): void => {
             if (currentEmpty.length > 0) {
@@ -439,15 +503,29 @@ class LockCodeManagerLockDataCard extends LitElement {
             }
         };
 
+        const flushActive = (): void => {
+            if (currentActive.length > 0) {
+                groups.push({ slots: currentActive, type: 'active' });
+                currentActive = [];
+            }
+        };
+
         for (const slot of slots) {
-            const hasCode = this._hasCode(slot);
-            if (hasCode) {
+            // Expand slots that:
+            // - Have active code on lock, OR
+            // - Are managed by LCM AND have a configured code (disabled/empty with config)
+            const hasConfiguredCode = !!(slot.configured_code || slot.configured_code_length);
+            const shouldExpand =
+                this._hasCode(slot) || (slot.managed === true && hasConfiguredCode);
+            if (shouldExpand) {
                 flushEmpty();
-                groups.push({ slots: [slot], type: 'active' });
+                currentActive.push(slot);
             } else {
+                flushActive();
                 currentEmpty.push(slot);
             }
         }
+        flushActive();
         flushEmpty();
 
         return groups;
@@ -483,28 +561,67 @@ class LockCodeManagerLockDataCard extends LitElement {
         return `${ranges.join(', ')}`;
     }
 
-    private _renderSlotChip(slot: LockCoordinatorSlotData): TemplateResult {
+    private _renderSlotChip(slot: LockCoordinatorSlotData, isAlone: boolean): TemplateResult {
         const hasCode = this._hasCode(slot);
         const slotName = slot.name?.trim();
-        const managed = hasCode ? slot.managed : undefined;
+        const { managed } = slot;
+        const hasConfiguredCode = !!(slot.configured_code || slot.configured_code_length);
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const showName = !!slotName || managed !== false;
+
+        // Determine state for LCM-managed slots:
+        // - Active: active=true (code on lock, conditions met)
+        // - Inactive: enabled=true + active=false (enabled but conditions blocking)
+        // - Disabled: enabled=false (user explicitly disabled)
+        // - Empty: no code and no configured_code (unmanaged empty slot)
+        let stateClass: string;
+        let statusText: string;
+        let statusClass: string;
+
+        if (slot.active === true) {
+            // Binary sensor ON = active (code on lock, conditions met)
+            stateClass = 'active';
+            statusText = 'Active';
+            statusClass = 'active';
+        } else if (slot.enabled === true && slot.active === false) {
+            // Enabled switch ON but binary sensor OFF = inactive (conditions blocking)
+            stateClass = 'inactive';
+            statusText = 'Inactive';
+            statusClass = 'inactive';
+        } else if (slot.enabled === false && hasConfiguredCode) {
+            // Enabled switch OFF = disabled by user
+            stateClass = 'disabled';
+            statusText = 'Disabled';
+            statusClass = 'disabled';
+        } else if (hasCode) {
+            // Fallback: has code on lock but no LCM state info
+            stateClass = 'active';
+            statusText = 'Active';
+            statusClass = 'active';
+        } else if (hasConfiguredCode) {
+            // Fallback: has configured code but unknown state
+            stateClass = 'disabled';
+            statusText = 'Disabled';
+            statusClass = 'disabled';
+        } else {
+            stateClass = 'empty';
+            statusText = 'Empty';
+            statusClass = 'empty';
+        }
+
+        // Determine managed class for styling
+        const managedClass = managed === true ? 'managed' : managed === false ? 'unmanaged' : '';
+
         return html`
-            <div
-                class="slot-chip ${hasCode ? 'active' : 'empty'} ${managed === false
-                    ? 'manual'
-                    : ''}"
-            >
+            <div class="slot-chip ${stateClass} ${managedClass} ${isAlone ? 'full-width' : ''}">
                 <div class="slot-top">
                     <span class="slot-label">Slot ${slot.slot}</span>
                     <div class="slot-badges">
-                        <span class="slot-status ${hasCode ? 'active' : 'empty'}">
-                            ${hasCode ? 'Active' : 'Empty'}
-                        </span>
+                        <span class="slot-status ${statusClass}"> ${statusText} </span>
                         ${managed === undefined
                             ? nothing
                             : html`<span class="slot-origin ${managed ? 'managed' : 'external'}">
-                                  ${managed ? 'LCM' : 'Manual'}
+                                  ${managed ? 'Managed' : 'Unmanaged'}
                               </span>`}
                     </div>
                 </div>
@@ -532,19 +649,47 @@ class LockCodeManagerLockDataCard extends LitElement {
     }
 
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
+
+        // Active code on the lock
         if (slot.code !== null && slot.code !== '') return '';
         if (slot.code_length) return 'masked';
+
+        // No active code - check for configured code (disabled LCM slot)
+        if (slot.configured_code) {
+            // We have the actual code - choose class based on display mode
+            return shouldMask ? 'disabled masked' : 'disabled';
+        }
+        if (slot.configured_code_length) {
+            // Only have length (always masked)
+            return 'disabled masked';
+        }
+
         return 'no-code';
     }
 
     private _formatCode(slot: LockCoordinatorSlotData): string {
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
+
+        // Active code on the lock
         if (slot.code !== null && slot.code !== '') {
-            return String(slot.code);
+            return shouldMask ? '•'.repeat(String(slot.code).length) : String(slot.code);
         }
         if (slot.code_length) {
             return '•'.repeat(slot.code_length);
         }
-        return 'No code';
+
+        // Disabled LCM slot: show configured code (respect masking)
+        if (slot.configured_code) {
+            return shouldMask ? '•'.repeat(slot.configured_code.length) : slot.configured_code;
+        }
+        if (slot.configured_code_length) {
+            return '•'.repeat(slot.configured_code_length);
+        }
+
+        return '—';
     }
 
     private _renderEmptySummary(group: SlotGroup): TemplateResult {
@@ -555,27 +700,97 @@ class LockCodeManagerLockDataCard extends LitElement {
         </div>`;
     }
 
-    private _getSummary():
-        | {
-              active: number;
-              empty: number;
-              total: number;
-          }
-        | undefined {
-        const slots = this._data?.slots;
-        if (!slots || slots.length === 0) {
-            return undefined;
+    private _renderSummaryTable(): TemplateResult {
+        const slots = this._data?.slots ?? [];
+        if (slots.length === 0) {
+            return html``;
         }
-        let active = 0;
-        let empty = 0;
+
+        // Count by state and managed/unmanaged
+        // All slots must be counted - total should equal slots.length
+        let managedActive = 0;
+        let managedInactive = 0;
+        let managedDisabled = 0;
+        let unmanagedActive = 0;
+        // Empty unmanaged slots (no code, collapsed in UI)
+        let unmanagedInactive = 0;
+
         for (const slot of slots) {
-            if (this._hasCode(slot)) {
-                active += 1;
+            const hasCode = this._hasCode(slot);
+            const isManaged = slot.managed === true;
+
+            if (isManaged) {
+                // Managed slot - use LCM state fields
+                if (slot.active === true) {
+                    managedActive += 1;
+                } else if (slot.enabled === true && slot.active === false) {
+                    // Enabled but conditions blocking
+                    managedInactive += 1;
+                } else if (slot.enabled === false) {
+                    // User explicitly disabled via LCM switch
+                    managedDisabled += 1;
+                } else if (hasCode) {
+                    // Fallback: has code on lock but no state info - treat as active
+                    managedActive += 1;
+                } else {
+                    // Fallback: no code and no state info - treat as inactive
+                    managedInactive += 1;
+                }
+            } else if (hasCode) {
+                // Unmanaged slot with code = active
+                unmanagedActive += 1;
             } else {
-                empty += 1;
+                // Unmanaged slot without code = inactive (collapsed in UI)
+                unmanagedInactive += 1;
             }
         }
-        return { active, empty, total: slots.length };
+
+        const managedTotal = managedActive + managedInactive + managedDisabled;
+        const unmanagedTotal = unmanagedActive + unmanagedInactive;
+        const totalActive = managedActive + unmanagedActive;
+        const totalInactive = managedInactive + unmanagedInactive;
+        const totalDisabled = managedDisabled;
+        // Should always equal managedTotal + unmanagedTotal
+        const grandTotal = slots.length;
+
+        const cellClass = (val: number): string => (val === 0 ? 'summary-cell-zero' : '');
+
+        return html`
+            <table class="summary-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Active</th>
+                        <th>Inactive</th>
+                        <th>Disabled</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Managed</td>
+                        <td class="${cellClass(managedActive)}">${managedActive}</td>
+                        <td class="${cellClass(managedInactive)}">${managedInactive}</td>
+                        <td class="${cellClass(managedDisabled)}">${managedDisabled}</td>
+                        <td>${managedTotal}</td>
+                    </tr>
+                    <tr>
+                        <td>Unmanaged</td>
+                        <td class="${cellClass(unmanagedActive)}">${unmanagedActive}</td>
+                        <td class="${cellClass(unmanagedInactive)}">${unmanagedInactive}</td>
+                        <td class="${cellClass(0)}">–</td>
+                        <td>${unmanagedTotal}</td>
+                    </tr>
+                    <tr class="total-row">
+                        <td>Total</td>
+                        <td class="${cellClass(totalActive)}">${totalActive}</td>
+                        <td class="${cellClass(totalInactive)}">${totalInactive}</td>
+                        <td class="${cellClass(totalDisabled)}">${totalDisabled}</td>
+                        <td>${grandTotal}</td>
+                    </tr>
+                </tbody>
+            </table>
+        `;
     }
 
     private _hasCode(slot: LockCoordinatorSlotData): boolean {

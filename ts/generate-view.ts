@@ -97,18 +97,12 @@ export async function generateView(
             };
         });
         if (lockCards.length > 0) {
-            cards.push(
-                {
-                    content: '## <ha-icon icon="mdi:lock-smart"></ha-icon> User Codes',
-                    type: 'markdown'
-                },
-                {
-                    cards: lockCards,
-                    columns: Math.min(lockCards.length, 3),
-                    square: false,
-                    type: 'grid'
-                }
-            );
+            cards.push({
+                cards: lockCards,
+                columns: Math.min(lockCards.length, 3),
+                square: false,
+                type: 'grid'
+            });
         }
     }
 

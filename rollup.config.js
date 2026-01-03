@@ -27,5 +27,11 @@ export default {
             ]
         }),
         !dev && terser({ format: { comments: false } })
-    ]
+    ],
+    // Watch all TypeScript sources during development (only applies in watch mode).
+    // Note: unlike the `!dev` condition on terser, this config is always present
+    // but has no effect unless Rollup is explicitly run with --watch.
+    watch: {
+        include: 'ts/**'
+    }
 };

@@ -12,6 +12,19 @@ usercodes across multiple locks. It reduces entity/automation sprawl compared to
 alternatives by handling logic internally rather than generating numerous Home Assistant
 entities.
 
+## Follow these rules always
+
+- `git` and `gh` commands are automatically approved
+- When making changes to ts files, before handing it back over to me, run yarn test and build and fix any issues.
+- When making changes to python files, before handing it back over to me, run pytest in the venv and fix any issues.
+- When creating a PR, ALWAYS use the PULL_REQUEST_TEMPLATE.md template
+- When submitting a PR, note that Copilot will eventually add review comments which you must review -
+  either make changes as needed or explain why you are not addressing a comment (comments that you make
+  code changes for don't need a response). Resolve all comments as you address them or respond to them.
+  Provide a summary of what was done or not done and ask for confirmation before committing the changes.
+- When running hass, pre-commit, or any other python driven commands, always run from the venv
+-
+
 ## Codex Agent Context (2025-02 Session)
 
 - `BaseLock` now performs its own rate limiting + connection checks without Tenacity.
@@ -101,6 +114,74 @@ entities.
   methods with asyncio locks to prevent race conditions
 - **Dispatcher signals**: Heavily used for dynamic entity management without tight coupling
 - **Reauth flow**: Automatically triggered if configured lock entities are removed
+
+### User Codes Data Card - Slot State Logic
+
+The `lock-code-manager-lock-data` card displays lock slot states with the following data model:
+
+**Data Fields from Websocket:**
+
+| Field | Source | Description |
+|-------|--------|-------------|
+| `code` / `code_length` | Lock coordinator | Actual code on the lock (current state) |
+| `configured_code` / `configured_code_length` | LCM text entities | Desired code from LCM config |
+| `managed` | LCM config entries | Whether LCM manages this slot (authoritative field) |
+| `name` | LCM text entities | Slot name configured in LCM |
+| `active` | LCM binary sensor | True if enabled + conditions met, False if blocked |
+| `enabled` | LCM switch entity | True if user enabled the slot, False if disabled |
+
+**Frontend State Decision Table (for managed slots):**
+
+| `active` | `enabled` | Result | UI Treatment |
+|----------|-----------|--------|--------------|
+| true | true | Active | Blue solid border, "Active" badge |
+| false | true | Inactive | Blue dotted border, "Inactive" badge (conditions blocking) |
+| false | false | Disabled | Blue dotted border, "Disabled" badge (user disabled) |
+| undefined | undefined | Fallback | Uses `code` presence to determine Active vs Inactive |
+
+**Unmanaged Slots:** Only have Active (has code) or Inactive (no code) states. They appear
+with gray borders and "Unmanaged" badge.
+
+**Key Insight:** The `managed` field (from config entries) determines LCM management status.
+The `configured_code` field indicates whether a PIN is configured, but a slot can be managed
+even without a configured code if the PIN text entity is empty.
+
+### Future: Slot Status Enum (TODO)
+
+Currently, the coordinator only stores `{slot: code}` and we infer status from code presence.
+Z-Wave locks provide richer status via `userIdStatus`:
+
+- **Enabled**: Slot has active code
+- **Available**: Slot can be used but is empty
+- **Disabled**: Slot cannot be used (locked out by lock firmware)
+
+**Planned Enhancement:**
+
+1. Define generic `SlotStatus` enum in `const.py`:
+
+   ```python
+   class SlotStatus(StrEnum):
+       ENABLED = "enabled"
+       AVAILABLE = "available"
+       DISABLED = "disabled"
+   ```
+
+2. Providers map their native status to this enum:
+   - Z-Wave JS: `userIdStatus` → `SlotStatus`
+   - Other providers: Infer from their equivalent states
+
+3. Change coordinator data schema from `dict[int, str]` to `dict[int, SlotData]`
+
+**Provider Guidance for Status Inference:**
+
+| Provider State | Maps To |
+|----------------|---------|
+| Code exists on lock | `ENABLED` |
+| Slot empty but usable | `AVAILABLE` |
+| Slot programmatically disabled | `DISABLED` |
+| Unknown/unsupported | Default to `AVAILABLE` if no code, `ENABLED` if code |
+
+See `TODO.md` for implementation details.
 
 ## Development Commands
 
