@@ -83,31 +83,30 @@ class MockLockWithPush(MockLockWithHardRefresh):
 
 async def test_drift_timer_not_created_without_hard_refresh_interval(
     hass: HomeAssistant,
+    mock_lock_config_entry,
 ):
     """Test that drift detection timer is NOT created when hard_refresh_interval is None."""
     entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
 
     lock_entity = entity_reg.async_get_or_create(
         "lock",
         "test",
         "test_lock",
-        config_entry=config_entry,
+        config_entry=mock_lock_config_entry,
     )
 
     lock = VirtualLock(
         hass,
         dr.async_get(hass),
         entity_reg,
-        config_entry,
+        mock_lock_config_entry,
         lock_entity,
     )
 
     # VirtualLock doesn't override hard_refresh_interval, so it should be None
     assert lock.hard_refresh_interval is None
 
-    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, mock_lock_config_entry)
 
     # With no hard_refresh_interval, drift timer should NOT be created
     assert coordinator._drift_unsub is None
@@ -349,24 +348,25 @@ async def test_push_update_notifies_listeners(
 
 async def test_subscribe_push_updates_called_during_setup(
     hass: HomeAssistant,
+    mock_lock_config_entry,
 ):
     """Test that subscribe_push_updates is called during async_setup."""
     entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
+    await hass.async_block_till_done()
 
     lock_entity = entity_reg.async_get_or_create(
         "lock",
         "test",
         "test_lock",
-        config_entry=config_entry,
+        config_entry=mock_lock_config_entry,
     )
 
     lock = MockLockWithPush(
         hass,
         dr.async_get(hass),
         entity_reg,
-        config_entry,
+        mock_lock_config_entry,
         lock_entity,
     )
 
@@ -382,7 +382,7 @@ async def test_subscribe_push_updates_called_during_setup(
         ),
     ):
         assert not lock._subscribe_called
-        await lock.async_setup(config_entry)
+        await lock.async_setup(mock_lock_config_entry)
         assert lock._subscribe_called
 
 
