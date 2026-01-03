@@ -202,6 +202,121 @@ export const lcmRevealButtonStyles = css`
 `;
 
 /**
+ * Shared collapsible section styles.
+ */
+export const lcmCollapsibleStyles = css`
+    .collapsible-section {
+        background: var(--lcm-section-bg);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    .collapsible-header {
+        align-items: center;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        padding: 12px 16px;
+        user-select: none;
+    }
+
+    .collapsible-header:hover {
+        background: var(--lcm-section-bg-hover);
+    }
+
+    .collapsible-title {
+        align-items: center;
+        color: var(--secondary-text-color);
+        display: flex;
+        font-size: var(--lcm-section-header-size);
+        font-weight: var(--lcm-section-header-weight);
+        gap: 8px;
+        letter-spacing: var(--lcm-section-header-spacing);
+        text-transform: uppercase;
+    }
+
+    .collapsible-badge {
+        background: var(--lcm-active-bg);
+        border-radius: 10px;
+        color: var(--primary-color);
+        font-size: var(--lcm-badge-font-size);
+        padding: 2px 8px;
+    }
+
+    .collapsible-badge.primary {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+    }
+
+    .collapsible-badge.warning {
+        background: var(--warning-color, #ffa600);
+        color: var(--text-primary-color, #fff);
+    }
+
+    .collapsible-chevron {
+        --mdc-icon-size: 20px;
+        color: var(--secondary-text-color);
+        transition: transform 0.2s ease;
+    }
+
+    .collapsible-content {
+        max-height: 0;
+        opacity: 0;
+        overflow: hidden;
+        padding: 0 16px;
+        transition:
+            max-height 0.3s ease,
+            opacity 0.2s ease,
+            padding 0.3s ease;
+    }
+
+    .collapsible-content.expanded {
+        max-height: 500px;
+        opacity: 1;
+        padding: 0 16px 16px;
+    }
+`;
+
+/**
+ * Shared editable field styles for inline editing.
+ */
+export const lcmEditableStyles = css`
+    .editable {
+        border-radius: 4px;
+        cursor: pointer;
+        margin: -4px -8px;
+        padding: 4px 8px;
+        transition: background-color 0.2s;
+    }
+
+    .editable:hover {
+        background: var(--lcm-active-bg);
+    }
+
+    .edit-input {
+        background: var(--card-background-color, #fff);
+        border: 1px solid var(--primary-color);
+        border-radius: 4px;
+        color: var(--primary-text-color);
+        font-family: inherit;
+        font-size: inherit;
+        outline: none;
+        padding: 4px 8px;
+        width: 100%;
+    }
+
+    .edit-input:focus {
+        box-shadow: 0 0 0 1px var(--primary-color);
+    }
+
+    .edit-help {
+        color: var(--secondary-text-color);
+        font-size: var(--lcm-section-header-size);
+        margin-top: 4px;
+    }
+`;
+
+/**
  * Combined shared styles - import this for all common styles.
  */
 export const lcmSharedStyles = css`
@@ -211,4 +326,6 @@ export const lcmSharedStyles = css`
     ${lcmCodeStyles}
     ${lcmSectionStyles}
     ${lcmRevealButtonStyles}
+    ${lcmCollapsibleStyles}
+    ${lcmEditableStyles}
 `;

@@ -4,10 +4,9 @@ import { CodeDisplayMode, LockCoordinatorSlotData } from './types';
 
 // Test the logic that can be unit tested without full component instantiation
 
-describe('LockCodeManagerLockDataCard logic', () => {
+describe('LockCodesCard logic', () => {
     describe('shouldReveal logic', () => {
-        // Default changed from 'unmasked' to 'masked_with_reveal' for better security UX
-        const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
+        const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'unmasked';
 
         function shouldReveal(mode: CodeDisplayMode | undefined, revealed: boolean): boolean {
             const effectiveMode = mode ?? DEFAULT_CODE_DISPLAY;
@@ -31,9 +30,8 @@ describe('LockCodeManagerLockDataCard logic', () => {
             expect(shouldReveal('masked_with_reveal', true)).toBe(true);
         });
 
-        it('defaults to masked_with_reveal when mode is undefined', () => {
-            // With new default, codes are hidden until user clicks reveal
-            expect(shouldReveal(undefined, false)).toBe(false);
+        it('defaults to unmasked when mode is undefined', () => {
+            expect(shouldReveal(undefined, false)).toBe(true);
             expect(shouldReveal(undefined, true)).toBe(true);
         });
     });

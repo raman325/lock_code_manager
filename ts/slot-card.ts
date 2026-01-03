@@ -10,17 +10,20 @@ import {
     mdiLock,
     mdiPound
 } from '@mdi/js';
-import { UnsubscribeFunc } from 'home-assistant-js-websocket';
+import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import {
+    lcmCollapsibleStyles,
     lcmCssVars,
+    lcmEditableStyles,
     lcmRevealButtonStyles,
     lcmSectionStyles,
     lcmStatusIndicatorStyles
 } from './shared-styles';
+import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
     LockCodeManagerSlotCardConfig,
@@ -44,17 +47,22 @@ interface LockSyncStatus {
     name: string;
 }
 
+// Base class with subscription mixin
+const LcmSlotCardBase = LcmSubscriptionMixin(LitElement);
+
 /**
  * Streamlined slot card for Lock Code Manager.
  *
  * Phase 3: Uses websocket subscription for real-time updates.
  */
-class LockCodeManagerSlotCard extends LitElement {
+class LockCodeManagerSlotCard extends LcmSlotCardBase {
     static styles = [
         lcmCssVars,
         lcmSectionStyles,
         lcmStatusIndicatorStyles,
         lcmRevealButtonStyles,
+        lcmCollapsibleStyles,
+        lcmEditableStyles,
         css`
             :host {
                 display: block;
@@ -150,55 +158,7 @@ class LockCodeManagerSlotCard extends LitElement {
                 padding: 16px;
             }
 
-            /* Collapsible Section */
-            .collapsible-section {
-                background: var(--lcm-section-bg);
-                border-radius: 12px;
-                overflow: hidden;
-            }
-
-            .collapsible-header {
-                align-items: center;
-                cursor: pointer;
-                display: flex;
-                justify-content: space-between;
-                padding: 12px 16px;
-                user-select: none;
-            }
-
-            .collapsible-header:hover {
-                background: var(--lcm-section-bg-hover);
-            }
-
-            .collapsible-title {
-                align-items: center;
-                color: var(--secondary-text-color);
-                display: flex;
-                font-size: var(--lcm-section-header-size);
-                font-weight: var(--lcm-section-header-weight);
-                gap: 8px;
-                letter-spacing: var(--lcm-section-header-spacing);
-                text-transform: uppercase;
-            }
-
-            .collapsible-badge {
-                background: var(--lcm-active-bg);
-                border-radius: 10px;
-                color: var(--primary-color);
-                font-size: var(--lcm-badge-font-size);
-                padding: 2px 8px;
-            }
-
-            .collapsible-badge.primary {
-                background: var(--primary-color);
-                color: var(--text-primary-color, #fff);
-            }
-
-            .collapsible-badge.warning {
-                background: var(--warning-color, #ffa600);
-                color: var(--text-primary-color, #fff);
-            }
-
+            /* Condition-specific icons (extend shared collapsible styles) */
             .condition-blocking-icons {
                 align-items: center;
                 display: flex;
@@ -222,29 +182,6 @@ class LockCodeManagerSlotCard extends LitElement {
 
             .condition-row-icon.blocking {
                 color: var(--lcm-warning-color);
-            }
-
-            .collapsible-chevron {
-                --mdc-icon-size: 20px;
-                color: var(--secondary-text-color);
-                transition: transform 0.2s ease;
-            }
-
-            .collapsible-content {
-                max-height: 0;
-                opacity: 0;
-                overflow: hidden;
-                padding: 0 16px;
-                transition:
-                    max-height 0.3s ease,
-                    opacity 0.2s ease,
-                    padding 0.3s ease;
-            }
-
-            .collapsible-content.expanded {
-                max-height: 500px;
-                opacity: 1;
-                padding: 0 16px 16px;
             }
 
             /* Primary Controls Section */
@@ -302,41 +239,7 @@ class LockCodeManagerSlotCard extends LitElement {
                 --mdc-icon-size: 18px;
             }
 
-            /* Inline editing */
-            .editable {
-                border-radius: 4px;
-                cursor: pointer;
-                margin: -4px -8px;
-                padding: 4px 8px;
-                transition: background-color 0.2s;
-            }
-
-            .editable:hover {
-                background: var(--lcm-active-bg);
-            }
-
-            .edit-input {
-                background: var(--card-background-color, #fff);
-                border: 1px solid var(--primary-color);
-                border-radius: 4px;
-                color: var(--primary-text-color);
-                font-family: inherit;
-                font-size: inherit;
-                outline: none;
-                padding: 4px 8px;
-                width: 100%;
-            }
-
-            .edit-input:focus {
-                box-shadow: 0 0 0 1px var(--primary-color);
-            }
-
-            .edit-help {
-                color: var(--secondary-text-color);
-                font-size: var(--lcm-section-header-size);
-                margin-top: 4px;
-            }
-
+            /* PIN-specific edit input (extends shared editable styles) */
             .pin-edit-input {
                 font-family: var(--lcm-code-font);
                 font-size: var(--lcm-code-font-size);
@@ -576,19 +479,15 @@ class LockCodeManagerSlotCard extends LitElement {
         `
     ];
 
-    @state() private _config?: LockCodeManagerSlotCardConfig;
-    @state() private _revealed = false;
+    // Note: _revealed, _unsub, _subscribing provided by LcmSubscriptionMixin
+    @state() _config?: LockCodeManagerSlotCardConfig;
+    @state() _data?: SlotCardData;
+    @state() _error?: string;
     @state() private _conditionsExpanded = false;
+    @state() private _editingField: 'name' | 'pin' | 'numberOfUses' | null = null;
     @state() private _lockStatusExpanded = false;
-    @state() private _data?: SlotCardData;
-    @state() private _error?: string;
-    @state() private _editingName = false;
-    @state() private _editingPin = false;
-    @state() private _editingNumberOfUses = false;
 
-    private _hass?: HomeAssistant;
-    private _unsub?: UnsubscribeFunc;
-    private _subscribing = false;
+    _hass?: HomeAssistant;
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -601,8 +500,7 @@ class LockCodeManagerSlotCard extends LitElement {
     }
 
     static getConfigElement(): HTMLElement {
-        // TODO: Create editor component
-        return document.createElement('div');
+        return document.createElement('lcm-slot-card-editor');
     }
 
     static getStubConfig(): Partial<LockCodeManagerSlotCardConfig> {
@@ -613,8 +511,8 @@ class LockCodeManagerSlotCard extends LitElement {
         if (!config.config_entry_id && !config.config_entry_title) {
             throw new Error('config_entry_id or config_entry_title is required');
         }
-        if (typeof config.slot !== 'number' || config.slot < 1) {
-            throw new Error('slot must be a positive number');
+        if (typeof config.slot !== 'number' || config.slot < 1 || config.slot > 9999) {
+            throw new Error('slot must be a number between 1 and 9999');
         }
         // If config changed, unsubscribe and resubscribe
         if (
@@ -634,37 +532,51 @@ class LockCodeManagerSlotCard extends LitElement {
         void this._subscribe();
     }
 
-    connectedCallback(): void {
-        super.connectedCallback();
-        void this._subscribe();
+    // Mixin abstract method implementations
+    protected _getDefaultCodeDisplay(): CodeDisplayMode {
+        return DEFAULT_CODE_DISPLAY;
     }
 
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._unsubscribe();
+    protected _buildSubscribeMessage(): MessageBase {
+        if (!this._config) {
+            throw new Error('Config not set');
+        }
+        const msg: MessageBase & {
+            config_entry_id?: string;
+            config_entry_title?: string;
+            reveal: boolean;
+            slot: number;
+        } = {
+            reveal: this._shouldReveal(),
+            slot: this._config.slot,
+            type: 'lock_code_manager/subscribe_code_slot'
+        };
+        if (this._config.config_entry_id) {
+            msg.config_entry_id = this._config.config_entry_id;
+        } else if (this._config.config_entry_title) {
+            msg.config_entry_title = this._config.config_entry_title;
+        }
+        return msg;
     }
+
+    protected _handleSubscriptionData(data: unknown): void {
+        this._data = data as SlotCardData;
+    }
+
+    // connectedCallback and disconnectedCallback provided by mixin
 
     protected updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
 
         // Focus the appropriate input when entering edit mode
-        if (this._editingName) {
+        if (this._editingField) {
+            const selectors: Record<string, string> = {
+                name: '.control-row .edit-input.name-edit-input',
+                numberOfUses: '.condition-row .edit-input[type="number"]',
+                pin: '.pin-edit-input'
+            };
             const input = this.shadowRoot?.querySelector<HTMLInputElement>(
-                '.control-row .edit-input:not(.pin-edit-input)'
-            );
-            if (input && this.shadowRoot?.activeElement !== input) {
-                input.focus();
-                input.select();
-            }
-        } else if (this._editingPin) {
-            const input = this.shadowRoot?.querySelector<HTMLInputElement>('.pin-edit-input');
-            if (input && this.shadowRoot?.activeElement !== input) {
-                input.focus();
-                input.select();
-            }
-        } else if (this._editingNumberOfUses) {
-            const input = this.shadowRoot?.querySelector<HTMLInputElement>(
-                '.condition-row .edit-input[type="number"]'
+                selectors[this._editingField]
             );
             if (input && this.shadowRoot?.activeElement !== input) {
                 input.focus();
@@ -811,18 +723,18 @@ class LockCodeManagerSlotCard extends LitElement {
                 <div class="control-row">
                     <span class="control-label">Name</span>
                     <div style="flex: 1;">
-                        ${this._editingName
+                        ${this._editingField === 'name'
                             ? html`<input
-                                      class="edit-input"
+                                      class="edit-input name-edit-input"
                                       type="text"
                                       .value=${name ?? ''}
-                                      @blur=${this._handleNameBlur}
-                                      @keydown=${this._handleNameKeydown}
+                                      @blur=${this._handleEditBlur}
+                                      @keydown=${this._handleEditKeydown}
                                   />
                                   <div class="edit-help">Enter to save, Esc to cancel</div>`
                             : html`<span
                                   class="control-value editable ${name ? '' : 'unnamed'}"
-                                  @click=${this._startEditingName}
+                                  @click=${() => this._startEditing('name')}
                               >
                                   ${name ?? 'Unnamed'}
                               </span>`}
@@ -833,25 +745,27 @@ class LockCodeManagerSlotCard extends LitElement {
                     <span class="control-label">PIN</span>
                     <div style="flex: 1;">
                         <div class="pin-field">
-                            ${this._editingPin
+                            ${this._editingField === 'pin'
                                 ? html`<input
                                       class="edit-input pin-edit-input"
                                       type="text"
                                       inputmode="numeric"
                                       pattern="[0-9]*"
                                       .value=${pin ?? ''}
-                                      @blur=${this._handlePinBlur}
-                                      @keydown=${this._handlePinKeydown}
+                                      @blur=${this._handleEditBlur}
+                                      @keydown=${this._handleEditKeydown}
                                   />`
                                 : html`<span
                                       class="pin-value editable ${shouldMask && hasPin
                                           ? 'masked'
                                           : ''}"
-                                      @click=${this._startEditingPin}
+                                      @click=${() => this._startEditing('pin')}
                                   >
                                       ${displayPin}
                                   </span>`}
-                            ${mode === 'masked_with_reveal' && hasPin && !this._editingPin
+                            ${mode === 'masked_with_reveal' &&
+                            hasPin &&
+                            this._editingField !== 'pin'
                                 ? html`<ha-icon-button
                                       class="pin-reveal"
                                       .path=${this._revealed ? mdiEyeOff : mdiEye}
@@ -860,7 +774,7 @@ class LockCodeManagerSlotCard extends LitElement {
                                   ></ha-icon-button>`
                                 : nothing}
                         </div>
-                        ${this._editingPin
+                        ${this._editingField === 'pin'
                             ? html`<div class="edit-help">Enter to save, Esc to cancel</div>`
                             : nothing}
                     </div>
@@ -917,112 +831,84 @@ class LockCodeManagerSlotCard extends LitElement {
         const { number_of_uses, calendar, calendar_next } = conditions;
         const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
         const hasCalendar = calendar !== undefined;
-
-        // Determine which conditions are blocking access
         const usesBlocking = hasNumberOfUses && number_of_uses === 0;
         const calendarBlocking = hasCalendar && calendar.active === false;
-
         const hasConditions = hasNumberOfUses || hasCalendar;
-
-        // Count conditions: blocking vs total
         const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasCalendar ? 1 : 0);
         const blockingConditions = (usesBlocking ? 1 : 0) + (calendarBlocking ? 1 : 0);
 
-        return html`
-            <div class="collapsible-section">
-                <div class="collapsible-header" @click=${this._toggleConditions}>
-                    <div class="collapsible-title">
-                        Conditions
-                        ${hasConditions
-                            ? html`<span
-                                      class="collapsible-badge ${blockingConditions > 0
-                                          ? 'warning'
-                                          : 'primary'}"
-                                      >${blockingConditions}/${totalConditions}</span
-                                  >
-                                  <span class="condition-blocking-icons">
-                                      ${hasNumberOfUses
-                                          ? html`<ha-svg-icon
-                                                class="condition-icon ${usesBlocking
-                                                    ? 'blocking'
-                                                    : ''}"
-                                                .path=${mdiPound}
-                                                title="${usesBlocking
-                                                    ? 'No uses remaining'
-                                                    : `${number_of_uses} uses remaining`}"
-                                            ></ha-svg-icon>`
-                                          : nothing}
-                                      ${hasCalendar
-                                          ? html`<ha-svg-icon
-                                                class="condition-icon ${calendarBlocking
-                                                    ? 'blocking'
-                                                    : ''}"
-                                                .path=${calendarBlocking
-                                                    ? mdiCalendarRemove
-                                                    : mdiCalendar}
-                                                title="${calendarBlocking
-                                                    ? 'Calendar blocking access'
-                                                    : 'Calendar allowing access'}"
-                                            ></ha-svg-icon>`
-                                          : nothing}
-                                  </span>`
-                            : nothing}
-                    </div>
-                    <ha-svg-icon
-                        class="collapsible-chevron"
-                        .path=${this._conditionsExpanded ? mdiChevronUp : mdiChevronDown}
-                    ></ha-svg-icon>
-                </div>
-                <div class="collapsible-content ${this._conditionsExpanded ? 'expanded' : ''}">
-                    ${hasConditions
-                        ? html`
-                              ${hasNumberOfUses
-                                  ? html`<div class="condition-row">
-                                        <ha-svg-icon
-                                            class="condition-row-icon ${usesBlocking
-                                                ? 'blocking'
-                                                : ''}"
-                                            .path=${mdiPound}
-                                        ></ha-svg-icon>
-                                        <span class="condition-label">Uses remaining</span>
-                                        <div style="flex: 1;">
-                                            ${this._editingNumberOfUses
-                                                ? html`<input
-                                                          class="edit-input"
-                                                          type="number"
-                                                          inputmode="numeric"
-                                                          min="0"
-                                                          .value=${String(number_of_uses ?? 0)}
-                                                          @blur=${this._handleNumberOfUsesBlur}
-                                                          @keydown=${this
-                                                              ._handleNumberOfUsesKeydown}
-                                                      />
-                                                      <div class="edit-help">
-                                                          Enter to save, Esc to cancel
-                                                      </div>`
-                                                : html`<span
-                                                      class="condition-value editable"
-                                                      @click=${this._startEditingNumberOfUses}
-                                                  >
-                                                      ${number_of_uses}
-                                                  </span>`}
-                                        </div>
-                                    </div>`
-                                  : nothing}
-                              ${hasCalendar
-                                  ? this._renderCalendarCondition(
-                                        calendar,
-                                        calendar_next,
-                                        conditions.calendar_entity_id
-                                    )
-                                  : nothing}
-                          `
-                        : html`<div class="no-conditions">
-                              No conditions configured for this slot
-                          </div>`}
-                </div>
-            </div>
-        `;
+        const headerExtra = hasConditions
+            ? html`<span class="collapsible-badge ${blockingConditions > 0 ? 'warning' : 'primary'}"
+                      >${blockingConditions}/${totalConditions}</span
+                  >
+                  <span class="condition-blocking-icons">
+                      ${hasNumberOfUses
+                          ? html`<ha-svg-icon
+                                class="condition-icon ${usesBlocking ? 'blocking' : ''}"
+                                .path=${mdiPound}
+                                title="${usesBlocking
+                                    ? 'No uses remaining'
+                                    : `${number_of_uses} uses remaining`}"
+                            ></ha-svg-icon>`
+                          : nothing}
+                      ${hasCalendar
+                          ? html`<ha-svg-icon
+                                class="condition-icon ${calendarBlocking ? 'blocking' : ''}"
+                                .path=${calendarBlocking ? mdiCalendarRemove : mdiCalendar}
+                                title="${calendarBlocking
+                                    ? 'Calendar blocking access'
+                                    : 'Calendar allowing access'}"
+                            ></ha-svg-icon>`
+                          : nothing}
+                  </span>`
+            : undefined;
+
+        const content = hasConditions
+            ? html`
+                  ${hasNumberOfUses
+                      ? html`<div class="condition-row">
+                            <ha-svg-icon
+                                class="condition-row-icon ${usesBlocking ? 'blocking' : ''}"
+                                .path=${mdiPound}
+                            ></ha-svg-icon>
+                            <span class="condition-label">Uses remaining</span>
+                            <div style="flex: 1;">
+                                ${this._editingField === 'numberOfUses'
+                                    ? html`<input
+                                              class="edit-input"
+                                              type="number"
+                                              inputmode="numeric"
+                                              min="0"
+                                              .value=${String(number_of_uses ?? 0)}
+                                              @blur=${this._handleEditBlur}
+                                              @keydown=${this._handleEditKeydown}
+                                          />
+                                          <div class="edit-help">Enter to save, Esc to cancel</div>`
+                                    : html`<span
+                                          class="condition-value editable"
+                                          @click=${() => this._startEditing('numberOfUses')}
+                                          >${number_of_uses}</span
+                                      >`}
+                            </div>
+                        </div>`
+                      : nothing}
+                  ${hasCalendar
+                      ? this._renderCalendarCondition(
+                            calendar,
+                            calendar_next,
+                            conditions.calendar_entity_id
+                        )
+                      : nothing}
+              `
+            : html`<div class="no-conditions">No conditions configured for this slot</div>`;
+
+        return this._renderCollapsible(
+            'Conditions',
+            this._conditionsExpanded,
+            this._toggleConditions,
+            content,
+            headerExtra
+        );
     }
 
     private _renderCalendarCondition(
@@ -1082,29 +968,23 @@ class LockCodeManagerSlotCard extends LitElement {
         const syncedCount = lockStatuses.filter((l) => l.inSync === true).length;
         const totalCount = lockStatuses.length;
 
-        return html`
-            <div class="collapsible-section">
-                <div class="collapsible-header" @click=${this._toggleLockStatus}>
-                    <div class="collapsible-title">
-                        Lock Status
-                        ${totalCount > 0
-                            ? html`<span class="collapsible-badge"
-                                  >${syncedCount}/${totalCount}</span
-                              >`
-                            : nothing}
-                    </div>
-                    <ha-svg-icon
-                        class="collapsible-chevron"
-                        .path=${this._lockStatusExpanded ? mdiChevronUp : mdiChevronDown}
-                    ></ha-svg-icon>
-                </div>
-                <div class="collapsible-content ${this._lockStatusExpanded ? 'expanded' : ''}">
-                    ${lockStatuses.length > 0
-                        ? lockStatuses.map((lock) => this._renderLockRow(lock))
-                        : html`<div class="no-conditions">No locks found</div>`}
-                </div>
-            </div>
-        `;
+        const headerExtra =
+            totalCount > 0
+                ? html`<span class="collapsible-badge">${syncedCount}/${totalCount}</span>`
+                : undefined;
+
+        const content =
+            lockStatuses.length > 0
+                ? html`${lockStatuses.map((lock) => this._renderLockRow(lock))}`
+                : html`<div class="no-conditions">No locks found</div>`;
+
+        return this._renderCollapsible(
+            'Lock Status',
+            this._lockStatusExpanded,
+            this._toggleLockStatus,
+            content,
+            headerExtra
+        );
     }
 
     private _renderLockRow(lock: LockSyncStatus): TemplateResult {
@@ -1188,11 +1068,28 @@ class LockCodeManagerSlotCard extends LitElement {
         return null;
     }
 
-    private _toggleReveal(): void {
-        this._revealed = !this._revealed;
-        // Resubscribe to get masked/unmasked PIN based on new reveal state
-        this._unsubscribe();
-        void this._subscribe();
+    // _toggleReveal inherited from mixin
+
+    // Render helper for collapsible sections
+    private _renderCollapsible(
+        title: string,
+        expanded: boolean,
+        onToggle: () => void,
+        content: TemplateResult,
+        headerExtra?: TemplateResult
+    ): TemplateResult {
+        return html`
+            <div class="collapsible-section">
+                <div class="collapsible-header" @click=${onToggle}>
+                    <div class="collapsible-title">${title} ${headerExtra ?? nothing}</div>
+                    <ha-svg-icon
+                        class="collapsible-chevron"
+                        .path=${expanded ? mdiChevronUp : mdiChevronDown}
+                    ></ha-svg-icon>
+                </div>
+                <div class="collapsible-content ${expanded ? 'expanded' : ''}">${content}</div>
+            </div>
+        `;
     }
 
     private _toggleConditions(): void {
@@ -1203,7 +1100,7 @@ class LockCodeManagerSlotCard extends LitElement {
         this._lockStatusExpanded = !this._lockStatusExpanded;
     }
 
-    private _handleEnabledToggle(e: Event): void {
+    private async _handleEnabledToggle(e: Event): Promise<void> {
         const target = e.target as HTMLInputElement;
         const newState = target.checked;
 
@@ -1211,130 +1108,101 @@ class LockCodeManagerSlotCard extends LitElement {
         const enabledEntityId = this._data?.entities?.enabled ?? undefined;
         if (!enabledEntityId) return;
 
-        void this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
-            entity_id: enabledEntityId
-        });
-    }
-
-    private _startEditingName(): void {
-        // Exit PIN editing if active
-        this._editingPin = false;
-        this._editingName = true;
-    }
-
-    private _handleNameBlur(e: Event): void {
-        const target = e.target as HTMLInputElement;
-        const newValue = target.value.trim();
-        this._saveNameValue(newValue);
-        this._editingName = false;
-    }
-
-    private _handleNameKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Enter') {
-            const target = e.target as HTMLInputElement;
-            const newValue = target.value.trim();
-            this._saveNameValue(newValue);
-            this._editingName = false;
-        } else if (e.key === 'Escape') {
-            this._editingName = false;
+        try {
+            await this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
+                entity_id: enabledEntityId
+            });
+        } catch (err) {
+            console.error('Failed to toggle slot enabled state:', err);
         }
     }
 
-    private _saveNameValue(value: string): void {
-        if (!this._hass) return;
-        const nameEntityId = this._data?.entities?.name ?? undefined;
-        if (!nameEntityId) return;
-
-        void this._hass.callService('text', 'set_value', {
-            entity_id: nameEntityId,
-            value
-        });
-    }
-
-    private _startEditingPin(): void {
-        // Exit name editing if active
-        this._editingName = false;
-
-        // When starting to edit PIN, reveal it first to show current value
-        if (!this._revealed) {
+    // Consolidated edit handlers for name, pin, and numberOfUses fields
+    private _startEditing(field: 'name' | 'pin' | 'numberOfUses'): void {
+        // Special handling for PIN: reveal first to show current value
+        if (field === 'pin' && !this._revealed) {
             this._revealed = true;
-            // Resubscribe to get unmasked PIN, then enter edit mode
             this._unsubscribe();
             void this._subscribe().then(() => {
-                this._editingPin = true;
+                this._editingField = 'pin';
             });
         } else {
-            this._editingPin = true;
+            this._editingField = field;
         }
     }
 
-    private _handlePinBlur(e: Event): void {
+    private _handleEditBlur(e: Event): void {
         const target = e.target as HTMLInputElement;
-        const newValue = target.value.trim();
-        this._savePinValue(newValue);
-        this._editingPin = false;
+        this._saveEditValue(target.value);
+        this._editingField = null;
     }
 
-    private _handlePinKeydown(e: KeyboardEvent): void {
+    private _handleEditKeydown(e: KeyboardEvent): void {
         if (e.key === 'Enter') {
             const target = e.target as HTMLInputElement;
-            const newValue = target.value.trim();
-            this._savePinValue(newValue);
-            this._editingPin = false;
+            this._saveEditValue(target.value);
+            this._editingField = null;
         } else if (e.key === 'Escape') {
-            this._editingPin = false;
+            this._editingField = null;
         }
     }
 
-    private _savePinValue(value: string): void {
-        if (!this._hass) return;
-        const pinEntityId = this._data?.entities?.pin ?? undefined;
-        if (!pinEntityId) return;
+    private async _saveEditValue(rawValue: string): Promise<void> {
+        if (!this._hass || !this._editingField) return;
 
-        void this._hass.callService('text', 'set_value', {
-            entity_id: pinEntityId,
-            value
-        });
-    }
-
-    private _startEditingNumberOfUses(): void {
-        // Exit other editing modes
-        this._editingName = false;
-        this._editingPin = false;
-        this._editingNumberOfUses = true;
-    }
-
-    private _handleNumberOfUsesBlur(e: Event): void {
-        const target = e.target as HTMLInputElement;
-        const newValue = parseInt(target.value, 10);
-        if (!isNaN(newValue) && newValue >= 0) {
-            this._saveNumberOfUsesValue(newValue);
-        }
-        this._editingNumberOfUses = false;
-    }
-
-    private _handleNumberOfUsesKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Enter') {
-            const target = e.target as HTMLInputElement;
-            const newValue = parseInt(target.value, 10);
-            if (!isNaN(newValue) && newValue >= 0) {
-                this._saveNumberOfUsesValue(newValue);
+        const fieldConfig: Record<
+            'name' | 'pin' | 'numberOfUses',
+            {
+                entityKey: keyof NonNullable<SlotCardData['entities']>;
+                errorMsg: string;
+                service: string;
+                serviceData: (v: string) => Record<string, unknown>;
             }
-            this._editingNumberOfUses = false;
-        } else if (e.key === 'Escape') {
-            this._editingNumberOfUses = false;
+        > = {
+            name: {
+                entityKey: 'name',
+                errorMsg: 'Failed to save name',
+                service: 'text.set_value',
+                serviceData: (v) => {
+                    return { value: v.trim() };
+                }
+            },
+            numberOfUses: {
+                entityKey: 'number_of_uses',
+                errorMsg: 'Failed to save number of uses',
+                service: 'number.set_value',
+                serviceData: (v) => {
+                    const num = parseInt(v, 10);
+                    return !isNaN(num) && num >= 0 ? { value: num } : {};
+                }
+            },
+            pin: {
+                entityKey: 'pin',
+                errorMsg: 'Failed to save PIN',
+                service: 'text.set_value',
+                serviceData: (v) => {
+                    return { value: v.trim() };
+                }
+            }
+        };
+
+        const config = fieldConfig[this._editingField];
+        const entityId = this._data?.entities?.[config.entityKey];
+        if (!entityId) return;
+
+        const serviceData = config.serviceData(rawValue);
+        // Skip if invalid value (e.g., non-numeric for numberOfUses)
+        if (Object.keys(serviceData).length === 0) return;
+
+        const [domain, service] = config.service.split('.');
+        try {
+            await this._hass.callService(domain, service, {
+                entity_id: entityId,
+                ...serviceData
+            });
+        } catch (err) {
+            console.error(config.errorMsg, err);
         }
-    }
-
-    private _saveNumberOfUsesValue(value: number): void {
-        if (!this._hass) return;
-        const numberOfUsesEntityId = this._data?.entities?.number_of_uses ?? undefined;
-        if (!numberOfUsesEntityId) return;
-
-        void this._hass.callService('number', 'set_value', {
-            entity_id: numberOfUsesEntityId,
-            value
-        });
     }
 
     private _navigateToCalendar(calendarEntityId: string): void {
@@ -1355,70 +1223,10 @@ class LockCodeManagerSlotCard extends LitElement {
         this.dispatchEvent(event);
     }
 
-    private _unsubscribe(): void {
-        if (this._unsub) {
-            this._unsub();
-            this._unsub = undefined;
-        }
-    }
-
-    private _shouldReveal(): boolean {
-        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        return mode === 'unmasked' || (mode === 'masked_with_reveal' && this._revealed);
-    }
-
-    private async _subscribe(): Promise<void> {
-        if (!this._hass || !this._config || this._unsub || this._subscribing) {
-            return;
-        }
-        if (!this._hass.connection?.subscribeMessage) {
-            this._error = 'Websocket connection unavailable';
-            return;
-        }
-
-        this._subscribing = true;
-        try {
-            // Build subscription message with either config_entry_id or config_entry_title
-            const subscribeMsg: {
-                config_entry_id?: string;
-                config_entry_title?: string;
-                reveal: boolean;
-                slot: number;
-                type: 'lock_code_manager/subscribe_code_slot';
-            } = {
-                reveal: this._shouldReveal(),
-                slot: this._config.slot,
-                type: 'lock_code_manager/subscribe_code_slot'
-            };
-            if (this._config.config_entry_id) {
-                subscribeMsg.config_entry_id = this._config.config_entry_id;
-            } else if (this._config.config_entry_title) {
-                subscribeMsg.config_entry_title = this._config.config_entry_title;
-            }
-
-            this._unsub = await this._hass.connection.subscribeMessage<SlotCardData>((event) => {
-                this._data = event;
-                this._error = undefined;
-                this.requestUpdate();
-            }, subscribeMsg);
-        } catch (err) {
-            this._data = undefined;
-            // Show detailed error for debugging
-            if (err instanceof Error) {
-                this._error = err.message;
-            } else if (typeof err === 'object' && err !== null && 'message' in err) {
-                this._error = String((err as { message: unknown }).message);
-            } else {
-                this._error = `Failed to subscribe: ${JSON.stringify(err)}`;
-            }
-            this.requestUpdate();
-        } finally {
-            this._subscribing = false;
-        }
-    }
+    // _unsubscribe, _shouldReveal, _subscribe inherited from mixin
 }
 
-customElements.define('lock-code-manager-slot', LockCodeManagerSlotCard);
+customElements.define('lcm-slot-card', LockCodeManagerSlotCard);
 
 declare global {
     interface Window {
@@ -1429,6 +1237,6 @@ declare global {
 window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays and controls a Lock Code Manager code slot',
-    name: 'Lock Code Manager Slot',
-    type: 'custom:lock-code-manager-slot'
+    name: 'LCM Slot Card',
+    type: 'custom:lcm-slot-card'
 });
