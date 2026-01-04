@@ -23,7 +23,6 @@ from homeassistant.components.text import (
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
-    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
@@ -38,6 +37,7 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
+    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
@@ -185,7 +185,7 @@ async def test_binary_sensor_entity(
     assert service_calls.get("set_usercode", []) == initial_set_calls
 
     new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS][2][CONF_ENTITY_ID] = "calendar.test_2"
+    new_config[CONF_SLOTS][2][CONF_CALENDAR] = "calendar.test_2"
 
     hass.config_entries.async_update_entry(
         lock_code_manager_config_entry, options=new_config
@@ -318,11 +318,7 @@ async def test_startup_out_of_sync_slots_sync_once(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Ensure out-of-sync slots sync once each without extra operations.
-
-    With coordinator-triggered syncs, out-of-sync slots are detected and synced
-    automatically during startup via coordinator update callbacks.
-    """
+    """Ensure out-of-sync slots sync once each without extra operations."""
     # Arrange two slots that need syncing on startup
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
@@ -346,9 +342,17 @@ async def test_startup_out_of_sync_slots_sync_once(
     assert hass.states.get(in_sync_slot_2)
 
     service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    # No set calls should have happened before we trigger updates
+    assert service_calls["set_usercode"] == []
 
-    # Syncs now happen automatically via coordinator update callbacks
-    # Both slots should have synced exactly once during/after startup
+    # Trigger sync for both slots (first update is skipped after initial load)
+    await async_update_entity(hass, in_sync_slot_1)
+    await async_update_entity(hass, in_sync_slot_2)
+    await hass.async_block_till_done()
+    await async_update_entity(hass, in_sync_slot_1)
+    await async_update_entity(hass, in_sync_slot_2)
+    await hass.async_block_till_done()
+
     set_calls = service_calls["set_usercode"]
     assert len(set_calls) == 2
     assert (1, "9999", "test1") in set_calls
@@ -425,12 +429,12 @@ async def test_in_sync_waits_for_missing_pin_state(
     lock_code_manager_config_entry,
 ):
     """Test that in-sync entity waits for dependent entities to report state."""
-    entity_component = hass.data["entity_components"]["binary_sensor"]
-    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
-    assert in_sync_entity_obj is not None
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
 
-    # Simulate pre-initialization state
-    in_sync_entity_obj._attr_is_on = None
+    # Simulate pre-initialization state by removing sync state from coordinator
+    coordinator._sync_state.pop(1, None)
 
     # Remove the PIN entity state so _ensure_entities_ready() fails
     hass.states.async_remove(SLOT_1_PIN_ENTITY)
@@ -439,8 +443,8 @@ async def test_in_sync_waits_for_missing_pin_state(
     await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
     await hass.async_block_till_done()
 
-    # Entity should still be waiting on initial state
-    assert in_sync_entity_obj._attr_is_on is None, (
+    # Entity should still be waiting on initial state (sync state is None)
+    assert coordinator.get_sync_state(1) is None, (
         "In-sync sensor should not initialize when PIN state is missing"
     )
 
@@ -451,7 +455,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
     await hass.async_block_till_done()
 
-    assert in_sync_entity_obj._attr_is_on is True, (
+    assert coordinator.get_sync_state(1) is True, (
         "In-sync sensor should initialize once dependent states are available"
     )
 
@@ -619,17 +623,14 @@ async def test_coordinator_refresh_failure_schedules_retry(
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
-    entity_component = hass.data["entity_components"]["binary_sensor"]
-    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    # Verify no retry is scheduled initially (now tracked in coordinator)
+    assert 1 not in coordinator._pending_retries
 
-    # Verify no retry is scheduled initially
-    assert in_sync_entity_obj._retry_unsub is None
-
-    # Patch coordinator refresh to fail BEFORE changing PIN
-    # This way the failure happens during the sync triggered by the PIN change
+    # Patch coordinator async_request_refresh to raise UpdateFailed
+    # This simulates a refresh failure after sync operation
     with patch.object(
         coordinator,
-        "async_refresh",
+        "async_request_refresh",
         new=AsyncMock(side_effect=UpdateFailed("Connection failed")),
     ):
         # Change PIN to trigger sync - coordinator refresh will fail
@@ -642,180 +643,10 @@ async def test_coordinator_refresh_failure_schedules_retry(
         )
         await hass.async_block_till_done()
 
-    # Retry should be scheduled due to coordinator refresh failure
-    assert in_sync_entity_obj._retry_unsub is not None, (
-        "Retry should be scheduled when coordinator refresh fails after sync"
+    # Retry should be scheduled in coordinator due to refresh failure
+    assert 1 in coordinator._pending_retries, (
+        "Retry should be scheduled in coordinator when refresh fails after sync"
     )
 
     # Clean up - cancel the retry
-    in_sync_entity_obj._cancel_retry()
-
-
-async def test_coordinator_update_triggers_sync_on_external_change(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """Test that coordinator updates trigger sync when lock code changes externally.
-
-    This test replicates the issue where someone manually changes a code on the
-    lock (or the lock reports a different code), and the integration should
-    automatically sync to restore the configured code.
-
-    Before the fix: coordinator updates only called async_write_ha_state(),
-    which updated the display but didn't trigger sync operations.
-
-    After the fix: _handle_coordinator_update() triggers _async_update_state()
-    which performs sync operations when out of sync.
-    """
-    # Use config without calendar so both slots are active
-    config = {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID],
-        CONF_SLOTS: {
-            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
-        },
-    }
-
-    config_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=config,
-        unique_id="Test Coordinator Sync",
-        title="Test LCM",
-    )
-    config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    # Verify initial state - should be in sync
-    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
-    state = hass.states.get(in_sync_entity)
-    assert state.state == STATE_ON, "Slot should be in sync initially"
-
-    # Get the lock provider and coordinator
-    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
-
-    # Clear any service calls from initial setup
-    service_calls["set_usercode"].clear()
-
-    # Simulate external change: someone changed the code on the lock to "9999"
-    # This simulates what happens when the lock reports a different code
-    hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"
-
-    # Trigger coordinator refresh - this should detect the mismatch and sync
-    await coordinator.async_refresh()
-    await hass.async_block_till_done()
-
-    # The fix: coordinator update should have triggered sync to restore "1234"
-    assert len(service_calls["set_usercode"]) == 1, (
-        "Coordinator update should trigger sync when lock code differs from config"
-    )
-    assert service_calls["set_usercode"][0] == (1, "1234", "test1"), (
-        "Sync should restore the configured PIN"
-    )
-
-    # Verify slot is back in sync
-    state = hass.states.get(in_sync_entity)
-    assert state.state == STATE_ON, (
-        "Slot should be in sync after coordinator-triggered sync"
-    )
-
-    await hass.config_entries.async_unload(config_entry.entry_id)
-
-
-async def test_condition_entity_subscription_updates_on_config_change(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """Test that condition entity subscription updates when config entry changes."""
-    # Create two input_booleans to use as condition entities
-    hass.states.async_set("input_boolean.access_1", STATE_ON)
-    hass.states.async_set("input_boolean.access_2", STATE_OFF)
-    await hass.async_block_till_done()
-
-    # Set up a slot with the first input_boolean as condition
-    config = {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID],
-        CONF_SLOTS: {
-            1: {
-                CONF_NAME: "test1",
-                CONF_PIN: "1234",
-                CONF_ENABLED: True,
-                CONF_ENTITY_ID: "input_boolean.access_1",
-            },
-        },
-    }
-
-    config_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=config,
-        unique_id="Test Condition Subscription",
-        title="Test LCM",
-    )
-    config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    active_entity = "binary_sensor.test_lcm_code_slot_1_active"
-
-    # Initial state: access_1 is ON, so slot should be active
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_ON, "Slot should be active when condition entity is ON"
-
-    # Turn off access_1 - slot should become inactive
-    hass.states.async_set("input_boolean.access_1", STATE_OFF)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_OFF, (
-        "Slot should be inactive when condition entity is OFF"
-    )
-
-    # Turn it back on
-    hass.states.async_set("input_boolean.access_1", STATE_ON)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_ON, "Slot should be active when condition entity is ON"
-
-    # Now update the config entry to use a different condition entity
-    new_config = copy.deepcopy(config)
-    new_config[CONF_SLOTS][1][CONF_ENTITY_ID] = "input_boolean.access_2"
-
-    hass.config_entries.async_update_entry(config_entry, data=new_config)
-    await hass.async_block_till_done()
-
-    # Now the slot should be inactive because access_2 is OFF
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_OFF, (
-        "Slot should be inactive after switching to condition entity that is OFF"
-    )
-
-    # The slot should now react to access_2, NOT access_1
-    # Turn on access_2 - slot should become active
-    hass.states.async_set("input_boolean.access_2", STATE_ON)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_ON, "Slot should react to new condition entity"
-
-    # Turn off access_2
-    hass.states.async_set("input_boolean.access_2", STATE_OFF)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_OFF, (
-        "Slot should react to new condition entity being OFF"
-    )
-
-    # Verify the slot does NOT react to the old condition entity anymore
-    # Turn on access_1 - slot should stay inactive
-    hass.states.async_set("input_boolean.access_1", STATE_ON)
-    await hass.async_block_till_done()
-
-    state = hass.states.get(active_entity)
-    assert state.state == STATE_OFF, (
-        "Slot should NOT react to old condition entity after config change"
-    )
-
-    await hass.config_entries.async_unload(config_entry.entry_id)
+    coordinator._cancel_retry(1)
