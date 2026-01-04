@@ -1,6 +1,7 @@
 """Test websockets."""
 
 import asyncio
+from datetime import datetime
 import logging
 from unittest.mock import AsyncMock, patch
 
@@ -28,6 +29,14 @@ from custom_components.lock_code_manager.const import (
     CONF_PIN,
     CONF_SLOTS,
     DOMAIN,
+)
+from custom_components.lock_code_manager.websocket import (
+    _find_config_entry_by_title,
+    _get_bool_state,
+    _get_last_changed,
+    _get_number_state,
+    _get_slot_calendar_entity_id,
+    _get_text_state,
 )
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
@@ -872,3 +881,224 @@ async def test_set_lock_usercode_clear_operation_failure(
         assert not msg["success"]
         assert msg["error"]["code"] == "unknown_error"
         assert "Clear failed" in msg["error"]["message"]
+
+
+# =============================================================================
+# Tests for helper functions
+# =============================================================================
+
+
+class TestGetTextState:
+    """Tests for _get_text_state helper."""
+
+    async def test_returns_valid_state(self, hass: HomeAssistant) -> None:
+        """Test returns state value for valid entity."""
+        hass.states.async_set("text.test", "hello")
+        assert _get_text_state(hass, "text.test") == "hello"
+
+    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
+        """Test returns None for unknown state."""
+        hass.states.async_set("text.test", "unknown")
+        assert _get_text_state(hass, "text.test") is None
+
+    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
+        """Test returns None for unavailable state."""
+        hass.states.async_set("text.test", "unavailable")
+        assert _get_text_state(hass, "text.test") is None
+
+    async def test_returns_none_for_nonexistent(self, hass: HomeAssistant) -> None:
+        """Test returns None for nonexistent entity."""
+        assert _get_text_state(hass, "text.nonexistent") is None
+
+    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
+        """Test returns None when entity_id is None."""
+        assert _get_text_state(hass, None) is None
+
+
+class TestGetBoolState:
+    """Tests for _get_bool_state helper."""
+
+    async def test_returns_true_for_on(self, hass: HomeAssistant) -> None:
+        """Test returns True for 'on' state."""
+        hass.states.async_set("switch.test", "on")
+        assert _get_bool_state(hass, "switch.test") is True
+
+    async def test_returns_false_for_off(self, hass: HomeAssistant) -> None:
+        """Test returns False for 'off' state."""
+        hass.states.async_set("switch.test", "off")
+        assert _get_bool_state(hass, "switch.test") is False
+
+    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
+        """Test returns None for unknown state."""
+        hass.states.async_set("switch.test", "unknown")
+        assert _get_bool_state(hass, "switch.test") is None
+
+    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
+        """Test returns None for unavailable state."""
+        hass.states.async_set("switch.test", "unavailable")
+        assert _get_bool_state(hass, "switch.test") is None
+
+    async def test_returns_none_for_nonexistent(self, hass: HomeAssistant) -> None:
+        """Test returns None for nonexistent entity."""
+        assert _get_bool_state(hass, "switch.nonexistent") is None
+
+    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
+        """Test returns None when entity_id is None."""
+        assert _get_bool_state(hass, None) is None
+
+
+class TestGetNumberState:
+    """Tests for _get_number_state helper."""
+
+    async def test_returns_integer(self, hass: HomeAssistant) -> None:
+        """Test returns integer for valid number."""
+        hass.states.async_set("number.test", "42")
+        assert _get_number_state(hass, "number.test") == 42
+
+    async def test_returns_integer_from_float(self, hass: HomeAssistant) -> None:
+        """Test converts float to integer."""
+        hass.states.async_set("number.test", "3.14")
+        assert _get_number_state(hass, "number.test") == 3
+
+    async def test_returns_none_for_invalid(self, hass: HomeAssistant) -> None:
+        """Test returns None for non-numeric value."""
+        hass.states.async_set("number.test", "not_a_number")
+        assert _get_number_state(hass, "number.test") is None
+
+    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
+        """Test returns None for unknown state."""
+        hass.states.async_set("number.test", "unknown")
+        assert _get_number_state(hass, "number.test") is None
+
+    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
+        """Test returns None for unavailable state."""
+        hass.states.async_set("number.test", "unavailable")
+        assert _get_number_state(hass, "number.test") is None
+
+    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
+        """Test returns None when entity_id is None."""
+        assert _get_number_state(hass, None) is None
+
+
+class TestGetLastChanged:
+    """Tests for _get_last_changed helper."""
+
+    async def test_returns_iso_timestamp(self, hass: HomeAssistant) -> None:
+        """Test returns ISO timestamp for valid entity."""
+        hass.states.async_set("sensor.test", "value")
+        result = _get_last_changed(hass, "sensor.test")
+        assert result is not None
+        # Should be a valid ISO format string
+        datetime.fromisoformat(result)
+
+    async def test_returns_none_for_nonexistent(self, hass: HomeAssistant) -> None:
+        """Test returns None for nonexistent entity."""
+        assert _get_last_changed(hass, "sensor.nonexistent") is None
+
+    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
+        """Test returns None when entity_id is None."""
+        assert _get_last_changed(hass, None) is None
+
+    async def test_require_valid_state_filters_unknown(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Test require_valid_state=True returns None for unknown state."""
+        hass.states.async_set("sensor.test", "unknown")
+        assert _get_last_changed(hass, "sensor.test", require_valid_state=True) is None
+
+    async def test_require_valid_state_filters_unavailable(
+        self, hass: HomeAssistant
+    ) -> None:
+        """Test require_valid_state=True returns None for unavailable state."""
+        hass.states.async_set("sensor.test", "unavailable")
+        assert _get_last_changed(hass, "sensor.test", require_valid_state=True) is None
+
+    async def test_require_valid_state_allows_valid(self, hass: HomeAssistant) -> None:
+        """Test require_valid_state=True returns timestamp for valid state."""
+        hass.states.async_set("sensor.test", "valid_value")
+        result = _get_last_changed(hass, "sensor.test", require_valid_state=True)
+        assert result is not None
+
+
+class TestFindConfigEntryByTitle:
+    """Tests for _find_config_entry_by_title helper."""
+
+    async def test_finds_entry_by_exact_title(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test finds config entry by exact title."""
+        entry = _find_config_entry_by_title(hass, "Mock Title")
+        assert entry is not None
+        assert entry.entry_id == lock_code_manager_config_entry.entry_id
+
+    async def test_finds_entry_by_slugified_title(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test finds config entry by slugified title match."""
+        # "mock-title" should match "Mock Title" after slugification
+        entry = _find_config_entry_by_title(hass, "mock-title")
+        assert entry is not None
+        assert entry.entry_id == lock_code_manager_config_entry.entry_id
+
+    async def test_returns_none_for_nonexistent(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test returns None for nonexistent title."""
+        entry = _find_config_entry_by_title(hass, "nonexistent-title")
+        assert entry is None
+
+
+class TestGetSlotCalendarEntityId:
+    """Tests for _get_slot_calendar_entity_id helper."""
+
+    async def test_returns_calendar_for_slot_with_calendar(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test returns calendar entity ID for slot with calendar configured."""
+        # Slot 2 has a calendar configured in the test fixtures
+        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 2)
+        assert calendar_id == "calendar.test_1"
+
+    async def test_returns_none_for_slot_without_calendar(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test returns None for slot without calendar."""
+        # Slot 1 has no calendar configured
+        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 1)
+        assert calendar_id is None
+
+    async def test_returns_none_for_nonexistent_slot(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test returns None for nonexistent slot."""
+        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 999)
+        assert calendar_id is None
+
+    async def test_handles_string_slot_keys(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Test handles slot config with string keys."""
+        # The config uses string keys internally, test that int lookup works
+        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 2)
+        assert calendar_id == "calendar.test_1"

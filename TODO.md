@@ -3,12 +3,7 @@
 ## New Items
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
-- Use both custom cards in strategy instead of entities card.
-- Refactor websocket module to promote code reuse. Consider refactoring websocket commands to avoid
-  overlap/duplication in logic and have better separation of responsibilities (balanced against
-  making excessive WS calls).
 - Test visual editor for both cards.
-- Go through `.ha/zwave_reconnect_test_plan.md` for PR 704.
 
 ## High Priority Investigation
 
@@ -350,6 +345,51 @@ no visibility to users or entities.
 
 ## Features
 
+### Add Schedule and Entity Condition Types
+
+**Problem:** Users report that managing calendars in HA is too painful for simple
+recurring schedules. Calendars are overkill for "weekdays 9-5" patterns.
+
+**Proposed Solution:** Add alternative condition types alongside `calendar`:
+
+| Condition Type | Use Case |
+|----------------|----------|
+| `calendar` | One-time events, external calendar sync (existing) |
+| `schedule` | Recurring weekly patterns via HA schedule helper |
+| `entity` | Custom logic via any binary sensor/input_boolean |
+
+**Implementation:**
+
+1. **Config Flow Changes:**
+   - Add condition type selector (calendar/schedule/entity)
+   - Show appropriate entity selector based on type
+   - `schedule`: EntitySelector filtered to `schedule` domain
+   - `entity`: EntitySelector filtered to `binary_sensor`, `input_boolean`
+
+2. **Binary Sensor Changes:**
+   - Update `_get_entity_state()` to handle different condition types
+   - Schedule entities: check if current time is within schedule (state = "on")
+   - Entity conditions: directly use entity state
+
+3. **Slot Data Model:**
+   - Add `condition_type` field: `calendar | schedule | entity`
+   - Add `condition_entity` field (alternative to `calendar`)
+   - Maintain backward compatibility with existing `calendar` field
+
+4. **Frontend Updates:**
+   - Update slot card to show condition type
+   - Show appropriate icon/label for each type
+
+**Benefits:**
+
+- Schedule helper is much simpler for recurring patterns
+- Entity condition allows maximum flexibility (templates, automations)
+- Calendar remains available for complex/one-time events
+
+**Estimated Effort:** Medium (8-12 hours)
+**Priority:** Medium-High
+**Status:** Not started
+
 ### Advanced Calendar Configuration
 
 **Feature Request:** Allow slot number and PIN to be configured directly in
@@ -614,10 +654,9 @@ For each new provider:
 ### Additional Feature Notes
 
 - Better out-of-sync visibility in the UI.
-- Websocket commands already expose slot data via
-  `lock_code_manager/subscribe_lock_slot_data`, and the
-  `lock-code-data-card` frontend subscribes to it; follow-up is to document the
-  API and card usage.
+- Websocket commands expose lock data via `lock_code_manager/subscribe_lock_codes`
+  and slot data via `lock_code_manager/subscribe_code_slot`. The `lcm-lock-codes-card`
+  and `lcm-slot-card` frontend cards subscribe to these respectively.
 
 ## Docs and Process
 
