@@ -9,98 +9,36 @@
 
 ### Fix Locks Out of Sync Issue
 
-**Problem:** Users report that locks go out of sync and the integration does not
-automatically re-sync them. The in-sync binary sensor shows "off" but the
-integration does not trigger automatic sync operations to fix the issue.
+**Status:** ✅ **RESOLVED** (January 2026)
 
-**Initial Analysis:** Based on PR review comments, the current auto-sync logic
-has issues:
+**Solution Implemented:** Moved sync logic ownership from binary sensor to coordinator.
 
-**Current Behavior (in `binary_sensor.py`):**
+**Key Changes:**
 
-- `_async_update_state()` runs on:
-  - Initial load (sets in-sync state without operations)
-  - Entity state changes (tracked via `async_track_state_change_event`)
-- When out of sync, `_async_update_state()` performs a set/clear operation and
-  refreshes the coordinator.
-- `async_update()` is still used for periodic polling and retry callbacks.
-  It only proceeds when:
-  - The internal `_lock` is not locked
-  - The entity is out of sync (`self.is_on` is False)
-  - The lock state is available
-  - The coordinator last update succeeded (or a retry is active)
+1. **Coordinator now owns sync operations** (`coordinator.py`):
+   - `async_request_sync()` - executes set/clear operations with automatic retries
+   - `mark_synced()` / `mark_out_of_sync()` - manages per-slot sync state
+   - `get_sync_state()` - returns sync status for binary sensor to display
+   - `_pending_retries` - tracks per-slot retry callbacks (infinite retries until success)
 
-**Issues Identified:**
+2. **Binary sensor simplified** (`binary_sensor.py`):
+   - Now read-only: displays sync state from coordinator via `is_on` property
+   - Detects out-of-sync conditions and requests sync via coordinator
+   - No longer owns retry logic or performs sync operations directly
 
-1. **Sync triggers may miss coordinator-only changes:** State change events
-   trigger sync attempts, but coordinator updates without any entity state
-   changes still rely on polling (`should_poll=True`).
-2. **Lock condition problematic:** `self._lock.locked()` check may prevent
-   syncing when it should happen
-3. **No user-initiated sync:** There is a `hard_refresh_usercodes` service, but
-   no per-slot/manual sync operation
+3. **Retry behavior:**
+   - Infinite retries every 10 seconds until success
+   - New sync requests replace pending retries (latest state always wins)
+   - E.g., if "set" fails and user disables slot, pending retry is cancelled and
+     replaced with "clear" operation
 
-**Existing Coverage:**
+**Files Modified:**
 
-- Tests cover startup flapping prevention, out-of-sync detection, retry
-  scheduling, and disconnected lock handling (see `tests/test_binary_sensor.py`).
-
-**Root Cause Areas to Investigate:**
-
-1. **When does `async_update()` actually get called?**
-   - Periodic polling (entity `should_poll=True`)
-   - Retry callbacks (after `LockDisconnected` or refresh errors)
-2. **What does `self._lock.locked()` check?**
-   - This is an `asyncio.Lock()`, not lock state
-   - Prevents concurrent sync operations
-   - May block legitimate sync attempts if lock held
-3. **Why do some state changes still not trigger sync?**
-   - `_async_update_state()` exits early if entities are missing/unavailable,
-     the coordinator update failed, or the event is not for a tracked entity.
-   - Investigate whether coordinator-only changes should enqueue a sync.
-
-**Proposed Solutions:**
-
-#### Option 1: More Aggressive Auto-Sync
-
-- Remove or adjust `self._lock.locked()` check in `async_update()`
-- Add retry logic with exponential backoff
-- Trigger sync on any PIN/name/active state change, not just during polling
-- Add sync on coordinator refresh success
-
-#### Option 2: Manual Sync Service
-
-- Add `lock_code_manager.sync_slot` service action
-- Add `lock_code_manager.sync_all_slots` service action
-- Allow users to manually trigger sync when they notice issues
-- Could be called from automations
-
-#### Option 3: Better State Change Detection
-
-- Enhance `_async_update_state()` to be more responsive
-- Remove guards that prevent sync on legitimate state changes
-- Add more detailed logging to understand why syncs do not happen
-- Consider firing HA events when sync fails repeatedly
-
-**Investigation Steps:**
-
-1. Add detailed logging to understand when `async_update()` is called
-2. Add logging to show why sync operations are skipped
-3. Monitor `self._lock.locked()` state to see if it blocks syncs
-4. Review state change event handling to ensure it triggers appropriately
-5. Test with deliberately out-of-sync locks to reproduce issue
-
-**Files to Modify:**
-
-- `custom_components/lock_code_manager/binary_sensor.py` (`async_update`,
-  `_async_update_state`, retry scheduling)
-- `custom_components/lock_code_manager/__init__.py` (if adding new services)
-- `tests/test_binary_sensor.py` (sync behavior, retries, coordinator-only changes)
-
-**Estimated Effort:** High (16-24 hours)
-**Priority:** High
-**Status:** Not started
-**Related Issues:** Review comments on PR indicating locks do not auto-sync
+- `custom_components/lock_code_manager/coordinator.py` - sync operation methods
+- `custom_components/lock_code_manager/binary_sensor.py` - simplified to read-only
+- `custom_components/lock_code_manager/__init__.py` - split async_update_listener
+- `tests/test_coordinator.py` - 14 new tests for sync operations
+- `tests/test_binary_sensor.py` - updated tests for new architecture
 
 ## Testing
 
@@ -162,59 +100,6 @@ and prevent regressions.
 
 **Estimated Effort:** High (20+ hours)
 **Priority:** Low-Medium
-**Status:** Not started
-
-#### Move Sync Logic to Coordinator
-
-**Current Architecture Issues:**
-
-- In-sync binary sensor reads PIN config from text entities via
-  `_get_entity_state()`
-- Reads lock state from coordinator data
-- Compares them and triggers sync operations (set_usercode/clear_usercode)
-- Cross-entity dependencies create race conditions during startup
-- Current guard uses `_attr_is_on is None` to avoid initial sync operations
-
-**Proposed Solution:**
-Move sync logic entirely into the coordinator:
-
-- Coordinator already has access to both desired state (from config) and actual
-  state (from lock)
-- Coordinator performs sync operations during its `_async_update_data()` cycle
-- Binary sensor becomes read-only, just displays coordinator's computed in-sync
-  status
-- Text/number/switch entities remain as config views
-
-**Example Implementation:**
-
-```python
-# In coordinator._async_update_data()
-actual_code = await self.provider.get_usercodes()
-desired_code = self.config_entry.data[slot]["pin"]
-
-if actual_code != desired_code and slot_enabled:
-    await self.provider.set_usercode(slot, desired_code)
-
-return {"in_sync": actual_code == desired_code, "actual_code": actual_code}
-```
-
-**Benefits:**
-
-- Eliminates cross-entity state reading
-- Removes `_initial_state_loaded` flag and startup detection logic
-- No race conditions during startup
-- Simpler, more centralized sync logic
-- Coordinator is single source of truth
-
-**Considerations:**
-
-- Major architectural change
-- Would need to update binary sensor to be read-only
-- Config updates still flow through text/switch entities
-- Need to ensure coordinator runs sync on config changes
-
-**Estimated Effort:** High (16-24 hours)
-**Priority:** Medium
 **Status:** Not started
 
 ### Convert Config and Internal Dicts to Dataclasses
