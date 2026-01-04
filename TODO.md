@@ -3,9 +3,6 @@
 ## New Items
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
-- Refactor websocket module to promote code reuse. Consider refactoring websocket commands to avoid
-  overlap/duplication in logic and have better separation of responsibilities (balanced against
-  making excessive WS calls).
 - Test visual editor for both cards.
 
 ## High Priority Investigation

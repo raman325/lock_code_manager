@@ -65,6 +65,97 @@ from .providers import BaseLock
 ERR_NOT_LOADED = "not_loaded"
 
 
+# =============================================================================
+# State Helper Functions
+# =============================================================================
+
+
+def _get_text_state(hass: HomeAssistant, entity_id: str | None) -> str | None:
+    """Get text state from an entity, returning None if unavailable."""
+    if not entity_id:
+        return None
+    if state := hass.states.get(entity_id):
+        if state.state and state.state not in ("unknown", "unavailable"):
+            return state.state
+    return None
+
+
+def _get_bool_state(hass: HomeAssistant, entity_id: str | None) -> bool | None:
+    """Get boolean state from an entity, returning None if unavailable."""
+    if not entity_id:
+        return None
+    if state := hass.states.get(entity_id):
+        if state.state == "on":
+            return True
+        if state.state == "off":
+            return False
+    return None
+
+
+def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
+    """Get integer state from a number entity, returning None if unavailable."""
+    if not entity_id:
+        return None
+    if state := hass.states.get(entity_id):
+        if state.state and state.state not in ("unknown", "unavailable"):
+            try:
+                return int(float(state.state))
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def _get_last_changed(
+    hass: HomeAssistant, entity_id: str | None, require_valid_state: bool = False
+) -> str | None:
+    """Get last_changed timestamp as ISO string.
+
+    Args:
+        hass: Home Assistant instance.
+        entity_id: Entity ID to get last_changed from.
+        require_valid_state: If True, only return timestamp if state is not
+            unknown/unavailable. Useful for event entities where last_changed
+            only matters if the event has actually fired.
+
+    """
+    if not entity_id:
+        return None
+    if state := hass.states.get(entity_id):
+        if require_valid_state and state.state in ("unknown", "unavailable"):
+            return None
+        if state.last_changed:
+            return state.last_changed.isoformat()
+    return None
+
+
+# =============================================================================
+# Config Entry Helpers
+# =============================================================================
+
+
+def _find_config_entry_by_title(hass: HomeAssistant, title: str) -> ConfigEntry | None:
+    """Find a config entry by title (slugified comparison)."""
+    return next(
+        (
+            entry
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if slugify(entry.title) == slugify(title)
+        ),
+        None,
+    )
+
+
+def _get_slot_calendar_entity_id(
+    config_entry: ConfigEntry, slot_num: int
+) -> str | None:
+    """Get calendar entity ID from slot config."""
+    slots_data = get_entry_data(config_entry, CONF_SLOTS, {})
+    slot_config = slots_data.get(slot_num) or slots_data.get(str(slot_num)) or {}
+    if isinstance(slot_config, dict):
+        return slot_config.get(CONF_CALENDAR)
+    return None
+
+
 def async_get_entry(
     orig_func: Callable[
         [HomeAssistant, websocket_api.ActiveConnection, dict[str, Any], ConfigEntry],
@@ -84,14 +175,7 @@ def async_get_entry(
     ) -> None:
         """Provide user specific data and store to function."""
         if config_entry_title := msg.get("config_entry_title"):
-            config_entry = next(
-                (
-                    entry
-                    for entry in hass.config_entries.async_entries(DOMAIN)
-                    if slugify(entry.title) == slugify(config_entry_title)
-                ),
-                None,
-            )
+            config_entry = _find_config_entry_by_title(hass, config_entry_title)
         elif config_entry_id := msg.get("config_entry_id"):
             config_entry = hass.config_entries.async_get_entry(config_entry_id)
         else:
@@ -365,32 +449,13 @@ def _get_slot_metadata(
     - active: From binary sensor (True=on, False=off, None=unknown)
     - enabled: From switch (True=on, False=off, None=unknown)
     """
-
-    def _get_text_state(entity_id: str | None) -> str | None:
-        if not entity_id:
-            return None
-        if state := hass.states.get(entity_id):
-            if state.state and state.state not in ("unknown", "unavailable"):
-                return state.state
-        return None
-
-    def _get_bool_state(entity_id: str | None) -> bool | None:
-        if not entity_id:
-            return None
-        if state := hass.states.get(entity_id):
-            if state.state == "on":
-                return True
-            if state.state == "off":
-                return False
-        return None
-
     slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
     return {
         slot_num: SlotMetadata(
-            name=_get_text_state(ids.name),
-            configured_pin=_get_text_state(ids.pin),
-            active=_get_bool_state(ids.active),
-            enabled=_get_bool_state(ids.enabled),
+            name=_get_text_state(hass, ids.name),
+            configured_pin=_get_text_state(hass, ids.pin),
+            active=_get_bool_state(hass, ids.active),
+            enabled=_get_bool_state(hass, ids.enabled),
         )
         for slot_num, ids in slot_entities.items()
     }
@@ -562,14 +627,7 @@ async def get_locks(
         entry_locks = get_entry_data(entry, CONF_LOCKS, []) if entry else []
         locks = {k: v for k, v in all_locks.items() if k in entry_locks}
     elif config_entry_title := msg.get("config_entry_title"):
-        entry = next(
-            (
-                e
-                for e in hass.config_entries.async_entries(DOMAIN)
-                if slugify(e.title) == slugify(config_entry_title)
-            ),
-            None,
-        )
+        entry = _find_config_entry_by_title(hass, config_entry_title)
         entry_locks = get_entry_data(entry, CONF_LOCKS, []) if entry else []
         locks = {k: v for k, v in all_locks.items() if k in entry_locks}
     else:
@@ -705,63 +763,12 @@ def _serialize_slot_card_data(
     reveal: bool,
 ) -> dict[str, Any]:
     """Serialize slot data for the slot card."""
-
-    def _get_text_state(entity_id: str | None) -> str | None:
-        if not entity_id:
-            return None
-        if state := hass.states.get(entity_id):
-            if state.state and state.state not in ("unknown", "unavailable"):
-                return state.state
-        return None
-
-    def _get_bool_state(entity_id: str | None) -> bool | None:
-        if not entity_id:
-            return None
-        if state := hass.states.get(entity_id):
-            if state.state == "on":
-                return True
-            if state.state == "off":
-                return False
-        return None
-
-    def _get_number_state(entity_id: str | None) -> int | None:
-        if not entity_id:
-            return None
-        if state := hass.states.get(entity_id):
-            if state.state and state.state not in ("unknown", "unavailable"):
-                try:
-                    return int(float(state.state))
-                except (ValueError, TypeError):
-                    return None
-        return None
-
-    def _get_last_changed(
-        entity_id: str | None, require_valid_state: bool = False
-    ) -> str | None:
-        """Get last_changed timestamp as ISO string.
-
-        Args:
-            entity_id: Entity ID to get last_changed from.
-            require_valid_state: If True, only return timestamp if state is not
-                unknown/unavailable. Useful for event entities where last_changed
-                only matters if the event has actually fired.
-
-        """
-        if not entity_id:
-            return None
-        if state := hass.states.get(entity_id):
-            if require_valid_state and state.state in ("unknown", "unavailable"):
-                return None
-            if state.last_changed:
-                return state.last_changed.isoformat()
-        return None
-
-    # Get slot metadata
-    name = _get_text_state(slot_entities.name_entity_id) or ""
-    pin = _get_text_state(slot_entities.pin_entity_id)
-    enabled = _get_bool_state(slot_entities.enabled_entity_id)
-    active = _get_bool_state(slot_entities.active_entity_id)
-    number_of_uses = _get_number_state(slot_entities.number_of_uses_entity_id)
+    # Get slot metadata using module-level helpers
+    name = _get_text_state(hass, slot_entities.name_entity_id) or ""
+    pin = _get_text_state(hass, slot_entities.pin_entity_id)
+    enabled = _get_bool_state(hass, slot_entities.enabled_entity_id)
+    active = _get_bool_state(hass, slot_entities.active_entity_id)
+    number_of_uses = _get_number_state(hass, slot_entities.number_of_uses_entity_id)
 
     # Get last_used from event entity state
     # EventEntity's state IS the timestamp (ISO format) of when the last event fired
@@ -781,12 +788,8 @@ def _serialize_slot_card_data(
                             "friendly_name", last_used_lock_id
                         )
 
-    # Get calendar from config (slot keys can be int or str)
-    slots_data = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_config = slots_data.get(slot_num) or slots_data.get(str(slot_num)) or {}
-    calendar_entity_id = (
-        slot_config.get(CONF_CALENDAR) if isinstance(slot_config, dict) else None
-    )
+    # Get calendar from config using helper
+    calendar_entity_id = _get_slot_calendar_entity_id(config_entry, slot_num)
 
     # Build per-lock status
     locks_data: list[dict[str, Any]] = []
@@ -800,8 +803,8 @@ def _serialize_slot_card_data(
 
         lock_name = _get_lock_friendly_name(hass, lock)
         in_sync_entity_id = in_sync_map.get(lock_entity_id)
-        in_sync = _get_bool_state(in_sync_entity_id)
-        last_synced = _get_last_changed(in_sync_entity_id)
+        in_sync = _get_bool_state(hass, in_sync_entity_id)
+        last_synced = _get_last_changed(hass, in_sync_entity_id)
 
         # Get code from coordinator
         coordinator = lock.coordinator
@@ -923,13 +926,7 @@ async def subscribe_code_slot(
     # Get entity data
     slot_entities = _get_slot_entity_data(hass, config_entry, slot_num)
     in_sync_map = _get_slot_in_sync_entity_ids(hass, config_entry, slot_num)
-
-    # Get calendar entity ID from slot config
-    slots_data = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_config = slots_data.get(slot_num) or slots_data.get(str(slot_num)) or {}
-    calendar_entity_id = (
-        slot_config.get(CONF_CALENDAR) if isinstance(slot_config, dict) else None
-    )
+    calendar_entity_id = _get_slot_calendar_entity_id(config_entry, slot_num)
 
     @callback
     def _send_update() -> None:
