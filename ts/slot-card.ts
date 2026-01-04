@@ -500,7 +500,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     static getConfigElement(): HTMLElement {
-        return document.createElement('lcm-slot-card-editor');
+        return document.createElement('lcm-slot-editor');
     }
 
     static getStubConfig(): Partial<LockCodeManagerSlotCardConfig> {
@@ -1226,7 +1226,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     // _unsubscribe, _shouldReveal, _subscribe inherited from mixin
 }
 
-customElements.define('lcm-slot-card', LockCodeManagerSlotCard);
+customElements.define('lcm-slot', LockCodeManagerSlotCard);
 
 declare global {
     interface Window {
@@ -1238,5 +1238,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays and controls a Lock Code Manager code slot',
     name: 'LCM Slot Card',
-    type: 'custom:lcm-slot-card'
+    type: 'custom:lcm-slot'
 });

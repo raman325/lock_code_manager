@@ -390,7 +390,7 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     static getConfigElement(): HTMLElement {
-        return document.createElement('lcm-lock-codes-card-editor');
+        return document.createElement('lcm-lock-codes-editor');
     }
 
     static getStubConfig(): Partial<LockCodesCardConfig> {
@@ -941,7 +941,7 @@ class LockCodesCard extends LockCodesCardBase {
     }
 }
 
-customElements.define('lcm-lock-codes-card', LockCodesCard);
+customElements.define('lcm-lock-codes', LockCodesCard);
 
 declare global {
     interface Window {
@@ -953,5 +953,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
     name: 'LCM Lock Codes Card',
-    type: 'custom:lcm-lock-codes-card'
+    type: 'custom:lcm-lock-codes'
 });

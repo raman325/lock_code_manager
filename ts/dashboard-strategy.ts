@@ -72,7 +72,7 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                 return {
                     code_display: config.code_display ?? DEFAULT_CODE_DISPLAY,
                     lock_entity_id: lockEntityId,
-                    type: 'custom:lcm-lock-codes-card'
+                    type: 'custom:lcm-lock-codes'
                 };
             });
 

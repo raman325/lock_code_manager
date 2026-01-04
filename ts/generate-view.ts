@@ -113,7 +113,7 @@ export async function generateView(
             return {
                 code_display,
                 lock_entity_id: lockEntityId,
-                type: 'custom:lcm-lock-codes-card'
+                type: 'custom:lcm-lock-codes'
             };
         });
         if (lockCards.length > 0) {
@@ -288,7 +288,7 @@ export function generateNewSlotCard(
         show_lock_status,
         show_lock_sync,
         slot: slotNum,
-        type: 'custom:lcm-slot-card'
+        type: 'custom:lcm-slot'
     };
     if (collapsed_sections && collapsed_sections.length > 0) {
         card.collapsed_sections = collapsed_sections;

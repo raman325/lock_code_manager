@@ -655,8 +655,8 @@ For each new provider:
 
 - Better out-of-sync visibility in the UI.
 - Websocket commands expose lock data via `lock_code_manager/subscribe_lock_codes`
-  and slot data via `lock_code_manager/subscribe_code_slot`. The `lcm-lock-codes-card`
-  and `lcm-slot-card` frontend cards subscribe to these respectively.
+  and slot data via `lock_code_manager/subscribe_code_slot`. The `lcm-lock-codes`
+  and `lcm-slot` frontend cards subscribe to these respectively.
 
 ## Docs and Process
 

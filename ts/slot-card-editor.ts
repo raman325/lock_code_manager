@@ -285,4 +285,4 @@ class LcmSlotCardEditor extends LitElement {
     }
 }
 
-customElements.define('lcm-slot-card-editor', LcmSlotCardEditor);
+customElements.define('lcm-slot-editor', LcmSlotCardEditor);
