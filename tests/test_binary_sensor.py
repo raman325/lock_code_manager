@@ -429,12 +429,12 @@ async def test_in_sync_waits_for_missing_pin_state(
     lock_code_manager_config_entry,
 ):
     """Test that in-sync entity waits for dependent entities to report state."""
-    entity_component = hass.data["entity_components"]["binary_sensor"]
-    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
-    assert in_sync_entity_obj is not None
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
 
-    # Simulate pre-initialization state
-    in_sync_entity_obj._attr_is_on = None
+    # Simulate pre-initialization state by removing sync state from coordinator
+    coordinator._sync_state.pop(1, None)
 
     # Remove the PIN entity state so _ensure_entities_ready() fails
     hass.states.async_remove(SLOT_1_PIN_ENTITY)
@@ -443,8 +443,8 @@ async def test_in_sync_waits_for_missing_pin_state(
     await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
     await hass.async_block_till_done()
 
-    # Entity should still be waiting on initial state
-    assert in_sync_entity_obj._attr_is_on is None, (
+    # Entity should still be waiting on initial state (sync state is None)
+    assert coordinator.get_sync_state(1) is None, (
         "In-sync sensor should not initialize when PIN state is missing"
     )
 
@@ -455,7 +455,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
     await hass.async_block_till_done()
 
-    assert in_sync_entity_obj._attr_is_on is True, (
+    assert coordinator.get_sync_state(1) is True, (
         "In-sync sensor should initialize once dependent states are available"
     )
 
@@ -623,17 +623,14 @@ async def test_coordinator_refresh_failure_schedules_retry(
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
-    entity_component = hass.data["entity_components"]["binary_sensor"]
-    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    # Verify no retry is scheduled initially (now tracked in coordinator)
+    assert 1 not in coordinator._pending_retries
 
-    # Verify no retry is scheduled initially
-    assert in_sync_entity_obj._retry_unsub is None
-
-    # Patch coordinator refresh to fail BEFORE changing PIN
-    # This way the failure happens during the sync triggered by the PIN change
+    # Patch coordinator async_request_refresh to raise UpdateFailed
+    # This simulates a refresh failure after sync operation
     with patch.object(
         coordinator,
-        "async_refresh",
+        "async_request_refresh",
         new=AsyncMock(side_effect=UpdateFailed("Connection failed")),
     ):
         # Change PIN to trigger sync - coordinator refresh will fail
@@ -646,10 +643,10 @@ async def test_coordinator_refresh_failure_schedules_retry(
         )
         await hass.async_block_till_done()
 
-    # Retry should be scheduled due to coordinator refresh failure
-    assert in_sync_entity_obj._retry_unsub is not None, (
-        "Retry should be scheduled when coordinator refresh fails after sync"
+    # Retry should be scheduled in coordinator due to refresh failure
+    assert 1 in coordinator._pending_retries, (
+        "Retry should be scheduled in coordinator when refresh fails after sync"
     )
 
     # Clean up - cancel the retry
-    in_sync_entity_obj._cancel_retry()
+    coordinator._cancel_retry(1)
