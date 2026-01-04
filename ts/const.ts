@@ -21,11 +21,23 @@ export const KEY_ORDER = [
     CODE_EVENT_KEY
 ];
 export const DOMAIN = 'lock_code_manager';
-export const DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false;
-export const DEFAULT_INCLUDE_CODE_DATA_VIEW = false;
-export const DEFAULT_INCLUDE_IN_SYNC_SENSORS = true;
-export const DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal';
+
+// Strategy defaults (new option names)
+export const DEFAULT_CODE_DISPLAY = 'masked_with_reveal';
+export const DEFAULT_SHOW_CODE_SENSORS = false;
+export const DEFAULT_SHOW_CONDITIONS = true;
+export const DEFAULT_SHOW_LOCK_STATUS = true;
+export const DEFAULT_SHOW_LOCK_SYNC = true;
 export const DEFAULT_USE_SLOT_CARDS = true;
+export const DEFAULT_INCLUDE_CODE_DATA_VIEW = false;
+
+// Legacy defaults (deprecated, kept for backwards compatibility)
+/** @deprecated Use DEFAULT_CODE_DISPLAY */
+export const DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = DEFAULT_CODE_DISPLAY;
+/** @deprecated Use DEFAULT_SHOW_CODE_SENSORS */
+export const DEFAULT_INCLUDE_CODE_SLOT_SENSORS = DEFAULT_SHOW_CODE_SENSORS;
+/** @deprecated Use DEFAULT_SHOW_LOCK_SYNC */
+export const DEFAULT_INCLUDE_IN_SYNC_SENSORS = DEFAULT_SHOW_LOCK_SYNC;
 
 export const FOLD_ENTITY_ROW_SEARCH_STRING = 'fold-entity-row.js';
 export const FOLD_ENTITY_ROW_REPO_NAME = 'thomasloven/lovelace-fold-entity-row';

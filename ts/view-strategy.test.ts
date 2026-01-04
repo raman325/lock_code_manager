@@ -83,10 +83,9 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false
-            // DEFAULT_INCLUDE_IN_SYNC_SENSORS = true
-            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
-            // DEFAULT_USE_SLOT_CARDS = true
+            // Expected: show_code_sensors=false, show_lock_sync=true, include_code_data_view=false,
+            // code_display='masked_with_reveal', use_slot_cards=true, show_conditions=true,
+            // show_lock_status=true, collapsed_sections=undefined
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 mockConfigEntry,
@@ -95,11 +94,44 @@ describe('LockCodeManagerViewStrategy', () => {
                 true,
                 false,
                 'masked_with_reveal',
-                true
+                true,
+                true,
+                true,
+                undefined
             );
         });
 
-        it('passes include_code_slot_sensors to generateView', async () => {
+        it('passes show_code_sensors to generateView (new option)', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', show_code_sensors: true }),
+                hass
+            );
+
+            // show_code_sensors=true (set explicitly), rest are defaults
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                expect.anything(),
+                true,
+                true,
+                false,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('maps legacy include_code_slot_sensors to show_code_sensors', async () => {
             const hass = createMockHass({
                 callWS: () => {
                     return { config_entry: {}, entities: [] };
@@ -113,9 +145,7 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // include_code_slot_sensors = true, DEFAULT_INCLUDE_IN_SYNC_SENSORS = true
-            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
-            // DEFAULT_USE_SLOT_CARDS = true
+            // show_code_sensors=true (from legacy include_code_slot_sensors), rest are defaults
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
@@ -124,11 +154,44 @@ describe('LockCodeManagerViewStrategy', () => {
                 true,
                 false,
                 'masked_with_reveal',
-                true
+                true,
+                true,
+                true,
+                undefined
             );
         });
 
-        it('passes include_in_sync_sensors to generateView', async () => {
+        it('passes show_lock_sync to generateView (new option)', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', show_lock_sync: false }),
+                hass
+            );
+
+            // show_lock_sync=false (set explicitly), rest are defaults
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                expect.anything(),
+                false,
+                false,
+                false,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('maps legacy include_in_sync_sensors to show_lock_sync', async () => {
             const hass = createMockHass({
                 callWS: () => {
                     return { config_entry: {}, entities: [] };
@@ -142,9 +205,7 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // DEFAULT_INCLUDE_CODE_SLOT_SENSORS = false, include_in_sync_sensors = false
-            // DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = 'masked_with_reveal'
-            // DEFAULT_USE_SLOT_CARDS = true
+            // show_lock_sync=false (from legacy include_in_sync_sensors), rest are defaults
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
@@ -153,7 +214,45 @@ describe('LockCodeManagerViewStrategy', () => {
                 false,
                 false,
                 'masked_with_reveal',
-                true
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('new option takes precedence over legacy option', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            // New option (show_code_sensors: false) should take precedence over legacy (include_code_slot_sensors: true)
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({
+                    config_entry_id: 'test',
+                    include_code_slot_sensors: true,
+                    show_code_sensors: false
+                }),
+                hass
+            );
+
+            // show_code_sensors=false (new option takes precedence over legacy true), rest are defaults
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                expect.anything(),
+                false,
+                true,
+                false,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                undefined
             );
         });
 

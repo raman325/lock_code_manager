@@ -7,11 +7,27 @@ export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
 }
 
 export interface LockCodeManagerStrategyConfig {
+    /** @deprecated Use code_display instead */
     code_data_view_code_display?: CodeDisplayMode;
+    /** How to display codes in slot cards and lock codes cards */
+    code_display?: CodeDisplayMode;
+    /** Sections to show collapsed by default in slot cards */
+    collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Add a "User Codes" view/section with lock codes cards */
     include_code_data_view?: boolean;
+    /** @deprecated Use show_code_sensors instead */
     include_code_slot_sensors?: boolean;
+    /** @deprecated Use show_lock_sync instead */
     include_in_sync_sensors?: boolean;
-    /** Use the new streamlined slot cards instead of entities cards (default: true for new installs) */
+    /** Show code sensors (actual code on lock) in lock status section */
+    show_code_sensors?: boolean;
+    /** Show conditions section in slot cards */
+    show_conditions?: boolean;
+    /** Show lock status section in slot cards */
+    show_lock_status?: boolean;
+    /** Show sync status per lock in lock status */
+    show_lock_sync?: boolean;
+    /** Use the new streamlined slot cards instead of entities cards (default: true) */
     use_slot_cards?: boolean;
 }
 

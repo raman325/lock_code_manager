@@ -28,11 +28,14 @@ export async function generateView(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
     entities: EntityRegistryEntry[],
-    include_code_slot_sensors: boolean,
-    include_in_sync_sensors: boolean,
+    show_code_sensors: boolean,
+    show_lock_sync: boolean,
     include_code_data_view: boolean,
-    code_data_view_code_display: string,
-    use_slot_cards: boolean
+    code_display: string,
+    use_slot_cards: boolean,
+    show_conditions = true,
+    show_lock_status = true,
+    collapsed_sections?: ('conditions' | 'lock_status')[]
 ): Promise<LovelaceViewConfig> {
     const callData = {
         type: 'lock_code_manager/get_config_entry_entities'
@@ -82,8 +85,11 @@ export async function generateView(
               generateNewSlotCard(
                   configEntry,
                   slotMapping.slotNum,
-                  include_code_slot_sensors,
-                  include_in_sync_sensors
+                  show_code_sensors,
+                  show_lock_sync,
+                  show_conditions,
+                  show_lock_status,
+                  collapsed_sections
               )
           )
         : slotMappings.map((slotMapping) =>
@@ -92,8 +98,8 @@ export async function generateView(
                   configEntry,
                   slotMapping,
                   useFoldEntityRow,
-                  include_code_slot_sensors,
-                  include_in_sync_sensors
+                  show_code_sensors,
+                  show_lock_sync
               )
           );
 
@@ -105,7 +111,7 @@ export async function generateView(
         });
         const lockCards = sortedLockIds.map((lockEntityId) => {
             return {
-                code_display: code_data_view_code_display,
+                code_display,
                 lock_entity_id: lockEntityId,
                 type: 'custom:lcm-lock-codes-card'
             };
@@ -208,8 +214,8 @@ export function generateSlotCard(
     configEntry: ConfigEntryJSONFragment,
     slotMapping: SlotMapping,
     useFoldEntityRow: boolean,
-    include_code_slot_sensors: boolean,
-    include_in_sync_sensors: boolean
+    show_code_sensors: boolean,
+    show_lock_sync: boolean
 ): LovelaceCardConfig {
     return {
         cards: [
@@ -237,7 +243,7 @@ export function generateSlotCard(
                         'Conditions',
                         useFoldEntityRow
                     ),
-                    ...(include_in_sync_sensors
+                    ...(show_lock_sync
                         ? maybeGenerateFoldEntityRowCard(
                               hass,
                               configEntry,
@@ -246,7 +252,7 @@ export function generateSlotCard(
                               useFoldEntityRow
                           )
                         : []),
-                    ...(include_code_slot_sensors
+                    ...(show_code_sensors
                         ? maybeGenerateFoldEntityRowCard(
                               hass,
                               configEntry,
@@ -268,17 +274,26 @@ export function generateSlotCard(
 export function generateNewSlotCard(
     configEntry: ConfigEntryJSONFragment,
     slotNum: number,
-    include_code_slot_sensors: boolean,
-    include_in_sync_sensors: boolean
+    show_code_sensors: boolean,
+    show_lock_sync: boolean,
+    show_conditions = true,
+    show_lock_status = true,
+    collapsed_sections?: ('conditions' | 'lock_status')[]
 ): LovelaceCardConfig {
     // Use the new slot card with built-in header, inline editing, and websocket updates
-    return {
+    const card: LovelaceCardConfig = {
         config_entry_id: configEntry.entry_id,
-        show_code_sensors: include_code_slot_sensors,
-        show_lock_sync: include_in_sync_sensors,
+        show_code_sensors,
+        show_conditions,
+        show_lock_status,
+        show_lock_sync,
         slot: slotNum,
         type: 'custom:lcm-slot-card'
     };
+    if (collapsed_sections && collapsed_sections.length > 0) {
+        card.collapsed_sections = collapsed_sections;
+    }
+    return card;
 }
 
 /** @internal - exported for testing via generate-view.internal.ts */
