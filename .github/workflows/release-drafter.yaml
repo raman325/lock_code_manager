@@ -13,13 +13,24 @@ on:
       - reopened
       - synchronize
       - unlabeled
+  # pull_request_target is needed for fork PRs - it runs in the base repo context
+  # with elevated permissions required for pull-requests: write
+  pull_request_target:
+    types:
+      - labeled
+      - opened
+      - reopened
+      - synchronize
+      - unlabeled
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-drafter-${{ github.ref }}
+  # Use head_ref for PRs (branch name) or ref for pushes (refs/heads/main)
+  # This ensures PR updates are serialized while different PRs run concurrently
+  group: release-drafter-${{ github.head_ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
