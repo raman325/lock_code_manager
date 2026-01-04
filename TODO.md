@@ -10,6 +10,41 @@
   - Fix existing type errors (~30 errors as of Jan 2026)
 - Test visual editor for both cards.
 
+## High Priority Investigation
+
+### Fix Locks Out of Sync Issue
+
+**Status:** ✅ **RESOLVED** (January 2026)
+
+**Solution Implemented:** Moved sync logic ownership from binary sensor to coordinator.
+
+**Key Changes:**
+
+1. **Coordinator now owns sync operations** (`coordinator.py`):
+   - `async_request_sync()` - executes set/clear operations with automatic retries
+   - `mark_synced()` / `mark_out_of_sync()` - manages per-slot sync state
+   - `get_sync_state()` - returns sync status for binary sensor to display
+   - `_pending_retries` - tracks per-slot retry callbacks (infinite retries until success)
+
+2. **Binary sensor simplified** (`binary_sensor.py`):
+   - Now read-only: displays sync state from coordinator via `is_on` property
+   - Detects out-of-sync conditions and requests sync via coordinator
+   - No longer owns retry logic or performs sync operations directly
+
+3. **Retry behavior:**
+   - Infinite retries every 10 seconds until success
+   - New sync requests replace pending retries (latest state always wins)
+   - E.g., if "set" fails and user disables slot, pending retry is cancelled and
+     replaced with "clear" operation
+
+**Files Modified:**
+
+- `custom_components/lock_code_manager/coordinator.py` - sync operation methods
+- `custom_components/lock_code_manager/binary_sensor.py` - simplified to read-only
+- `custom_components/lock_code_manager/__init__.py` - split async_update_listener
+- `tests/test_coordinator.py` - 14 new tests for sync operations
+- `tests/test_binary_sensor.py` - updated tests for new architecture
+
 ## Testing
 
 - Strategy UI module has unit tests in `ts/*.test.ts` and Python tests for
@@ -70,59 +105,6 @@ and prevent regressions.
 
 **Estimated Effort:** High (20+ hours)
 **Priority:** Low-Medium
-**Status:** Not started
-
-#### Move Sync Logic to Coordinator
-
-**Current Architecture Issues:**
-
-- In-sync binary sensor reads PIN config from text entities via
-  `_get_entity_state()`
-- Reads lock state from coordinator data
-- Compares them and triggers sync operations (set_usercode/clear_usercode)
-- Cross-entity dependencies create race conditions during startup
-- Current guard uses `_attr_is_on is None` to avoid initial sync operations
-
-**Proposed Solution:**
-Move sync logic entirely into the coordinator:
-
-- Coordinator already has access to both desired state (from config) and actual
-  state (from lock)
-- Coordinator performs sync operations during its `_async_update_data()` cycle
-- Binary sensor becomes read-only, just displays coordinator's computed in-sync
-  status
-- Text/number/switch entities remain as config views
-
-**Example Implementation:**
-
-```python
-# In coordinator._async_update_data()
-actual_code = await self.provider.get_usercodes()
-desired_code = self.config_entry.data[slot]["pin"]
-
-if actual_code != desired_code and slot_enabled:
-    await self.provider.set_usercode(slot, desired_code)
-
-return {"in_sync": actual_code == desired_code, "actual_code": actual_code}
-```
-
-**Benefits:**
-
-- Eliminates cross-entity state reading
-- Removes `_initial_state_loaded` flag and startup detection logic
-- No race conditions during startup
-- Simpler, more centralized sync logic
-- Coordinator is single source of truth
-
-**Considerations:**
-
-- Major architectural change
-- Would need to update binary sensor to be read-only
-- Config updates still flow through text/switch entities
-- Need to ensure coordinator runs sync on config changes
-
-**Estimated Effort:** High (16-24 hours)
-**Priority:** Medium
 **Status:** Not started
 
 ### Convert Config and Internal Dicts to Dataclasses
