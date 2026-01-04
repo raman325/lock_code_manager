@@ -257,9 +257,16 @@ def connection_check_interval(self) -> timedelta | None:
 
 ### Subscribe to Events
 
-```python
-_event_unsub: Callable[[], None] | None = field(init=False, default=None)
+First, add a class-level field to store the unsubscribe callback:
 
+```python
+# Add this field to your dataclass (before method definitions)
+_event_unsub: Callable[[], None] | None = field(init=False, default=None)
+```
+
+Then implement the subscription methods:
+
+```python
 @callback
 def subscribe_push_updates(self) -> None:
     """Subscribe to real-time value updates."""
