@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_INCLUDE_CODE_DATA_VIEW } from './const';
+import { DEFAULT_SHOW_ALL_CODES_FOR_LOCKS } from './const';
 import {
     LockCodeManagerDashboardStrategy,
     NO_CONFIG_MESSAGE,
@@ -60,107 +60,135 @@ describe('LockCodeManagerDashboardStrategy', () => {
         });
 
         it('generates views for each config entry', async () => {
-            const hass = createMockHass({
-                callWS: () => [
+            const hass = createDashboardMockHass({
+                configEntries: [
                     { entry_id: 'entry1', title: 'Front Door' },
                     { entry_id: 'entry2', title: 'Back Door' }
-                ]
+                ],
+                locksPerEntry: { entry1: [], entry2: [] }
             });
 
-            const result = await LockCodeManagerDashboardStrategy.generate(testConfig({}), hass);
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_all_codes_for_locks: false }),
+                hass
+            );
 
             expect(result.title).toBe('Lock Code Manager');
             expect(result.views).toHaveLength(2);
             expect(result.views[0]).toEqual({
                 path: 'front-door',
                 strategy: {
+                    code_display: undefined,
+                    collapsed_sections: undefined,
                     config_entry_id: 'entry1',
-                    include_code_slot_sensors: undefined,
-                    include_in_sync_sensors: undefined,
-                    type: 'custom:lock-code-manager'
+                    show_code_sensors: undefined,
+                    show_conditions: undefined,
+                    show_lock_status: undefined,
+                    show_lock_sync: undefined,
+                    type: 'custom:lock-code-manager',
+                    use_slot_cards: undefined
                 },
                 title: 'Front Door'
             });
             expect(result.views[1]).toEqual({
                 path: 'back-door',
                 strategy: {
+                    code_display: undefined,
+                    collapsed_sections: undefined,
                     config_entry_id: 'entry2',
-                    include_code_slot_sensors: undefined,
-                    include_in_sync_sensors: undefined,
-                    type: 'custom:lock-code-manager'
+                    show_code_sensors: undefined,
+                    show_conditions: undefined,
+                    show_lock_status: undefined,
+                    show_lock_sync: undefined,
+                    type: 'custom:lock-code-manager',
+                    use_slot_cards: undefined
                 },
                 title: 'Back Door'
             });
         });
 
         it('adds placeholder view when only one config entry exists', async () => {
-            const hass = createMockHass({
-                callWS: () => [{ entry_id: 'entry1', title: 'Only Lock' }]
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Only Lock' }],
+                locksPerEntry: { entry1: [] }
             });
 
-            const result = await LockCodeManagerDashboardStrategy.generate(testConfig({}), hass);
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_all_codes_for_locks: false }),
+                hass
+            );
 
             expect(result.views).toHaveLength(2);
             expect(result.views[1]).toEqual({ title: ZERO_WIDTH_SPACE });
         });
 
         it('does not add placeholder when multiple config entries exist', async () => {
-            const hass = createMockHass({
-                callWS: () => [
+            const hass = createDashboardMockHass({
+                configEntries: [
                     { entry_id: 'entry1', title: 'Lock 1' },
                     { entry_id: 'entry2', title: 'Lock 2' }
-                ]
+                ],
+                locksPerEntry: { entry1: [], entry2: [] }
             });
 
-            const result = await LockCodeManagerDashboardStrategy.generate(testConfig({}), hass);
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_all_codes_for_locks: false }),
+                hass
+            );
 
             expect(result.views).toHaveLength(2);
             expect(result.views.every((v) => 'strategy' in v)).toBe(true);
         });
 
-        it('passes include_code_slot_sensors config to view strategies', async () => {
-            const hass = createMockHass({
-                callWS: () => [{ entry_id: 'entry1', title: 'Lock' }]
+        it('passes show_code_sensors config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ include_code_slot_sensors: true }),
+                testConfig({ show_code_sensors: true, show_all_codes_for_locks: false }),
                 hass
             );
 
-            const view = result.views[0] as { strategy: { include_code_slot_sensors: boolean } };
-            expect(view.strategy.include_code_slot_sensors).toBe(true);
+            const view = result.views[0] as { strategy: { show_code_sensors: boolean } };
+            expect(view.strategy.show_code_sensors).toBe(true);
         });
 
-        it('passes include_in_sync_sensors config to view strategies', async () => {
-            const hass = createMockHass({
-                callWS: () => [{ entry_id: 'entry1', title: 'Lock' }]
+        it('passes show_lock_sync config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ include_in_sync_sensors: false }),
+                testConfig({ show_lock_sync: false, show_all_codes_for_locks: false }),
                 hass
             );
 
-            const view = result.views[0] as { strategy: { include_in_sync_sensors: boolean } };
-            expect(view.strategy.include_in_sync_sensors).toBe(false);
+            const view = result.views[0] as { strategy: { show_lock_sync: boolean } };
+            expect(view.strategy.show_lock_sync).toBe(false);
         });
 
         it('slugifies config entry titles for view paths', async () => {
-            const hass = createMockHass({
-                callWS: () => [{ entry_id: 'entry1', title: 'My Special Lock!' }]
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'My Special Lock!' }],
+                locksPerEntry: { entry1: [] }
             });
 
-            const result = await LockCodeManagerDashboardStrategy.generate(testConfig({}), hass);
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_all_codes_for_locks: false }),
+                hass
+            );
 
             const view = result.views[0] as { path: string };
             expect(view.path).toBe('my-special-lock');
         });
 
-        describe('include_code_data_view', () => {
-            it('adds User Codes view by default when DEFAULT_INCLUDE_CODE_DATA_VIEW is true', async () => {
+        describe('show_all_codes_for_locks', () => {
+            it('adds User Codes view by default when DEFAULT_SHOW_ALL_CODES_FOR_LOCKS is true', async () => {
                 // Skip if default is false
-                if (!DEFAULT_INCLUDE_CODE_DATA_VIEW) return;
+                if (!DEFAULT_SHOW_ALL_CODES_FOR_LOCKS) return;
 
                 const hass = createDashboardMockHass({
                     configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
@@ -186,14 +214,14 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 expect(lockCodesView.cards[0].cards?.[0].lock_entity_id).toBe('lock.front_door');
             });
 
-            it('does not add Lock Codes view when include_code_data_view is false', async () => {
+            it('does not add Lock Codes view when show_all_codes_for_locks is false', async () => {
                 const hass = createDashboardMockHass({
                     configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
                     locksPerEntry: { entry1: ['lock.front_door'] }
                 });
 
                 const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ include_code_data_view: false }),
+                    testConfig({ show_all_codes_for_locks: false }),
                     hass
                 );
 
@@ -203,15 +231,15 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 expect(lockCodesView).toBeUndefined();
             });
 
-            it('adds User Codes view when include_code_data_view is true', async () => {
+            it('adds User Codes view when show_all_codes_for_locks is true', async () => {
                 const hass = createDashboardMockHass({
                     configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
                     locksPerEntry: { entry1: ['lock.front_door', 'lock.back_door'] }
                 });
 
-                const config = DEFAULT_INCLUDE_CODE_DATA_VIEW
+                const config = DEFAULT_SHOW_ALL_CODES_FOR_LOCKS
                     ? testConfig({})
-                    : testConfig({ include_code_data_view: true });
+                    : testConfig({ show_all_codes_for_locks: true });
                 const result = await LockCodeManagerDashboardStrategy.generate(config, hass);
 
                 const lockCodesView = result.views.find(
@@ -236,7 +264,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 });
 
                 const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ include_code_data_view: true }),
+                    testConfig({ show_all_codes_for_locks: true }),
                     hass
                 );
 
@@ -255,7 +283,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 });
 
                 const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ include_code_data_view: true }),
+                    testConfig({ show_all_codes_for_locks: true }),
                     hass
                 );
 
