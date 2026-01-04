@@ -893,10 +893,10 @@ describe('generateView', () => {
 
         expect(result.cards).toHaveLength(2);
         // Verify cards are new slot cards, not vertical-stack with entities
-        expect(result.cards[0].type).toBe('custom:lcm-slot-card');
+        expect(result.cards[0].type).toBe('custom:lcm-slot');
         expect(result.cards[0].slot).toBe(1);
         expect(result.cards[0].config_entry_id).toBe('entry123');
-        expect(result.cards[1].type).toBe('custom:lcm-slot-card');
+        expect(result.cards[1].type).toBe('custom:lcm-slot');
         expect(result.cards[1].slot).toBe(2);
     });
 });
@@ -920,7 +920,7 @@ describe('generateNewSlotCard', () => {
     it('generates slot card with correct type and slot number', () => {
         const result = generateNewSlotCard(testConfigEntry, 3, false, false);
 
-        expect(result.type).toBe('custom:lcm-slot-card');
+        expect(result.type).toBe('custom:lcm-slot');
         expect(result.slot).toBe(3);
         expect(result.config_entry_id).toBe('entry456');
     });
@@ -940,7 +940,7 @@ describe('generateNewSlotCard', () => {
     it('passes both options when enabled', () => {
         const result = generateNewSlotCard(testConfigEntry, 5, true, true);
 
-        expect(result.type).toBe('custom:lcm-slot-card');
+        expect(result.type).toBe('custom:lcm-slot');
         expect(result.slot).toBe(5);
         expect(result.show_code_sensors).toBe(true);
         expect(result.show_lock_sync).toBe(true);

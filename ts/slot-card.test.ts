@@ -42,7 +42,7 @@ describe('LockCodeManagerSlotCard logic', () => {
                 validateConfig({
                     config_entry_title: 'My Lock Manager',
                     slot: 1,
-                    type: 'custom:lcm-slot-card'
+                    type: 'custom:lcm-slot'
                 })
             ).toEqual({ valid: true });
         });
@@ -80,7 +80,7 @@ describe('LockCodeManagerSlotCard logic', () => {
                 validateConfig({
                     config_entry_id: 'abc123',
                     slot: 9999,
-                    type: 'custom:lcm-slot-card'
+                    type: 'custom:lcm-slot'
                 })
             ).toEqual({ valid: true });
         });
@@ -90,7 +90,7 @@ describe('LockCodeManagerSlotCard logic', () => {
                 validateConfig({
                     config_entry_id: 'abc123',
                     slot: 1,
-                    type: 'custom:lcm-slot-card'
+                    type: 'custom:lcm-slot'
                 })
             ).toEqual({ valid: true });
         });
@@ -103,7 +103,7 @@ describe('LockCodeManagerSlotCard logic', () => {
                     config_entry_id: 'abc123',
                     show_code_sensors: true,
                     slot: 5,
-                    type: 'custom:lcm-slot-card'
+                    type: 'custom:lcm-slot'
                 })
             ).toEqual({ valid: true });
         });

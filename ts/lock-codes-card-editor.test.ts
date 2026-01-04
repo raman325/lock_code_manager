@@ -286,7 +286,7 @@ describe('LockCodesCardEditor logic', () => {
             expect(
                 validateConfig({
                     lock_entity_id: 'lock.front_door',
-                    type: 'custom:lcm-lock-codes-card'
+                    type: 'custom:lcm-lock-codes'
                 })
             ).toEqual({ valid: true });
         });
@@ -297,7 +297,7 @@ describe('LockCodesCardEditor logic', () => {
                     code_display: 'masked',
                     lock_entity_id: 'lock.front_door',
                     title: 'Custom Title',
-                    type: 'custom:lcm-lock-codes-card'
+                    type: 'custom:lcm-lock-codes'
                 })
             ).toEqual({ valid: true });
         });

@@ -103,7 +103,7 @@ export interface LockCodesCardConfig {
     code_display?: CodeDisplayMode;
     lock_entity_id: string;
     title?: string;
-    type: 'custom:lcm-lock-codes-card';
+    type: 'custom:lcm-lock-codes';
 }
 
 export interface LockCodeManagerSlotCardConfig {
@@ -125,7 +125,7 @@ export interface LockCodeManagerSlotCardConfig {
     show_lock_sync?: boolean;
     /** Slot number to display */
     slot: number;
-    type: 'custom:lcm-slot-card';
+    type: 'custom:lcm-slot';
 }
 
 export interface SlotCardLockStatus {

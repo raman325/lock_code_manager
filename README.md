@@ -108,7 +108,7 @@ strategy:
 
 ### Slot Card
 
-The `lcm-slot-card` displays a single code slot with inline editing, real-time WebSocket
+The `lcm-slot` displays a single code slot with inline editing, real-time WebSocket
 updates, and collapsible sections for conditions and lock status. This is the default card
 used by the strategies when `use_slot_cards: true` (the default).
 
@@ -129,7 +129,7 @@ used by the strategies when `use_slot_cards: true` (the default).
 Example card configuration:
 
 ```yaml
-type: custom:lcm-slot-card
+type: custom:lcm-slot
 config_entry_id: 1234567890abcdef
 slot: 1
 code_display: masked_with_reveal
@@ -139,7 +139,7 @@ collapsed_sections:
 
 ### Lock Codes Card
 
-The `lcm-lock-codes-card` displays all code slots for a specific lock with status badges,
+The `lcm-lock-codes` displays all code slots for a specific lock with status badges,
 inline editing for unmanaged slots, and click-to-navigate for LCM-managed slots.
 
 | Option           | Required | Default              | Description                                    |
@@ -151,7 +151,7 @@ inline editing for unmanaged slots, and click-to-navigate for LCM-managed slots.
 Example card configuration:
 
 ```yaml
-type: custom:lcm-lock-codes-card
+type: custom:lcm-lock-codes
 lock_entity_id: lock.front_door
 title: Front Door Codes
 code_display: masked_with_reveal

@@ -167,4 +167,4 @@ class LockCodesCardEditor extends LitElement {
     }
 }
 
-customElements.define('lcm-lock-codes-card-editor', LockCodesCardEditor);
+customElements.define('lcm-lock-codes-editor', LockCodesCardEditor);
