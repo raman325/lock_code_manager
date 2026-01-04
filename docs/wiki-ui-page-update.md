@@ -29,7 +29,7 @@ strategy:
 | `show_conditions`       | `true`               | Show conditions section in slot cards                          |
 | `show_lock_status`      | `true`               | Show lock status section in slot cards                         |
 | `show_lock_sync`        | `true`               | Show sync status per lock in lock status                       |
-| `collapsed_sections`    | `[]`                 | Sections collapsed by default: `conditions`, `lock_status`     |
+| `collapsed_sections`    | `[]`                 | Sections to collapse. Options: `conditions`, `lock_status`     |
 | `include_code_data_view`| `false`              | Add a "User Codes" view with cards showing all lock codes      |
 | `code_display`          | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards       |
 
@@ -64,7 +64,7 @@ If you want to add Lock Code Manager to an existing dashboard, you can use the v
 | `show_conditions`       | `true`               | Show conditions section in slot cards                         |
 | `show_lock_status`      | `true`               | Show lock status section in slot cards                        |
 | `show_lock_sync`        | `true`               | Show sync status per lock in lock status                      |
-| `collapsed_sections`    | `[]`                 | Sections collapsed by default: `conditions`, `lock_status`    |
+| `collapsed_sections`    | `[]`                 | Sections to collapse. Options: `conditions`, `lock_status`    |
 | `include_code_data_view`| `false`              | Append a "User Codes" section below the slot cards            |
 | `code_display`          | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards      |
 
@@ -114,7 +114,7 @@ and collapsible sections. This is the default card used by the strategies.
 | `show_lock_status`   | No       | `true`               | Show the lock status section                                 |
 | `show_code_sensors`  | No       | `true`               | Show code sensors in lock status                             |
 | `show_lock_sync`     | No       | `true`               | Show sync status per lock                                    |
-| `collapsed_sections` | No       | `[]`                 | Sections collapsed by default: `conditions`, `lock_status`   |
+| `collapsed_sections` | No       | `[]`                 | Sections to collapse. Options: `conditions`, `lock_status`   |
 
 *Either `config_entry_id` or `config_entry_title` is required, but not both.
 
