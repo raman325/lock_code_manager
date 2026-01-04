@@ -41,6 +41,10 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
+      # Give GitHub API time to index newly merged PRs before querying
+      - name: Wait for PR indexing
+        if: github.event_name == 'push'
+        run: sleep 10
       - uses: release-drafter/release-drafter@v6
         with:
           commitish: main
