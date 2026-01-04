@@ -13,12 +13,12 @@ export interface LockCodeManagerStrategyConfig {
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default in slot cards */
     collapsed_sections?: ('conditions' | 'lock_status')[];
-    /** Add a "User Codes" view/section with lock codes cards */
-    include_code_data_view?: boolean;
     /** @deprecated Use show_code_sensors instead */
     include_code_slot_sensors?: boolean;
     /** @deprecated Use show_lock_sync instead */
     include_in_sync_sensors?: boolean;
+    /** Add lock codes cards showing all codes for each lock */
+    show_all_codes_for_locks?: boolean;
     /** Show code sensors (actual code on lock) in lock status section */
     show_code_sensors?: boolean;
     /** Show conditions section in slot cards */

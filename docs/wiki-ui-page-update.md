@@ -25,12 +25,12 @@ strategy:
 | Option                  | Default              | Description                                                    |
 | ----------------------- | -------------------- | -------------------------------------------------------------- |
 | `use_slot_cards`        | `true`               | Use streamlined slot cards instead of legacy entities cards    |
-| `show_code_sensors`     | `false`              | Show code sensors in lock status section                       |
+| `show_code_sensors`     | `true`               | Show code sensors in lock status section                       |
 | `show_conditions`       | `true`               | Show conditions section in slot cards                          |
 | `show_lock_status`      | `true`               | Show lock status section in slot cards                         |
 | `show_lock_sync`        | `true`               | Show sync status per lock in lock status                       |
-| `collapsed_sections`    | `[]`                 | Sections to collapse. Options: `conditions`, `lock_status`     |
-| `include_code_data_view`| `false`              | Add a "User Codes" view with cards showing all lock codes      |
+| `collapsed_sections`    | `[]`                 | Which sections start collapsed (empty = all expanded)          |
+| `show_all_codes_for_locks` | `true`            | Add cards showing all codes for each lock                      |
 | `code_display`          | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards       |
 
 **Legacy options** (still supported but deprecated):
@@ -44,7 +44,7 @@ strategy:
 ```yaml
 strategy:
   type: custom:lock-code-manager
-  include_code_data_view: true
+  show_all_codes_for_locks: true
   code_display: masked_with_reveal
   show_lock_sync: true
 ```
@@ -60,12 +60,12 @@ If you want to add Lock Code Manager to an existing dashboard, you can use the v
 | `config_entry_id`       | -                    | Config entry ID to render (use this OR config_entry_title)    |
 | `config_entry_title`    | -                    | Config entry title to render (use this OR config_entry_id)    |
 | `use_slot_cards`        | `true`               | Use streamlined slot cards instead of legacy entities cards   |
-| `show_code_sensors`     | `false`              | Show code sensors in lock status section                      |
+| `show_code_sensors`     | `true`               | Show code sensors in lock status section                      |
 | `show_conditions`       | `true`               | Show conditions section in slot cards                         |
 | `show_lock_status`      | `true`               | Show lock status section in slot cards                        |
 | `show_lock_sync`        | `true`               | Show sync status per lock in lock status                      |
-| `collapsed_sections`    | `[]`                 | Sections to collapse. Options: `conditions`, `lock_status`    |
-| `include_code_data_view`| `false`              | Append a "User Codes" section below the slot cards            |
+| `collapsed_sections`    | `[]`                 | Which sections start collapsed (empty = all expanded)          |
+| `show_all_codes_for_locks` | `true`            | Append cards showing all codes for each lock                  |
 | `code_display`          | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards      |
 
 **Legacy options** (still supported but deprecated):
@@ -114,7 +114,7 @@ and collapsible sections. This is the default card used by the strategies.
 | `show_lock_status`   | No       | `true`               | Show the lock status section                                 |
 | `show_code_sensors`  | No       | `true`               | Show code sensors in lock status                             |
 | `show_lock_sync`     | No       | `true`               | Show sync status per lock                                    |
-| `collapsed_sections` | No       | `[]`                 | Sections to collapse. Options: `conditions`, `lock_status`   |
+| `collapsed_sections` | No       | `[]`                 | Which sections start collapsed (empty = all expanded)        |
 
 *Either `config_entry_id` or `config_entry_title` is required, but not both.
 

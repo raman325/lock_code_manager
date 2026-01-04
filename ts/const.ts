@@ -24,12 +24,12 @@ export const DOMAIN = 'lock_code_manager';
 
 // Strategy defaults (new option names)
 export const DEFAULT_CODE_DISPLAY = 'masked_with_reveal';
-export const DEFAULT_SHOW_CODE_SENSORS = false;
+export const DEFAULT_SHOW_CODE_SENSORS = true;
 export const DEFAULT_SHOW_CONDITIONS = true;
 export const DEFAULT_SHOW_LOCK_STATUS = true;
 export const DEFAULT_SHOW_LOCK_SYNC = true;
 export const DEFAULT_USE_SLOT_CARDS = true;
-export const DEFAULT_INCLUDE_CODE_DATA_VIEW = false;
+export const DEFAULT_SHOW_ALL_CODES_FOR_LOCKS = true;
 
 // Legacy defaults (deprecated, kept for backwards compatibility)
 /** @deprecated Use DEFAULT_CODE_DISPLAY */

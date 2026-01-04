@@ -30,7 +30,7 @@ export async function generateView(
     entities: EntityRegistryEntry[],
     show_code_sensors: boolean,
     show_lock_sync: boolean,
-    include_code_data_view: boolean,
+    show_all_codes_for_locks: boolean,
     code_display: string,
     use_slot_cards: boolean,
     show_conditions = true,
@@ -103,7 +103,7 @@ export async function generateView(
               )
           );
 
-    if (include_code_data_view) {
+    if (show_all_codes_for_locks) {
         const sortedLockIds = [...configEntryData.locks].sort((a, b) => {
             const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
             const nameB = hass.states[b]?.attributes?.friendly_name ?? b;

@@ -3,7 +3,7 @@ import { ReactiveElement } from 'lit';
 
 import {
     DEFAULT_CODE_DISPLAY,
-    DEFAULT_INCLUDE_CODE_DATA_VIEW,
+    DEFAULT_SHOW_ALL_CODES_FOR_LOCKS,
     DEFAULT_SHOW_CODE_SENSORS,
     DEFAULT_SHOW_CONDITIONS,
     DEFAULT_SHOW_LOCK_STATUS,
@@ -59,7 +59,7 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                 entities,
                 showCodeSensors,
                 showLockSync,
-                config.include_code_data_view ?? DEFAULT_INCLUDE_CODE_DATA_VIEW,
+                config.show_all_codes_for_locks ?? DEFAULT_SHOW_ALL_CODES_FOR_LOCKS,
                 codeDisplay,
                 config.use_slot_cards ?? DEFAULT_USE_SLOT_CARDS,
                 config.show_conditions ?? DEFAULT_SHOW_CONDITIONS,

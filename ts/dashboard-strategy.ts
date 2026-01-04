@@ -1,6 +1,6 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY, DEFAULT_INCLUDE_CODE_DATA_VIEW } from './const';
+import { DEFAULT_CODE_DISPLAY, DEFAULT_SHOW_ALL_CODES_FOR_LOCKS } from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import { slugify } from './slugify';
 import { createErrorView } from './strategy-utils';
@@ -34,17 +34,23 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
             return {
                 path: slugify(configEntry.title),
                 strategy: {
+                    code_display: config.code_display,
+                    collapsed_sections: config.collapsed_sections,
                     config_entry_id: configEntry.entry_id,
-                    include_code_slot_sensors: config.include_code_slot_sensors,
-                    include_in_sync_sensors: config.include_in_sync_sensors,
-                    type: 'custom:lock-code-manager'
+                    show_code_sensors: config.show_code_sensors,
+                    show_conditions: config.show_conditions,
+                    show_lock_status: config.show_lock_status,
+                    show_lock_sync: config.show_lock_sync,
+                    type: 'custom:lock-code-manager',
+                    use_slot_cards: config.use_slot_cards
                 },
                 title: configEntry.title
             };
         });
 
-        const includeCodeDataView = config.include_code_data_view ?? DEFAULT_INCLUDE_CODE_DATA_VIEW;
-        if (includeCodeDataView) {
+        const showAllCodesForLocks =
+            config.show_all_codes_for_locks ?? DEFAULT_SHOW_ALL_CODES_FOR_LOCKS;
+        if (showAllCodesForLocks) {
             const lockEntityIds = new Set<string>();
             await Promise.all(
                 configEntries.map(async (configEntry) => {
@@ -64,8 +70,7 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
 
             const lockCards = sortedLockEntityIds.map((lockEntityId) => {
                 return {
-                    code_display:
-                        config.code_data_view_code_display ?? DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY,
+                    code_display: config.code_display ?? DEFAULT_CODE_DISPLAY,
                     lock_entity_id: lockEntityId,
                     type: 'custom:lcm-lock-codes-card'
                 };

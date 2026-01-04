@@ -83,16 +83,14 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // Expected: show_code_sensors=false, show_lock_sync=true, include_code_data_view=false,
-            // code_display='masked_with_reveal', use_slot_cards=true, show_conditions=true,
-            // show_lock_status=true, collapsed_sections=undefined
+            // Expected: all show_* defaults are true
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 mockConfigEntry,
                 mockEntities,
-                false,
                 true,
-                false,
+                true,
+                true,
                 'masked_with_reveal',
                 true,
                 true,
@@ -111,18 +109,18 @@ describe('LockCodeManagerViewStrategy', () => {
             const { generateView } = await import('./generate-view');
 
             await LockCodeManagerViewStrategy.generate(
-                testConfig({ config_entry_id: 'test', show_code_sensors: true }),
+                testConfig({ config_entry_id: 'test', show_code_sensors: false }),
                 hass
             );
 
-            // show_code_sensors=true (set explicitly), rest are defaults
+            // show_code_sensors=false (set explicitly), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
                 expect.anything(),
-                true,
-                true,
                 false,
+                true,
+                true,
                 'masked_with_reveal',
                 true,
                 true,
@@ -141,18 +139,18 @@ describe('LockCodeManagerViewStrategy', () => {
             const { generateView } = await import('./generate-view');
 
             await LockCodeManagerViewStrategy.generate(
-                testConfig({ config_entry_id: 'test', include_code_slot_sensors: true }),
+                testConfig({ config_entry_id: 'test', include_code_slot_sensors: false }),
                 hass
             );
 
-            // show_code_sensors=true (from legacy include_code_slot_sensors), rest are defaults
+            // show_code_sensors=false (from legacy include_code_slot_sensors), rest are defaults
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
                 expect.anything(),
-                true,
-                true,
                 false,
+                true,
+                true,
                 'masked_with_reveal',
                 true,
                 true,
@@ -175,14 +173,14 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // show_lock_sync=false (set explicitly), rest are defaults
+            // show_lock_sync=false (set explicitly), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
                 expect.anything(),
+                true,
                 false,
-                false,
-                false,
+                true,
                 'masked_with_reveal',
                 true,
                 true,
@@ -205,14 +203,14 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // show_lock_sync=false (from legacy include_in_sync_sensors), rest are defaults
+            // show_lock_sync=false (from legacy include_in_sync_sensors), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
                 expect.anything(),
+                true,
                 false,
-                false,
-                false,
+                true,
                 'masked_with_reveal',
                 true,
                 true,
@@ -240,14 +238,14 @@ describe('LockCodeManagerViewStrategy', () => {
                 hass
             );
 
-            // show_code_sensors=false (new option takes precedence over legacy true), rest are defaults
+            // show_code_sensors=false (new option takes precedence over legacy), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
                 expect.anything(),
                 false,
                 true,
-                false,
+                true,
                 'masked_with_reveal',
                 true,
                 true,
