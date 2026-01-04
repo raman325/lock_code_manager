@@ -13,17 +13,14 @@ on:
       - reopened
       - synchronize
       - unlabeled
-  pull_request_target:
-    types:
-      - labeled
-      - opened
-      - reopened
-      - synchronize
-      - unlabeled
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-drafter-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   update_release_draft:
