@@ -248,6 +248,22 @@ async def lock_entity_fixture(
 # =============================================================================
 
 
+@pytest.fixture
+def mock_zha_radio_delays() -> Generator[None]:
+    """Mock ZHA radio manager delays to speed up tests."""
+    with (
+        patch(
+            "homeassistant.components.zha.radio_manager.CONNECT_DELAY_S",
+            0,
+        ),
+        patch(
+            "homeassistant.components.zha.radio_manager.RETRY_DELAY_S",
+            0,
+        ),
+    ):
+        yield
+
+
 class _FakeZigbeeApp(ControllerApplication):
     """Fake Zigbee application controller for testing."""
 
@@ -446,6 +462,7 @@ def setup_zha(
     hass: HomeAssistant,
     zha_config_entry: MockConfigEntry,
     mock_zigpy_connect: ControllerApplication,
+    mock_zha_radio_delays: None,
 ) -> Callable[..., Coroutine[None]]:
     """Set up ZHA component."""
 
