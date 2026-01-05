@@ -14,8 +14,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers._base import BaseLock
-
-from ..common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
+from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
 

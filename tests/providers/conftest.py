@@ -21,7 +21,7 @@ from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-FIXTURES_DIR = Path(__file__).parent / "fixtures"
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "zwave_js"
 
 
 def load_json_fixture(filename: str) -> dict[str, Any]:
