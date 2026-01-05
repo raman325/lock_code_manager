@@ -8,7 +8,7 @@ const dev = process.env.ROLLUP_WATCH;
 export default {
     input: 'ts/main.ts',
     output: {
-        file: 'custom_components/lock_code_manager/www/lock-code-manager-strategy.js',
+        file: 'custom_components/lock_code_manager/www/generated/lock-code-manager.js',
         format: 'es'
     },
     plugins: [
