@@ -1,4 +1,9 @@
+aiousbwatcher>=1.1.0
+ha-silabs-firmware-client>=0.3.0
 pylint-strict-informational>=0.1
 pytest>=8.0.2
 pytest-homeassistant-custom-component==0.13.306
+universal-silabs-flasher>=0.1.0
+usb-devices>=0.4.5
+zha>=0.0.81
 zigpy>=0.60.0
