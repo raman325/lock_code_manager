@@ -17,10 +17,14 @@ jobs:
         id: get_version
         run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_OUTPUT"
       - name: Update versions
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          WORKSPACE: ${{ github.workspace }}
         # yamllint disable rule:line-length
         run: |
-          sed -i '/VERSION = /c\VERSION = \"${{ steps.get_version.outputs.VERSION }}\"' ${{ github.workspace }}/custom_components/lock_code_manager/const.py
-          sed -i '/version/c\  \"version\": \"${{ steps.get_version.outputs.VERSION }}\"' ${{ github.workspace }}/custom_components/lock_code_manager/manifest.json
+          sed -i "/VERSION = /c\VERSION = \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/const.py"
+          sed -i "/version/c\  \"version\": \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/manifest.json"
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "${WORKSPACE}/package.json"
         # yamllint enable rule:line-length
       # Pack the lock_code_manager dir as a zip and upload to the release
       - name: ZIP Lock Code Manager Dir
