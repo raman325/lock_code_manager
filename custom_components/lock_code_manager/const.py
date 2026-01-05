@@ -9,7 +9,7 @@ VERSION = "0.0.0"  # this will be automatically updated as part of the release w
 PLATFORMS = (Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR)
 
 FILES_URL_BASE = f"/{DOMAIN}_files"
-STRATEGY_FILENAME = "lock-code-manager-strategy.js"
+STRATEGY_FILENAME = "generated/lock-code-manager.js"
 STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
 
 SERVICE_HARD_REFRESH_USERCODES = "hard_refresh_usercodes"
