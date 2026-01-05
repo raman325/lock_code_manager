@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Coroutine, Generator
+from collections.abc import Awaitable, Callable, Generator
 import copy
 import itertools
 import json
@@ -463,7 +463,7 @@ def setup_zha(
     zha_config_entry: MockConfigEntry,
     mock_zigpy_connect: ControllerApplication,
     mock_zha_radio_delays: None,
-) -> Callable[..., Coroutine[None]]:
+) -> Callable[..., Awaitable[None]]:
     """Set up ZHA component."""
 
     async def _setup(config=None) -> None:
@@ -566,7 +566,7 @@ def zigpy_lock_device(
 @pytest.fixture
 async def zha_lock_entity(
     hass: HomeAssistant,
-    setup_zha: Callable[..., Coroutine[None]],
+    setup_zha: Callable[..., Awaitable[None]],
     zigpy_lock_device: zigpy.device.Device,
     zha_config_entry: MockConfigEntry,
 ) -> er.RegistryEntry:
