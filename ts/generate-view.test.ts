@@ -901,6 +901,216 @@ describe('generateView', () => {
     });
 });
 
+describe('generateView lock codes cards', () => {
+    function createEntityRegistryEntry(
+        slotNum: number,
+        key: string,
+        lockEntityId?: string
+    ): EntityRegistryEntry {
+        const suffix = lockEntityId ? `_${lockEntityId.replace('.', '_')}` : '';
+        return {
+            entity_id: `switch.slot_${slotNum}_${key}${suffix}`,
+            name: `Code slot ${slotNum} ${key}`,
+            original_name: `Code slot ${slotNum} ${key}`,
+            unique_id: `config|${slotNum}|${key}${lockEntityId ? `|${lockEntityId}` : ''}`
+        } as EntityRegistryEntry;
+    }
+
+    const testConfigEntry: ConfigEntryJSONFragment = {
+        disabled_by: '',
+        domain: 'lock_code_manager',
+        entry_id: 'entry123',
+        pref_disable_new_entities: false,
+        pref_disable_polling: false,
+        reason: null,
+        source: 'user',
+        state: 'loaded',
+        supports_options: true,
+        supports_remove_device: false,
+        supports_unload: true,
+        title: 'Test Lock'
+    };
+
+    it('adds lock codes cards directly to cards array (not wrapped in grid)', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front', 'lock.back'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            },
+            states: {
+                'lock.front': { attributes: { friendly_name: 'Front Lock' }, state: 'locked' },
+                'lock.back': { attributes: { friendly_name: 'Back Lock' }, state: 'locked' }
+            }
+        });
+
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            // show_all_codes_for_locks
+            true,
+            'unmasked',
+            true
+        );
+
+        // Should have 1 slot card + 2 lock codes cards (not wrapped in grid)
+        expect(result.cards).toHaveLength(3);
+
+        // Lock codes cards should be individual cards, not a grid
+        const lockCodesCards = result.cards.filter((card) => card.type === 'custom:lcm-lock-codes');
+        expect(lockCodesCards).toHaveLength(2);
+
+        // Verify no grid wrapper exists
+        const gridCards = result.cards.filter((card) => card.type === 'grid');
+        expect(gridCards).toHaveLength(0);
+    });
+
+    it('sorts lock codes cards alphabetically by friendly name', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.z_garage', 'lock.a_front', 'lock.m_back'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            },
+            states: {
+                'lock.z_garage': { attributes: { friendly_name: 'Garage' }, state: 'locked' },
+                'lock.a_front': { attributes: { friendly_name: 'Front Door' }, state: 'locked' },
+                'lock.m_back': { attributes: { friendly_name: 'Back Door' }, state: 'locked' }
+            }
+        });
+
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            // show_all_codes_for_locks
+            true,
+            'unmasked',
+            true
+        );
+
+        const lockCodesCards = result.cards.filter((card) => card.type === 'custom:lcm-lock-codes');
+
+        // Should be sorted by friendly name: Back Door, Front Door, Garage
+        expect(lockCodesCards[0].lock_entity_id).toBe('lock.m_back');
+        expect(lockCodesCards[1].lock_entity_id).toBe('lock.a_front');
+        expect(lockCodesCards[2].lock_entity_id).toBe('lock.z_garage');
+    });
+
+    it('includes code_display in lock codes cards', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            // show_all_codes_for_locks
+            true,
+            'masked_with_reveal',
+            true
+        );
+
+        const lockCodesCard = result.cards.find((card) => card.type === 'custom:lcm-lock-codes');
+        expect(lockCodesCard?.code_display).toBe('masked_with_reveal');
+    });
+
+    it('does not add lock codes cards when show_all_codes_for_locks is false', async () => {
+        const configEntryData: LockCodeManagerConfigEntryData = {
+            locks: ['lock.front', 'lock.back'],
+            slots: { 1: null }
+        };
+        const entities = [
+            createEntityRegistryEntry(1, 'enabled'),
+            createEntityRegistryEntry(1, ACTIVE_KEY),
+            createEntityRegistryEntry(1, CODE_EVENT_KEY)
+        ];
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                    return configEntryData;
+                }
+                if (msg.type === 'lovelace/resources') {
+                    return [];
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(
+            hass,
+            testConfigEntry,
+            entities,
+            false,
+            false,
+            // show_all_codes_for_locks = false
+            false,
+            'unmasked',
+            true
+        );
+
+        // Should only have 1 slot card, no lock codes cards
+        expect(result.cards).toHaveLength(1);
+        const lockCodesCards = result.cards.filter((card) => card.type === 'custom:lcm-lock-codes');
+        expect(lockCodesCards).toHaveLength(0);
+    });
+});
+
 describe('generateNewSlotCard', () => {
     const testConfigEntry: ConfigEntryJSONFragment = {
         disabled_by: '',
