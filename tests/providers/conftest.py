@@ -412,11 +412,13 @@ async def zigpy_app_controller():
             mock_app = _wrap_mock_instance(app)
             mock_app.backups = _wrap_mock_instance(app.backups)
 
-            # Ensure _concurrent_requests_semaphore has a proper max_value
+            # Ensure _concurrent_requests_semaphore has proper attributes
             # This is needed by ZHA gateway's radio_concurrency property
-            # Use a simple object instead of MagicMock to ensure max_value is an int
+            # Use a simple object instead of MagicMock to ensure values are ints
+            # Include both max_value (older) and max_concurrency (newer) for compatibility
             class MockSemaphore:
                 max_value = 8
+                max_concurrency = 8
 
             mock_app._concurrent_requests_semaphore = MockSemaphore()
 
