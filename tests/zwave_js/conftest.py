@@ -7,6 +7,7 @@ from collections.abc import Generator
 import copy
 import json
 from pathlib import Path
+import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -131,6 +132,18 @@ def mock_zwave_client_fixture(
         }
 
         yield client
+
+
+@pytest.fixture(name="mock_usb", autouse=True)
+def mock_usb_fixture() -> Generator[None]:
+    """Mock the USB component to avoid aiousbwatcher dependency."""
+    # Create a mock aiousbwatcher module if it doesn't exist
+    if "aiousbwatcher" not in sys.modules:
+        mock_aiousbwatcher = MagicMock()
+        mock_aiousbwatcher.AIOUSBWatcher = MagicMock()
+        mock_aiousbwatcher.InotifyNotAvailableError = Exception
+        sys.modules["aiousbwatcher"] = mock_aiousbwatcher
+    yield
 
 
 @pytest.fixture(name="server_version_side_effect")
