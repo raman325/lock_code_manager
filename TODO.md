@@ -452,30 +452,29 @@ and integrate relevant new features.
 
 **Key Features to Evaluate (2024-2025):**
 
-1. **Config Entry Runtime Data** (2024.8+)
-   - `ConfigEntry.runtime_data` is already used for callbacks/locks/state
-   - **Action:** Audit remaining `hass.data[DOMAIN]` usage and decide what
-     should stay global vs. move into runtime data
-2. **DataUpdateCoordinator `_async_setup()`** (2024.8+)
-   - One-time initialization method
-   - **Action:** Evaluate if any coordinator setup code should move to
-     `_async_setup()`
-3. **Entity Category Enhancements** (2024.x)
+1. **Entity Category Enhancements** (2024.x)
    - New entity categories available
    - **Action:** Review entity category assignments
-4. **Selector Improvements** (2024.x)
+2. **Selector Improvements** (2024.x)
    - New selector types for config flow
    - **Action:** Review config flow UI for better selectors
-5. **Repair Platform** (2024.x)
+3. **Repair Platform** (2024.x)
    - Notify users of configuration issues
    - **Action:** Consider adding repairs for common misconfigurations
-6. **Config Entry Diagnostics** (2024.x)
-   - Better debugging information
-   - **Action:** Add diagnostics download capability
 
-**Estimated Effort:** Medium-High (12-20 hours)
+**Already Evaluated (No Changes Needed):**
+
+- **Config Entry Runtime Data**: `hass.data[DOMAIN]` correctly holds global
+  cross-config-entry state (lock registry, resource flag). Per-entry data
+  already uses `runtime_data`.
+- **DataUpdateCoordinator `_async_setup()`**: All coordinator setup is
+  synchronous (timer registration). No async initialization needed.
+- **Config Entry Diagnostics**: No significant internal state to expose beyond
+  what's already visible via entities and config entries.
+
+**Estimated Effort:** Low-Medium (4-8 hours)
 **Priority:** Medium
-**Status:** Not started
+**Status:** Partially evaluated
 
 ### Add Support for Additional Lock Providers
 
