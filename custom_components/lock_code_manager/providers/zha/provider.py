@@ -94,14 +94,20 @@ class ZHALock(BaseLock):
             _LOGGER.debug("Could not find device proxy for %s", self.lock.entity_id)
             return None
 
-        # Get the underlying zigpy device
+        # Get the underlying zigpy device (device_proxy.device is ZHA Device,
+        # device_proxy.device.device is the zigpy device)
         zha_device = device_proxy.device
         if not zha_device:
             _LOGGER.debug("Could not find ZHA device for %s", self.lock.entity_id)
             return None
 
+        zigpy_device = zha_device.device
+        if not zigpy_device:
+            _LOGGER.debug("Could not find zigpy device for %s", self.lock.entity_id)
+            return None
+
         # Find the Door Lock cluster
-        for endpoint_id, endpoint in zha_device.endpoints.items():
+        for endpoint_id, endpoint in zigpy_device.endpoints.items():
             if endpoint_id == 0:  # Skip ZDO endpoint
                 continue
             for cluster in endpoint.in_clusters.values():

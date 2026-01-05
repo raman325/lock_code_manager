@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
+from homeassistant.components.zha.helpers import (
+    get_zha_gateway_proxy as _get_zha_gateway_proxy,
+)
 from homeassistant.core import HomeAssistant
 
 
@@ -12,10 +14,7 @@ def get_zha_gateway(hass: HomeAssistant):
     Returns the gateway proxy from the ZHA integration's runtime data,
     or None if ZHA is not loaded or has no gateway.
     """
-    if ZHA_DOMAIN not in hass.data:
+    try:
+        return _get_zha_gateway_proxy(hass)
+    except (KeyError, ValueError):
         return None
-    # ZHA stores gateway in runtime_data on the config entry
-    for entry in hass.config_entries.async_entries(ZHA_DOMAIN):
-        if hasattr(entry, "runtime_data") and entry.runtime_data:
-            return getattr(entry.runtime_data, "gateway_proxy", None)
-    return None
