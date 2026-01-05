@@ -1,0 +1,266 @@
+{
+  "nodeId": 20,
+  "index": 0,
+  "status": 4,
+  "ready": true,
+  "deviceClass": {
+    "basic": {"key": 2, "label": "Static Controller"},
+    "generic": {"key": 64, "label": "Entry Control"},
+    "specific": {"key": 3, "label": "Secure Keypad Door Lock"},
+    "mandatorySupportedCCs": [],
+    "mandatoryControlledCCs": []
+  },
+  "isListening": false,
+  "isFrequentListening": true,
+  "isRouting": true,
+  "maxBaudRate": 40000,
+  "isSecure": true,
+  "version": 4,
+  "isBeaming": true,
+  "manufacturerId": 59,
+  "productId": 20548,
+  "productType": 25409,
+  "firmwareVersion": "113.22",
+  "deviceConfig": {
+    "manufacturerId": 59,
+    "manufacturer": "Allegion",
+    "label": "BE469",
+    "description": "Touchscreen Deadbolt",
+    "devices": [{"productType": "0x6341", "productId": "0x5044"}],
+    "firmwareVersion": {"min": "0.0", "max": "255.255"},
+    "associations": {},
+    "paramInformation": {"_map": {}}
+  },
+  "label": "BE469",
+  "neighbors": [1, 2, 3, 4, 13],
+  "interviewAttempts": 1,
+  "endpoints": [
+    {
+      "nodeId": 20,
+      "index": 0,
+      "commandClasses": [
+        {"id": 98, "name": "Door Lock", "version": 1, "isSecure": true},
+        {"id": 99, "name": "User Code", "version": 1, "isSecure": true},
+        {"id": 112, "name": "Configuration", "version": 1, "isSecure": true},
+        {"id": 113, "name": "Notification", "version": 1, "isSecure": true},
+        {"id": 114, "name": "Manufacturer Specific", "version": 1, "isSecure": false},
+        {"id": 128, "name": "Battery", "version": 1, "isSecure": true},
+        {"id": 133, "name": "Association", "version": 1, "isSecure": true},
+        {"id": 134, "name": "Version", "version": 1, "isSecure": false},
+        {"id": 152, "name": "Security", "version": 1, "isSecure": true}
+      ]
+    }
+  ],
+  "values": [
+    {
+      "commandClassName": "Door Lock",
+      "commandClass": 98,
+      "endpoint": 0,
+      "property": "currentMode",
+      "propertyName": "currentMode",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": false,
+        "min": 0,
+        "max": 255,
+        "label": "Current lock mode",
+        "states": {"0": "Unsecured", "255": "Secured"}
+      },
+      "value": 255
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userIdStatus",
+      "propertyKey": 1,
+      "propertyName": "userIdStatus",
+      "propertyKeyName": "1",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": true,
+        "label": "User ID status (1)",
+        "states": {"0": "Available", "1": "Enabled", "2": "Disabled"}
+      },
+      "value": 1
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userCode",
+      "propertyKey": 1,
+      "propertyName": "userCode",
+      "propertyKeyName": "1",
+      "metadata": {
+        "type": "string",
+        "readable": true,
+        "writeable": true,
+        "minLength": 4,
+        "maxLength": 10,
+        "label": "User Code (1)"
+      },
+      "value": "9999"
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userIdStatus",
+      "propertyKey": 2,
+      "propertyName": "userIdStatus",
+      "propertyKeyName": "2",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": true,
+        "label": "User ID status (2)",
+        "states": {"0": "Available", "1": "Enabled", "2": "Disabled"}
+      },
+      "value": 1
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userCode",
+      "propertyKey": 2,
+      "propertyName": "userCode",
+      "propertyKeyName": "2",
+      "metadata": {
+        "type": "string",
+        "readable": true,
+        "writeable": true,
+        "minLength": 4,
+        "maxLength": 10,
+        "label": "User Code (2)"
+      },
+      "value": "1234"
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userIdStatus",
+      "propertyKey": 3,
+      "propertyName": "userIdStatus",
+      "propertyKeyName": "3",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": true,
+        "label": "User ID status (3)",
+        "states": {"0": "Available", "1": "Enabled", "2": "Disabled"}
+      },
+      "value": 0
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userCode",
+      "propertyKey": 3,
+      "propertyName": "userCode",
+      "propertyKeyName": "3",
+      "metadata": {
+        "type": "string",
+        "readable": true,
+        "writeable": true,
+        "minLength": 4,
+        "maxLength": 10,
+        "label": "User Code (3)"
+      },
+      "value": ""
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userIdStatus",
+      "propertyKey": 4,
+      "propertyName": "userIdStatus",
+      "propertyKeyName": "4",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": true,
+        "label": "User ID status (4)",
+        "states": {"0": "Available", "1": "Enabled", "2": "Disabled"}
+      },
+      "value": 0
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userCode",
+      "propertyKey": 4,
+      "propertyName": "userCode",
+      "propertyKeyName": "4",
+      "metadata": {
+        "type": "string",
+        "readable": true,
+        "writeable": true,
+        "minLength": 4,
+        "maxLength": 10,
+        "label": "User Code (4)"
+      },
+      "value": ""
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userIdStatus",
+      "propertyKey": 5,
+      "propertyName": "userIdStatus",
+      "propertyKeyName": "5",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": true,
+        "label": "User ID status (5)",
+        "states": {"0": "Available", "1": "Enabled", "2": "Disabled"}
+      },
+      "value": 0
+    },
+    {
+      "commandClassName": "User Code",
+      "commandClass": 99,
+      "endpoint": 0,
+      "property": "userCode",
+      "propertyKey": 5,
+      "propertyName": "userCode",
+      "propertyKeyName": "5",
+      "metadata": {
+        "type": "string",
+        "readable": true,
+        "writeable": true,
+        "minLength": 4,
+        "maxLength": 10,
+        "label": "User Code (5)"
+      },
+      "value": ""
+    },
+    {
+      "commandClassName": "Battery",
+      "commandClass": 128,
+      "endpoint": 0,
+      "property": "level",
+      "propertyName": "level",
+      "metadata": {
+        "type": "number",
+        "readable": true,
+        "writeable": false,
+        "min": 0,
+        "max": 100,
+        "unit": "%",
+        "label": "Battery level"
+      },
+      "value": 100
+    }
+  ],
+  "isControllerNode": false
+}
