@@ -1,4 +1,4 @@
-"""Module for ZHA (Zigbee Home Automation) locks."""
+"""ZHA lock provider implementation."""
 
 from __future__ import annotations
 
@@ -6,88 +6,22 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from homeassistant.components.zha.const import (
-    DOMAIN as ZHA_DOMAIN,
-)
+from zigpy.zcl.clusters.closures import DoorLock
+
+from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from ..data import get_entry_data
-from ..exceptions import LockDisconnected
-from ._base import BaseLock
-
-if TYPE_CHECKING:
-    from zigpy.zcl.clusters.closures import DoorLock
+from ...const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from ...data import get_entry_data
+from ...exceptions import LockDisconnected
+from .._base import BaseLock
+from .const import OPERATION_SOURCE_NAMES, OPERATION_TO_LOCKED
+from .helpers import get_zha_gateway
 
 _LOGGER = logging.getLogger(__name__)
-
-# Door Lock cluster ID
-CLUSTER_ID_DOOR_LOCK = 0x0101
-
-# Cluster command IDs
-CMD_OPERATION_EVENT_NOTIFICATION = 0x20
-CMD_PROGRAMMING_EVENT_NOTIFICATION = 0x21
-
-# User status values per ZCL spec
-USER_STATUS_AVAILABLE = 0x00
-USER_STATUS_ENABLED = 0x01
-USER_STATUS_DISABLED = 0x03
-
-# User type values per ZCL spec
-USER_TYPE_UNRESTRICTED = 0x00
-
-# Operation event source values
-OPERATION_SOURCE_KEYPAD = 0x00
-OPERATION_SOURCE_RF = 0x01
-OPERATION_SOURCE_MANUAL = 0x02
-OPERATION_SOURCE_RFID = 0x03
-
-# Operation event codes (subset relevant for lock/unlock)
-OPERATION_LOCK = 0x01
-OPERATION_UNLOCK = 0x02
-OPERATION_LOCK_FAILURE_INVALID_PIN = 0x03
-OPERATION_UNLOCK_FAILURE_INVALID_PIN = 0x05
-OPERATION_KEY_LOCK = 0x08
-OPERATION_KEY_UNLOCK = 0x09
-OPERATION_AUTO_LOCK = 0x0A
-OPERATION_MANUAL_LOCK = 0x0D
-OPERATION_MANUAL_UNLOCK = 0x0E
-
-# Map operation events to locked state
-OPERATION_TO_LOCKED: dict[int, bool] = {
-    OPERATION_LOCK: True,
-    OPERATION_KEY_LOCK: True,
-    OPERATION_AUTO_LOCK: True,
-    OPERATION_MANUAL_LOCK: True,
-    OPERATION_UNLOCK: False,
-    OPERATION_KEY_UNLOCK: False,
-    OPERATION_MANUAL_UNLOCK: False,
-}
-
-# Programming event codes
-PROGRAMMING_PIN_ADDED = 0x02
-PROGRAMMING_PIN_DELETED = 0x03
-PROGRAMMING_PIN_CHANGED = 0x04
-
-
-def _get_zha_gateway(hass):
-    """Get the ZHA gateway proxy."""
-    if ZHA_DOMAIN not in hass.data:
-        return None
-    # ZHA stores gateway in runtime_data on the config entry
-    for entry in hass.config_entries.async_entries(ZHA_DOMAIN):
-        if hasattr(entry, "runtime_data") and entry.runtime_data:
-            return getattr(entry.runtime_data, "gateway_proxy", None)
-    return None
-
-
-# Programming event mask attribute IDs
-ATTR_KEYPAD_PROGRAMMING_EVENT_MASK = 0x0045
-ATTR_RF_PROGRAMMING_EVENT_MASK = 0x0046
-ATTR_RFID_PROGRAMMING_EVENT_MASK = 0x0047
 
 
 @dataclass(repr=False, eq=False)
@@ -144,7 +78,7 @@ class ZHALock(BaseLock):
         if self._door_lock_cluster is not None:
             return self._door_lock_cluster
 
-        gateway = _get_zha_gateway(self.hass)
+        gateway = get_zha_gateway(self.hass)
         if not gateway:
             _LOGGER.debug("ZHA gateway not available")
             return None
@@ -171,7 +105,7 @@ class ZHALock(BaseLock):
             if endpoint_id == 0:  # Skip ZDO endpoint
                 continue
             for cluster in endpoint.in_clusters.values():
-                if cluster.cluster_id == CLUSTER_ID_DOOR_LOCK:
+                if cluster.cluster_id == DoorLock.cluster_id:
                     self._door_lock_cluster = cluster
                     self._endpoint_id = endpoint_id
                     _LOGGER.debug(
@@ -186,7 +120,7 @@ class ZHALock(BaseLock):
 
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
-        gateway = _get_zha_gateway(self.hass)
+        gateway = get_zha_gateway(self.hass)
         if not gateway:
             return False
 
@@ -251,7 +185,7 @@ class ZHALock(BaseLock):
                     continue
 
                 # Check if slot is in use
-                if user_status == USER_STATUS_ENABLED:
+                if user_status == DoorLock.UserStatus.Enabled:
                     # Convert bytes to string if needed
                     if isinstance(pin_code, bytes):
                         pin_code = pin_code.decode("utf-8", errors="ignore")
@@ -287,8 +221,8 @@ class ZHALock(BaseLock):
             # Parameters: user_id, user_status, user_type, pin_code
             result = await cluster.set_pin_code(
                 code_slot,
-                USER_STATUS_ENABLED,
-                USER_TYPE_UNRESTRICTED,
+                DoorLock.UserStatus.Enabled,
+                DoorLock.UserType.Unrestricted,
                 str(usercode),
             )
             _LOGGER.debug(
@@ -385,36 +319,32 @@ class ZHALock(BaseLock):
             return False
 
         # Check if any programming event mask attribute has a non-zero value
-        mask_attrs = [
-            ATTR_KEYPAD_PROGRAMMING_EVENT_MASK,
-            ATTR_RF_PROGRAMMING_EVENT_MASK,
-            ATTR_RFID_PROGRAMMING_EVENT_MASK,
-        ]
+        # Use AttributeDefs for guaranteed-accurate IDs
+        mask_attrs = (
+            DoorLock.AttributeDefs.keypad_programming_event_mask,
+            DoorLock.AttributeDefs.rf_programming_event_mask,
+            DoorLock.AttributeDefs.rfid_programming_event_mask,
+        )
 
-        for attr_id in mask_attrs:
+        for attr in mask_attrs:
             try:
-                # Try to read the attribute from cache first
-                attr_name = {
-                    ATTR_KEYPAD_PROGRAMMING_EVENT_MASK: "keypad_programming_event_mask",
-                    ATTR_RF_PROGRAMMING_EVENT_MASK: "rf_programming_event_mask",
-                    ATTR_RFID_PROGRAMMING_EVENT_MASK: "rfid_programming_event_mask",
-                }.get(attr_id)
-
-                if attr_name and hasattr(cluster, "get"):
-                    value = cluster.get(attr_name)
+                if hasattr(cluster, "get"):
+                    value = cluster.get(attr.name)
                     if value is not None and value != 0:
                         _LOGGER.debug(
-                            "Lock %s: supports programming events (%s=0x%04x)",
+                            "Lock %s: supports programming events (%s [0x%04x]=0x%04x)",
                             self.lock.entity_id,
-                            attr_name,
+                            attr.name,
+                            attr.id,
                             value,
                         )
                         return True
             except Exception as err:
                 _LOGGER.debug(
-                    "Lock %s: could not read %s: %s",
+                    "Lock %s: could not read %s [0x%04x]: %s",
                     self.lock.entity_id,
-                    attr_name,
+                    attr.name,
+                    attr.id,
                     err,
                 )
 
@@ -489,9 +419,9 @@ class ZHALock(BaseLock):
 
         Called by zigpy when the lock sends a cluster command (client -> server).
         """
-        if command_id == CMD_PROGRAMMING_EVENT_NOTIFICATION:
+        if command_id == DoorLock.ClientCommandDefs.programming_event_notification.id:
             self._handle_programming_event(args)
-        elif command_id == CMD_OPERATION_EVENT_NOTIFICATION:
+        elif command_id == DoorLock.ClientCommandDefs.operation_event_notification.id:
             self._handle_operation_event(args)
 
     def _handle_programming_event(self, args: Any) -> None:
@@ -567,13 +497,7 @@ class ZHALock(BaseLock):
         to_locked = OPERATION_TO_LOCKED.get(event_code)
 
         # Build action text from source and event
-        source_names = {
-            OPERATION_SOURCE_KEYPAD: "Keypad",
-            OPERATION_SOURCE_RF: "RF",
-            OPERATION_SOURCE_MANUAL: "Manual",
-            OPERATION_SOURCE_RFID: "RFID",
-        }
-        source_name = source_names.get(source, f"Source {source}")
+        source_name = OPERATION_SOURCE_NAMES.get(source, f"Source {source}")
         action = "lock" if to_locked else "unlock" if to_locked is False else "event"
         action_text = f"{source_name} {action} operation"
 
