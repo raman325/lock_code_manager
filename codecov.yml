@@ -4,17 +4,35 @@ coverage:
       python:
         flags:
           - python
+        paths:
+          - custom_components/
+          - tests/
       typescript:
         flags:
           - typescript
+        paths:
+          - ts/
     patch:
       python:
         flags:
           - python
+        paths:
+          - custom_components/
+          - tests/
       typescript:
         flags:
           - typescript
+        paths:
+          - ts/
 
 flag_management:
   default_rules:
     carryforward: true
+  individual_flags:
+    - name: python
+      paths:
+        - custom_components/
+        - tests/
+    - name: typescript
+      paths:
+        - ts/
