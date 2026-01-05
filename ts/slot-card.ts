@@ -623,8 +623,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             };
         });
 
-        const showConditions = this._config.show_conditions !== false;
         const showLockStatus = this._config.show_lock_status !== false;
+
+        // Only show conditions section if at least one condition is configured
+        const hasConditions =
+            (conditions.number_of_uses !== undefined && conditions.number_of_uses !== null) ||
+            conditions.calendar !== undefined;
+        const showConditions = this._config.show_conditions !== false && hasConditions;
 
         return html`
             <ha-card>
@@ -863,44 +868,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                   </span>`
             : undefined;
 
-        const content = hasConditions
-            ? html`
-                  ${hasNumberOfUses
-                      ? html`<div class="condition-row">
-                            <ha-svg-icon
-                                class="condition-row-icon ${usesBlocking ? 'blocking' : ''}"
-                                .path=${mdiPound}
-                            ></ha-svg-icon>
-                            <span class="condition-label">Uses remaining</span>
-                            <div style="flex: 1;">
-                                ${this._editingField === 'numberOfUses'
-                                    ? html`<input
-                                              class="edit-input"
-                                              type="number"
-                                              inputmode="numeric"
-                                              min="0"
-                                              .value=${String(number_of_uses ?? 0)}
-                                              @blur=${this._handleEditBlur}
-                                              @keydown=${this._handleEditKeydown}
-                                          />
-                                          <div class="edit-help">Enter to save, Esc to cancel</div>`
-                                    : html`<span
-                                          class="condition-value editable"
-                                          @click=${() => this._startEditing('numberOfUses')}
-                                          >${number_of_uses}</span
-                                      >`}
-                            </div>
-                        </div>`
-                      : nothing}
-                  ${hasCalendar
-                      ? this._renderCalendarCondition(
-                            calendar,
-                            calendar_next,
-                            conditions.calendar_entity_id
-                        )
-                      : nothing}
-              `
-            : html`<div class="no-conditions">No conditions configured for this slot</div>`;
+        const content = html`
+            ${hasNumberOfUses
+                ? html`<div class="condition-row">
+                      <ha-svg-icon
+                          class="condition-row-icon ${usesBlocking ? 'blocking' : ''}"
+                          .path=${mdiPound}
+                      ></ha-svg-icon>
+                      <span class="condition-label">Uses remaining</span>
+                      <div style="flex: 1;">
+                          ${this._editingField === 'numberOfUses'
+                              ? html`<input
+                                        class="edit-input"
+                                        type="number"
+                                        inputmode="numeric"
+                                        min="0"
+                                        .value=${String(number_of_uses ?? 0)}
+                                        @blur=${this._handleEditBlur}
+                                        @keydown=${this._handleEditKeydown}
+                                    />
+                                    <div class="edit-help">Enter to save, Esc to cancel</div>`
+                              : html`<span
+                                    class="condition-value editable"
+                                    @click=${() => this._startEditing('numberOfUses')}
+                                    >${number_of_uses}</span
+                                >`}
+                      </div>
+                  </div>`
+                : nothing}
+            ${hasCalendar
+                ? this._renderCalendarCondition(
+                      calendar,
+                      calendar_next,
+                      conditions.calendar_entity_id
+                  )
+                : nothing}
+        `;
 
         return this._renderCollapsible(
             'Conditions',
