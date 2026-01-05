@@ -6,6 +6,7 @@
     "frontend",
     "input_boolean",
     "lovelace",
+    "mqtt",
     "schedule",
     "template",
     "virtual",
