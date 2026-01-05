@@ -27,12 +27,12 @@ jobs:
           sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "${WORKSPACE}/package.json"
         # yamllint enable rule:line-length
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "yarn"
       - name: Rebuild frontend with updated version
-        run: yarn install && yarn build
+        run: yarn build
       # Pack the lock_code_manager dir as a zip and upload to the release
       - name: ZIP Lock Code Manager Dir
         run: |
