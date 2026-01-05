@@ -124,6 +124,20 @@ class ZHALock(BaseLock):
         _LOGGER.warning("Could not find Door Lock cluster for %s", self.lock.entity_id)
         return None
 
+    async def _get_connected_cluster(self) -> DoorLock:
+        """Get the Door Lock cluster, ensuring connection is up.
+
+        Raises LockDisconnected if cluster is unavailable or device is disconnected.
+        """
+        cluster = self._get_door_lock_cluster()
+        if not cluster:
+            raise LockDisconnected("Door Lock cluster not available")
+
+        if not await self.async_is_connection_up():
+            raise LockDisconnected("Lock not connected")
+
+        return cluster
+
     async def async_is_connection_up(self) -> bool:
         """Return whether connection to lock is up."""
         gateway = get_zha_gateway(self.hass)
@@ -143,12 +157,7 @@ class ZHALock(BaseLock):
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Get dictionary of code slots and usercodes."""
-        cluster = self._get_door_lock_cluster()
-        if not cluster:
-            raise LockDisconnected("Door Lock cluster not available")
-
-        if not await self.async_is_connection_up():
-            raise LockDisconnected("Lock not connected")
+        cluster = await self._get_connected_cluster()
 
         # Get configured code slots for this lock
         code_slots = {
@@ -179,7 +188,7 @@ class ZHALock(BaseLock):
                 elif isinstance(result, (list, tuple)) and len(result) >= 4:
                     # Result format: [user_id, user_status, user_type, code]
                     user_status = result[1]
-                    pin_code = result[3] if len(result) > 3 else ""
+                    pin_code = result[3]
                 else:
                     _LOGGER.warning(
                         "Unexpected get_pin_code response format for %s slot %s: %s",
@@ -215,12 +224,7 @@ class ZHALock(BaseLock):
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
-        cluster = self._get_door_lock_cluster()
-        if not cluster:
-            raise LockDisconnected("Door Lock cluster not available")
-
-        if not await self.async_is_connection_up():
-            raise LockDisconnected("Lock not connected")
+        cluster = await self._get_connected_cluster()
 
         try:
             # Call set_pin_code cluster command (0x05)
@@ -253,6 +257,8 @@ class ZHALock(BaseLock):
 
             return True
 
+        except LockDisconnected:
+            raise
         except Exception as err:
             _LOGGER.error(
                 "Failed to set PIN for %s slot %s: %s",
@@ -264,12 +270,7 @@ class ZHALock(BaseLock):
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """Clear a usercode on a code slot."""
-        cluster = self._get_door_lock_cluster()
-        if not cluster:
-            raise LockDisconnected("Door Lock cluster not available")
-
-        if not await self.async_is_connection_up():
-            raise LockDisconnected("Lock not connected")
+        cluster = await self._get_connected_cluster()
 
         try:
             # Call clear_pin_code cluster command (0x07)
@@ -296,6 +297,8 @@ class ZHALock(BaseLock):
 
             return True
 
+        except LockDisconnected:
+            raise
         except Exception as err:
             _LOGGER.error(
                 "Failed to clear PIN for %s slot %s: %s",
