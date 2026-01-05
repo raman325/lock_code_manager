@@ -318,7 +318,11 @@ async def test_startup_out_of_sync_slots_sync_once(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Ensure out-of-sync slots sync once each without extra operations."""
+    """Ensure out-of-sync slots sync once each without extra operations.
+
+    With coordinator-triggered syncs, out-of-sync slots are detected and synced
+    automatically during startup via coordinator update callbacks.
+    """
     # Arrange two slots that need syncing on startup
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
@@ -342,17 +346,9 @@ async def test_startup_out_of_sync_slots_sync_once(
     assert hass.states.get(in_sync_slot_2)
 
     service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
-    # No set calls should have happened before we trigger updates
-    assert service_calls["set_usercode"] == []
 
-    # Trigger sync for both slots (first update is skipped after initial load)
-    await async_update_entity(hass, in_sync_slot_1)
-    await async_update_entity(hass, in_sync_slot_2)
-    await hass.async_block_till_done()
-    await async_update_entity(hass, in_sync_slot_1)
-    await async_update_entity(hass, in_sync_slot_2)
-    await hass.async_block_till_done()
-
+    # Syncs now happen automatically via coordinator update callbacks
+    # Both slots should have synced exactly once during/after startup
     set_calls = service_calls["set_usercode"]
     assert len(set_calls) == 2
     assert (1, "9999", "test1") in set_calls
@@ -653,3 +649,75 @@ async def test_coordinator_refresh_failure_schedules_retry(
 
     # Clean up - cancel the retry
     in_sync_entity_obj._cancel_retry()
+
+
+async def test_coordinator_update_triggers_sync_on_external_change(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test that coordinator updates trigger sync when lock code changes externally.
+
+    This test replicates the issue where someone manually changes a code on the
+    lock (or the lock reports a different code), and the integration should
+    automatically sync to restore the configured code.
+
+    Before the fix: coordinator updates only called async_write_ha_state(),
+    which updated the display but didn't trigger sync operations.
+
+    After the fix: _handle_coordinator_update() triggers _async_update_state()
+    which performs sync operations when out of sync.
+    """
+    # Use config without calendar so both slots are active
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test Coordinator Sync",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify initial state - should be in sync
+    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Slot should be in sync initially"
+
+    # Get the lock provider and coordinator
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+
+    # Clear any service calls from initial setup
+    service_calls["set_usercode"].clear()
+
+    # Simulate external change: someone changed the code on the lock to "9999"
+    # This simulates what happens when the lock reports a different code
+    hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"
+
+    # Trigger coordinator refresh - this should detect the mismatch and sync
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # The fix: coordinator update should have triggered sync to restore "1234"
+    assert len(service_calls["set_usercode"]) == 1, (
+        "Coordinator update should trigger sync when lock code differs from config"
+    )
+    assert service_calls["set_usercode"][0] == (1, "1234", "test1"), (
+        "Sync should restore the configured PIN"
+    )
+
+    # Verify slot is back in sync
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, (
+        "Slot should be in sync after coordinator-triggered sync"
+    )
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
