@@ -44,7 +44,7 @@ def controller_node_state_fixture() -> dict[str, Any]:
 
 @pytest.fixture(name="lock_schlage_be469_state")
 def lock_schlage_be469_state_fixture() -> dict[str, Any]:
-    """Load the schlage lock node state fixture data."""
+    """Load the Schlage lock node state fixture data."""
     return load_json_fixture("lock_schlage_be469_state.json")
 
 

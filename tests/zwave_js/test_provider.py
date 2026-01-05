@@ -121,6 +121,7 @@ async def test_get_usercodes_from_cache(
     # Slot 3: empty (in_use=False)
     codes = await zwave_js_lock.async_get_usercodes()
 
+    assert codes[1] == "9999"
     assert codes[2] == "1234"
     assert codes[3] == ""
 
