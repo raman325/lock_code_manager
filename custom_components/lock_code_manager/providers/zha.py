@@ -84,6 +84,12 @@ def _get_zha_gateway(hass):
     return None
 
 
+# Programming event mask attribute IDs
+ATTR_KEYPAD_PROGRAMMING_EVENT_MASK = 0x0045
+ATTR_RF_PROGRAMMING_EVENT_MASK = 0x0046
+ATTR_RFID_PROGRAMMING_EVENT_MASK = 0x0047
+
+
 @dataclass(repr=False, eq=False)
 class ZHALock(BaseLock):
     """Class to represent ZHA lock.
@@ -91,12 +97,16 @@ class ZHALock(BaseLock):
     Supports push updates via zigpy cluster listeners for:
     - programming_event_notification (0x21): PIN code added/deleted/changed
     - operation_event_notification (0x20): lock/unlock operations with user ID
+
+    If the lock doesn't support programming event notifications (detected via
+    event mask attributes), falls back to drift detection polling.
     """
 
     lock_config_entry: ConfigEntry = field(repr=False)
     _door_lock_cluster: DoorLock | None = field(init=False, default=None)
     _endpoint_id: int | None = field(init=False, default=None)
     _cluster_listener_unsub: Callable[[], None] | None = field(init=False, default=None)
+    _supports_programming_events: bool | None = field(init=False, default=None)
 
     @property
     def domain(self) -> str:
@@ -107,8 +117,9 @@ class ZHALock(BaseLock):
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates.
 
-        ZHA locks support push updates via zigpy cluster listeners for
-        programming_event_notification and operation_event_notification.
+        Always True - we subscribe to cluster events for operation notifications
+        (lock/unlock with user ID). Programming event support is checked separately
+        to determine if we need drift detection fallback.
         """
         return True
 
@@ -116,10 +127,11 @@ class ZHALock(BaseLock):
     def hard_refresh_interval(self) -> timedelta | None:
         """Return interval for hard refresh.
 
-        Disabled since we receive programming_event_notification when codes
-        change. Locks that don't support this notification will just have
-        slightly stale data until manually refreshed.
+        Returns 1 hour if the lock doesn't support programming event notifications
+        (detected during setup), otherwise None to disable drift detection.
         """
+        if self._supports_programming_events is False:
+            return timedelta(hours=1)
         return None
 
     @property
@@ -362,6 +374,57 @@ class ZHALock(BaseLock):
 
     # Push update support via zigpy cluster listeners
 
+    async def _async_check_programming_event_support(self) -> bool:
+        """Check if the lock supports programming event notifications.
+
+        Reads the programming event mask attributes to determine if the lock
+        will send programming_event_notification when codes change.
+        """
+        cluster = self._get_door_lock_cluster()
+        if not cluster:
+            return False
+
+        # Check if any programming event mask attribute has a non-zero value
+        mask_attrs = [
+            ATTR_KEYPAD_PROGRAMMING_EVENT_MASK,
+            ATTR_RF_PROGRAMMING_EVENT_MASK,
+            ATTR_RFID_PROGRAMMING_EVENT_MASK,
+        ]
+
+        for attr_id in mask_attrs:
+            try:
+                # Try to read the attribute from cache first
+                attr_name = {
+                    ATTR_KEYPAD_PROGRAMMING_EVENT_MASK: "keypad_programming_event_mask",
+                    ATTR_RF_PROGRAMMING_EVENT_MASK: "rf_programming_event_mask",
+                    ATTR_RFID_PROGRAMMING_EVENT_MASK: "rfid_programming_event_mask",
+                }.get(attr_id)
+
+                if attr_name and hasattr(cluster, "get"):
+                    value = cluster.get(attr_name)
+                    if value is not None and value != 0:
+                        _LOGGER.debug(
+                            "Lock %s: supports programming events (%s=0x%04x)",
+                            self.lock.entity_id,
+                            attr_name,
+                            value,
+                        )
+                        return True
+            except Exception as err:
+                _LOGGER.debug(
+                    "Lock %s: could not read %s: %s",
+                    self.lock.entity_id,
+                    attr_name,
+                    err,
+                )
+
+        _LOGGER.debug(
+            "Lock %s: no programming event mask attributes found, "
+            "will use drift detection fallback",
+            self.lock.entity_id,
+        )
+        return False
+
     @callback
     def subscribe_push_updates(self) -> None:
         """Subscribe to push-based value updates via zigpy cluster listener."""
@@ -376,6 +439,14 @@ class ZHALock(BaseLock):
             )
             return
 
+        # Check programming event support if not already done
+        if self._supports_programming_events is None:
+            # Schedule async check - for now assume supported, will update on next refresh
+            self.hass.async_create_task(
+                self._async_detect_programming_support(),
+                f"Detect programming event support for {self.lock.entity_id}",
+            )
+
         # Register as a listener on the cluster
         cluster.add_listener(self)
         self._cluster_listener_unsub = lambda: cluster.remove_listener(self)
@@ -384,6 +455,18 @@ class ZHALock(BaseLock):
             "Lock %s: subscribed to Door Lock cluster events",
             self.lock.entity_id,
         )
+
+    async def _async_detect_programming_support(self) -> None:
+        """Detect programming event support and log result."""
+        self._supports_programming_events = (
+            await self._async_check_programming_event_support()
+        )
+        if not self._supports_programming_events:
+            _LOGGER.info(
+                "Lock %s: programming event notifications not supported, "
+                "enabling drift detection (1 hour interval)",
+                self.lock.entity_id,
+            )
 
     @callback
     def unsubscribe_push_updates(self) -> None:
