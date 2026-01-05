@@ -5,6 +5,7 @@
     "calendar",
     "frontend",
     "lovelace",
+    "mqtt",
     "virtual",
     "zwave_js"
   ],
