@@ -109,21 +109,14 @@ export async function generateView(
             const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
             return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
         });
-        const lockCards = sortedLockIds.map((lockEntityId) => {
-            return {
+        // Add lock codes cards directly to let masonry layout handle them like slot cards
+        sortedLockIds.forEach((lockEntityId) => {
+            cards.push({
                 code_display,
                 lock_entity_id: lockEntityId,
                 type: 'custom:lcm-lock-codes'
-            };
-        });
-        if (lockCards.length > 0) {
-            cards.push({
-                cards: lockCards,
-                columns: Math.min(lockCards.length, 3),
-                square: false,
-                type: 'grid'
             });
-        }
+        });
     }
 
     return {
