@@ -275,6 +275,26 @@ class LockCodeManagerCodeSlotInSyncEntity(
         self._attr_is_on = is_on
         self.async_write_ha_state()
 
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator.
+
+        Triggers sync check when coordinator data changes to ensure we sync
+        when the lock reports different codes than expected (e.g., someone
+        manually changed a code on the lock).
+
+        Multiple tasks may be queued during rapid updates, but they serialize
+        via asyncio.Lock and each reads the latest coordinator data when it runs.
+        After the first successful sync, subsequent tasks exit early (is_on=True).
+        """
+        super()._handle_coordinator_update()
+        # Skip if not yet initialized or sync already in progress
+        if self._attr_is_on is not None and not self._lock.locked():
+            self.hass.async_create_task(
+                self._async_update_state(),
+                name=f"lcm_sync_check_{self.entity_id}",
+            )
+
     def _cancel_retry(self) -> None:
         """Cancel any scheduled retry callback."""
         if self._retry_unsub:
