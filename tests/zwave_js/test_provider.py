@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const import CommandClass
+from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.node import Node
 
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
+    ATTR_ACTION_TEXT,
+    ATTR_CODE_SLOT,
+    ATTR_FROM,
+    ATTR_TO,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
@@ -379,5 +386,111 @@ async def test_hard_refresh_calls_refresh_cc_values(
 
         mock_refresh.assert_called_once_with(CommandClass.USER_CODE)
         assert isinstance(codes, dict)
+
+    await zwave_js_lock.async_unload(False)
+
+
+# Notification event tests
+
+
+def async_capture_events(
+    hass: HomeAssistant, event_name: str
+) -> list[Event[dict[str, Any]]]:
+    """Create a helper that captures events."""
+    events: list[Event[dict[str, Any]]] = []
+
+    @callback
+    def capture_events(event: Event[dict[str, Any]]) -> None:
+        events.append(event)
+
+    hass.bus.async_listen(event_name, capture_events)
+    return events
+
+
+async def test_notification_event_keypad_lock_fires_lock_state_changed(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that a keypad lock notification event fires EVENT_LOCK_STATE_CHANGED."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Capture LCM lock state changed events
+    events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    # Create a notification event matching the pattern from HA core tests
+    # Type 6 = ACCESS_CONTROL, Event 5 = KEYPAD_LOCK_OPERATION
+    event = ZwaveEvent(
+        type="notification",
+        data={
+            "source": "node",
+            "event": "notification",
+            "nodeId": lock_schlage_be469.node_id,
+            "endpointIndex": 0,
+            "ccId": 113,  # Notification CC
+            "args": {
+                "type": 6,  # ACCESS_CONTROL
+                "event": 5,  # KEYPAD_LOCK_OPERATION
+                "label": "Access Control",
+                "eventLabel": "Keypad lock operation",
+                "parameters": {"userId": 1},
+            },
+        },
+    )
+    lock_schlage_be469.receive_event(event)
+    await hass.async_block_till_done()
+
+    # Verify the LCM event was fired
+    assert len(events) == 1
+    assert events[0].data[ATTR_CODE_SLOT] == 1
+    assert events[0].data[ATTR_ACTION_TEXT] == "Keypad lock operation"
+    assert events[0].data[ATTR_TO] == "locked"
+    assert events[0].data[ATTR_FROM] == "unlocked"
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_notification_event_keypad_unlock_fires_lock_state_changed(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that a keypad unlock notification event fires EVENT_LOCK_STATE_CHANGED."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    # Type 6 = ACCESS_CONTROL, Event 6 = KEYPAD_UNLOCK_OPERATION
+    event = ZwaveEvent(
+        type="notification",
+        data={
+            "source": "node",
+            "event": "notification",
+            "nodeId": lock_schlage_be469.node_id,
+            "endpointIndex": 0,
+            "ccId": 113,
+            "args": {
+                "type": 6,
+                "event": 6,  # KEYPAD_UNLOCK_OPERATION
+                "label": "Access Control",
+                "eventLabel": "Keypad unlock operation",
+                "parameters": {"userId": 2},
+            },
+        },
+    )
+    lock_schlage_be469.receive_event(event)
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data[ATTR_CODE_SLOT] == 2
+    assert events[0].data[ATTR_ACTION_TEXT] == "Keypad unlock operation"
+    assert events[0].data[ATTR_TO] == "unlocked"
+    assert events[0].data[ATTR_FROM] == "locked"
 
     await zwave_js_lock.async_unload(False)
