@@ -30,7 +30,7 @@ autolabeler:
       - 'Pipfile.lock'
   - label: 'github_actions'
     files:
-      - '.github/workflows/*'
+      - '.github/workflows/**/*'
   - label: 'dependencies'
     files:
       - 'requirements*.txt'
@@ -46,6 +46,7 @@ autolabeler:
   - label: 'documentation'
     files:
       - '*.md'
+      - '**/*.md'
       - 'docs/**/*'
   - label: 'bug'
     body:
