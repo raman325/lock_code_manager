@@ -67,7 +67,7 @@ The coordinator manages the state of usercodes and notifies entities when data c
 Lock Code Manager creates entities for each configured slot:
 
 | Entity Type | Purpose |
-|-------------|---------|
+| ----------- | ------- |
 | `switch` | Enable/disable the code slot |
 | `text` | Name for the code slot |
 | `text` | PIN value for the code slot |

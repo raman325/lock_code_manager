@@ -66,7 +66,7 @@ repos:
         types: [yaml]
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.44.0
+    rev: v0.47.0
     hooks:
       - id: markdownlint
         args: ["--fix"]
@@ -86,6 +86,6 @@ repos:
         files: ^(custom_components)/.+\.py$
 
   - repo: https://github.com/rhysd/actionlint
-    rev: a443f344ff32813837fa49f7aa6cbc478d770e62  # frozen: v1.7.9
+    rev: 0933c147c9d6587653d45fdcb4c497c57a65f9af  # frozen: v1.7.10
     hooks:
       - id: actionlint

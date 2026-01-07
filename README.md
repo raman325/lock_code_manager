@@ -112,16 +112,16 @@ The `lcm-slot` displays a single code slot with inline editing, real-time WebSoc
 updates, and collapsible sections for conditions and lock status. This is the default card
 used by the strategies when `use_slot_cards: true` (the default).
 
-| Option               | Required | Default              | Description                                              |
-| -------------------- | -------- | -------------------- | -------------------------------------------------------- |
-| `config_entry_id`    | Yes*     | -                    | Config entry ID for the LCM instance                     |
-| `config_entry_title` | Yes*     | -                    | Config entry title (alternative to ID)                   |
-| `slot`               | Yes      | -                    | Slot number to display                                   |
-| `code_display`       | No       | `masked_with_reveal` | How to display codes: see modes below                    |
-| `show_conditions`    | No       | `true`               | Show the conditions section                              |
-| `show_lock_status`   | No       | `true`               | Show the lock status section                             |
-| `show_code_sensors`  | No       | `true`               | Show code sensors in lock status                         |
-| `show_lock_sync`     | No       | `true`               | Show sync status per lock                                |
+| Option               | Required | Default              | Description                                                  |
+| -------------------- | -------- | -------------------- | ------------------------------------------------------------ |
+| `config_entry_id`    | Yes*     | -                    | Config entry ID for the LCM instance                         |
+| `config_entry_title` | Yes*     | -                    | Config entry title (alternative to ID)                       |
+| `slot`               | Yes      | -                    | Slot number to display                                       |
+| `code_display`       | No       | `masked_with_reveal` | How to display codes: see modes below                        |
+| `show_conditions`    | No       | `true`               | Show the conditions section                                  |
+| `show_lock_status`   | No       | `true`               | Show the lock status section                                 |
+| `show_code_sensors`  | No       | `true`               | Show code sensors in lock status                             |
+| `show_lock_sync`     | No       | `true`               | Show sync status per lock                                    |
 | `collapsed_sections` | No       | `[]`                 | Sections to collapse by default: `conditions`, `lock_status` |
 
 *Either `config_entry_id` or `config_entry_title` is required, but not both.

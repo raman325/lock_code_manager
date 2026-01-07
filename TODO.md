@@ -256,7 +256,7 @@ recurring schedules. Calendars are overkill for "weekdays 9-5" patterns.
 **Proposed Solution:** Add alternative condition types alongside `calendar`:
 
 | Condition Type | Use Case |
-|----------------|----------|
+| -------------- | -------- |
 | `calendar` | One-time events, external calendar sync (existing) |
 | `schedule` | Recurring weekly patterns via HA schedule helper |
 | `entity` | Custom logic via any binary sensor/input_boolean |
