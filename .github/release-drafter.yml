@@ -73,18 +73,18 @@ version-resolver:
       - "lcm-patch"
   default: patch
 categories:
-  - title: ":boom: Breaking Change :boom:"
+  - title: "⚠️ Breaking Changes"
     labels:
       - "breaking-change"
-  - title: ":zap: Enhancements :zap:"
+  - title: "✨ Enhancements"
     labels:
       - "enhancement"
-  - title: ":bug: Bug Fixes :bug:"
+  - title: "🐛 Bug Fixes"
     labels:
       - "fix"
       - "bugfix"
       - "bug"
-  - title: ":mortar_board: Code Quality :mortar_board:"
+  - title: "🔧 Code Quality"
     labels:
       - "code-quality"
   - title: "📝 Documentation"
