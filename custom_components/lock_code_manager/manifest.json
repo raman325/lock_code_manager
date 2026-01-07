@@ -4,7 +4,6 @@
   "after_dependencies": [
     "calendar",
     "frontend",
-    "hacs",
     "lovelace",
     "virtual",
     "zwave_js"
