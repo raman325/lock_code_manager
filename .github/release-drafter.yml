@@ -48,13 +48,13 @@ autolabeler:
 version-resolver:
   major:
     labels:
-      - "major"
+      - "lcm-major"
   minor:
     labels:
-      - "minor"
+      - "lcm-minor"
   patch:
     labels:
-      - "patch"
+      - "lcm-patch"
   default: patch
 categories:
   - title: ":boom: Breaking Change :boom:"
