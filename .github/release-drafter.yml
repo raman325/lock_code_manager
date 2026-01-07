@@ -99,7 +99,7 @@ categories:
     labels:
       - "dependencies"
       - "pre-commit"
-  - title: "⚙️ GitHub Actions"
+  - title: "🔄 GitHub Actions"
     collapse-after: 1
     labels:
       - "github_actions"
