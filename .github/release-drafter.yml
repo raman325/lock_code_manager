@@ -84,7 +84,7 @@ categories:
       - "fix"
       - "bugfix"
       - "bug"
-  - title: "🧹 Code Quality"
+  - title: "⚓ Code Quality"
     labels:
       - "code-quality"
   - title: "📝 Documentation"
@@ -99,7 +99,7 @@ categories:
     labels:
       - "dependencies"
       - "pre-commit"
-  - title: "🔄 GitHub Actions"
+  - title: "🧹 Housekeeping"
     collapse-after: 1
     labels:
       - "github_actions"
