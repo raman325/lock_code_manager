@@ -11,27 +11,43 @@ autolabeler:
     files:
       - '*.ts'
       - '*.js'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'yarn.lock'
+      - 'ts/**/*'
       - '.eslintrc.cjs'
       - 'tsconfig.json'
       - 'rollup.config.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'yarn.lock'
   - label: 'python'
     files:
-      - 'requirements_*.txt'
+      - '*.py'
+      - 'custom_components/**/*.py'
+      - 'tests/**/*.py'
+      - 'tox.ini'
+      - 'requirements*.txt'
+      - 'pyproject.toml'
       - 'Pipfile'
       - 'Pipfile.lock'
-      - 'setup.py'
-      - 'pyproject.toml'
-      - 'tox.ini'
-      - '*.py'
   - label: 'github_actions'
     files:
-      - '.github/*'
+      - '.github/workflows/**/*'
   - label: 'dependencies'
+    files:
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'Pipfile'
+      - 'Pipfile.lock'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'yarn.lock'
+      - '.pre-commit-config.yaml'
     body:
       - '/\[x\] dependency/i'
+  - label: 'documentation'
+    files:
+      - '*.md'
+      - '**/*.md'
+      - 'docs/**/*'
   - label: 'bug'
     body:
       - '/\[x\] bugfix/i'
@@ -57,25 +73,39 @@ version-resolver:
       - "lcm-patch"
   default: patch
 categories:
-  - title: ":boom: Breaking Change :boom:"
+  - title: "⚠️ Breaking Changes"
     labels:
       - "breaking-change"
-  - title: ":zap: Enhancements :zap:"
+  - title: "🆕 Enhancements"
     labels:
       - "enhancement"
-  - title: ":bug: Bug Fixes :bug:"
+  - title: "✅ Bug Fixes"
     labels:
       - "fix"
       - "bugfix"
       - "bug"
-  - title: ":mortar_board: Code Quality :mortar_board:"
+  - title: "⚓ Code Quality"
     labels:
       - "code-quality"
-  - title: "⬆️ Dependencies"
+  - title: "📝 Documentation"
+    collapse-after: 1
+    labels:
+      - "documentation"
+    exclude-labels:
+      - "python"
+      - "javascript"
+  - title: "📦 Dependencies"
     collapse-after: 1
     labels:
       - "dependencies"
       - "pre-commit"
+  - title: "🧹 Housekeeping"
+    collapse-after: 1
+    labels:
+      - "github_actions"
+    exclude-labels:
+      - "python"
+      - "javascript"
 # yamllint disable rule:line-length
 template: |
   [![Downloads for this release](https://img.shields.io/github/downloads/raman325/lock_code_manager/$RESOLVED_VERSION/total.svg)](https://github.com/raman325/lock_code_manager/releases/$RESOLVED_VERSION)
