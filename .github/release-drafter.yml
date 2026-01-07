@@ -76,10 +76,10 @@ categories:
   - title: "⚠️ Breaking Changes"
     labels:
       - "breaking-change"
-  - title: "✨ Enhancements"
+  - title: "🆕 Enhancements"
     labels:
       - "enhancement"
-  - title: "🐛 Bug Fixes"
+  - title: "✅ Bug Fixes"
     labels:
       - "fix"
       - "bugfix"
