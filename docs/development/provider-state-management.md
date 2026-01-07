@@ -8,7 +8,7 @@ modes, the coordinator lifecycle, and best practices.
 The `LockUsercodeUpdateCoordinator` manages usercode state through three update modes:
 
 | Mode | Mechanism | When to Use |
-|------|-----------|-------------|
+| ---- | --------- | ----------- |
 | **Poll for updates** | Periodic `get_usercodes()` | Default for most integrations |
 | **Push for updates** | Real-time subscription | Integrations with event support |
 | **Poll for drift** | Periodic `hard_refresh_codes()` | Detect out-of-band changes |
@@ -145,7 +145,7 @@ Drift detection catches out-of-band changes (e.g., codes changed at the lock's k
 ## Interval Properties
 
 | Property | Default | Purpose |
-|----------|---------|---------|
+| -------- | ------- | ------- |
 | `usercode_scan_interval` | 1 minute | How often to poll for usercode updates (ignored if `supports_push=True`) |
 | `hard_refresh_interval` | `None` | How often to hard refresh for drift detection (`None` = disabled) |
 | `connection_check_interval` | 30 seconds | How often to check connection state (`None` = disabled) |
@@ -381,10 +381,10 @@ def get_usercodes(self) -> dict[int, int | str]:
 
 **Available exceptions:**
 
-| Exception | When to Use |
-|-----------|-------------|
-| `LockDisconnected` | Lock is unreachable or communication failed |
-| `LockCodeManagerError` | Base class for other LCM errors |
+| Exception              | When to Use                                 |
+| ---------------------- | ------------------------------------------- |
+| `LockDisconnected`     | Lock is unreachable or communication failed |
+| `LockCodeManagerError` | Base class for other LCM errors             |
 
 The coordinator catches `LockCodeManagerError` and handles retry logic. Do NOT raise generic
 exceptions or `HomeAssistantError` directly.

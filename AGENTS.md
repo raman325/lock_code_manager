@@ -122,7 +122,7 @@ The `lock-code-manager-lock-data` card displays lock slot states with the follow
 **Data Fields from Websocket:**
 
 | Field | Source | Description |
-|-------|--------|-------------|
+| ----- | ------ | ----------- |
 | `code` / `code_length` | Lock coordinator | Actual code on the lock (current state) |
 | `configured_code` / `configured_code_length` | LCM text entities | Desired code from LCM config |
 | `managed` | LCM config entries | Whether LCM manages this slot (authoritative field) |
@@ -133,7 +133,7 @@ The `lock-code-manager-lock-data` card displays lock slot states with the follow
 **Frontend State Decision Table (for managed slots):**
 
 | `active` | `enabled` | Result | UI Treatment |
-|----------|-----------|--------|--------------|
+| -------- | --------- | ------ | ------------ |
 | true | true | Active | Blue solid border, "Active" badge |
 | false | true | Inactive | Blue dotted border, "Inactive" badge (conditions blocking) |
 | false | false | Disabled | Blue dotted border, "Disabled" badge (user disabled) |
@@ -175,7 +175,7 @@ Z-Wave locks provide richer status via `userIdStatus`:
 **Provider Guidance for Status Inference:**
 
 | Provider State | Maps To |
-|----------------|---------|
+| -------------- | ------- |
 | Code exists on lock | `ENABLED` |
 | Slot empty but usable | `AVAILABLE` |
 | Slot programmatically disabled | `DISABLED` |
@@ -323,7 +323,7 @@ stable.
 Fixed three critical compatibility issues for HA Core 2025.7-2025.11+:
 
 | Issue | Problem | Solution | File |
-|-------|---------|----------|------|
+| ----- | ------- | -------- | ---- |
 | **Config Import** (2025.11) | Deprecated `Config` import from `homeassistant.core` | Changed to `homeassistant.core_config.Config` | `__init__.py` |
 | **register_static_path** (2025.7+) | Synchronous API blocks event loop | Changed to `async_register_static_paths()` with `StaticPathConfig` | `__init__.py` |
 | **Z-Wave JS DATA_CLIENT** (2025.8+) | Deprecated dictionary access pattern | Changed to `getattr(zwave_data, "_client_driver_map", {})` and `client_entry.client` | `providers/zwave_js.py` |
@@ -341,7 +341,7 @@ pytest-homeassistant 85 versions behind).
 **API Compatibility Fixes:**
 
 | API Change | Before | After | Files |
-|------------|--------|-------|-------|
+| ---------- | ------ | ----- | ----- |
 | pytest-asyncio 1.2.0+ | `def aiohttp_client(event_loop, ...)` | `def aiohttp_client(...)` | `tests/conftest.py` |
 | Config Entry Setup | `async_forward_entry_setup(entry, platform)` | `async_forward_entry_setups(entry, [platform])` | `__init__.py`, `tests/conftest.py` |
 | Entity Registry | `er.RegistryEntry("lock.test", ...)` | `entity_reg.async_get_or_create(...)` | `tests/*_provider.py` |
