@@ -92,6 +92,14 @@ categories:
     labels:
       - "dependencies"
       - "pre-commit"
+  - title: "📝 Documentation"
+    collapse-after: 1
+    labels:
+      - "documentation"
+  - title: "⚙️ GitHub Actions"
+    collapse-after: 1
+    labels:
+      - "github_actions"
 # yamllint disable rule:line-length
 template: |
   [![Downloads for this release](https://img.shields.io/github/downloads/raman325/lock_code_manager/$RESOLVED_VERSION/total.svg)](https://github.com/raman325/lock_code_manager/releases/$RESOLVED_VERSION)
