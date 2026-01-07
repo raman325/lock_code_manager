@@ -4,7 +4,7 @@ aiofiles==25.1.0
 colorlog==6.10.1
 debugpy==1.8.19
 home-assistant-frontend==20251229.0
-homeassistant==2026.1.0b3
+homeassistant==2026.1.0b4
 pyserial==3.5
 pyudev==0.24.4
 uv
