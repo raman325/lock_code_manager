@@ -494,3 +494,48 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
     assert events[0].data[ATTR_FROM] == "locked"
 
     await zwave_js_lock.async_unload(False)
+
+
+# Masked usercode tests
+
+
+async def test_get_usercodes_masked_pin_unmanaged_slot_no_crash(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that masked PINs on slots not managed by LCM don't cause StopIteration.
+
+    Regression test for GitHub issue #572. When a lock has a slot with a masked
+    PIN (all *'s) that isn't configured in Lock Code Manager, the code previously
+    crashed with RuntimeError: coroutine raised StopIteration.
+    """
+    # Configure LCM to only manage slot 1 (not slot 5)
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}},  # Only slot 1 is managed
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Mock the cache to include a slot with a masked PIN that isn't managed by LCM
+    masked_slots = [
+        {"code_slot": 1, "usercode": "9999", "in_use": True},  # Managed by LCM
+        {"code_slot": 5, "usercode": "****", "in_use": True},  # NOT managed, masked
+    ]
+
+    with patch.object(
+        zwave_js_lock, "_get_usercodes_from_cache", return_value=masked_slots
+    ):
+        # This should NOT raise RuntimeError: coroutine raised StopIteration
+        codes = await zwave_js_lock.async_get_usercodes()
+
+        # Slot 1 should have its code
+        assert codes[1] == "9999"
+        # Slot 5 should be empty string since it's masked but not managed
+        assert codes[5] == ""
+
+    await zwave_js_lock.async_unload(False)
