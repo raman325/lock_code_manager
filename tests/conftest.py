@@ -35,7 +35,7 @@ pytest_plugins = ["pytest_homeassistant_custom_component"]
 TEST_DOMAIN = "test"
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def aiohttp_client(aiohttp_client, socket_enabled):
     """Return aiohttp_client and allow opening sockets."""
     return aiohttp_client
