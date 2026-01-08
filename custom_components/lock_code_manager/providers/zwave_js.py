@@ -430,6 +430,12 @@ class ZWaveJSLock(BaseLock):
                 data[code_slot] = ""
             # Special handling if usercode is all *'s
             elif usercode and len(str(usercode)) * "*" == str(usercode):
+                # Only look up PIN from entities if slot is managed by LCM
+                if code_slot not in code_slots:
+                    # Slot not managed by LCM, record empty since we can't
+                    # retrieve the actual PIN
+                    data[code_slot] = ""
+                    continue
                 # Build data from entities
                 config_entry = next(
                     config_entry
@@ -455,16 +461,15 @@ class ZWaveJSLock(BaseLock):
                 pin_state = self.hass.states.get(pin_entity_id)
                 assert active_state
                 assert pin_state
-                if code_slot in code_slots:
-                    _LOGGER.debug(
-                        (
-                            "PIN is masked for lock %s code slot %s so "
-                            "assuming value from PIN entity %s"
-                        ),
-                        self.lock.entity_id,
-                        code_slot,
-                        pin_entity_id,
-                    )
+                _LOGGER.debug(
+                    (
+                        "PIN is masked for lock %s code slot %s so "
+                        "assuming value from PIN entity %s"
+                    ),
+                    self.lock.entity_id,
+                    code_slot,
+                    pin_entity_id,
+                )
                 if active_state.state == STATE_ON and pin_state.state.isnumeric():
                     data[code_slot] = pin_state.state
                 else:
