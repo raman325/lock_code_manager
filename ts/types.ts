@@ -52,6 +52,36 @@ export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrate
     type: 'custom:lock-code-manager';
 }
 
+export interface LockCodeManagerSlotSectionStrategyConfig {
+    /** How to display codes */
+    code_display?: CodeDisplayMode;
+    /** Sections to show collapsed by default */
+    collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Config entry ID for the LCM instance */
+    config_entry_id: string;
+    /** Show code sensors in lock status section */
+    show_code_sensors?: boolean;
+    /** Show conditions section */
+    show_conditions?: boolean;
+    /** Show lock status section */
+    show_lock_status?: boolean;
+    /** Show sync status per lock */
+    show_lock_sync?: boolean;
+    /** Slot number to display */
+    slot: number;
+    type: 'custom:lock-code-manager-slot';
+    /** Use new slot cards (true) or legacy entities cards (false). Default: true */
+    use_slot_cards?: boolean;
+}
+
+export interface LockCodeManagerLockSectionStrategyConfig {
+    /** How to display codes */
+    code_display?: CodeDisplayMode;
+    /** Lock entity ID to display codes for */
+    lock_entity_id: string;
+    type: 'custom:lock-code-manager-lock';
+}
+
 export interface LockCodeManagerEntitiesResponse {
     config_entry: ConfigEntryJSONFragment;
     entities: EntityRegistryEntry[];

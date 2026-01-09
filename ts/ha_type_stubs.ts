@@ -49,8 +49,21 @@ export interface LovelaceResource {
     url: string;
 }
 
+export interface LovelaceSectionStrategyConfig {
+    [key: string]: unknown;
+    type: string;
+}
+
+export interface LovelaceSectionConfig {
+    cards?: LovelaceCardConfig[];
+    strategy?: LovelaceSectionStrategyConfig;
+    title?: string;
+    type?: string;
+}
+
 export interface LovelaceViewConfig extends LovelaceBaseViewConfig {
     badges?: Array<string | object>;
     cards?: object[];
+    sections?: LovelaceSectionConfig[];
     type?: string;
 }

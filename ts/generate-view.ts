@@ -4,7 +4,6 @@ import {
     CODE_SENSOR_KEY,
     CONDITION_KEYS,
     DIVIDER_CARD,
-    FOLD_ENTITY_ROW_SEARCH_STRING,
     IN_SYNC_KEY,
     KEY_ORDER
 } from './const';
@@ -12,9 +11,11 @@ import {
     EntityRegistryEntry,
     HomeAssistant,
     LovelaceCardConfig,
-    LovelaceResource,
+    LovelaceSectionConfig,
     LovelaceViewConfig
 } from './ha_type_stubs';
+// Note: FOLD_ENTITY_ROW_SEARCH_STRING and LovelaceResource are used by slot-section-strategy
+// via the exported functions, keeping imports for re-export
 import { slugify } from './slugify';
 import {
     ConfigEntryJSONFragment,
@@ -27,7 +28,6 @@ import { capitalize } from './util';
 export async function generateView(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
-    entities: EntityRegistryEntry[],
     show_code_sensors: boolean,
     show_lock_sync: boolean,
     show_all_codes_for_locks: boolean,
@@ -37,27 +37,12 @@ export async function generateView(
     show_lock_status = true,
     collapsed_sections?: ('conditions' | 'lock_status')[]
 ): Promise<LovelaceViewConfig> {
-    const callData = {
-        type: 'lock_code_manager/get_config_entry_entities'
-    };
+    const configEntryData = await hass.callWS<LockCodeManagerConfigEntryData>({
+        config_entry_id: configEntry.entry_id,
+        type: 'lock_code_manager/get_slot_calendar_data'
+    });
 
-    const [configEntryData, lovelaceResources] = await Promise.all([
-        hass.callWS<LockCodeManagerConfigEntryData>({
-            config_entry_id: configEntry.entry_id,
-            type: 'lock_code_manager/get_slot_calendar_data'
-        }),
-        hass.callWS<LovelaceResource[]>({
-            type: 'lovelace/resources'
-        })
-    ]);
-
-    const sortedEntities = entities
-        .map((entity) => createLockCodeManagerEntity(entity))
-        .sort(compareAndSortEntities);
     const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
-    const slotMappings: SlotMapping[] = slots.map((slotNum) =>
-        getSlotMapping(hass, slotNum, sortedEntities, configEntryData)
-    );
 
     // Build badges - lock state badges only
     // Note: Template badges are not supported by HA, so we only use entity badges
@@ -75,33 +60,23 @@ export async function generateView(
             });
         });
 
-    const useFoldEntityRow =
-        lovelaceResources.filter((resource) => resource.url.includes(FOLD_ENTITY_ROW_SEARCH_STRING))
-            .length > 0;
-
-    // Generate slot cards using either the new streamlined cards or legacy entities cards
-    const cards = use_slot_cards
-        ? slotMappings.map((slotMapping) =>
-              generateNewSlotCard(
-                  configEntry,
-                  slotMapping.slotNum,
-                  show_code_sensors,
-                  show_lock_sync,
-                  show_conditions,
-                  show_lock_status,
-                  collapsed_sections
-              )
-          )
-        : slotMappings.map((slotMapping) =>
-              generateSlotCard(
-                  hass,
-                  configEntry,
-                  slotMapping,
-                  useFoldEntityRow,
-                  show_code_sensors,
-                  show_lock_sync
-              )
-          );
+    // Generate sections using section strategies (strategies handle both new and legacy card modes)
+    const sections: LovelaceSectionConfig[] = slots.map((slotNum) => {
+        return {
+            strategy: {
+                code_display,
+                collapsed_sections,
+                config_entry_id: configEntry.entry_id,
+                show_code_sensors,
+                show_conditions,
+                show_lock_status,
+                show_lock_sync,
+                slot: slotNum,
+                type: 'custom:lock-code-manager-slot',
+                use_slot_cards
+            }
+        };
+    });
 
     if (show_all_codes_for_locks) {
         const sortedLockIds = [...configEntryData.locks].sort((a, b) => {
@@ -109,22 +84,25 @@ export async function generateView(
             const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
             return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
         });
-        // Add lock codes cards directly to let masonry layout handle them like slot cards
+        // Add lock codes sections using section strategy
         sortedLockIds.forEach((lockEntityId) => {
-            cards.push({
-                code_display,
-                lock_entity_id: lockEntityId,
-                type: 'custom:lcm-lock-codes'
+            sections.push({
+                strategy: {
+                    code_display,
+                    lock_entity_id: lockEntityId,
+                    type: 'custom:lock-code-manager-lock'
+                }
             });
         });
     }
 
     return {
         badges,
-        cards,
         panel: false,
         path: slugify(configEntry.title),
-        title: configEntry.title
+        sections,
+        title: configEntry.title,
+        type: 'sections'
     };
 }
 
@@ -291,7 +269,6 @@ export function generateNewSlotCard(
 
 /** @internal - exported for testing via generate-view.internal.ts */
 export function getSlotMapping(
-    hass: HomeAssistant,
     slotNum: number,
     lockCodeManagerEntities: LockCodeManagerEntityEntry[],
     configEntryData: LockCodeManagerConfigEntryData
