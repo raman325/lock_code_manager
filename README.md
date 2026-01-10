@@ -106,6 +106,66 @@ strategy:
   code_display: masked
 ```
 
+### Section Strategies
+
+For advanced users building custom `sections`-type views, Lock Code Manager provides
+section strategies that generate cards when Home Assistant renders the section.
+
+> **Note:** Section strategies simply render a single card (`lcm-slot` or `lcm-lock-codes`)
+> within a grid section. You can use the cards directly in your dashboard without using
+> section strategies - see the [Slot Card](#slot-card) and [Lock Codes Card](#lock-codes-card)
+> sections below.
+
+#### Slot Section Strategy
+
+Use `custom:lock-code-manager-slot` to render a single slot section:
+
+| Option              | Required | Default              | Description                                                   |
+| ------------------- | -------- | -------------------- | ------------------------------------------------------------- |
+| `config_entry_id`   | Yes      | -                    | Config entry ID for the LCM instance                          |
+| `slot`              | Yes      | -                    | Slot number to display                                        |
+| `use_slot_cards`    | No       | `true`               | Use new lcm-slot card (`true`) or legacy entities card        |
+| `code_display`      | No       | `masked_with_reveal` | Code visibility mode                                          |
+| `show_conditions`   | No       | `true`               | Show conditions section                                       |
+| `show_lock_status`  | No       | `true`               | Show lock status section                                      |
+| `show_code_sensors` | No       | `true`               | Show code sensors in lock status                              |
+| `show_lock_sync`    | No       | `true`               | Show sync status per lock                                     |
+| `collapsed_sections`| No       | `[]`                 | Sections to collapse by default: `conditions`, `lock_status`  |
+
+```yaml
+views:
+  - type: sections
+    sections:
+      - strategy:
+          type: custom:lock-code-manager-slot
+          config_entry_id: 1234567890abcdef
+          slot: 1
+          code_display: masked_with_reveal
+      - strategy:
+          type: custom:lock-code-manager-slot
+          config_entry_id: 1234567890abcdef
+          slot: 2
+```
+
+#### Lock Section Strategy
+
+Use `custom:lock-code-manager-lock` to render a lock codes section:
+
+| Option           | Required | Default              | Description                           |
+| ---------------- | -------- | -------------------- | ------------------------------------- |
+| `lock_entity_id` | Yes      | -                    | The entity ID of the lock             |
+| `code_display`   | No       | `masked_with_reveal` | Code visibility mode                  |
+
+```yaml
+views:
+  - type: sections
+    sections:
+      - strategy:
+          type: custom:lock-code-manager-lock
+          lock_entity_id: lock.front_door
+          code_display: masked
+```
+
 ### Slot Card
 
 The `lcm-slot` displays a single code slot with inline editing, real-time WebSocket

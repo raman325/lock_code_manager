@@ -319,9 +319,7 @@ describe('getSlotMapping', () => {
             createTestEntity(1, IN_SYNC_KEY, 'binary_sensor.in_sync', 'lock.front'),
             createTestEntity(1, CONDITION_KEYS[0], 'switch.condition')
         ];
-        const hass = createMockHass();
-
-        const result = getSlotMapping(hass, 1, entities, configEntryData);
+        const result = getSlotMapping(1, entities, configEntryData);
 
         expect(result.slotNum).toBe(1);
         expect(result.mainEntities).toHaveLength(2);
@@ -338,9 +336,7 @@ describe('getSlotMapping', () => {
             createTestEntity(2, ACTIVE_KEY, 'binary_sensor.active'),
             createTestEntity(2, CODE_EVENT_KEY, 'event.code')
         ];
-        const hass = createMockHass();
-
-        const result = getSlotMapping(hass, 2, entities, configEntryData);
+        const result = getSlotMapping(2, entities, configEntryData);
 
         expect(result.calendarEntityId).toBeNull();
     });
@@ -352,9 +348,7 @@ describe('getSlotMapping', () => {
             createTestEntity(1, ACTIVE_KEY, 'binary_sensor.active_1'),
             createTestEntity(1, CODE_EVENT_KEY, 'event.code_1')
         ];
-        const hass = createMockHass();
-
-        const result = getSlotMapping(hass, 1, entities, configEntryData);
+        const result = getSlotMapping(1, entities, configEntryData);
 
         expect(result.mainEntities).toHaveLength(1);
         expect(result.mainEntities[0].entity_id).toBe('switch.slot_1_enabled');
@@ -585,20 +579,6 @@ describe('generateSlotCard', () => {
 });
 
 describe('generateView', () => {
-    function createEntityRegistryEntry(
-        slotNum: number,
-        key: string,
-        lockEntityId?: string
-    ): EntityRegistryEntry {
-        const suffix = lockEntityId ? `_${lockEntityId.replace('.', '_')}` : '';
-        return {
-            entity_id: `switch.slot_${slotNum}_${key}${suffix}`,
-            name: `Code slot ${slotNum} ${key}`,
-            original_name: `Code slot ${slotNum} ${key}`,
-            unique_id: `config|${slotNum}|${key}${lockEntityId ? `|${lockEntityId}` : ''}`
-        } as EntityRegistryEntry;
-    }
-
     const testConfigEntry: ConfigEntryJSONFragment = {
         disabled_by: '',
         domain: 'lock_code_manager',
@@ -619,11 +599,6 @@ describe('generateView', () => {
             locks: ['lock.front'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY)
-        ];
         const lovelaceResources: LovelaceResource[] = [];
 
         const hass = createMockHass({
@@ -641,7 +616,6 @@ describe('generateView', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             false,
@@ -655,13 +629,24 @@ describe('generateView', () => {
         expect(result.panel).toBe(false);
         // Lock badges are now entity objects
         const lockBadge = result.badges.find(
-            (badge) =>
+            (badge): badge is { entity: string; type: string } =>
                 typeof badge === 'object' &&
+                badge !== null &&
+                'type' in badge &&
                 badge.type === 'entity' &&
+                'entity' in badge &&
                 badge.entity === 'lock.front'
         );
         expect(lockBadge).toBeDefined();
-        expect(result.cards).toHaveLength(1);
+        expect(result.type).toBe('sections');
+        expect(result.sections).toHaveLength(1);
+        // Sections now contain strategies, not rendered cards
+        const strategy = result.sections[0].strategy as {
+            slot: number;
+            type: string;
+        };
+        expect(strategy.type).toBe('custom:lock-code-manager-slot');
+        expect(strategy.slot).toBe(1);
     });
 
     it('only includes lock entity badges (no template badges)', async () => {
@@ -669,14 +654,6 @@ describe('generateView', () => {
             locks: ['lock.front'],
             slots: { 1: null, 2: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY),
-            createEntityRegistryEntry(2, 'enabled'),
-            createEntityRegistryEntry(2, ACTIVE_KEY),
-            createEntityRegistryEntry(2, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -693,7 +670,6 @@ describe('generateView', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             false,
@@ -704,14 +680,22 @@ describe('generateView', () => {
 
         // Should only have entity badges for locks (no template badges)
         const entityBadges = result.badges.filter(
-            (badge) => typeof badge === 'object' && badge.type === 'entity'
+            (badge): badge is { entity: string; type: string } =>
+                typeof badge === 'object' &&
+                badge !== null &&
+                'type' in badge &&
+                badge.type === 'entity'
         );
         expect(entityBadges).toHaveLength(1);
         expect(entityBadges[0].entity).toBe('lock.front');
 
         // No template badges (not supported by HA)
         const templateBadges = result.badges.filter(
-            (badge) => typeof badge === 'object' && badge.type === 'template'
+            (badge): badge is { type: string } =>
+                typeof badge === 'object' &&
+                badge !== null &&
+                'type' in badge &&
+                badge.type === 'template'
         );
         expect(templateBadges).toHaveLength(0);
     });
@@ -721,17 +705,6 @@ describe('generateView', () => {
             locks: ['lock.front'],
             slots: { 1: null, 2: null, 3: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY),
-            createEntityRegistryEntry(2, 'enabled'),
-            createEntityRegistryEntry(2, ACTIVE_KEY),
-            createEntityRegistryEntry(2, CODE_EVENT_KEY),
-            createEntityRegistryEntry(3, 'enabled'),
-            createEntityRegistryEntry(3, ACTIVE_KEY),
-            createEntityRegistryEntry(3, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -748,7 +721,6 @@ describe('generateView', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             false,
@@ -757,31 +729,19 @@ describe('generateView', () => {
             false
         );
 
-        expect(result.cards).toHaveLength(3);
+        expect(result.sections).toHaveLength(3);
     });
 
-    it('uses fold-entity-row when available in lovelace resources', async () => {
+    it('passes use_slot_cards=false to section strategy for legacy mode', async () => {
         const configEntryData: LockCodeManagerConfigEntryData = {
             locks: ['lock.front'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY),
-            createEntityRegistryEntry(1, IN_SYNC_KEY, 'lock.front')
-        ];
-        const lovelaceResources: LovelaceResource[] = [
-            { id: '1', type: 'module', url: '/local/fold-entity-row.js' }
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
                 if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
                     return configEntryData;
-                }
-                if (msg.type === 'lovelace/resources') {
-                    return lovelaceResources;
                 }
                 return undefined;
             },
@@ -793,7 +753,6 @@ describe('generateView', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             true,
             false,
@@ -802,12 +761,15 @@ describe('generateView', () => {
             false
         );
 
-        const [card] = result.cards as Array<{ cards: Array<{ entities: unknown[] }> }>;
-        const [, entitiesCard] = card.cards;
-        const hasFoldRow = entitiesCard.entities.some(
-            (e) => typeof e === 'object' && 'type' in e && e.type === 'custom:fold-entity-row'
-        );
-        expect(hasFoldRow).toBe(true);
+        // Verify the section strategy is configured for legacy mode
+        const [strategy] = result.sections.map((s) => s.strategy) as Array<{
+            show_lock_sync: boolean;
+            type: string;
+            use_slot_cards: boolean;
+        }>;
+        expect(strategy.type).toBe('custom:lock-code-manager-slot');
+        expect(strategy.use_slot_cards).toBe(false);
+        expect(strategy.show_lock_sync).toBe(true);
     });
 
     it('sorts locks alphabetically in badges', async () => {
@@ -815,11 +777,6 @@ describe('generateView', () => {
             locks: ['lock.z_back', 'lock.a_front'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -836,7 +793,6 @@ describe('generateView', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             false,
@@ -847,7 +803,11 @@ describe('generateView', () => {
 
         // Lock badges are now entity objects, not strings
         const lockBadges = result.badges.filter(
-            (badge) => typeof badge === 'object' && badge.type === 'entity'
+            (badge): badge is { entity: string; type: string } =>
+                typeof badge === 'object' &&
+                badge !== null &&
+                'type' in badge &&
+                badge.type === 'entity'
         );
         const lockEntityIds = lockBadges.map((badge) => badge.entity);
         expect(lockEntityIds).toEqual(['lock.a_front', 'lock.z_back']);
@@ -858,14 +818,6 @@ describe('generateView', () => {
             locks: ['lock.front'],
             slots: { 1: null, 2: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY),
-            createEntityRegistryEntry(2, 'enabled'),
-            createEntityRegistryEntry(2, ACTIVE_KEY),
-            createEntityRegistryEntry(2, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -882,7 +834,6 @@ describe('generateView', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             true,
             false,
@@ -891,31 +842,22 @@ describe('generateView', () => {
             true
         );
 
-        expect(result.cards).toHaveLength(2);
-        // Verify cards are new slot cards, not vertical-stack with entities
-        expect(result.cards[0].type).toBe('custom:lcm-slot');
-        expect(result.cards[0].slot).toBe(1);
-        expect(result.cards[0].config_entry_id).toBe('entry123');
-        expect(result.cards[1].type).toBe('custom:lcm-slot');
-        expect(result.cards[1].slot).toBe(2);
+        expect(result.sections).toHaveLength(2);
+        // Verify sections use slot section strategies
+        const strategies = result.sections.map((s) => s.strategy) as Array<{
+            config_entry_id: string;
+            slot: number;
+            type: string;
+        }>;
+        expect(strategies[0].type).toBe('custom:lock-code-manager-slot');
+        expect(strategies[0].slot).toBe(1);
+        expect(strategies[0].config_entry_id).toBe('entry123');
+        expect(strategies[1].type).toBe('custom:lock-code-manager-slot');
+        expect(strategies[1].slot).toBe(2);
     });
 });
 
 describe('generateView lock codes cards', () => {
-    function createEntityRegistryEntry(
-        slotNum: number,
-        key: string,
-        lockEntityId?: string
-    ): EntityRegistryEntry {
-        const suffix = lockEntityId ? `_${lockEntityId.replace('.', '_')}` : '';
-        return {
-            entity_id: `switch.slot_${slotNum}_${key}${suffix}`,
-            name: `Code slot ${slotNum} ${key}`,
-            original_name: `Code slot ${slotNum} ${key}`,
-            unique_id: `config|${slotNum}|${key}${lockEntityId ? `|${lockEntityId}` : ''}`
-        } as EntityRegistryEntry;
-    }
-
     const testConfigEntry: ConfigEntryJSONFragment = {
         disabled_by: '',
         domain: 'lock_code_manager',
@@ -936,11 +878,6 @@ describe('generateView lock codes cards', () => {
             locks: ['lock.front', 'lock.back'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -961,7 +898,6 @@ describe('generateView lock codes cards', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             // show_all_codes_for_locks
@@ -970,16 +906,19 @@ describe('generateView lock codes cards', () => {
             true
         );
 
-        // Should have 1 slot card + 2 lock codes cards (not wrapped in grid)
-        expect(result.cards).toHaveLength(3);
+        // Should have 1 slot section + 2 lock sections
+        expect(result.sections).toHaveLength(3);
 
-        // Lock codes cards should be individual cards, not a grid
-        const lockCodesCards = result.cards.filter((card) => card.type === 'custom:lcm-lock-codes');
-        expect(lockCodesCards).toHaveLength(2);
+        // Extract strategies from sections
+        const strategies = result.sections.map((s) => s.strategy) as Array<{ type: string }>;
 
-        // Verify no grid wrapper exists
-        const gridCards = result.cards.filter((card) => card.type === 'grid');
-        expect(gridCards).toHaveLength(0);
+        // Lock codes should use lock section strategies
+        const lockStrategies = strategies.filter((s) => s.type === 'custom:lock-code-manager-lock');
+        expect(lockStrategies).toHaveLength(2);
+
+        // Slot should use slot section strategy
+        const slotStrategies = strategies.filter((s) => s.type === 'custom:lock-code-manager-slot');
+        expect(slotStrategies).toHaveLength(1);
     });
 
     it('sorts lock codes cards alphabetically by friendly name', async () => {
@@ -987,11 +926,6 @@ describe('generateView lock codes cards', () => {
             locks: ['lock.z_garage', 'lock.a_front', 'lock.m_back'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -1013,7 +947,6 @@ describe('generateView lock codes cards', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             // show_all_codes_for_locks
@@ -1022,12 +955,18 @@ describe('generateView lock codes cards', () => {
             true
         );
 
-        const lockCodesCards = result.cards.filter((card) => card.type === 'custom:lcm-lock-codes');
+        // Extract lock strategies from sections (skip the slot strategy at index 0)
+        const lockStrategies = result.sections
+            .map((s) => s.strategy)
+            .filter((s) => s?.type === 'custom:lock-code-manager-lock') as Array<{
+            lock_entity_id: string;
+            type: string;
+        }>;
 
         // Should be sorted by friendly name: Back Door, Front Door, Garage
-        expect(lockCodesCards[0].lock_entity_id).toBe('lock.m_back');
-        expect(lockCodesCards[1].lock_entity_id).toBe('lock.a_front');
-        expect(lockCodesCards[2].lock_entity_id).toBe('lock.z_garage');
+        expect(lockStrategies[0].lock_entity_id).toBe('lock.m_back');
+        expect(lockStrategies[1].lock_entity_id).toBe('lock.a_front');
+        expect(lockStrategies[2].lock_entity_id).toBe('lock.z_garage');
     });
 
     it('includes code_display in lock codes cards', async () => {
@@ -1035,11 +974,6 @@ describe('generateView lock codes cards', () => {
             locks: ['lock.front'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -1056,7 +990,6 @@ describe('generateView lock codes cards', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             // show_all_codes_for_locks
@@ -1065,8 +998,14 @@ describe('generateView lock codes cards', () => {
             true
         );
 
-        const lockCodesCard = result.cards.find((card) => card.type === 'custom:lcm-lock-codes');
-        expect(lockCodesCard?.code_display).toBe('masked_with_reveal');
+        // Extract lock strategy from sections
+        const lockStrategy = result.sections
+            .map((s) => s.strategy)
+            .find((s) => s?.type === 'custom:lock-code-manager-lock') as {
+            code_display?: string;
+            type: string;
+        };
+        expect(lockStrategy?.code_display).toBe('masked_with_reveal');
     });
 
     it('does not add lock codes cards when show_all_codes_for_locks is false', async () => {
@@ -1074,11 +1013,6 @@ describe('generateView lock codes cards', () => {
             locks: ['lock.front', 'lock.back'],
             slots: { 1: null }
         };
-        const entities = [
-            createEntityRegistryEntry(1, 'enabled'),
-            createEntityRegistryEntry(1, ACTIVE_KEY),
-            createEntityRegistryEntry(1, CODE_EVENT_KEY)
-        ];
 
         const hass = createMockHass({
             callWS: (msg) => {
@@ -1095,7 +1029,6 @@ describe('generateView lock codes cards', () => {
         const result = await generateView(
             hass,
             testConfigEntry,
-            entities,
             false,
             false,
             // show_all_codes_for_locks = false
@@ -1104,10 +1037,15 @@ describe('generateView lock codes cards', () => {
             true
         );
 
-        // Should only have 1 slot card, no lock codes cards
-        expect(result.cards).toHaveLength(1);
-        const lockCodesCards = result.cards.filter((card) => card.type === 'custom:lcm-lock-codes');
-        expect(lockCodesCards).toHaveLength(0);
+        // Should only have 1 slot section, no lock sections
+        expect(result.sections).toHaveLength(1);
+        const strategies = result.sections.map((s) => s.strategy) as Array<{ type: string }>;
+        const lockStrategies = strategies.filter(
+            (s) => s?.type === 'custom:lock-code-manager-lock'
+        );
+        expect(lockStrategies).toHaveLength(0);
+        // Verify it's a slot strategy
+        expect(strategies[0].type).toBe('custom:lock-code-manager-slot');
     });
 });
 

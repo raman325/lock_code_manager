@@ -87,7 +87,6 @@ describe('LockCodeManagerViewStrategy', () => {
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 mockConfigEntry,
-                mockEntities,
                 true,
                 true,
                 true,
@@ -116,7 +115,6 @@ describe('LockCodeManagerViewStrategy', () => {
             // show_code_sensors=false (set explicitly), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
-                expect.anything(),
                 expect.anything(),
                 false,
                 true,
@@ -147,7 +145,6 @@ describe('LockCodeManagerViewStrategy', () => {
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
-                expect.anything(),
                 false,
                 true,
                 true,
@@ -177,7 +174,6 @@ describe('LockCodeManagerViewStrategy', () => {
             expect(generateView).toHaveBeenCalledWith(
                 hass,
                 expect.anything(),
-                expect.anything(),
                 true,
                 false,
                 true,
@@ -206,7 +202,6 @@ describe('LockCodeManagerViewStrategy', () => {
             // show_lock_sync=false (from legacy include_in_sync_sensors), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
-                expect.anything(),
                 expect.anything(),
                 true,
                 false,
@@ -241,7 +236,6 @@ describe('LockCodeManagerViewStrategy', () => {
             // show_code_sensors=false (new option takes precedence over legacy), rest are defaults (all true)
             expect(generateView).toHaveBeenCalledWith(
                 hass,
-                expect.anything(),
                 expect.anything(),
                 false,
                 true,

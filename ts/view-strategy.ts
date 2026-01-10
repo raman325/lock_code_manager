@@ -37,7 +37,7 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
         }
 
         try {
-            const { config_entry, entities } = await hass.callWS<LockCodeManagerEntitiesResponse>({
+            const { config_entry } = await hass.callWS<LockCodeManagerEntitiesResponse>({
                 config_entry_id,
                 config_entry_title,
                 type: 'lock_code_manager/get_config_entry_entities'
@@ -56,7 +56,6 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
             return generateView(
                 hass,
                 config_entry,
-                entities,
                 showCodeSensors,
                 showLockSync,
                 config.show_all_codes_for_locks ?? DEFAULT_SHOW_ALL_CODES_FOR_LOCKS,
