@@ -74,12 +74,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
             /* Header Section */
             .header {
-                align-items: center;
                 background: var(--ha-card-background, var(--card-background-color, #fff));
                 border-bottom: 1px solid var(--lcm-border-color);
                 display: flex;
+                flex-direction: column;
                 gap: 12px;
                 padding: 16px;
+            }
+
+            .header-top {
+                align-items: center;
+                display: flex;
+                gap: 12px;
             }
 
             .header-icon {
@@ -88,6 +94,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 border-radius: 50%;
                 color: var(--primary-color);
                 display: flex;
+                flex-shrink: 0;
                 height: 40px;
                 justify-content: center;
                 width: 40px;
@@ -111,14 +118,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-weight: 500;
             }
 
-            .header-subtitle {
-                color: var(--secondary-text-color);
-                font-size: 12px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
             .header-badges {
                 align-items: center;
                 display: flex;
@@ -139,6 +138,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
             .header-badge ha-svg-icon {
                 --mdc-icon-size: 14px;
+                flex-shrink: 0;
             }
 
             .header-badge.clickable {
@@ -147,6 +147,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             }
 
             .header-badge.clickable:hover {
+                background: var(--lcm-section-bg-hover);
+            }
+
+            .header-last-used {
+                align-items: center;
+                background: var(--lcm-section-bg);
+                border-radius: 12px;
+                color: var(--secondary-text-color);
+                display: flex;
+                font-size: 11px;
+                gap: 4px;
+                padding: 4px 8px;
+            }
+
+            .header-last-used ha-svg-icon {
+                --mdc-icon-size: 14px;
+            }
+
+            .header-last-used.clickable {
+                cursor: pointer;
+                transition: background-color 0.2s;
+            }
+
+            .header-last-used.clickable:hover {
                 background: var(--lcm-section-bg-hover);
             }
 
@@ -646,49 +670,47 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderHeader(): TemplateResult {
         const lockCount = this._data?.locks?.length ?? 0;
-        const configEntryTitle = this._data?.config_entry_title;
         const lastUsed = this._data?.last_used;
 
         return html`
             <div class="header">
-                <div class="header-icon">
-                    <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
-                </div>
-                <div class="header-info">
-                    <span class="header-title">Code Slot ${this._config?.slot}</span>
-                    ${configEntryTitle
-                        ? html`<span class="header-subtitle">${configEntryTitle}</span>`
-                        : nothing}
-                </div>
-                <div class="header-badges">
+                <div class="header-top">
+                    <div class="header-icon">
+                        <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
+                    </div>
+                    <div class="header-info">
+                        <span class="header-title">Code Slot ${this._config?.slot}</span>
+                    </div>
                     ${lockCount > 0
-                        ? html`<span
-                              class="header-badge clickable"
-                              title=${this._data?.locks?.map((l) => l.name).join(', ') ?? ''}
-                              @click=${this._toggleLockStatus}
-                          >
-                              <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
-                              ${lockCount}
-                          </span>`
+                        ? html`<div class="header-badges">
+                              <span
+                                  class="header-badge clickable"
+                                  title=${this._data?.locks?.map((l) => l.name).join(', ') ?? ''}
+                                  @click=${this._toggleLockStatus}
+                              >
+                                  <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
+                                  ${lockCount}
+                              </span>
+                          </div>`
                         : nothing}
-                    <span
-                        class="header-badge ${lastUsed ? 'clickable' : ''}"
-                        title=${lastUsed
-                            ? this._data?.last_used_lock
-                                ? `Used on ${this._data.last_used_lock} - Click to view history`
-                                : 'Click to view PIN usage history'
-                            : 'This PIN has never been used'}
-                        @click=${lastUsed ? this._navigateToEventHistory : nothing}
-                    >
-                        <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
-                        ${lastUsed
-                            ? html`${this._data?.last_used_lock ?? 'Used'}
-                                  <ha-relative-time
-                                      .hass=${this._hass}
-                                      .datetime=${lastUsed}
-                                  ></ha-relative-time>`
-                            : 'Never used'}
-                    </span>
+                </div>
+                <div
+                    class="header-last-used ${lastUsed ? 'clickable' : ''}"
+                    title=${lastUsed
+                        ? this._data?.last_used_lock
+                            ? `Used on ${this._data.last_used_lock} - Click to view history`
+                            : 'Click to view PIN usage history'
+                        : 'This PIN has never been used'}
+                    @click=${() => lastUsed && this._navigateToEventHistory()}
+                >
+                    <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
+                    ${lastUsed
+                        ? html`${this._data?.last_used_lock ?? 'Used'}
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${lastUsed}
+                              ></ha-relative-time>`
+                        : 'Never used'}
                 </div>
             </div>
         `;
@@ -1111,12 +1133,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const enabledEntityId = this._data?.entities?.enabled ?? undefined;
         if (!enabledEntityId) return;
 
+        const service = newState ? 'turn_on' : 'turn_off';
         try {
-            await this._hass.callService('switch', newState ? 'turn_on' : 'turn_off', {
+            await this._hass.callService('switch', service, {
                 entity_id: enabledEntityId
             });
         } catch (err) {
-            console.error('Failed to toggle slot enabled state:', err);
+            // eslint-disable-next-line no-console
+            console.error(`Failed service call: switch.${service} on ${enabledEntityId}`, err);
         }
     }
 
@@ -1157,14 +1181,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             'name' | 'pin' | 'numberOfUses',
             {
                 entityKey: keyof NonNullable<SlotCardData['entities']>;
-                errorMsg: string;
                 service: string;
                 serviceData: (v: string) => Record<string, unknown>;
             }
         > = {
             name: {
                 entityKey: 'name',
-                errorMsg: 'Failed to save name',
                 service: 'text.set_value',
                 serviceData: (v) => {
                     return { value: v.trim() };
@@ -1172,7 +1194,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             },
             numberOfUses: {
                 entityKey: 'number_of_uses',
-                errorMsg: 'Failed to save number of uses',
                 service: 'number.set_value',
                 serviceData: (v) => {
                     const num = parseInt(v, 10);
@@ -1181,7 +1202,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             },
             pin: {
                 entityKey: 'pin',
-                errorMsg: 'Failed to save PIN',
                 service: 'text.set_value',
                 serviceData: (v) => {
                     return { value: v.trim() };
@@ -1204,7 +1224,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 ...serviceData
             });
         } catch (err) {
-            console.error(config.errorMsg, err);
+            // eslint-disable-next-line no-console
+            console.error(`Failed service call: ${config.service} on ${entityId}`, err);
         }
     }
 
