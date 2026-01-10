@@ -56,6 +56,7 @@ export async function generateView(
         .forEach((lockEntityId) => {
             badges.push({
                 entity: lockEntityId,
+                show_name: true,
                 type: 'entity'
             });
         });

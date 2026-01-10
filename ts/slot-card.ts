@@ -1031,7 +1031,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     </span>
                     ${showSync && lock.lastSynced
                         ? html`<span class="lock-synced-time">
-                              ${statusText}
+                              Last synced to lock
                               <ha-relative-time
                                   .hass=${this._hass}
                                   .datetime=${lock.lastSynced}
