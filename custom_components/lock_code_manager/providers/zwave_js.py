@@ -415,18 +415,15 @@ class ZWaveJSLock(BaseLock):
             slots = self._get_usercodes_from_cache()
             slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
 
+        slots_with_pin: list[int] = []
+        slots_not_enabled: list[int] = []
         for slot in slots:
             code_slot = int(slot["code_slot"])
             usercode: str = slot["usercode"] or ""
             in_use: bool | None = slot["in_use"]
 
             if not in_use:
-                if code_slot in code_slots:
-                    _LOGGER.debug(
-                        "Lock %s code slot %s not enabled",
-                        self.lock.entity_id,
-                        code_slot,
-                    )
+                slots_not_enabled.append(code_slot)
                 data[code_slot] = ""
             # Special handling if usercode is all *'s
             elif usercode and len(str(usercode)) * "*" == str(usercode):
@@ -471,16 +468,21 @@ class ZWaveJSLock(BaseLock):
                     pin_entity_id,
                 )
                 if active_state.state == STATE_ON and pin_state.state.isnumeric():
+                    slots_with_pin.append(code_slot)
                     data[code_slot] = pin_state.state
                 else:
+                    slots_not_enabled.append(code_slot)
                     data[code_slot] = ""
             else:
-                if code_slot in code_slots:
-                    _LOGGER.debug(
-                        "Lock %s code slot %s has a PIN",
-                        self.lock.entity_id,
-                        code_slot,
-                    )
+                slots_with_pin.append(code_slot)
                 data[code_slot] = usercode or ""
 
+        _LOGGER.debug(
+            "Lock %s: %s slots with PIN %s, %s slots not enabled %s",
+            self.lock.entity_id,
+            len(slots_with_pin),
+            slots_with_pin,
+            len(slots_not_enabled),
+            slots_not_enabled,
+        )
         return data
