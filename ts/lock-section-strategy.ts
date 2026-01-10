@@ -7,9 +7,13 @@ import { LockCodeManagerLockSectionStrategyConfig } from './types';
 export class LockCodeManagerLockSectionStrategy extends ReactiveElement {
     static async generate(
         config: LockCodeManagerLockSectionStrategyConfig,
-        _hass: HomeAssistant
+        hass: HomeAssistant
     ): Promise<LovelaceSectionConfig> {
         const { code_display = DEFAULT_CODE_DISPLAY, lock_entity_id } = config;
+
+        // Get the lock's friendly name for the section title
+        const lockState = hass.states[lock_entity_id];
+        const lockName = lockState?.attributes?.friendly_name ?? lock_entity_id;
 
         return {
             cards: [
@@ -19,6 +23,7 @@ export class LockCodeManagerLockSectionStrategy extends ReactiveElement {
                     type: 'custom:lcm-lock-codes'
                 }
             ],
+            title: lockName,
             type: 'grid'
         };
     }

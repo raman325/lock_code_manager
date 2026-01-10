@@ -203,15 +203,21 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'user-codes'
                 ) as {
-                    cards: Array<{ cards?: Array<{ lock_entity_id?: string }>; type: string }>;
+                    sections: Array<{
+                        cards: Array<{ lock_entity_id?: string }>;
+                        title: string;
+                        type: string;
+                    }>;
                     title: string;
+                    type: string;
                 };
                 expect(lockCodesView).toBeDefined();
                 expect(lockCodesView.title).toBe('User Codes');
-                expect(lockCodesView.cards).toHaveLength(1);
-                expect(lockCodesView.cards[0].type).toBe('grid');
-                expect(lockCodesView.cards[0].cards).toHaveLength(1);
-                expect(lockCodesView.cards[0].cards?.[0].lock_entity_id).toBe('lock.front_door');
+                expect(lockCodesView.type).toBe('sections');
+                expect(lockCodesView.sections).toHaveLength(1);
+                expect(lockCodesView.sections[0].type).toBe('grid');
+                expect(lockCodesView.sections[0].cards).toHaveLength(1);
+                expect(lockCodesView.sections[0].cards[0].lock_entity_id).toBe('lock.front_door');
             });
 
             it('does not add Lock Codes view when show_all_codes_for_locks is false', async () => {
@@ -244,11 +250,15 @@ describe('LockCodeManagerDashboardStrategy', () => {
 
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'user-codes'
-                ) as { cards: Array<{ cards?: Array<{ lock_entity_id: string }>; type: string }> };
+                ) as {
+                    sections: Array<{ cards: Array<{ lock_entity_id: string }>; type: string }>;
+                    type: string;
+                };
                 expect(lockCodesView).toBeDefined();
-                expect(lockCodesView.cards).toHaveLength(1);
-                expect(lockCodesView.cards[0].type).toBe('grid');
-                expect(lockCodesView.cards[0].cards).toHaveLength(2);
+                expect(lockCodesView.type).toBe('sections');
+                expect(lockCodesView.sections).toHaveLength(2);
+                expect(lockCodesView.sections[0].type).toBe('grid');
+                expect(lockCodesView.sections[0].cards).toHaveLength(1);
             });
 
             it('deduplicates locks across multiple config entries', async () => {
@@ -270,10 +280,14 @@ describe('LockCodeManagerDashboardStrategy', () => {
 
                 const lockCodesView = result.views.find(
                     (v) => 'path' in v && v.path === 'user-codes'
-                ) as { cards: Array<{ cards?: Array<{ lock_entity_id: string }>; type: string }> };
-                expect(lockCodesView.cards).toHaveLength(1);
-                expect(lockCodesView.cards[0].type).toBe('grid');
-                expect(lockCodesView.cards[0].cards).toHaveLength(3);
+                ) as {
+                    sections: Array<{ cards: Array<{ lock_entity_id: string }>; type: string }>;
+                    type: string;
+                };
+                expect(lockCodesView.type).toBe('sections');
+                // 3 unique locks: front_door, back_door, shared (deduplicated)
+                expect(lockCodesView.sections).toHaveLength(3);
+                expect(lockCodesView.sections[0].type).toBe('grid');
             });
 
             it('shows "No locks found" message when no locks exist', async () => {
