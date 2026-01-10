@@ -500,6 +500,32 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             .error {
                 color: var(--error-color);
             }
+
+            /* Action error banner */
+            .action-error {
+                align-items: center;
+                background: var(--error-color, #db4437);
+                color: white;
+                display: flex;
+                font-size: 14px;
+                gap: 8px;
+                justify-content: space-between;
+                padding: 8px 16px;
+            }
+
+            .action-error-dismiss {
+                background: none;
+                border: none;
+                color: white;
+                cursor: pointer;
+                font-size: 16px;
+                opacity: 0.8;
+                padding: 4px;
+            }
+
+            .action-error-dismiss:hover {
+                opacity: 1;
+            }
         `
     ];
 
@@ -507,6 +533,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() _config?: LockCodeManagerSlotCardConfig;
     @state() _data?: SlotCardData;
     @state() _error?: string;
+    @state() private _actionError?: string;
     @state() private _conditionsExpanded = false;
     @state() private _editingField: 'name' | 'pin' | 'numberOfUses' | null = null;
     @state() private _lockStatusExpanded = false;
@@ -657,6 +684,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         return html`
             <ha-card>
+                ${this._actionError
+                    ? html`<div class="action-error">
+                          <span>${this._actionError}</span>
+                          <button
+                              class="action-error-dismiss"
+                              @click=${this._dismissActionError}
+                              aria-label="Dismiss error"
+                          >
+                              ✕
+                          </button>
+                      </div>`
+                    : nothing}
                 ${this._renderHeader()}
                 <div class="content">
                     ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
@@ -1139,8 +1178,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 entity_id: enabledEntityId
             });
         } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error(`Failed service call: switch.${service} on ${enabledEntityId}`, err);
+            this._setActionError(
+                `Failed to ${newState ? 'enable' : 'disable'} slot: ${err instanceof Error ? err.message : 'Unknown error'}`
+            );
         }
     }
 
@@ -1224,9 +1264,24 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 ...serviceData
             });
         } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error(`Failed service call: ${config.service} on ${entityId}`, err);
+            const fieldLabel =
+                this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
+            this._setActionError(
+                `Failed to update ${fieldLabel}: ${err instanceof Error ? err.message : 'Unknown error'}`
+            );
         }
+    }
+
+    private _setActionError(message: string): void {
+        this._actionError = message;
+        // Auto-dismiss after 5 seconds
+        setTimeout(() => {
+            this._actionError = undefined;
+        }, 5000);
+    }
+
+    private _dismissActionError(): void {
+        this._actionError = undefined;
     }
 
     private _navigateToCalendar(calendarEntityId: string): void {
