@@ -260,6 +260,7 @@ async def async_setup_entry(
         )
 
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
+    await _async_register_strategy_resource(hass)
     config_entry.runtime_data = LockCodeManagerConfigEntryData()
 
     dev_reg = dr.async_get(hass)
