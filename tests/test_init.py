@@ -373,3 +373,61 @@ async def test_resource_not_loaded_on_unload(
 
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
     assert DOMAIN not in hass.data
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_resource_reregistered_after_unload_and_new_entry(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test resource is re-registered when new entry added after all entries removed."""
+    resources = hass.data[LL_DOMAIN].resources
+    assert resources
+    await resources.async_load()
+
+    # Set up first config entry
+    config_entry_1 = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title 1", title="Mock Title 1"
+    )
+    config_entry_1.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry_1.entry_id)
+    await hass.async_block_till_done()
+
+    # Set up second config entry
+    config_entry_2 = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title 2", title="Mock Title 2"
+    )
+    config_entry_2.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry_2.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify resource is registered
+    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+    assert hass.data[DOMAIN]["resources"] is True
+
+    # Remove first entry - resource should still exist
+    await hass.config_entries.async_remove(config_entry_1.entry_id)
+    await hass.async_block_till_done()
+    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+
+    # Remove second entry - resource should be cleaned up
+    await hass.config_entries.async_remove(config_entry_2.entry_id)
+    await hass.async_block_till_done()
+    assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+    assert DOMAIN not in hass.data
+
+    # Set up a new config entry - resource should be re-registered
+    config_entry_3 = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title 3", title="Mock Title 3"
+    )
+    config_entry_3.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry_3.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify resource is re-registered
+    assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+    assert hass.data[DOMAIN]["resources"] is True
+
+    # Clean up
+    await hass.config_entries.async_remove(config_entry_3.entry_id)
