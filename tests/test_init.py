@@ -2,6 +2,7 @@
 
 import copy
 import logging
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -18,7 +19,7 @@ from homeassistant.const import (
     CONF_URL,
     Platform,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -275,8 +276,9 @@ async def test_resource_not_loaded_yaml(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
 ):
-    """Test when strategy resource is not loaded in YAML mode."""
+    """Test when strategy resource is not loaded in YAML mode shows warning."""
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )
@@ -287,6 +289,10 @@ async def test_resource_not_loaded_yaml(
     resources = hass.data[LL_DOMAIN].resources
     assert resources
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+
+    # Verify warning about manual YAML registration was logged
+    assert "can't automatically be registered" in caplog.text
+    assert "running in YAML mode" in caplog.text
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -299,8 +305,11 @@ async def test_resource_unload_skips_yaml_mode(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
 ):
     """Ensure resource removal is skipped when resources are managed via YAML."""
+    caplog.set_level(logging.DEBUG)
+
     config_entry = MockConfigEntry(
         domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
     )
@@ -320,6 +329,9 @@ async def test_resource_unload_skips_yaml_mode(
 
     # Resource should remain because YAML mode can't be modified automatically
     assert any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
+    # Verify the YAML mode skip messages were logged
+    assert "already in YAML resources" in caplog.text
+    assert "skipping automatic removal" in caplog.text
 
 
 async def test_two_entries_same_locks(
@@ -431,3 +443,28 @@ async def test_resource_reregistered_after_unload_and_new_entry(
 
     # Clean up
     await hass.config_entries.async_remove(config_entry_3.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_entry_setup_and_unload_before_ha_started(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test entry setup before HA started and safe_unsub on unload."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Startup"
+    )
+    config_entry.add_to_hass(hass)
+
+    # Setup while HA is "starting" - exercises the startup listener code path
+    with patch.object(hass, "state", CoreState.starting):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Unload immediately (before started event fires)
+    # This exercises the _safe_unsub path that catches ValueError
+    await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
