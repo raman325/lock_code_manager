@@ -233,9 +233,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 flex: 1;
                 font-size: 14px;
                 gap: 8px;
+                min-height: 1.5em;
             }
 
-            .control-value.unnamed {
+            .placeholder {
                 color: var(--secondary-text-color);
                 font-style: italic;
             }
@@ -252,6 +253,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-size: var(--lcm-code-font-size);
                 font-weight: var(--lcm-code-font-weight);
                 letter-spacing: 2px;
+                min-height: 1.5em;
             }
 
             .pin-value.masked {
@@ -780,7 +782,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 : pin
             : pinLength !== undefined
               ? '•'.repeat(pinLength)
-              : '—';
+              : null;
 
         return html`
             <div class="lcm-section">
@@ -799,10 +801,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   />
                                   <div class="edit-help">Enter to save, Esc to cancel</div>`
                             : html`<span
-                                  class="control-value editable ${name ? '' : 'unnamed'}"
+                                  class="control-value editable"
                                   @click=${() => this._startEditing('name')}
                               >
-                                  ${name || 'Unnamed'}
+                                  ${name || html`<em class="placeholder">Unnamed</em>`}
                               </span>`}
                     </div>
                 </div>
@@ -827,7 +829,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                           : ''}"
                                       @click=${() => this._startEditing('pin')}
                                   >
-                                      ${displayPin}
+                                      ${displayPin ?? html`<em class="placeholder">No PIN</em>`}
                                   </span>`}
                             ${mode === 'masked_with_reveal' &&
                             hasPin &&
