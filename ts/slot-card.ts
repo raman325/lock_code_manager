@@ -802,7 +802,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   class="control-value editable ${name ? '' : 'unnamed'}"
                                   @click=${() => this._startEditing('name')}
                               >
-                                  ${name ?? 'Unnamed'}
+                                  ${name || 'Unnamed'}
                               </span>`}
                     </div>
                 </div>
@@ -1251,7 +1251,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         const config = fieldConfig[this._editingField];
         const entityId = this._data?.entities?.[config.entityKey];
-        if (!entityId) return;
+        if (!entityId) {
+            const fieldLabel =
+                this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
+            this._setActionError(`Cannot update ${fieldLabel}: entity is unavailable`);
+            return;
+        }
 
         const serviceData = config.serviceData(rawValue);
         // Skip if invalid value (e.g., non-numeric for numberOfUses)
