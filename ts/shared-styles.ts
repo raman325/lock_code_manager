@@ -286,6 +286,9 @@ export const lcmEditableStyles = css`
         cursor: pointer;
         margin: -4px -8px;
         padding: 4px 8px;
+        text-decoration: underline dashed;
+        text-decoration-color: var(--secondary-text-color);
+        text-underline-offset: 3px;
         transition: background-color 0.2s;
     }
 

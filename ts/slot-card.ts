@@ -231,7 +231,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 color: var(--primary-text-color);
                 display: flex;
                 flex: 1;
-                font-size: 14px;
+                font-family: var(--lcm-code-font);
+                font-size: var(--lcm-code-font-size);
+                font-weight: var(--lcm-code-font-weight);
                 gap: 8px;
                 min-height: 1.5em;
             }
@@ -263,6 +265,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             .pin-reveal {
                 --mdc-icon-button-size: 32px;
                 --mdc-icon-size: 18px;
+            }
+
+            /* Name-specific edit input (extends shared editable styles) */
+            .name-edit-input {
+                font-family: var(--lcm-code-font);
+                font-size: var(--lcm-code-font-size);
+                font-weight: var(--lcm-code-font-weight);
             }
 
             /* PIN-specific edit input (extends shared editable styles) */
@@ -804,7 +813,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   class="control-value editable"
                                   @click=${() => this._startEditing('name')}
                               >
-                                  ${name || html`<em class="placeholder">Unnamed</em>`}
+                                  ${name || html`<em class="placeholder">&lt;No Name&gt;</em>`}
                               </span>`}
                     </div>
                 </div>
@@ -829,7 +838,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                           : ''}"
                                       @click=${() => this._startEditing('pin')}
                                   >
-                                      ${displayPin ?? html`<em class="placeholder">No PIN</em>`}
+                                      ${displayPin ??
+                                      html`<em class="placeholder">&lt;No PIN&gt;</em>`}
                                   </span>`}
                             ${mode === 'masked_with_reveal' &&
                             hasPin &&
@@ -1253,10 +1263,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         const config = fieldConfig[this._editingField];
         const entityId = this._data?.entities?.[config.entityKey];
+        const fieldLabel =
+            this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
+
         if (!entityId) {
-            const fieldLabel =
-                this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
             this._setActionError(`Cannot update ${fieldLabel}: entity is unavailable`);
+            return;
+        }
+
+        // Check if entity exists and is available
+        const entityState = this._hass.states[entityId];
+        if (!entityState || entityState.state === 'unavailable') {
+            this._setActionError(`Cannot update ${fieldLabel}: entity is unavailable or disabled`);
             return;
         }
 
@@ -1271,8 +1289,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 ...serviceData
             });
         } catch (err) {
-            const fieldLabel =
-                this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
             this._setActionError(
                 `Failed to update ${fieldLabel}: ${err instanceof Error ? err.message : 'Unknown error'}`
             );
