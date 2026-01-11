@@ -94,14 +94,15 @@ async def _async_register_strategy_resource(hass: HomeAssistant) -> None:
         _LOGGER.debug("Manually loaded resources")
         resources.loaded = True
 
-    try:
-        res_id = next(
-            data[CONF_ID]
-            for data in resources.async_items()
-            if data[CONF_URL] == STRATEGY_PATH
-        )
-    except StopIteration:
-        if isinstance(resources, ResourceYAMLCollection):
+    # Check if resource already exists (YAML resources don't have CONF_ID)
+    resource_exists = any(
+        data[CONF_URL] == STRATEGY_PATH for data in resources.async_items()
+    )
+
+    if isinstance(resources, ResourceYAMLCollection):
+        if resource_exists:
+            _LOGGER.debug("Strategy module already in YAML resources")
+        else:
             _LOGGER.warning(
                 "Strategy module can't automatically be registered because this "
                 "Home Assistant instance is running in YAML mode for resources. "
@@ -110,16 +111,22 @@ async def _async_register_strategy_resource(hass: HomeAssistant) -> None:
                 "\n    type: module",
                 STRATEGY_PATH,
             )
-            return
-
-        data = await resources.async_create_item(
-            {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
-        )
-        _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
-        hass.data[DOMAIN]["resources"] = True
         return
 
-    _LOGGER.debug("Strategy module already registered with resource ID %s", res_id)
+    if resource_exists:
+        res_id = next(
+            data[CONF_ID]
+            for data in resources.async_items()
+            if data[CONF_URL] == STRATEGY_PATH
+        )
+        _LOGGER.debug("Strategy module already registered with resource ID %s", res_id)
+        return
+
+    data = await resources.async_create_item(
+        {CONF_RESOURCE_TYPE_WS: "module", CONF_URL: STRATEGY_PATH}
+    )
+    _LOGGER.debug("Registered strategy module (resource ID %s)", data[CONF_ID])
+    hass.data[DOMAIN]["resources"] = True
 
 
 async def _async_cleanup_strategy_resource(
