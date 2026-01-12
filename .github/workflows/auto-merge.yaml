@@ -20,12 +20,22 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      # Auto-merge patch and minor updates after CI passes
-      - name: Enable auto-merge for Dependabot PRs
+      # Wait for all CI checks to pass before merging
+      - name: Wait for CI checks to pass
         if: >-
           steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
           steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr merge --auto --squash "$PR_URL"
+        run: gh pr checks "$PR_URL" --watch --fail-fast
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Merge after CI passes
+      - name: Merge Dependabot PR
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -35,9 +45,16 @@ jobs:
     # Only run on pre-commit-ci PRs
     if: github.event.pull_request.user.login == 'pre-commit-ci[bot]'
     steps:
-      # Auto-merge pre-commit-ci updates after CI passes
-      - name: Enable auto-merge for pre-commit-ci PRs
-        run: gh pr merge --auto --squash "$PR_URL"
+      # Wait for all CI checks to pass before merging
+      - name: Wait for CI checks to pass
+        run: gh pr checks "$PR_URL" --watch --fail-fast
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Merge after CI passes
+      - name: Merge pre-commit-ci PR
+        run: gh pr merge --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
