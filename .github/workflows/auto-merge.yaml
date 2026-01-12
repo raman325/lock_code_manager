@@ -29,3 +29,15 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pre-commit-ci:
+    runs-on: ubuntu-latest
+    # Only run on pre-commit-ci PRs
+    if: github.event.pull_request.user.login == 'pre-commit-ci[bot]'
+    steps:
+      # Auto-merge pre-commit-ci updates after CI passes
+      - name: Enable auto-merge for pre-commit-ci PRs
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
