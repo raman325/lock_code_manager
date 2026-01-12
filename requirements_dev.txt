@@ -3,7 +3,7 @@
 aiofiles==25.1.0
 colorlog==6.10.1
 debugpy==1.8.19
-homeassistant==2026.1.0
+homeassistant==2026.1.1
 pyserial==3.5
 pyudev==0.24.4
 uv
