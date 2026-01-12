@@ -3,57 +3,67 @@ name: auto-merge
 
 "on":
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: write
   pull-requests: write
 
+# Cancel in-progress runs for the same PR (only latest should merge)
+concurrency:
+  group: auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  dependabot:
+  auto-merge:
     runs-on: ubuntu-latest
-    # Only run on Dependabot PRs
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    # Run for dependabot, pre-commit-ci, or PRs with auto-merge label
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' ||
+      github.event.pull_request.user.login == 'pre-commit-ci[bot]' ||
+      contains(github.event.pull_request.labels.*.name, 'auto-merge')
     steps:
+      # Fetch Dependabot metadata (only runs for dependabot PRs)
       - name: Fetch Dependabot metadata
         id: metadata
+        if: github.event.pull_request.user.login == 'dependabot[bot]'
         uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      # Wait for all CI checks to pass before merging
-      - name: Wait for CI checks to pass
-        if: >-
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr checks "$PR_URL" --watch --fail-fast
+      # Determine if PR is eligible for auto-merge
+      - name: Check eligibility
+        id: eligible
+        run: |
+          if [[ "$ACTOR" == "dependabot[bot]" ]]; then
+            # Dependabot: only auto-merge patch and minor updates
+            if [[ "$UPDATE_TYPE" == "version-update:semver-patch" ]] ||
+               [[ "$UPDATE_TYPE" == "version-update:semver-minor" ]]; then
+              echo "result=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "result=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping: Dependabot major update requires manual review"
+            fi
+          else
+            # pre-commit-ci and auto-merge labeled PRs are always eligible
+            echo "result=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ACTOR: ${{ github.event.pull_request.user.login }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+
+      # Wait for required CI checks (--required avoids deadlock with this workflow)
+      - name: Wait for CI checks
+        if: steps.eligible.outputs.result == 'true'
+        timeout-minutes: 30
+        run: gh pr checks "$PR_URL" --watch --fail-fast --required
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Merge after CI passes
-      - name: Merge Dependabot PR
-        if: >-
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
-        run: gh pr merge --squash "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  pre-commit-ci:
-    runs-on: ubuntu-latest
-    # Only run on pre-commit-ci PRs
-    if: github.event.pull_request.user.login == 'pre-commit-ci[bot]'
-    steps:
-      # Wait for all CI checks to pass before merging
-      - name: Wait for CI checks to pass
-        run: gh pr checks "$PR_URL" --watch --fail-fast
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Merge after CI passes
-      - name: Merge pre-commit-ci PR
+      - name: Merge PR
+        if: steps.eligible.outputs.result == 'true'
         run: gh pr merge --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
