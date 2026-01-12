@@ -30,7 +30,7 @@ export async function generateView(
     configEntry: ConfigEntryJSONFragment,
     show_code_sensors: boolean,
     show_lock_sync: boolean,
-    show_all_codes_for_locks: boolean,
+    show_lock_cards: boolean,
     code_display: string,
     use_slot_cards: boolean,
     show_conditions = true,
@@ -79,7 +79,7 @@ export async function generateView(
         };
     });
 
-    if (show_all_codes_for_locks) {
+    if (show_lock_cards) {
         const sortedLockIds = [...configEntryData.locks].sort((a, b) => {
             const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
             const nameB = hass.states[b]?.attributes?.friendly_name ?? b;

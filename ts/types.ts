@@ -17,12 +17,16 @@ export interface LockCodeManagerStrategyConfig {
     include_code_slot_sensors?: boolean;
     /** @deprecated Use show_lock_sync instead */
     include_in_sync_sensors?: boolean;
-    /** Add lock codes cards showing all codes for each lock */
+    /** @deprecated Use show_all_lock_cards_view instead */
     show_all_codes_for_locks?: boolean;
+    /** Add "User Codes" view with lock codes cards showing all codes for each lock */
+    show_all_lock_cards_view?: boolean;
     /** Show code sensors (actual code on lock) in lock status section */
     show_code_sensors?: boolean;
     /** Show conditions section in slot cards */
     show_conditions?: boolean;
+    /** Show lock cards in this view (default: true) */
+    show_lock_cards?: boolean;
     /** Show lock status section in slot cards */
     show_lock_status?: boolean;
     /** Show sync status per lock in lock status */
@@ -32,6 +36,8 @@ export interface LockCodeManagerStrategyConfig {
 }
 
 export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {
+    /** Show lock cards in per-config-entry views (default: true). Feeds show_lock_cards to views. */
+    show_per_configuration_lock_cards?: boolean;
     type: 'custom:lock-code-manager';
 }
 

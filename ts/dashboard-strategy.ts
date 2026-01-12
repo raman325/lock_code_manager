@@ -1,6 +1,10 @@
 import { ReactiveElement } from 'lit';
 
-import { DEFAULT_CODE_DISPLAY, DEFAULT_SHOW_ALL_CODES_FOR_LOCKS } from './const';
+import {
+    DEFAULT_CODE_DISPLAY,
+    DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW,
+    DEFAULT_SHOW_PER_CONFIGURATION_LOCK_CARDS
+} from './const';
 import { HomeAssistant } from './ha_type_stubs';
 import { slugify } from './slugify';
 import { createErrorView } from './strategy-utils';
@@ -30,6 +34,14 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
             };
         }
 
+        // show_per_configuration_lock_cards controls whether lock cards appear in per-config views
+        // It feeds show_lock_cards to each view strategy
+        // Support legacy show_all_codes_for_locks option for backwards compatibility
+        const showLockCardsInViews =
+            config.show_per_configuration_lock_cards ??
+            config.show_all_codes_for_locks ??
+            DEFAULT_SHOW_PER_CONFIGURATION_LOCK_CARDS;
+
         const views: object[] = configEntries.map((configEntry) => {
             return {
                 path: slugify(configEntry.title),
@@ -39,6 +51,7 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                     config_entry_id: configEntry.entry_id,
                     show_code_sensors: config.show_code_sensors,
                     show_conditions: config.show_conditions,
+                    show_lock_cards: showLockCardsInViews,
                     show_lock_status: config.show_lock_status,
                     show_lock_sync: config.show_lock_sync,
                     type: 'custom:lock-code-manager',
@@ -48,9 +61,13 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
             };
         });
 
-        const showAllCodesForLocks =
-            config.show_all_codes_for_locks ?? DEFAULT_SHOW_ALL_CODES_FOR_LOCKS;
-        if (showAllCodesForLocks) {
+        // show_all_lock_cards_view controls whether the "User Codes" view is added
+        // Support legacy show_all_codes_for_locks option for backwards compatibility
+        const showAllLockCardsView =
+            config.show_all_lock_cards_view ??
+            config.show_all_codes_for_locks ??
+            DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW;
+        if (showAllLockCardsView) {
             const lockEntityIds = new Set<string>();
             await Promise.all(
                 configEntries.map(async (configEntry) => {

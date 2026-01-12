@@ -900,7 +900,7 @@ describe('generateView lock codes cards', () => {
             testConfigEntry,
             false,
             false,
-            // show_all_codes_for_locks
+            // show_lock_cards
             true,
             'unmasked',
             true
@@ -949,7 +949,7 @@ describe('generateView lock codes cards', () => {
             testConfigEntry,
             false,
             false,
-            // show_all_codes_for_locks
+            // show_lock_cards
             true,
             'unmasked',
             true
@@ -992,7 +992,7 @@ describe('generateView lock codes cards', () => {
             testConfigEntry,
             false,
             false,
-            // show_all_codes_for_locks
+            // show_lock_cards
             true,
             'masked_with_reveal',
             true
@@ -1031,7 +1031,7 @@ describe('generateView lock codes cards', () => {
             testConfigEntry,
             false,
             false,
-            // show_all_codes_for_locks = false
+            // show_lock_cards = false
             false,
             'unmasked',
             true
