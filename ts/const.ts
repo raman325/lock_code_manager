@@ -26,12 +26,16 @@ export const DOMAIN = 'lock_code_manager';
 export const DEFAULT_CODE_DISPLAY = 'masked_with_reveal';
 export const DEFAULT_SHOW_CODE_SENSORS = true;
 export const DEFAULT_SHOW_CONDITIONS = true;
+export const DEFAULT_SHOW_PER_CONFIGURATION_LOCK_CARDS = true;
+export const DEFAULT_SHOW_LOCK_CARDS = true;
 export const DEFAULT_SHOW_LOCK_STATUS = true;
 export const DEFAULT_SHOW_LOCK_SYNC = true;
 export const DEFAULT_USE_SLOT_CARDS = true;
-export const DEFAULT_SHOW_ALL_CODES_FOR_LOCKS = true;
+export const DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW = true;
 
 // Legacy defaults (deprecated, kept for backwards compatibility)
+/** @deprecated Use DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW */
+export const DEFAULT_SHOW_ALL_CODES_FOR_LOCKS = DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW;
 /** @deprecated Use DEFAULT_CODE_DISPLAY */
 export const DEFAULT_CODE_DATA_VIEW_CODE_DISPLAY = DEFAULT_CODE_DISPLAY;
 /** @deprecated Use DEFAULT_SHOW_CODE_SENSORS */

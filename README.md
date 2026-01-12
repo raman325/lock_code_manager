@@ -56,23 +56,25 @@ for more details.
 Use the dashboard strategy to build a full dashboard with one view per config entry, and
 an optional "User Codes" view that shows lock codes cards across all managed locks.
 
-| Option                     | Default              | Description                                                        |
-| -------------------------- | -------------------- | ------------------------------------------------------------------ |
-| `use_slot_cards`           | `true`               | Use streamlined slot cards instead of legacy entities cards        |
-| `show_code_sensors`        | `true`               | Show code sensors in lock status section                           |
-| `show_conditions`          | `true`               | Show conditions section in slot cards                              |
-| `show_lock_status`         | `true`               | Show lock status section in slot cards                             |
-| `show_lock_sync`           | `true`               | Show sync status per lock in lock status                           |
-| `collapsed_sections`       | `[]`                 | Which sections start collapsed (empty = all expanded)              |
-| `show_all_codes_for_locks` | `true`               | Add a "User Codes" view with cards showing all lock codes          |
-| `code_display`             | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards           |
+| Option                              | Default              | Description                                                 |
+| ----------------------------------- | -------------------- | ----------------------------------------------------------- |
+| `use_slot_cards`                    | `true`               | Use streamlined slot cards instead of legacy entities cards |
+| `show_code_sensors`                 | `true`               | Show code sensors in lock status section                    |
+| `show_conditions`                   | `true`               | Show conditions section in slot cards                       |
+| `show_lock_status`                  | `true`               | Show lock status section in slot cards                      |
+| `show_lock_sync`                    | `true`               | Show sync status per lock in lock status                    |
+| `collapsed_sections`                | `[]`                 | Which sections start collapsed (empty = all expanded)       |
+| `show_per_configuration_lock_cards` | `true`               | Show lock cards in per-config-entry views                   |
+| `show_all_lock_cards_view`          | `true`               | Add a "User Codes" view with cards showing all lock codes   |
+| `code_display`                      | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards    |
 
 Example dashboard configuration:
 
 ```yaml
 strategy:
   type: custom:lock-code-manager
-  show_all_codes_for_locks: true
+  show_all_lock_cards_view: true
+  show_per_configuration_lock_cards: true
   code_display: masked_with_reveal
   show_lock_sync: true
 ```
@@ -80,7 +82,7 @@ strategy:
 ### View Strategy
 
 Use the view strategy when you want a single view for one config entry. If
-`show_all_codes_for_locks` is true, lock codes cards are appended below the slot
+`show_lock_cards` is true, lock codes cards are appended below the slot
 cards within the same view (no extra view is created).
 
 | Option                     | Default              | Description                                                       |
@@ -93,7 +95,7 @@ cards within the same view (no extra view is created).
 | `show_lock_status`         | `true`               | Show lock status section in slot cards                            |
 | `show_lock_sync`           | `true`               | Show sync status per lock in lock status                          |
 | `collapsed_sections`       | `[]`                 | Which sections start collapsed (empty = all expanded)             |
-| `show_all_codes_for_locks` | `true`               | Append lock codes cards below the slot cards                      |
+| `show_lock_cards`          | `true`               | Append lock codes cards below the slot cards                      |
 | `code_display`             | `masked_with_reveal` | Code visibility mode for slot cards and lock codes cards          |
 
 Example view configuration:
@@ -102,7 +104,7 @@ Example view configuration:
 strategy:
   type: custom:lock-code-manager
   config_entry_id: 1234567890abcdef
-  show_all_codes_for_locks: false
+  show_lock_cards: false
   code_display: masked
 ```
 

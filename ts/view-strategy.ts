@@ -3,9 +3,9 @@ import { ReactiveElement } from 'lit';
 
 import {
     DEFAULT_CODE_DISPLAY,
-    DEFAULT_SHOW_ALL_CODES_FOR_LOCKS,
     DEFAULT_SHOW_CODE_SENSORS,
     DEFAULT_SHOW_CONDITIONS,
+    DEFAULT_SHOW_LOCK_CARDS,
     DEFAULT_SHOW_LOCK_STATUS,
     DEFAULT_SHOW_LOCK_SYNC,
     DEFAULT_USE_SLOT_CARDS
@@ -53,12 +53,18 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
             const codeDisplay =
                 config.code_display ?? config.code_data_view_code_display ?? DEFAULT_CODE_DISPLAY;
 
+            // Support legacy show_all_codes_for_locks option for backwards compatibility
+            const showLockCards =
+                config.show_lock_cards ??
+                config.show_all_codes_for_locks ??
+                DEFAULT_SHOW_LOCK_CARDS;
+
             return generateView(
                 hass,
                 config_entry,
                 showCodeSensors,
                 showLockSync,
-                config.show_all_codes_for_locks ?? DEFAULT_SHOW_ALL_CODES_FOR_LOCKS,
+                showLockCards,
                 codeDisplay,
                 config.use_slot_cards ?? DEFAULT_USE_SLOT_CARDS,
                 config.show_conditions ?? DEFAULT_SHOW_CONDITIONS,

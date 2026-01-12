@@ -248,6 +248,300 @@ describe('LockCodeManagerViewStrategy', () => {
             );
         });
 
+        it('passes show_lock_cards to generateView', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', show_lock_cards: false }),
+                hass
+            );
+
+            // show_lock_cards=false (3rd boolean param), rest are defaults
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                false,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('maps legacy show_all_codes_for_locks to show_lock_cards', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', show_all_codes_for_locks: false }),
+                hass
+            );
+
+            // show_lock_cards=false (from legacy show_all_codes_for_locks), rest are defaults
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                false,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('show_lock_cards takes precedence over show_all_codes_for_locks', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({
+                    config_entry_id: 'test',
+                    show_all_codes_for_locks: false,
+                    show_lock_cards: true
+                }),
+                hass
+            );
+
+            // New option takes precedence, show_lock_cards=true
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('passes code_display to generateView', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', code_display: 'unmasked' }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'unmasked',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('maps legacy code_data_view_code_display to code_display', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', code_data_view_code_display: 'masked' }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'masked',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('code_display takes precedence over code_data_view_code_display', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({
+                    config_entry_id: 'test',
+                    code_data_view_code_display: 'masked',
+                    code_display: 'unmasked'
+                }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'unmasked',
+                true,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('passes use_slot_cards to generateView', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', use_slot_cards: false }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'masked_with_reveal',
+                false,
+                true,
+                true,
+                undefined
+            );
+        });
+
+        it('passes show_conditions to generateView', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', show_conditions: false }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'masked_with_reveal',
+                true,
+                false,
+                true,
+                undefined
+            );
+        });
+
+        it('passes show_lock_status to generateView', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({ config_entry_id: 'test', show_lock_status: false }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'masked_with_reveal',
+                true,
+                true,
+                false,
+                undefined
+            );
+        });
+
+        it('passes collapsed_sections to generateView', async () => {
+            const hass = createMockHass({
+                callWS: () => {
+                    return { config_entry: {}, entities: [] };
+                }
+            });
+
+            const { generateView } = await import('./generate-view');
+
+            await LockCodeManagerViewStrategy.generate(
+                testConfig({
+                    config_entry_id: 'test',
+                    collapsed_sections: ['conditions', 'lock_status']
+                }),
+                hass
+            );
+
+            expect(generateView).toHaveBeenCalledWith(
+                hass,
+                expect.anything(),
+                true,
+                true,
+                true,
+                'masked_with_reveal',
+                true,
+                true,
+                true,
+                ['conditions', 'lock_status']
+            );
+        });
+
         it('returns error view when callWS throws', async () => {
             const hass = createMockHass({
                 callWS: () => {

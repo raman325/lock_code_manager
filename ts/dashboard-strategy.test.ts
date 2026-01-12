@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_SHOW_ALL_CODES_FOR_LOCKS } from './const';
+import { DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW } from './const';
 import {
     LockCodeManagerDashboardStrategy,
     NO_CONFIG_MESSAGE,
@@ -69,7 +69,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ show_all_codes_for_locks: false }),
+                testConfig({ show_all_lock_cards_view: false }),
                 hass
             );
 
@@ -83,6 +83,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
                     config_entry_id: 'entry1',
                     show_code_sensors: undefined,
                     show_conditions: undefined,
+                    show_lock_cards: true,
                     show_lock_status: undefined,
                     show_lock_sync: undefined,
                     type: 'custom:lock-code-manager',
@@ -98,6 +99,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
                     config_entry_id: 'entry2',
                     show_code_sensors: undefined,
                     show_conditions: undefined,
+                    show_lock_cards: true,
                     show_lock_status: undefined,
                     show_lock_sync: undefined,
                     type: 'custom:lock-code-manager',
@@ -114,7 +116,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ show_all_codes_for_locks: false }),
+                testConfig({ show_all_lock_cards_view: false }),
                 hass
             );
 
@@ -132,7 +134,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ show_all_codes_for_locks: false }),
+                testConfig({ show_all_lock_cards_view: false }),
                 hass
             );
 
@@ -147,7 +149,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ show_code_sensors: true, show_all_codes_for_locks: false }),
+                testConfig({ show_code_sensors: true, show_all_lock_cards_view: false }),
                 hass
             );
 
@@ -162,12 +164,45 @@ describe('LockCodeManagerDashboardStrategy', () => {
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ show_lock_sync: false, show_all_codes_for_locks: false }),
+                testConfig({ show_lock_sync: false, show_all_lock_cards_view: false }),
                 hass
             );
 
             const view = result.views[0] as { strategy: { show_lock_sync: boolean } };
             expect(view.strategy.show_lock_sync).toBe(false);
+        });
+
+        it('passes show_lock_cards from show_per_configuration_lock_cards to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({
+                    show_per_configuration_lock_cards: false,
+                    show_all_lock_cards_view: false
+                }),
+                hass
+            );
+
+            const view = result.views[0] as { strategy: { show_lock_cards: boolean } };
+            expect(view.strategy.show_lock_cards).toBe(false);
+        });
+
+        it('defaults show_lock_cards to true when show_per_configuration_lock_cards is not set', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_all_lock_cards_view: false }),
+                hass
+            );
+
+            const view = result.views[0] as { strategy: { show_lock_cards: boolean } };
+            expect(view.strategy.show_lock_cards).toBe(true);
         });
 
         it('slugifies config entry titles for view paths', async () => {
@@ -177,7 +212,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
             });
 
             const result = await LockCodeManagerDashboardStrategy.generate(
-                testConfig({ show_all_codes_for_locks: false }),
+                testConfig({ show_all_lock_cards_view: false }),
                 hass
             );
 
@@ -185,10 +220,166 @@ describe('LockCodeManagerDashboardStrategy', () => {
             expect(view.path).toBe('my-special-lock');
         });
 
-        describe('show_all_codes_for_locks', () => {
-            it('adds User Codes view by default when DEFAULT_SHOW_ALL_CODES_FOR_LOCKS is true', async () => {
+        it('passes code_display config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ code_display: 'unmasked', show_all_lock_cards_view: false }),
+                hass
+            );
+
+            const view = result.views[0] as { strategy: { code_display: string } };
+            expect(view.strategy.code_display).toBe('unmasked');
+        });
+
+        it('passes collapsed_sections config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({
+                    collapsed_sections: ['conditions', 'lock_status'],
+                    show_all_lock_cards_view: false
+                }),
+                hass
+            );
+
+            const view = result.views[0] as {
+                strategy: { collapsed_sections: string[] };
+            };
+            expect(view.strategy.collapsed_sections).toEqual(['conditions', 'lock_status']);
+        });
+
+        it('passes show_conditions config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_conditions: false, show_all_lock_cards_view: false }),
+                hass
+            );
+
+            const view = result.views[0] as { strategy: { show_conditions: boolean } };
+            expect(view.strategy.show_conditions).toBe(false);
+        });
+
+        it('passes show_lock_status config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ show_lock_status: false, show_all_lock_cards_view: false }),
+                hass
+            );
+
+            const view = result.views[0] as { strategy: { show_lock_status: boolean } };
+            expect(view.strategy.show_lock_status).toBe(false);
+        });
+
+        it('passes use_slot_cards config to view strategies', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({ use_slot_cards: false, show_all_lock_cards_view: false }),
+                hass
+            );
+
+            const view = result.views[0] as { strategy: { use_slot_cards: boolean } };
+            expect(view.strategy.use_slot_cards).toBe(false);
+        });
+
+        describe('deprecated show_all_codes_for_locks fallback', () => {
+            it('uses show_all_codes_for_locks as fallback for show_per_configuration_lock_cards', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                    locksPerEntry: { entry1: [] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({ show_all_codes_for_locks: false }),
+                    hass
+                );
+
+                const view = result.views[0] as { strategy: { show_lock_cards: boolean } };
+                // show_all_codes_for_locks: false should set show_lock_cards: false
+                expect(view.strategy.show_lock_cards).toBe(false);
+            });
+
+            it('uses show_all_codes_for_locks as fallback for show_all_lock_cards_view', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
+                    locksPerEntry: { entry1: ['lock.front_door'] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({ show_all_codes_for_locks: false }),
+                    hass
+                );
+
+                // Should not have User Codes view
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'user-codes'
+                );
+                expect(lockCodesView).toBeUndefined();
+            });
+
+            it('show_per_configuration_lock_cards takes precedence over show_all_codes_for_locks', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                    locksPerEntry: { entry1: [] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({
+                        show_all_codes_for_locks: false,
+                        show_per_configuration_lock_cards: true
+                    }),
+                    hass
+                );
+
+                const view = result.views[0] as { strategy: { show_lock_cards: boolean } };
+                // New option takes precedence
+                expect(view.strategy.show_lock_cards).toBe(true);
+            });
+
+            it('show_all_lock_cards_view takes precedence over show_all_codes_for_locks', async () => {
+                const hass = createDashboardMockHass({
+                    configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
+                    locksPerEntry: { entry1: ['lock.front_door'] }
+                });
+
+                const result = await LockCodeManagerDashboardStrategy.generate(
+                    testConfig({
+                        show_all_codes_for_locks: false,
+                        show_all_lock_cards_view: true
+                    }),
+                    hass
+                );
+
+                // New option takes precedence, should have User Codes view
+                const lockCodesView = result.views.find(
+                    (v) => 'path' in v && v.path === 'user-codes'
+                );
+                expect(lockCodesView).toBeDefined();
+            });
+        });
+
+        describe('show_all_lock_cards_view', () => {
+            it('adds User Codes view by default when DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW is true', async () => {
                 // Skip if default is false
-                if (!DEFAULT_SHOW_ALL_CODES_FOR_LOCKS) return;
+                if (!DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW) return;
 
                 const hass = createDashboardMockHass({
                     configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
@@ -220,14 +411,14 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 expect(lockCodesView.sections[0].cards[0].lock_entity_id).toBe('lock.front_door');
             });
 
-            it('does not add Lock Codes view when show_all_codes_for_locks is false', async () => {
+            it('does not add Lock Codes view when show_all_lock_cards_view is false', async () => {
                 const hass = createDashboardMockHass({
                     configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
                     locksPerEntry: { entry1: ['lock.front_door'] }
                 });
 
                 const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ show_all_codes_for_locks: false }),
+                    testConfig({ show_all_lock_cards_view: false }),
                     hass
                 );
 
@@ -237,15 +428,15 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 expect(lockCodesView).toBeUndefined();
             });
 
-            it('adds User Codes view when show_all_codes_for_locks is true', async () => {
+            it('adds User Codes view when show_all_lock_cards_view is true', async () => {
                 const hass = createDashboardMockHass({
                     configEntries: [{ entry_id: 'entry1', title: 'Front Door' }],
                     locksPerEntry: { entry1: ['lock.front_door', 'lock.back_door'] }
                 });
 
-                const config = DEFAULT_SHOW_ALL_CODES_FOR_LOCKS
+                const config = DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW
                     ? testConfig({})
-                    : testConfig({ show_all_codes_for_locks: true });
+                    : testConfig({ show_all_lock_cards_view: true });
                 const result = await LockCodeManagerDashboardStrategy.generate(config, hass);
 
                 const lockCodesView = result.views.find(
@@ -274,7 +465,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 });
 
                 const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ show_all_codes_for_locks: true }),
+                    testConfig({ show_all_lock_cards_view: true }),
                     hass
                 );
 
@@ -297,7 +488,7 @@ describe('LockCodeManagerDashboardStrategy', () => {
                 });
 
                 const result = await LockCodeManagerDashboardStrategy.generate(
-                    testConfig({ show_all_codes_for_locks: true }),
+                    testConfig({ show_all_lock_cards_view: true }),
                     hass
                 );
 
