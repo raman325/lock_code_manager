@@ -129,7 +129,7 @@ class ZWaveJSLock(BaseLock):
 
     def _is_masked_code(self, value: str) -> bool:
         """Check if a usercode value is masked (all asterisks)."""
-        return bool(value) and len(value) * "*" == value
+        return bool(value) and value == "*" * len(value)
 
     def _resolve_masked_code(self, code_slot: int) -> str | None:
         """Resolve a masked usercode to the expected PIN value.
@@ -175,14 +175,13 @@ class ZWaveJSLock(BaseLock):
         if not active_state or not pin_state:
             return None
 
-        _LOGGER.debug(
-            "PIN is masked for lock %s code slot %s, assuming value from PIN entity %s",
-            self.lock.entity_id,
-            code_slot,
-            pin_entity_id,
-        )
-
         if active_state.state == STATE_ON and pin_state.state.isnumeric():
+            _LOGGER.debug(
+                "PIN is masked for lock %s code slot %s, assuming value from PIN entity %s",
+                self.lock.entity_id,
+                code_slot,
+                pin_entity_id,
+            )
             return pin_state.state
         return None
 
