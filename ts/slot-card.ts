@@ -1,5 +1,6 @@
 import {
     mdiCalendar,
+    mdiCalendarClock,
     mdiCalendarRemove,
     mdiChevronDown,
     mdiChevronUp,
@@ -8,7 +9,9 @@ import {
     mdiEyeOff,
     mdiKey,
     mdiLock,
-    mdiPound
+    mdiPound,
+    mdiToggleSwitch,
+    mdiToggleSwitchOutline
 } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
@@ -26,6 +29,7 @@ import {
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
+    ConditionEntityInfo,
     LockCodeManagerSlotCardConfig,
     SlotCardConditions,
     SlotCardData
@@ -345,6 +349,70 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 color: var(--secondary-text-color);
                 font-size: 13px;
                 font-style: italic;
+            }
+
+            /* Entity condition (generic) */
+            .entity-condition {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                padding: 8px 0;
+            }
+
+            .entity-condition.clickable {
+                border-radius: 8px;
+                cursor: pointer;
+                margin: 8px -8px 0;
+                padding: 8px;
+                transition: background-color 0.2s;
+            }
+
+            .entity-condition.clickable:hover {
+                background: var(--lcm-active-bg);
+            }
+
+            .entity-condition:first-child {
+                padding-top: 0;
+            }
+
+            .entity-condition.clickable:first-child {
+                margin-top: 0;
+            }
+
+            .entity-condition-header {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+            }
+
+            .entity-condition-status {
+                align-items: center;
+                display: flex;
+                gap: 6px;
+            }
+
+            .entity-condition-icon {
+                --mdc-icon-size: 18px;
+            }
+
+            .entity-condition-icon.active {
+                color: var(--lcm-disabled-color);
+            }
+
+            .entity-condition-icon.inactive {
+                color: var(--lcm-warning-color);
+            }
+
+            .entity-condition-text {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            .entity-condition-name {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                margin-left: 24px;
             }
 
             /* Calendar condition */
@@ -914,14 +982,24 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderConditionsSection(conditions: SlotCardConditions): TemplateResult {
-        const { number_of_uses, calendar, calendar_next } = conditions;
+        const { number_of_uses, calendar, calendar_next, condition_entity } = conditions;
         const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
-        const hasCalendar = calendar !== undefined;
+
+        // Use condition_entity if available, falling back to legacy calendar field
+        const hasConditionEntity = condition_entity !== undefined;
+        const hasCalendar = !hasConditionEntity && calendar !== undefined;
+
         const usesBlocking = hasNumberOfUses && number_of_uses === 0;
+
+        // Determine if entity condition is blocking (state !== 'on')
+        const entityBlocking = hasConditionEntity && condition_entity.state !== 'on';
         const calendarBlocking = hasCalendar && calendar.active === false;
-        const hasConditions = hasNumberOfUses || hasCalendar;
-        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasCalendar ? 1 : 0);
-        const blockingConditions = (usesBlocking ? 1 : 0) + (calendarBlocking ? 1 : 0);
+
+        const hasConditions = hasNumberOfUses || hasConditionEntity || hasCalendar;
+        const totalConditions =
+            (hasNumberOfUses ? 1 : 0) + (hasConditionEntity ? 1 : 0) + (hasCalendar ? 1 : 0);
+        const blockingConditions =
+            (usesBlocking ? 1 : 0) + (entityBlocking ? 1 : 0) + (calendarBlocking ? 1 : 0);
 
         const headerExtra = hasConditions
             ? html`<span class="collapsible-badge ${blockingConditions > 0 ? 'warning' : 'primary'}"
@@ -935,6 +1013,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                 title="${usesBlocking
                                     ? 'No uses remaining'
                                     : `${number_of_uses} uses remaining`}"
+                            ></ha-svg-icon>`
+                          : nothing}
+                      ${hasConditionEntity
+                          ? html`<ha-svg-icon
+                                class="condition-icon ${entityBlocking ? 'blocking' : ''}"
+                                .path=${this._getConditionEntityIcon(
+                                    condition_entity.domain,
+                                    !entityBlocking
+                                )}
+                                title="${entityBlocking
+                                    ? 'Condition blocking access'
+                                    : 'Condition allowing access'}"
                             ></ha-svg-icon>`
                           : nothing}
                       ${hasCalendar
@@ -977,6 +1067,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                       </div>
                   </div>`
                 : nothing}
+            ${hasConditionEntity ? this._renderConditionEntity(condition_entity) : nothing}
             ${hasCalendar
                 ? this._renderCalendarCondition(
                       calendar,
@@ -993,6 +1084,86 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             content,
             headerExtra
         );
+    }
+
+    /**
+     * Get the appropriate icon for a condition entity based on its domain.
+     * Uses icons consistent with Home Assistant core.
+     */
+    private _getConditionEntityIcon(domain: string, isActive: boolean): string {
+        switch (domain) {
+            case 'calendar':
+                return isActive ? mdiCalendar : mdiCalendarRemove;
+            case 'binary_sensor':
+                // HA core uses mdi:eye for generic binary sensors
+                return mdiEye;
+            case 'switch':
+                // HA core uses mdi:toggle-switch / mdi:toggle-switch-outline
+                return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
+            case 'schedule':
+                // HA core uses mdi:calendar-clock for schedule entities
+                return mdiCalendarClock;
+            case 'input_boolean':
+                // HA core uses mdi:toggle-switch-outline for input_boolean
+                return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
+            default:
+                return mdiEye;
+        }
+    }
+
+    /**
+     * Render a generic condition entity (non-calendar).
+     * For calendars, uses the rich calendar rendering with event details.
+     */
+    private _renderConditionEntity(entity: ConditionEntityInfo): TemplateResult {
+        const isActive = entity.state === 'on';
+
+        // For calendar domain, use the rich calendar rendering if calendar data is available
+        if (entity.domain === 'calendar' && entity.calendar) {
+            // No next event data available in the new condition_entity format yet
+            return this._renderCalendarCondition(
+                entity.calendar,
+                undefined,
+                entity.condition_entity_id
+            );
+        }
+
+        // For other domains, render a simple status display
+        const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
+        const statusText = isActive ? 'Access allowed' : 'Access blocked';
+        const statusClass = isActive ? 'active' : 'inactive';
+        const displayName = entity.friendly_name ?? entity.condition_entity_id;
+
+        return html`
+            <div
+                class="entity-condition clickable"
+                @click=${() => this._openEntityMoreInfo(entity.condition_entity_id)}
+                title="Click to view entity details"
+            >
+                <div class="entity-condition-header">
+                    <div class="entity-condition-status">
+                        <ha-svg-icon
+                            class="entity-condition-icon ${statusClass}"
+                            .path=${statusIcon}
+                        ></ha-svg-icon>
+                        <span class="entity-condition-text">${statusText}</span>
+                    </div>
+                </div>
+                <div class="entity-condition-name">${displayName}</div>
+            </div>
+        `;
+    }
+
+    /**
+     * Open the more-info dialog for an entity.
+     */
+    private _openEntityMoreInfo(entityId: string): void {
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderCalendarCondition(

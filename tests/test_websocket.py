@@ -36,7 +36,7 @@ from custom_components.lock_code_manager.websocket import (
     _get_bool_state,
     _get_last_changed,
     _get_number_state,
-    _get_slot_calendar_entity_id,
+    _get_slot_condition_entity_id,
     _get_text_state,
 )
 
@@ -1034,30 +1034,30 @@ class TestFindConfigEntryByTitle:
         assert entry is None
 
 
-class TestGetSlotCalendarEntityId:
-    """Tests for _get_slot_calendar_entity_id helper."""
+class TestGetSlotConditionEntityId:
+    """Tests for _get_slot_condition_entity_id helper."""
 
-    async def test_returns_calendar_for_slot_with_calendar(
+    async def test_returns_entity_for_slot_with_condition(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """Test returns calendar entity ID for slot with calendar configured."""
-        # Slot 2 has a calendar configured in the test fixtures
-        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 2)
-        assert calendar_id == "calendar.test_1"
+        """Test returns condition entity ID for slot with condition configured."""
+        # Slot 2 has an entity_id configured in the test fixtures
+        entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 2)
+        assert entity_id == "calendar.test_1"
 
-    async def test_returns_none_for_slot_without_calendar(
+    async def test_returns_none_for_slot_without_condition(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """Test returns None for slot without calendar."""
-        # Slot 1 has no calendar configured
-        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 1)
-        assert calendar_id is None
+        """Test returns None for slot without condition entity."""
+        # Slot 1 has no condition entity configured
+        entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 1)
+        assert entity_id is None
 
     async def test_returns_none_for_nonexistent_slot(
         self,
@@ -1066,8 +1066,8 @@ class TestGetSlotCalendarEntityId:
         lock_code_manager_config_entry,
     ) -> None:
         """Test returns None for nonexistent slot."""
-        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 999)
-        assert calendar_id is None
+        entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 999)
+        assert entity_id is None
 
     async def test_handles_string_slot_keys(
         self,
@@ -1077,5 +1077,5 @@ class TestGetSlotCalendarEntityId:
     ) -> None:
         """Test handles slot config with string keys."""
         # The config uses string keys internally, test that int lookup works
-        calendar_id = _get_slot_calendar_entity_id(lock_code_manager_config_entry, 2)
-        assert calendar_id == "calendar.test_1"
+        entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 2)
+        assert entity_id == "calendar.test_1"

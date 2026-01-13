@@ -23,6 +23,7 @@ from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
     CONF_ENABLED,
+    CONF_ENTITY_ID,
     CONF_ID,
     CONF_NAME,
     CONF_PIN,
@@ -48,6 +49,7 @@ from homeassistant.helpers import (
 )
 
 from .const import (
+    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -72,6 +74,47 @@ from .websocket import async_setup as async_websocket_setup
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> bool:
+    """Migrate old entry data to new format."""
+    if config_entry.version == 1:
+        _LOGGER.debug(
+            "%s (%s): Migrating from version 1 to 2",
+            config_entry.entry_id,
+            config_entry.title,
+        )
+
+        # Migrate CONF_CALENDAR to CONF_ENTITY_ID in slot configs
+        new_data = {**config_entry.data}
+        new_options = {**config_entry.options}
+
+        for data_dict in (new_data, new_options):
+            if CONF_SLOTS in data_dict:
+                new_slots = {}
+                for slot_num, slot_config in data_dict[CONF_SLOTS].items():
+                    new_slot = {**slot_config}
+                    # Migrate calendar to entity_id if not already set
+                    if CONF_CALENDAR in new_slot and CONF_ENTITY_ID not in new_slot:
+                        new_slot[CONF_ENTITY_ID] = new_slot.pop(CONF_CALENDAR)
+                    elif CONF_CALENDAR in new_slot:
+                        # Remove calendar if entity_id is already set
+                        new_slot.pop(CONF_CALENDAR)
+                    new_slots[slot_num] = new_slot
+                data_dict[CONF_SLOTS] = new_slots
+
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options, version=2
+        )
+        _LOGGER.info(
+            "%s (%s): Migration to version 2 complete",
+            config_entry.entry_id,
+            config_entry.title,
+        )
+
+    return True
 
 
 def _get_lovelace_resources(

@@ -47,6 +47,13 @@ ATTR_CALENDAR_SUMMARY = "summary"
 ATTR_CALENDAR_END_TIME = "end_time"
 ATTR_CALENDAR_START_TIME = "start_time"
 
+# Condition entity attributes
+ATTR_CONDITION_ENTITY = "condition_entity"
+ATTR_CONDITION_ENTITY_ID = "condition_entity_id"
+ATTR_CONDITION_ENTITY_DOMAIN = "domain"
+ATTR_CONDITION_ENTITY_STATE = "state"
+ATTR_CONDITION_ENTITY_NAME = "friendly_name"
+
 # Events
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 
@@ -75,6 +82,15 @@ ATTR_IN_SYNC = "in_sync"
 # Code slot properties
 CONF_NUMBER_OF_USES = "number_of_uses"
 CONF_CALENDAR = "calendar"
+
+# Supported domains for condition entities (CONF_ENTITY_ID option)
+CONDITION_ENTITY_DOMAINS = [
+    "calendar",
+    "binary_sensor",
+    "switch",
+    "schedule",
+    "input_boolean",
+]
 
 # Defaults
 DEFAULT_NUM_SLOTS = 3

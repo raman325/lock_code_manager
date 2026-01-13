@@ -196,6 +196,20 @@ export interface CalendarNextEventInfo {
     summary?: string;
 }
 
+/** Condition entity information (generic for any supported domain) */
+export interface ConditionEntityInfo {
+    /** Calendar-specific data (only present when domain is 'calendar') */
+    calendar?: CalendarEventInfo;
+    /** Entity ID of the condition entity */
+    condition_entity_id: string;
+    /** Domain of the entity (calendar, binary_sensor, switch, schedule, input_boolean) */
+    domain: string;
+    /** Friendly name of the entity */
+    friendly_name?: string;
+    /** Current state of the entity */
+    state: string;
+}
+
 export interface SlotCardConditions {
     /** Current calendar event info */
     calendar?: CalendarEventInfo;
@@ -203,6 +217,8 @@ export interface SlotCardConditions {
     calendar_entity_id?: string;
     /** Next upcoming calendar event */
     calendar_next?: CalendarNextEventInfo;
+    /** Generic condition entity info (new unified approach) */
+    condition_entity?: ConditionEntityInfo;
     /** Number of uses remaining */
     number_of_uses?: number;
 }

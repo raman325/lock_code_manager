@@ -11,7 +11,12 @@ clear codes on your locks as needed depending on how you decide to configure the
 Features:
 
 - Synchronize multiple locks with a single set of codes
-- Optionally use a calendar entity to activate and deactivate a code
+- Optionally use a condition entity to control when a code is active. Supported entity types:
+  - `calendar` - code is active when an event is in progress
+  - `binary_sensor` - code is active when the sensor is `on`
+  - `switch` - code is active when the switch is `on`
+  - `schedule` - code is active when the schedule is `on`
+  - `input_boolean` - code is active when the input boolean is `on`
 - Optionally define a maximum number of uses for a code before the code is disabled
 
 Locks from the following integrations are currently supported:

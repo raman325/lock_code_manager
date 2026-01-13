@@ -23,7 +23,6 @@ from homeassistant.helpers.event import TrackStates, async_track_state_change_fi
 from .const import (
     ATTR_CODE_SLOT,
     ATTR_TO,
-    CONF_CALENDAR,
     CONF_SLOTS,
     DOMAIN,
 )
@@ -80,12 +79,6 @@ class BaseLockCodeManagerEntity(Entity):
     def _state(self) -> Any:
         """Return state of entity."""
         return get_slot_data(self.config_entry, self.slot_num).get(self.key)
-
-    @final
-    @property
-    def _calendar_entity_id(self) -> str | None:
-        """Return calendar entity ID for this slot."""
-        return get_slot_data(self.config_entry, self.slot_num).get(CONF_CALENDAR)
 
     @final
     def _get_uid(self, key: str) -> str:

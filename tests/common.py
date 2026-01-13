@@ -8,13 +8,12 @@ from datetime import datetime
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import (
-    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -36,7 +35,7 @@ BASE_CONFIG = {
             CONF_PIN: "5678",
             CONF_ENABLED: True,
             CONF_NUMBER_OF_USES: 5,
-            CONF_CALENDAR: "calendar.test_1",
+            CONF_ENTITY_ID: "calendar.test_1",
         },
     },
 }

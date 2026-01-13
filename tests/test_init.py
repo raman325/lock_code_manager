@@ -14,6 +14,7 @@ from homeassistant.const import (
     ATTR_CODE,
     ATTR_ENTITY_ID,
     CONF_ENABLED,
+    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     CONF_URL,
@@ -25,6 +26,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
+    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
@@ -467,4 +469,59 @@ async def test_entry_setup_and_unload_before_ha_started(
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.async_block_till_done()
 
+    await hass.config_entries.async_remove(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_migration_v1_to_v2_calendar_to_entity_id(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test migration from v1 CONF_CALENDAR to v2 CONF_ENTITY_ID."""
+    # Create v1 config with CONF_CALENDAR
+    v1_config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "test1",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+            },
+            2: {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                CONF_CALENDAR: "calendar.test_1",
+            },
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=v1_config,
+        unique_id="Migration Test",
+        version=1,
+    )
+    config_entry.add_to_hass(hass)
+
+    # Setup should trigger migration
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify migration happened
+    assert config_entry.version == 2
+
+    # Get the migrated data (should be in .data after setup moves options to data)
+    migrated_data = config_entry.data
+
+    # Slot 1 should be unchanged (no calendar)
+    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][1]
+    assert CONF_ENTITY_ID not in migrated_data[CONF_SLOTS][1]
+
+    # Slot 2 should have CONF_ENTITY_ID instead of CONF_CALENDAR
+    assert CONF_CALENDAR not in migrated_data[CONF_SLOTS][2]
+    assert migrated_data[CONF_SLOTS][2][CONF_ENTITY_ID] == "calendar.test_1"
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)

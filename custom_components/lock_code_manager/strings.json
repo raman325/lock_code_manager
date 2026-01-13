@@ -20,13 +20,13 @@
       },
       "code_slot": {
         "data": {
-          "calendar": "Calendar",
+          "entity_id": "Condition Entity",
           "enabled": "Enabled",
           "name": "Name",
           "number_of_uses": "Number of Uses",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:** If you link a slot to a calendar, the slot will only be active when there is an in progress event, so the calendar should be disabled if you don't plan to use it. Number of Uses will only be enabled if set to a number greater than 0. Set to empty to disable.",
+        "description": "**Configure slot {slot_num}:** You can link a slot to a condition entity (calendar, binary_sensor, switch, schedule, or input_boolean). When linked, the slot will only be active when the entity is 'on' (for calendars, this means an event is in progress). Number of Uses will only be enabled if set to a number greater than 0. Set to empty to disable.",
         "title": "Configure Slot {slot_num}"
       },
       "reauth": {
