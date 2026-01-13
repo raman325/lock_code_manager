@@ -13,13 +13,37 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
+from homeassistant.components.calendar import (
+    DOMAIN as CALENDAR_DOMAIN,
+    SERVICE_GET_EVENTS,
+)
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
+from homeassistant.components.schedule import (
+    ATTR_NEXT_EVENT as SCHEDULE_ATTR_NEXT_EVENT,
+    DOMAIN as SCHEDULE_DOMAIN,
+)
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_ENTITY_ID, CONF_PIN
-from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    CONF_ENABLED,
+    CONF_ENTITY_ID,
+    CONF_PIN,
+    STATE_OFF,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
+from homeassistant.core import (
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    callback,
+    split_entity_id,
+)
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util, slugify
@@ -72,7 +96,13 @@ from .const import (
 from .data import get_entry_data
 from .providers import BaseLock
 
+_LOGGER = logging.getLogger(__name__)
+
 ERR_NOT_LOADED = "not_loaded"
+
+# Calendar entity state attributes (not exported by HA, defined in CalendarEntity.state_attributes)
+CALENDAR_ATTR_MESSAGE = "message"
+CALENDAR_ATTR_END_TIME = "end_time"
 
 
 # =============================================================================
@@ -85,7 +115,7 @@ def _get_text_state(hass: HomeAssistant, entity_id: str | None) -> str | None:
     if not entity_id:
         return None
     if state := hass.states.get(entity_id):
-        if state.state and state.state not in ("unknown", "unavailable"):
+        if state.state and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             return state.state
     return None
 
@@ -95,9 +125,9 @@ def _get_bool_state(hass: HomeAssistant, entity_id: str | None) -> bool | None:
     if not entity_id:
         return None
     if state := hass.states.get(entity_id):
-        if state.state == "on":
+        if state.state == STATE_ON:
             return True
-        if state.state == "off":
+        if state.state == STATE_OFF:
             return False
     return None
 
@@ -107,7 +137,7 @@ def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
     if not entity_id:
         return None
     if state := hass.states.get(entity_id):
-        if state.state and state.state not in ("unknown", "unavailable"):
+        if state.state and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             try:
                 return int(float(state.state))
             except (ValueError, TypeError):
@@ -131,7 +161,7 @@ def _get_last_changed(
     if not entity_id:
         return None
     if state := hass.states.get(entity_id):
-        if require_valid_state and state.state in ("unknown", "unavailable"):
+        if require_valid_state and state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             return None
         if state.last_changed:
             return state.last_changed.isoformat()
@@ -491,7 +521,7 @@ def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
     """Get the friendly name for a lock, using state attributes as primary source."""
     # Prefer the friendly_name from state (what HA displays in the UI)
     if state := hass.states.get(lock.lock.entity_id):
-        if friendly_name := state.attributes.get("friendly_name"):
+        if friendly_name := state.attributes.get(ATTR_FRIENDLY_NAME):
             return friendly_name
     # Fall back to entity registry name/original_name
     return lock.lock.name or lock.lock.original_name or lock.lock.entity_id
@@ -701,8 +731,8 @@ def _get_condition_entity_data(
         return None
 
     # Extract domain from entity_id
-    domain = condition_entity_id.split(".")[0]
-    is_active = state.state == "on"
+    domain = split_entity_id(condition_entity_id)[0]
+    is_active = state.state == STATE_ON
 
     result: dict[str, Any] = {
         ATTR_CONDITION_ENTITY_ID: condition_entity_id,
@@ -711,22 +741,22 @@ def _get_condition_entity_data(
     }
 
     # Add friendly name if available
-    if friendly_name := state.attributes.get("friendly_name"):
+    if friendly_name := state.attributes.get(ATTR_FRIENDLY_NAME):
         result[ATTR_CONDITION_ENTITY_NAME] = friendly_name
 
     # For calendar entities, include rich event data
-    if domain == "calendar":
+    if domain == CALENDAR_DOMAIN:
         result[ATTR_CALENDAR] = {ATTR_CALENDAR_ACTIVE: is_active}
         if is_active:
-            if summary := state.attributes.get("message"):
+            if summary := state.attributes.get(CALENDAR_ATTR_MESSAGE):
                 result[ATTR_CALENDAR][ATTR_CALENDAR_SUMMARY] = summary
-            if end_time := state.attributes.get("end_time"):
+            if end_time := state.attributes.get(CALENDAR_ATTR_END_TIME):
                 result[ATTR_CALENDAR][ATTR_CALENDAR_END_TIME] = end_time
 
     # For schedule entities, include next_event timing info
-    elif domain == "schedule":
+    elif domain == SCHEDULE_DOMAIN:
         schedule_data: dict[str, Any] = {}
-        if next_event := state.attributes.get("next_event"):
+        if next_event := state.attributes.get(SCHEDULE_ATTR_NEXT_EVENT):
             # Convert datetime to ISO string if needed
             if hasattr(next_event, "isoformat"):
                 schedule_data[ATTR_SCHEDULE_NEXT_EVENT] = next_event.isoformat()
@@ -736,9 +766,6 @@ def _get_condition_entity_data(
             result[ATTR_SCHEDULE] = schedule_data
 
     return result
-
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def _get_next_calendar_event(
@@ -754,8 +781,8 @@ async def _get_next_calendar_event(
         end = now + timedelta(days=7)  # Look ahead 7 days
 
         result = await hass.services.async_call(
-            "calendar",
-            "get_events",
+            CALENDAR_DOMAIN,
+            SERVICE_GET_EVENTS,
             {
                 ATTR_ENTITY_ID: calendar_entity_id,
                 "start_date_time": now.isoformat(),
@@ -815,7 +842,7 @@ def _serialize_slot_card_data(
     last_used_lock_name: str | None = None
     if slot_entities.event_entity_id:
         if event_state := hass.states.get(slot_entities.event_entity_id):
-            if event_state.state not in ("unknown", "unavailable"):
+            if event_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
                 # The state IS the timestamp
                 last_used = event_state.state
                 # Get the friendly name of the lock where PIN was last used
@@ -921,8 +948,8 @@ def _serialize_slot_card_data(
             # Add next calendar event if available (for inactive calendar conditions)
             if (
                 calendar_next_event
-                and condition_data.get(ATTR_CONDITION_ENTITY_DOMAIN) == "calendar"
-                and condition_data.get(ATTR_CONDITION_ENTITY_STATE) != "on"
+                and condition_data.get(ATTR_CONDITION_ENTITY_DOMAIN) == CALENDAR_DOMAIN
+                and condition_data.get(ATTR_CONDITION_ENTITY_STATE) != STATE_ON
             ):
                 condition_data[ATTR_CALENDAR_NEXT] = calendar_next_event
 
@@ -974,7 +1001,10 @@ async def subscribe_code_slot(
 
     # Fetch next calendar event if condition is a calendar
     calendar_next_event: dict[str, Any] | None = None
-    if condition_entity_id and condition_entity_id.startswith("calendar."):
+    if (
+        condition_entity_id
+        and split_entity_id(condition_entity_id)[0] == CALENDAR_DOMAIN
+    ):
         calendar_next_event = await _get_next_calendar_event(hass, condition_entity_id)
 
     @callback
@@ -995,7 +1025,9 @@ async def subscribe_code_slot(
     async def _async_send_update_with_calendar() -> None:
         """Fetch next calendar event and send update (for state changes)."""
         next_event = None
-        if condition_entity_id and condition_entity_id.startswith("calendar."):
+        if condition_entity_id and condition_entity_id.startswith(
+            f"{CALENDAR_DOMAIN}."
+        ):
             next_event = await _get_next_calendar_event(hass, condition_entity_id)
         _send_update(next_event)
 
@@ -1011,7 +1043,7 @@ async def subscribe_code_slot(
             if (
                 event.data.get("entity_id") == condition_entity_id
                 and condition_entity_id
-                and condition_entity_id.startswith("calendar.")
+                and split_entity_id(condition_entity_id)[0] == CALENDAR_DOMAIN
             ):
                 hass.async_create_task(_async_send_update_with_calendar())
             else:
