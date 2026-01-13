@@ -54,6 +54,9 @@ ATTR_CONDITION_ENTITY_DOMAIN = "domain"
 ATTR_CONDITION_ENTITY_STATE = "state"
 ATTR_CONDITION_ENTITY_NAME = "friendly_name"
 
+ATTR_SCHEDULE = "schedule"
+ATTR_SCHEDULE_NEXT_EVENT = "next_event"
+
 # Events
 EVENT_LOCK_STATE_CHANGED = f"{DOMAIN}_lock_state_changed"
 

@@ -415,6 +415,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 margin-left: 24px;
             }
 
+            .entity-condition-timing {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                font-style: italic;
+                margin-left: 24px;
+            }
+
             /* Calendar condition */
             .calendar-condition {
                 display: flex;
@@ -1112,8 +1119,43 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     /**
+     * Format a schedule's next_event datetime for display.
+     * Shows relative time like "Until 5:00 PM" when active or "Starts at 9:00 AM" when inactive.
+     */
+    private _formatScheduleNextEvent(nextEventIso: string, isActive: boolean): string | null {
+        try {
+            const nextEvent = new Date(nextEventIso);
+            if (isNaN(nextEvent.getTime())) return null;
+
+            const timeStr = nextEvent.toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit'
+            });
+            const now = new Date();
+            const isToday = nextEvent.toDateString() === now.toDateString();
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            const isTomorrow = nextEvent.toDateString() === tomorrow.toDateString();
+
+            let datePrefix = '';
+            if (!isToday) {
+                datePrefix = isTomorrow
+                    ? 'tomorrow '
+                    : `${nextEvent.toLocaleDateString([], { weekday: 'short' })} `;
+            }
+
+            // When active (on), next_event is when it turns off
+            // When inactive (off), next_event is when it turns on
+            return isActive ? `Until ${datePrefix}${timeStr}` : `Starts ${datePrefix}${timeStr}`;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
      * Render a generic condition entity (non-calendar).
      * For calendars, uses the rich calendar rendering with event details.
+     * For schedules, shows next state change timing.
      */
     private _renderConditionEntity(entity: ConditionEntityInfo): TemplateResult {
         const isActive = entity.state === 'on';
@@ -1134,6 +1176,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const statusClass = isActive ? 'active' : 'inactive';
         const displayName = entity.friendly_name ?? entity.condition_entity_id;
 
+        // Get schedule timing info if available
+        const scheduleNextEvent = entity.schedule?.next_event
+            ? this._formatScheduleNextEvent(entity.schedule.next_event, isActive)
+            : null;
+
         return html`
             <div
                 class="entity-condition clickable"
@@ -1150,6 +1197,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     </div>
                 </div>
                 <div class="entity-condition-name">${displayName}</div>
+                ${scheduleNextEvent
+                    ? html`<div class="entity-condition-timing">${scheduleNextEvent}</div>`
+                    : nothing}
             </div>
         `;
     }

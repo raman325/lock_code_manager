@@ -49,6 +49,8 @@ from .const import (
     ATTR_LOCK_NAME,
     ATTR_MANAGED,
     ATTR_PIN_LENGTH,
+    ATTR_SCHEDULE,
+    ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_USERCODE,
@@ -715,6 +717,18 @@ def _get_condition_entity_data(
                 result[ATTR_CALENDAR][ATTR_CALENDAR_SUMMARY] = summary
             if end_time := state.attributes.get("end_time"):
                 result[ATTR_CALENDAR][ATTR_CALENDAR_END_TIME] = end_time
+
+    # For schedule entities, include next_event timing info
+    elif domain == "schedule":
+        schedule_data: dict[str, Any] = {}
+        if next_event := state.attributes.get("next_event"):
+            # Convert datetime to ISO string if needed
+            if hasattr(next_event, "isoformat"):
+                schedule_data[ATTR_SCHEDULE_NEXT_EVENT] = next_event.isoformat()
+            else:
+                schedule_data[ATTR_SCHEDULE_NEXT_EVENT] = str(next_event)
+        if schedule_data:
+            result[ATTR_SCHEDULE] = schedule_data
 
     return result
 

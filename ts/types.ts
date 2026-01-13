@@ -197,6 +197,11 @@ export interface CalendarNextEventInfo {
 }
 
 /** Condition entity information (generic for any supported domain) */
+export interface ScheduleInfo {
+    /** Next state change time (ISO timestamp) - when schedule will toggle on/off */
+    next_event?: string;
+}
+
 export interface ConditionEntityInfo {
     /** Calendar-specific data (only present when domain is 'calendar') */
     calendar?: CalendarEventInfo;
@@ -206,6 +211,8 @@ export interface ConditionEntityInfo {
     domain: string;
     /** Friendly name of the entity */
     friendly_name?: string;
+    /** Schedule-specific data (only present when domain is 'schedule') */
+    schedule?: ScheduleInfo;
     /** Current state of the entity */
     state: string;
 }
