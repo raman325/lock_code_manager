@@ -504,11 +504,14 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_skipped(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that masked PINs on slots not managed by LCM are skipped entirely.
+    """Test mixed slots: managed with real code vs unmanaged with masked code.
 
-    When a lock has a slot with a masked PIN (all *'s) that can't be resolved
-    (either not configured in LCM or entities not ready), the slot is skipped
-    entirely from the result, making it unavailable until resolution succeeds.
+    This test verifies behavior when the lock cache contains:
+    - Slot 1: Managed by LCM, has real code "9999" -> should be returned
+    - Slot 5: NOT managed by LCM, has masked code "****" -> should be skipped
+
+    Unmanaged slots with masked PINs can't be resolved since there's no LCM
+    config entry to look up the expected PIN, so they're skipped entirely.
     """
     # Configure LCM to only manage slot 1 (not slot 5)
     lcm_entry = MockConfigEntry(
