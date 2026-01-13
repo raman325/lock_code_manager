@@ -18,7 +18,7 @@ import {
     formatConfigEntryNotFoundError,
     validateViewStrategyConfig
 } from './strategy-utils';
-import { LockCodeManagerEntitiesResponse, LockCodeManagerViewStrategyConfig } from './types';
+import { LockCodeManagerConfigEntryDataResponse, LockCodeManagerViewStrategyConfig } from './types';
 
 export class LockCodeManagerViewStrategy extends ReactiveElement {
     static async generate(config: LockCodeManagerViewStrategyConfig, hass: HomeAssistant) {
@@ -37,10 +37,10 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
         }
 
         try {
-            const { config_entry } = await hass.callWS<LockCodeManagerEntitiesResponse>({
+            const { config_entry } = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
                 config_entry_id,
                 config_entry_title,
-                type: 'lock_code_manager/get_config_entry_entities'
+                type: 'lock_code_manager/get_config_entry_data'
             });
 
             // Map legacy options to new names (new options take precedence)

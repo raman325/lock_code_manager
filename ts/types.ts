@@ -88,9 +88,15 @@ export interface LockCodeManagerLockSectionStrategyConfig {
     type: 'custom:lock-code-manager-lock';
 }
 
-export interface LockCodeManagerEntitiesResponse {
+/**
+ * Response from get_config_entry_data websocket command.
+ * Contains all static configuration data needed to render the dashboard.
+ */
+export interface LockCodeManagerConfigEntryDataResponse {
     config_entry: ConfigEntryJSONFragment;
     entities: EntityRegistryEntry[];
+    locks: LockInfo[];
+    slots: { [key: number]: string | null };
 }
 
 export interface LockCoordinatorSlotData {
@@ -126,11 +132,6 @@ export interface LockCoordinatorData {
     lock_entity_id: string;
     lock_name: string;
     slots: LockCoordinatorSlotData[];
-}
-
-export interface LockCodeManagerConfigEntryData {
-    locks: string[];
-    slots: { [key: number]: string | null };
 }
 
 export type CodeDisplayMode = 'masked' | 'unmasked' | 'masked_with_reveal';
@@ -245,10 +246,6 @@ export interface SlotCardData {
 export interface LockInfo {
     entity_id: string;
     name: string;
-}
-
-export interface GetLocksResponse {
-    locks: LockInfo[];
 }
 
 export interface ConfigEntryJSONFragment {
