@@ -240,6 +240,46 @@ class SlotStatus(StrEnum):
 **Priority:** Medium
 **Status:** Not started
 
+### Add Optional Flags to `get_config_entry_data` Websocket Command
+
+**Context:** PR #787 consolidated multiple websocket commands into a single
+`get_config_entry_data` command that returns `{config_entry, entities, locks, slots}`.
+However, not all callers need all the data:
+
+| Caller | config_entry | entities | locks | slots |
+| ------ | ------------ | -------- | ----- | ----- |
+| `view-strategy.ts` | ✅ | ❌ | ❌ | ❌ |
+| `generate-view.ts` | ❌ | ❌ | ✅ | ✅ |
+| `slot-section-strategy.ts` (legacy) | ✅ | ✅ | ❌ | ✅ |
+| `dashboard-strategy.ts` | ❌ | ❌ | ✅ | ❌ |
+| `lock-codes-card-editor.ts` | ❌ | ❌ | ✅ | ❌ |
+
+**Cost Analysis:**
+
+- `config_entry` - Very cheap (just `config_entry.as_json_fragment`)
+- `slots` - Very cheap (extracts calendar IDs from config)
+- `locks` - Moderate (iterates locks, gets friendly names via state lookups)
+- `entities` - Most expensive (queries entity registry, maps to `as_partial_dict`)
+
+**Proposed Change:** Add optional `include_entities` and `include_locks` flags
+(default `True` for backwards compatibility). Skip `config_entry` and `slots`
+flags since they're essentially free.
+
+```python
+vol.Optional("include_entities", default=True): bool,
+vol.Optional("include_locks", default=True): bool,
+```
+
+**Benefits:**
+
+- `view-strategy.ts` can skip both entities and locks
+- `dashboard-strategy.ts` and `lock-codes-card-editor.ts` can skip entities
+- Legacy `slot-section-strategy.ts` can skip locks
+
+**Estimated Effort:** Low (2-4 hours)
+**Priority:** Low
+**Status:** Not started
+
 ### Entity Registry Change Detection
 
 Track entity registry updates and warn if LCM entities change entity IDs (reload
