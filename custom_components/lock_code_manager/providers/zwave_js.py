@@ -127,6 +127,67 @@ class ZWaveJSLock(BaseLock):
 
         return True, ""
 
+    def _resolve_masked_code(self, code_slot: int, value: str) -> str | None:
+        """Resolve a masked usercode to the expected PIN value.
+
+        Some locks return masked values (all asterisks) instead of the actual PIN.
+        This method looks up the expected PIN from LCM entities for managed slots.
+
+        Args:
+            code_slot: The code slot number
+            value: The usercode value (potentially masked)
+
+        Returns:
+            None if value is not masked (caller should use original value)
+            The expected PIN if slot is managed by LCM and active
+            Empty string if slot is not managed, not active, or entities unavailable
+
+        """
+        # Check if value is masked (all asterisks)
+        if not value or len(value) * "*" != value:
+            return None
+
+        # Find config entry managing this lock and slot
+        try:
+            config_entry = next(
+                entry
+                for entry in self.hass.config_entries.async_entries(DOMAIN)
+                if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
+                and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
+            )
+        except StopIteration:
+            # Slot doesn't exist in LCM configuration, skip masked resolution
+            return None
+
+        # Look up entities
+        base_unique_id = f"{config_entry.entry_id}|{code_slot}"
+        active_entity_id = self.ent_reg.async_get_entity_id(
+            SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
+        )
+        pin_entity_id = self.ent_reg.async_get_entity_id(
+            TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
+        )
+
+        if not active_entity_id or not pin_entity_id:
+            return ""
+
+        active_state = self.hass.states.get(active_entity_id)
+        pin_state = self.hass.states.get(pin_entity_id)
+
+        if not active_state or not pin_state:
+            return ""
+
+        _LOGGER.debug(
+            "PIN is masked for lock %s code slot %s, assuming value from PIN entity %s",
+            self.lock.entity_id,
+            code_slot,
+            pin_entity_id,
+        )
+
+        if active_state.state == STATE_ON and pin_state.state.isnumeric():
+            return pin_state.state
+        return ""
+
     @callback
     def subscribe_push_updates(self) -> None:
         """Subscribe to User Code CC value update events."""
@@ -170,6 +231,11 @@ class ZWaveJSLock(BaseLock):
                 value: int | str = ""
             else:
                 value = str(new_value)
+
+            # Resolve masked codes to expected PIN from LCM entities
+            # This prevents infinite sync loops when locks return masked values
+            if resolved := self._resolve_masked_code(code_slot, str(value)):
+                value = resolved
 
             # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
             if self.coordinator and self.coordinator.data.get(code_slot) == value:
@@ -425,51 +491,13 @@ class ZWaveJSLock(BaseLock):
             if not in_use:
                 slots_not_enabled.append(code_slot)
                 data[code_slot] = ""
-            # Special handling if usercode is all *'s
-            elif usercode and len(str(usercode)) * "*" == str(usercode):
-                # Only look up PIN from entities if slot is managed by LCM
-                if code_slot not in code_slots:
-                    # Slot not managed by LCM, record empty since we can't
-                    # retrieve the actual PIN
-                    data[code_slot] = ""
-                    continue
-                # Build data from entities
-                config_entry = next(
-                    config_entry
-                    for config_entry in self.hass.config_entries.async_entries(DOMAIN)
-                    if self.lock.entity_id
-                    in get_entry_data(config_entry, CONF_LOCKS, [])
-                    and int(code_slot)
-                    in (
-                        int(slot)
-                        for slot in get_entry_data(config_entry, CONF_SLOTS, {})
-                    )
-                )
-                base_unique_id = f"{config_entry.entry_id}|{code_slot}"
-                active = self.ent_reg.async_get_entity_id(
-                    SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
-                )
-                assert active
-                active_state = self.hass.states.get(active)
-                pin_entity_id = self.ent_reg.async_get_entity_id(
-                    TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
-                )
-                assert pin_entity_id
-                pin_state = self.hass.states.get(pin_entity_id)
-                assert active_state
-                assert pin_state
-                _LOGGER.debug(
-                    (
-                        "PIN is masked for lock %s code slot %s so "
-                        "assuming value from PIN entity %s"
-                    ),
-                    self.lock.entity_id,
-                    code_slot,
-                    pin_entity_id,
-                )
-                if active_state.state == STATE_ON and pin_state.state.isnumeric():
+            # Handle masked usercodes (all *'s) - resolve to expected PIN
+            elif (
+                resolved := self._resolve_masked_code(code_slot, usercode)
+            ) is not None:
+                if resolved:
                     slots_with_pin.append(code_slot)
-                    data[code_slot] = pin_state.state
+                    data[code_slot] = resolved
                 else:
                     slots_not_enabled.append(code_slot)
                     data[code_slot] = ""
