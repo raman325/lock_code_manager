@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import wraps
+import logging
 from typing import Any
 
 import voluptuous as vol
@@ -20,13 +22,16 @@ from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_ENTITY_ID, CO
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.util import slugify
+from homeassistant.util import dt as dt_util, slugify
 
 from .const import (
     ATTR_ACTIVE,
     ATTR_CALENDAR,
     ATTR_CALENDAR_ACTIVE,
     ATTR_CALENDAR_END_TIME,
+    ATTR_CALENDAR_NEXT,
+    ATTR_CALENDAR_NEXT_START,
+    ATTR_CALENDAR_NEXT_SUMMARY,
     ATTR_CALENDAR_SUMMARY,
     ATTR_CODE,
     ATTR_CODE_LENGTH,
@@ -733,6 +738,56 @@ def _get_condition_entity_data(
     return result
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
+async def _get_next_calendar_event(
+    hass: HomeAssistant, calendar_entity_id: str
+) -> dict[str, Any] | None:
+    """Fetch the next upcoming event from a calendar entity.
+
+    Returns dict with start_time and summary, or None if no upcoming events.
+    """
+    try:
+        # Call the calendar.get_events service
+        now = dt_util.now()
+        end = now + timedelta(days=7)  # Look ahead 7 days
+
+        result = await hass.services.async_call(
+            "calendar",
+            "get_events",
+            {
+                ATTR_ENTITY_ID: calendar_entity_id,
+                "start_date_time": now.isoformat(),
+                "end_date_time": end.isoformat(),
+            },
+            blocking=True,
+            return_response=True,
+        )
+
+        if not result or calendar_entity_id not in result:
+            return None
+
+        events = result[calendar_entity_id].get("events", [])
+        if not events:
+            return None
+
+        # Return the first event (soonest)
+        first_event = events[0]
+        next_event_data: dict[str, Any] = {}
+
+        if start := first_event.get("start"):
+            next_event_data[ATTR_CALENDAR_NEXT_START] = start
+        if summary := first_event.get("summary"):
+            next_event_data[ATTR_CALENDAR_NEXT_SUMMARY] = summary
+
+        return next_event_data if next_event_data else None
+
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug("Failed to fetch next calendar event for %s", calendar_entity_id)
+        return None
+
+
 def _serialize_slot_card_data(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -741,6 +796,7 @@ def _serialize_slot_card_data(
     in_sync_map: dict[str, str],
     *,
     reveal: bool,
+    calendar_next_event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Serialize slot data for the slot card."""
     # Get slot metadata using module-level helpers
@@ -862,6 +918,13 @@ def _serialize_slot_card_data(
         # Include condition entity data (handles both calendar and non-calendar entities)
         if condition_data := _get_condition_entity_data(hass, condition_entity_id):
             result[CONF_CONDITIONS][ATTR_CONDITION_ENTITY] = condition_data
+            # Add next calendar event if available (for inactive calendar conditions)
+            if (
+                calendar_next_event
+                and condition_data.get(ATTR_CONDITION_ENTITY_DOMAIN) == "calendar"
+                and condition_data.get(ATTR_CONDITION_ENTITY_STATE) != "on"
+            ):
+                condition_data[ATTR_CALENDAR_NEXT] = calendar_next_event
 
     return result
 
@@ -909,14 +972,32 @@ async def subscribe_code_slot(
     in_sync_map = _get_slot_in_sync_entity_ids(hass, config_entry, slot_num)
     condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
 
+    # Fetch next calendar event if condition is a calendar
+    calendar_next_event: dict[str, Any] | None = None
+    if condition_entity_id and condition_entity_id.startswith("calendar."):
+        calendar_next_event = await _get_next_calendar_event(hass, condition_entity_id)
+
     @callback
-    def _send_update() -> None:
+    def _send_update(next_event: dict[str, Any] | None = None) -> None:
         connection.send_event(
             msg["id"],
             _serialize_slot_card_data(
-                hass, config_entry, slot_num, slot_entities, in_sync_map, reveal=reveal
+                hass,
+                config_entry,
+                slot_num,
+                slot_entities,
+                in_sync_map,
+                reveal=reveal,
+                calendar_next_event=next_event,
             ),
         )
+
+    async def _async_send_update_with_calendar() -> None:
+        """Fetch next calendar event and send update (for state changes)."""
+        next_event = None
+        if condition_entity_id and condition_entity_id.startswith("calendar."):
+            next_event = await _get_next_calendar_event(hass, condition_entity_id)
+        _send_update(next_event)
 
     @callback
     def _on_state_change(event: Event[EventStateChangedData]) -> None:
@@ -926,7 +1007,15 @@ async def subscribe_code_slot(
 
         # Only send update if actual state value changed
         if old_state is None or new_state is None or old_state.state != new_state.state:
-            _send_update()
+            # For calendar entities, fetch next event asynchronously
+            if (
+                event.data.get("entity_id") == condition_entity_id
+                and condition_entity_id
+                and condition_entity_id.startswith("calendar.")
+            ):
+                hass.async_create_task(_async_send_update_with_calendar())
+            else:
+                _send_update()
 
     # Track slot entity state changes (including condition entity for state updates)
     tracked_entities = slot_entities.all_entity_ids() + list(in_sync_map.values())
@@ -955,7 +1044,7 @@ async def subscribe_code_slot(
 
     connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
-    _send_update()
+    _send_update(calendar_next_event)
 
 
 @websocket_api.websocket_command(

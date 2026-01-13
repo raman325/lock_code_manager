@@ -205,6 +205,8 @@ export interface ScheduleInfo {
 export interface ConditionEntityInfo {
     /** Calendar-specific data (only present when domain is 'calendar') */
     calendar?: CalendarEventInfo;
+    /** Next calendar event (only present when domain is 'calendar' and state is off) */
+    calendar_next?: CalendarNextEventInfo;
     /** Entity ID of the condition entity */
     condition_entity_id: string;
     /** Domain of the entity (calendar, binary_sensor, switch, schedule, input_boolean) */

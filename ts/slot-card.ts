@@ -1162,10 +1162,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         // For calendar domain, use the rich calendar rendering if calendar data is available
         if (entity.domain === 'calendar' && entity.calendar) {
-            // No next event data available in the new condition_entity format yet
             return this._renderCalendarCondition(
                 entity.calendar,
-                undefined,
+                entity.calendar_next,
                 entity.condition_entity_id
             );
         }
