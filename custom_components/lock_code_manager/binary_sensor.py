@@ -193,9 +193,10 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
     def _update_condition_entity_subscription(self) -> None:
         """Update subscription for condition entity if it changed."""
         current_entity_id = self._condition_entity_id
+        old_entity_id = self._subscribed_condition_entity_id
 
         # No change needed if entity ID hasn't changed
-        if current_entity_id == self._subscribed_condition_entity_id:
+        if current_entity_id == old_entity_id:
             return
 
         # Unsubscribe from old entity if we had one
@@ -215,7 +216,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             self.config_entry.entry_id,
             self.config_entry.title,
             self.entity_id,
-            self._subscribed_condition_entity_id,
+            old_entity_id,
             current_entity_id,
         )
 

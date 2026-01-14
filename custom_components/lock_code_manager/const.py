@@ -46,8 +46,8 @@ ATTR_CALENDAR_ACTIVE = "active"
 ATTR_CALENDAR_SUMMARY = "summary"
 ATTR_CALENDAR_END_TIME = "end_time"
 ATTR_CALENDAR_START_TIME = "start_time"
-ATTR_CALENDAR_NEXT_START = "start_time"
-ATTR_CALENDAR_NEXT_SUMMARY = "summary"
+ATTR_CALENDAR_NEXT_START = ATTR_CALENDAR_START_TIME  # Same key, used for next event
+ATTR_CALENDAR_NEXT_SUMMARY = ATTR_CALENDAR_SUMMARY  # Same key, used for next event
 
 # Condition entity attributes
 ATTR_CONDITION_ENTITY = "condition_entity"
