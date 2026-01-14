@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 import logging
 from typing import Any, Self
 
-from homeassistant.components.event import EventEntity
+from homeassistant.components.event import ATTR_EVENT_TYPE, EventEntity
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -122,8 +122,8 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
         # Include last event type if it exists and isn't in current locks
         # This preserves history even if a lock was removed
-        # state_attributes contains {"event_type": last_event_type} from EventEntity
-        last_event_type = self.state_attributes.get("event_type")
+        # state_attributes contains {ATTR_EVENT_TYPE: last_event_type} from EventEntity
+        last_event_type = self.state_attributes.get(ATTR_EVENT_TYPE)
         if last_event_type and last_event_type not in supported_lock_ids:
             return list(supported_lock_ids | {last_event_type})
 
