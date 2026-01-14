@@ -74,6 +74,8 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         self._attr_name = None
         # Track the last event type to preserve it in event_types even if lock removed
         self._last_event_type: str | None = None
+        # Track unsupported locks (restored from state on startup)
+        self._unsupported_locks: list[str] = []
 
     def _get_supported_locks(self) -> list[BaseLock]:
         """Get locks that support code slot events."""
@@ -82,6 +84,12 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     def _get_unsupported_locks(self) -> list[BaseLock]:
         """Get locks that don't support code slot events."""
         return [lock for lock in self.locks if not lock.supports_code_slot_events]
+
+    def _update_unsupported_locks(self) -> None:
+        """Update the cached list of unsupported lock entity IDs."""
+        self._unsupported_locks = [
+            lock.lock.entity_id for lock in self._get_unsupported_locks()
+        ]
 
     def _compute_event_types(self) -> list[str]:
         """Compute current event_types from supported locks.
@@ -106,17 +114,25 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         return self._compute_event_types()
 
     @property
+    def available(self) -> bool:
+        """Return True if entity is available.
+
+        The event entity is unavailable if no locks support code slot events.
+        """
+        if not self._get_supported_locks():
+            return False
+        return super().available
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes.
 
         Includes unsupported_locks list for locks that can't fire code slot events.
+        This value is cached and restored from state on startup.
         """
         attrs: dict[str, Any] = {}
-        unsupported = self._get_unsupported_locks()
-        if unsupported:
-            attrs[ATTR_UNSUPPORTED_LOCKS] = [
-                lock.lock.entity_id for lock in unsupported
-            ]
+        if self._unsupported_locks:
+            attrs[ATTR_UNSUPPORTED_LOCKS] = self._unsupported_locks
         return attrs
 
     @callback
@@ -131,6 +147,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
             self._trigger_event(lock_entity_id, event.data)
         else:
             # Fallback to generic event type if no lock entity ID
+            self._last_event_type = EVENT_PIN_USED
             self._trigger_event(EVENT_PIN_USED, event.data)
         self.async_write_ha_state()
 
@@ -138,25 +155,35 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     def _handle_add_locks(self, locks: list[BaseLock]) -> None:
         """Handle lock entities being added."""
         super()._handle_add_locks(locks)
-        # Update state to reflect new event_types
+        # Update cached unsupported locks and state to reflect new event_types
+        self._update_unsupported_locks()
         self.async_write_ha_state()
 
     @callback
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity being removed."""
         super()._handle_remove_lock(lock_entity_id)
-        # Update state to reflect new event_types
+        # Update cached unsupported locks and state to reflect new event_types
+        self._update_unsupported_locks()
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
-        # Restore last event type from state if available
+        # Restore state attributes if available
         if (last_state := await self.async_get_last_state()) and last_state.attributes:
-            # The last event type is stored in the state's event_type attribute
+            # Restore last event type (lock entity ID where PIN was used)
             if event_type := last_state.attributes.get("event_type"):
                 self._last_event_type = event_type
+            # Restore unsupported locks list
+            if unsupported := last_state.attributes.get(ATTR_UNSUPPORTED_LOCKS):
+                self._unsupported_locks = list(unsupported)
+
+        # Update unsupported locks from current locks if locks are available
+        # (may override restored state if locks have changed since last run)
+        if self.locks:
+            self._update_unsupported_locks()
 
         # Listen for lock state changed events
         self.async_on_remove(

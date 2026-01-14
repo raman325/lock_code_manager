@@ -9,6 +9,7 @@ from homeassistant.components.lock import LockState
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_STATE,
+    STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant
@@ -109,18 +110,35 @@ class MockLCMLockNoEvents(MockLCMLock):
         return False
 
 
-async def test_unsupported_locks_attribute(
+async def test_no_unsupported_locks_when_all_support_events(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that unsupported_locks attribute is not present when all locks support events."""
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+
+    # All mock locks support code slot events, so unsupported_locks should not be present
+    assert ATTR_UNSUPPORTED_LOCKS not in state.attributes
+
+
+async def test_event_entity_unavailable_when_no_supported_locks(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Test that unsupported_locks attribute lists locks without code slot events."""
+    """Test that event entity is unavailable when no locks support code slot events.
+
+    Note: When the entity is unavailable, extra_state_attributes (including
+    unsupported_locks) won't be visible in the state.
+    """
     # Create config with mock lock that doesn't support events
     with patch(
         "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockNoEvents},
     ):
         config_entry = MockConfigEntry(
-            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title No Events"
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title No Events 2"
         )
         config_entry.add_to_hass(hass)
         await hass.config_entries.async_setup(config_entry.entry_id)
@@ -129,9 +147,7 @@ async def test_unsupported_locks_attribute(
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
 
-        # unsupported_locks should list the locks that don't support events
-        unsupported = state.attributes.get(ATTR_UNSUPPORTED_LOCKS, [])
-        assert LOCK_1_ENTITY_ID in unsupported
-        assert LOCK_2_ENTITY_ID in unsupported
+        # Entity should be unavailable when no locks support code slot events
+        assert state.state == STATE_UNAVAILABLE
 
         await hass.config_entries.async_unload(config_entry.entry_id)
