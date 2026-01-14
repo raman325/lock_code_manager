@@ -127,7 +127,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         if last_event_type and last_event_type not in supported_lock_ids:
             return list(supported_lock_ids | {last_event_type})
 
-        return list(supported_lock_ids) if supported_lock_ids else [EVENT_PIN_USED]
+        return list(supported_lock_ids)
 
     @property
     def event_types(self) -> list[str]:
@@ -176,11 +176,10 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         _trigger_event stores the event type internally in EventEntity.
         """
         lock_entity_id = event.data.get(ATTR_ENTITY_ID)
-        if lock_entity_id:
-            self._trigger_event(lock_entity_id, event.data)
-        else:
-            # Fallback to generic event type if no lock entity ID
-            self._trigger_event(EVENT_PIN_USED, event.data)
+        if not lock_entity_id:
+            _LOGGER.warning("Received event without lock entity ID: %s", event.data)
+            return
+        self._trigger_event(lock_entity_id, event.data)
         self.async_write_ha_state()
 
     @callback
