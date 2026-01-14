@@ -4,10 +4,7 @@
   "after_dependencies": [
     "calendar",
     "frontend",
-    "input_boolean",
     "lovelace",
-    "schedule",
-    "template",
     "virtual",
     "zwave_js"
   ],
