@@ -729,6 +729,7 @@ def _serialize_slot_card_data(
     # EventEntity's state IS the timestamp (ISO format) of when the last event fired
     # - If state is "unknown" or "unavailable", no event has ever fired
     # - Otherwise, the state value is the ISO timestamp
+    # The event_type attribute is the lock entity ID where the PIN was last used
     last_used: str | None = None
     last_used_lock_name: str | None = None
     if slot_entities.event_entity_id:
@@ -737,7 +738,8 @@ def _serialize_slot_card_data(
                 # The state IS the timestamp
                 last_used = event_state.state
                 # Get the friendly name of the lock where PIN was last used
-                if last_used_lock_id := event_state.attributes.get(ATTR_LOCK_ENTITY_ID):
+                # event_type is now the lock entity ID (instead of ATTR_LOCK_ENTITY_ID)
+                if last_used_lock_id := event_state.attributes.get("event_type"):
                     if lock_state := hass.states.get(last_used_lock_id):
                         last_used_lock_name = lock_state.attributes.get(
                             "friendly_name", last_used_lock_id
