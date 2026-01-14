@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 import logging
-from typing import Any
+from typing import Any, Self
 
 from homeassistant.components.event import EventEntity
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import ExtraStoredData
 
 from .const import EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
 from .data import LockCodeManagerConfigEntry
@@ -19,6 +21,25 @@ from .providers import BaseLock
 _LOGGER = logging.getLogger(__name__)
 
 ATTR_UNSUPPORTED_LOCKS = "unsupported_locks"
+
+
+@dataclass
+class LockCodeManagerEventExtraStoredData(ExtraStoredData):
+    """Extra stored data for lock code manager event entity."""
+
+    unsupported_locks: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a dict representation of the data."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]) -> Self | None:
+        """Initialize from a dict."""
+        try:
+            return cls(restored["unsupported_locks"])
+        except KeyError:
+            return None
 
 
 async def async_setup_entry(
@@ -72,9 +93,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
             self, hass, ent_reg, config_entry, slot_num, key
         )
         self._attr_name = None
-        # Track the last event type to preserve it in event_types even if lock removed
-        self._last_event_type: str | None = None
-        # Track unsupported locks (restored from state on startup)
+        # Track unsupported locks (restored from extra stored data on startup)
         self._unsupported_locks: list[str] = []
 
     def _get_supported_locks(self) -> list[BaseLock]:
@@ -103,8 +122,10 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
         # Include last event type if it exists and isn't in current locks
         # This preserves history even if a lock was removed
-        if self._last_event_type and self._last_event_type not in supported_lock_ids:
-            return list(supported_lock_ids | {self._last_event_type})
+        # state_attributes contains {"event_type": last_event_type} from EventEntity
+        last_event_type = self.state_attributes.get("event_type")
+        if last_event_type and last_event_type not in supported_lock_ids:
+            return list(supported_lock_ids | {last_event_type})
 
         return list(supported_lock_ids) if supported_lock_ids else [EVENT_PIN_USED]
 
@@ -128,26 +149,37 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         """Return extra state attributes.
 
         Includes unsupported_locks list for locks that can't fire code slot events.
-        This value is cached and restored from state on startup.
         """
         attrs: dict[str, Any] = {}
         if self._unsupported_locks:
             attrs[ATTR_UNSUPPORTED_LOCKS] = self._unsupported_locks
         return attrs
 
+    @property
+    def extra_restore_state_data(self) -> LockCodeManagerEventExtraStoredData:
+        """Return extra data to be stored for restoration."""
+        return LockCodeManagerEventExtraStoredData(self._unsupported_locks)
+
+    async def _async_get_last_extra_data(
+        self,
+    ) -> LockCodeManagerEventExtraStoredData | None:
+        """Get last extra stored data."""
+        if (restored := await self.async_get_last_extra_data()) is None:
+            return None
+        return LockCodeManagerEventExtraStoredData.from_dict(restored.as_dict())
+
     @callback
     def _handle_event(self, event: Event) -> None:
         """Handle event.
 
         The event type is the lock entity ID where the PIN was used.
+        _trigger_event stores the event type internally in EventEntity.
         """
         lock_entity_id = event.data.get(ATTR_ENTITY_ID)
         if lock_entity_id:
-            self._last_event_type = lock_entity_id
             self._trigger_event(lock_entity_id, event.data)
         else:
             # Fallback to generic event type if no lock entity ID
-            self._last_event_type = EVENT_PIN_USED
             self._trigger_event(EVENT_PIN_USED, event.data)
         self.async_write_ha_state()
 
@@ -170,15 +202,12 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
+        # EventEntity.async_added_to_hass restores __last_event_type from stored data
+        await EventEntity.async_added_to_hass(self)
 
-        # Restore state attributes if available
-        if (last_state := await self.async_get_last_state()) and last_state.attributes:
-            # Restore last event type (lock entity ID where PIN was used)
-            if event_type := last_state.attributes.get("event_type"):
-                self._last_event_type = event_type
-            # Restore unsupported locks list
-            if unsupported := last_state.attributes.get(ATTR_UNSUPPORTED_LOCKS):
-                self._unsupported_locks = list(unsupported)
+        # Restore unsupported_locks from extra stored data
+        if restored := await self._async_get_last_extra_data():
+            self._unsupported_locks = restored.unsupported_locks
 
         # Update unsupported locks from current locks if locks are available
         # (may override restored state if locks have changed since last run)
