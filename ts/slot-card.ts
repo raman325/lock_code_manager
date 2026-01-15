@@ -721,6 +721,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _renderHeader(): TemplateResult {
         const lockCount = this._data?.locks?.length ?? 0;
         const lastUsed = this._data?.last_used;
+        const eventEntityId = this._data?.event_entity_id;
+        const eventEntityState = eventEntityId ? this._hass?.states[eventEntityId] : undefined;
+        const showLastUsed = eventEntityState && eventEntityState.state !== 'unavailable';
 
         return html`
             <div class="header">
@@ -744,24 +747,26 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           </div>`
                         : nothing}
                 </div>
-                <div
-                    class="header-last-used ${lastUsed ? 'clickable' : ''}"
-                    title=${lastUsed
-                        ? this._data?.last_used_lock
-                            ? `Used on ${this._data.last_used_lock} - Click to view history`
-                            : 'Click to view PIN usage history'
-                        : 'This PIN has never been used'}
-                    @click=${() => lastUsed && this._navigateToEventHistory()}
-                >
-                    <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
-                    ${lastUsed
-                        ? html`${this._data?.last_used_lock ?? 'Used'}
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${lastUsed}
-                              ></ha-relative-time>`
-                        : 'Never used'}
-                </div>
+                ${showLastUsed
+                    ? html`<div
+                          class="header-last-used ${lastUsed ? 'clickable' : ''}"
+                          title=${lastUsed
+                              ? this._data?.last_used_lock
+                                  ? `Used on ${this._data.last_used_lock} - Click for details`
+                                  : 'Click for PIN usage details'
+                              : 'This PIN has never been used'}
+                          @click=${() => lastUsed && this._navigateToEventHistory()}
+                      >
+                          <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
+                          ${lastUsed
+                              ? html`${this._data?.last_used_lock ?? 'Used'}
+                                    <ha-relative-time
+                                        .hass=${this._hass}
+                                        .datetime=${lastUsed}
+                                    ></ha-relative-time>`
+                              : 'Never used'}
+                      </div>`
+                    : nothing}
             </div>
         `;
     }
@@ -769,10 +774,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _navigateToEventHistory(): void {
         const eventEntityId = this._data?.event_entity_id;
         if (!eventEntityId) return;
-        // Navigate to entity history
-        const url = `/history?entity_id=${encodeURIComponent(eventEntityId)}`;
-        history.pushState(null, '', url);
-        window.dispatchEvent(new CustomEvent('location-changed'));
+        // Open the more-info dialog for this event entity
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: eventEntityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderPrimaryControls(

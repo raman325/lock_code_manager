@@ -9,7 +9,7 @@ import pytest
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE,
@@ -30,6 +30,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     _find_config_entry_by_title,
     _get_bool_state,
@@ -702,6 +703,65 @@ async def test_subscribe_code_slot_slot_2_with_calendar(
     assert data[ATTR_SLOT_NUM] == 2
     # Slot 2 should have calendar in conditions
     assert CONF_CONDITIONS in data
+
+
+async def test_subscribe_code_slot_with_event_type(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test event_type attribute is set correctly after firing code slot event.
+
+    This verifies the event entity state has the event_type attribute set to
+    the lock entity ID, which the websocket uses to look up last_used_lock_name.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # First, subscribe before any event - last_used should be None
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 2,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    event = await ws_client.receive_json()
+    data = event["event"]
+    assert data[ATTR_SLOT_NUM] == 2
+    # No event fired yet, so last_used should be None
+    assert data.get("last_used") is None
+    assert data.get("last_used_lock_name") is None
+
+    # Fire a code slot event
+    lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.async_fire_code_slot_event(2, False, "test", Event("zwave_js_notification"))
+    await hass.async_block_till_done()
+
+    # Check event entity state to verify event_type is set (this is what
+    # websocket code reads to determine last_used_lock_name)
+    event_state = hass.states.get("event.mock_title_code_slot_2")
+    assert event_state is not None
+    assert event_state.state not in ("unknown", "unavailable")
+    assert event_state.attributes.get("event_type") == LOCK_1_ENTITY_ID
+
+    # Verify lock state exists and has friendly_name (websocket looks this up)
+    lock_state = hass.states.get(LOCK_1_ENTITY_ID)
+    assert lock_state is not None
+    assert "friendly_name" in lock_state.attributes
+
+    # Should receive websocket update with last_used populated
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    data = updated["event"]
+    assert data[ATTR_SLOT_NUM] == 2
+    # last_used should have the timestamp from the event
+    assert data.get("last_used") is not None
 
 
 async def test_subscribe_lock_codes_slot_metadata(

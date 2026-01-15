@@ -242,6 +242,20 @@ class BaseLock:
         """
         return False
 
+    @property
+    def supports_code_slot_events(self) -> bool:
+        """
+        Return whether this lock supports code slot events.
+
+        When True, the lock can fire events indicating which code slot was used
+        to lock/unlock. This affects the event entity's event_types - locks that
+        support this will have their entity_id included in event_types.
+
+        Locks that don't support this will be listed in the unsupported_locks
+        attribute on the event entity.
+        """
+        return True
+
     @callback
     def subscribe_push_updates(self) -> None:
         """

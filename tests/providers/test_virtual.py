@@ -146,3 +146,28 @@ async def test_clear_usercode_returns_changed_status(hass: HomeAssistant):
     # Clearing again should return False (already cleared)
     changed = await lock.async_clear_usercode(1)
     assert changed is False
+
+
+async def test_virtual_lock_does_not_support_code_slot_events(hass: HomeAssistant):
+    """Test that virtual locks do not support code slot events."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_events",
+        config_entry=config_entry,
+    )
+
+    lock = VirtualLock(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+
+    # Virtual locks don't support code slot events
+    assert lock.supports_code_slot_events is False

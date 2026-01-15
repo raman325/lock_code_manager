@@ -101,6 +101,11 @@ class ZWaveJSLock(BaseLock):
         return True
 
     @property
+    def supports_code_slot_events(self) -> bool:
+        """Return whether this lock supports code slot events."""
+        return True
+
+    @property
     def connection_check_interval(self) -> timedelta | None:
         """Z-Wave JS exposes config entry state changes, so skip polling."""
         return None
