@@ -14,6 +14,10 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: labeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   label-files:
     name: Label by Files
@@ -25,6 +29,7 @@ jobs:
 
   label-body:
     name: Label by Body
+    needs: label-files
     runs-on: ubuntu-latest
     steps:
       - uses: github/issue-labeler@v3.4
