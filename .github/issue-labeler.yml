@@ -11,6 +11,8 @@ enhancement:
 
 breaking-change:
   - '\[[xX]\]\s*[Bb]reaking [Cc]hange'
+  # Match when breaking change section has content after the HTML comment
+  - '-->\s*\n+[A-Za-z][\s\S]*?## Proposed change'
 
 code-quality:
   - '\[[xX]\]\s*[Cc]ode [Qq]uality'
