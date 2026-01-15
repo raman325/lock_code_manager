@@ -112,6 +112,11 @@ jobs:
           # Checks that must pass IF they run (may be skipped by path filter)
           IF_RUN_PASS: Pytest,HACS,Hassfest,Vitest,Yarn Lint and Build
         run: |
+          # Give workflows time to register their check runs
+          # Longer delay is fine since auto-merge only runs for automated/low-risk PRs
+          echo "Waiting for workflows to register..."
+          sleep 60
+
           IFS=',' read -ra MUST <<< "$MUST_PASS"
           IFS=',' read -ra OPTIONAL <<< "$IF_RUN_PASS"
           ALL_CHECKS=("${MUST[@]}" "${OPTIONAL[@]}")
