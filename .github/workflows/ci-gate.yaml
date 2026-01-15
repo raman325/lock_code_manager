@@ -29,10 +29,6 @@ jobs:
         run: |
           echo "Waiting for all checks on $SHA to complete..."
 
-          # Initial delay to let other workflows start
-          echo "Waiting 60 seconds for other workflows to start..."
-          sleep 60
-
           while true; do
             # Get all check runs for this commit
             CHECKS=$(gh api "repos/$REPO/commits/$SHA/check-runs" \

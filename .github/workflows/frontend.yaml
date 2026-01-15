@@ -5,33 +5,37 @@ name: Frontend
 on:
   push:
     branches: [main]
-    paths:
-      - "**.js"
-      - "**.ts"
-      - "ts/**"
-      - ".eslintrc.cjs"
-      - "package.json"
-      - "rollup.config.js"
-      - "tsconfig.json"
-      - "vitest.config.ts"
-      - ".github/workflows/frontend.yaml"
   pull_request:
     branches: [main]
-    paths:
-      - "**.js"
-      - "**.ts"
-      - "ts/**"
-      - ".eslintrc.cjs"
-      - "package.json"
-      - "rollup.config.js"
-      - "tsconfig.json"
-      - "vitest.config.ts"
-      - ".github/workflows/frontend.yaml"
 
 jobs:
+  check-changes:
+    name: Check Changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - '**.js'
+              - '**.ts'
+              - 'ts/**'
+              - '.eslintrc.cjs'
+              - 'package.json'
+              - 'rollup.config.js'
+              - 'tsconfig.json'
+              - 'vitest.config.ts'
+              - '.github/workflows/frontend.yaml'
+
   lint-and-build:
     # pre-commit.ci skips yarn-lint and yarn-build (Node.js not available), so CI needs this job
     name: Yarn Lint and Build
+    needs: check-changes
+    if: needs.check-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -68,6 +72,8 @@ jobs:
 
   test:
     name: Vitest
+    needs: check-changes
+    if: needs.check-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

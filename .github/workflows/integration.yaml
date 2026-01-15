@@ -5,20 +5,31 @@ name: Integration
 on:
   push:
     branches: [main]
-    paths:
-      - "**.py"
-      - ".github/workflows/integration.yaml"
   pull_request:
     branches: [main]
-    paths:
-      - "**.py"
-      - "requirements*.txt"
-      - "pyproject.toml"
-      - ".github/workflows/integration.yaml"
 
 jobs:
+  check-changes:
+    name: Check Changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**.py'
+              - 'requirements*.txt'
+              - 'pyproject.toml'
+              - '.github/workflows/integration.yaml'
+
   test:
     name: Pytest
+    needs: check-changes
+    if: needs.check-changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -50,6 +61,8 @@ jobs:
 
   hacs:
     name: HACS
+    needs: check-changes
+    if: needs.check-changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -60,6 +73,8 @@ jobs:
 
   hassfest:
     name: Hassfest
+    needs: check-changes
+    if: needs.check-changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
