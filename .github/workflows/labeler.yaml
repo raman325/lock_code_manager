@@ -19,7 +19,7 @@ jobs:
     name: Label by Files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/labeler@v5
+      - uses: actions/labeler@v6
         with:
           sync-labels: true
 
