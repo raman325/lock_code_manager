@@ -110,7 +110,8 @@ jobs:
           # Checks that must exist and pass (always run)
           MUST_PASS: Check Changes
           # Checks that must pass IF they run (may be skipped by path filter)
-          IF_RUN_PASS: Pytest,HACS,Hassfest,Vitest,Yarn Lint and Build
+          # Reusable workflow jobs are prefixed with caller job name
+          IF_RUN_PASS: Python / Pytest,Python / HACS,Python / Hassfest,Frontend / Vitest,Frontend / Yarn Lint and Build
         run: |
           # Give workflows time to register their check runs
           # Longer delay is fine since auto-merge only runs for automated/low-risk PRs
