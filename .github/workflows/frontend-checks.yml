@@ -1,32 +1,8 @@
 ---
-name: Frontend
+name: Frontend Checks
 
-# yamllint disable-line rule:truthy
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.js"
-      - "**.ts"
-      - "ts/**"
-      - ".eslintrc.cjs"
-      - "package.json"
-      - "rollup.config.js"
-      - "tsconfig.json"
-      - "vitest.config.ts"
-      - ".github/workflows/frontend.yaml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "**.js"
-      - "**.ts"
-      - "ts/**"
-      - ".eslintrc.cjs"
-      - "package.json"
-      - "rollup.config.js"
-      - "tsconfig.json"
-      - "vitest.config.ts"
-      - ".github/workflows/frontend.yaml"
+  workflow_call:
 
 jobs:
   lint-and-build:
@@ -66,7 +42,7 @@ jobs:
           script: |
             core.setFailed('Repo is dirty after build! Run yarn build locally before pushing changes.')
 
-  test:
+  vitest:
     name: Vitest
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,16 @@
+# Configuration for github/issue-labeler - body-based labels
+# See: https://github.com/github/issue-labeler
+# Uses regex patterns to match PR/issue body content
+# Note: [xX] matches both lowercase and uppercase X in checkboxes
+---
+bug:
+  - '\[[xX]\]\s*[Bb]ugfix'
+
+enhancement:
+  - '\[[xX]\]\s*[Nn]ew [Ff]eature'
+
+breaking-change:
+  - '\[[xX]\]\s*[Bb]reaking [Cc]hange'
+
+code-quality:
+  - '\[[xX]\]\s*[Cc]ode [Qq]uality'

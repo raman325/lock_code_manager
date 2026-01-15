@@ -99,14 +99,105 @@ jobs:
           ACTOR: ${{ github.event.pull_request.user.login }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
 
-      # Wait for required CI checks (--required avoids deadlock with this workflow)
+      # Wait for specific CI checks (explicit list, not branch protection)
       - name: Wait for CI checks
         if: steps.eligible.outputs.result == 'true'
         timeout-minutes: 30
-        run: gh pr checks "$PR_URL" --watch --fail-fast --required
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          # Checks that must exist and pass (always run)
+          MUST_PASS: Check Changes,HACS,Hassfest
+          # Checks that must pass IF they run (may be skipped by path filter)
+          # Use * suffix for pattern matching (e.g., "Python / Pytest *" matches any version)
+          # yamllint disable-line rule:line-length
+          IF_RUN_PASS: Python / Setup,Python / Ruff,Python / Pytest *,Frontend / Vitest,Frontend / Yarn Lint and Build
+        run: |
+          IFS=',' read -ra MUST <<< "$MUST_PASS"
+          IFS=',' read -ra OPTIONAL <<< "$IF_RUN_PASS"
+          ALL_CHECKS=("${MUST[@]}" "${OPTIONAL[@]}")
+          echo "Must pass: ${MUST[*]}"
+          echo "If run, must pass: ${OPTIONAL[*]}"
+
+          # Fetch all check runs once per iteration
+          fetch_checks() {
+            gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
+              --jq '.check_runs[] | {name: .name, status: .status, conclusion: .conclusion}' \
+              2>/dev/null
+          }
+
+          while true; do
+            ALL_DONE=true
+            ANY_FAILED=false
+            MUST_FOUND=0
+            CHECKS_JSON=$(fetch_checks)
+
+            for CHECK in "${ALL_CHECKS[@]}"; do
+              # Check if this is a pattern (ends with *)
+              if [[ "$CHECK" == *'*' ]]; then
+                PREFIX="${CHECK%\*}"
+                MATCHES=$(echo "$CHECKS_JSON" | jq -s --arg p "$PREFIX" \
+                  '[.[] | select(.name | startswith($p))]')
+              else
+                MATCHES=$(echo "$CHECKS_JSON" | jq -s --arg n "$CHECK" \
+                  '[.[] | select(.name == $n)]')
+              fi
+
+              COUNT=$(echo "$MATCHES" | jq 'length')
+
+              if [ "$COUNT" -eq 0 ]; then
+                echo "$CHECK: not found"
+                continue
+              fi
+
+              # Track if this is a must-pass check
+              for M in "${MUST[@]}"; do
+                if [ "$CHECK" = "$M" ]; then
+                  MUST_FOUND=$((MUST_FOUND + COUNT))
+                  break
+                fi
+              done
+
+              # Check each instance
+              echo "$MATCHES" | jq -c '.[]' | while read -r item; do
+                NAME=$(echo "$item" | jq -r '.name')
+                STATUS=$(echo "$item" | jq -r '.status')
+                CONCLUSION=$(echo "$item" | jq -r '.conclusion')
+
+                if [ "$STATUS" != "completed" ]; then
+                  echo "$NAME: $STATUS"
+                  echo "PENDING" >> /tmp/check_status
+                elif [ "$CONCLUSION" != "success" ] && [ "$CONCLUSION" != "skipped" ]; then
+                  echo "::error::$NAME failed ($CONCLUSION)"
+                  echo "FAILED" >> /tmp/check_status
+                else
+                  echo "$NAME: $CONCLUSION"
+                fi
+              done
+            done
+
+            # Check for failures or pending (subshell writes to temp file)
+            if grep -q "FAILED" /tmp/check_status 2>/dev/null; then
+              rm -f /tmp/check_status
+              exit 1
+            fi
+            if grep -q "PENDING" /tmp/check_status 2>/dev/null; then
+              ALL_DONE=false
+            fi
+            rm -f /tmp/check_status
+
+            if [ "$ALL_DONE" = true ]; then
+              if [ "$MUST_FOUND" -eq 0 ]; then
+                echo "::error::No required checks found - something is wrong"
+                exit 1
+              fi
+              echo "All checks passed! (found $MUST_FOUND required check instances)"
+              break
+            fi
+
+            sleep 30
+          done
 
       # Merge after CI passes
       - name: Merge PR
