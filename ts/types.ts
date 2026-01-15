@@ -184,6 +184,8 @@ export interface CalendarEventInfo {
     active: boolean;
     /** Event end time (ISO datetime) */
     end_time?: string;
+    /** Event start time (ISO datetime) */
+    start_time?: string;
     /** Event title/summary */
     summary?: string;
 }

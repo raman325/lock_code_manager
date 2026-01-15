@@ -56,6 +56,7 @@ from .const import (
     ATTR_CALENDAR_NEXT,
     ATTR_CALENDAR_NEXT_START,
     ATTR_CALENDAR_NEXT_SUMMARY,
+    ATTR_CALENDAR_START_TIME,
     ATTR_CALENDAR_SUMMARY,
     ATTR_CODE,
     ATTR_CODE_LENGTH,
@@ -102,6 +103,7 @@ ERR_NOT_LOADED = "not_loaded"
 
 # Calendar entity state attributes (not exported by HA, defined in CalendarEntity.state_attributes)
 CALENDAR_ATTR_MESSAGE = "message"
+CALENDAR_ATTR_START_TIME = "start_time"
 CALENDAR_ATTR_END_TIME = "end_time"
 
 
@@ -750,6 +752,8 @@ def _get_condition_entity_data(
         if is_active:
             if summary := state.attributes.get(CALENDAR_ATTR_MESSAGE):
                 result[ATTR_CALENDAR][ATTR_CALENDAR_SUMMARY] = summary
+            if start_time := state.attributes.get(CALENDAR_ATTR_START_TIME):
+                result[ATTR_CALENDAR][ATTR_CALENDAR_START_TIME] = start_time
             if end_time := state.attributes.get(CALENDAR_ATTR_END_TIME):
                 result[ATTR_CALENDAR][ATTR_CALENDAR_END_TIME] = end_time
 
