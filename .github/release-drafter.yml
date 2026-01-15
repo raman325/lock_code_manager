@@ -3,63 +3,10 @@ name-template: "$RESOLVED_VERSION"
 tag-template: "$RESOLVED_VERSION"
 change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
 sort-direction: ascending
-autolabeler:
-  - label: 'pre-commit'
-    files:
-      - '.pre-commit-config.yaml'
-  - label: 'javascript'
-    files:
-      - '*.ts'
-      - '*.js'
-      - 'ts/**/*'
-      - '.eslintrc.cjs'
-      - 'tsconfig.json'
-      - 'rollup.config.js'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'yarn.lock'
-  - label: 'python'
-    files:
-      - '*.py'
-      - 'custom_components/**/*.py'
-      - 'tests/**/*.py'
-      - 'tox.ini'
-      - 'requirements*.txt'
-      - 'pyproject.toml'
-      - 'Pipfile'
-      - 'Pipfile.lock'
-  - label: 'github_actions'
-    files:
-      - '.github/workflows/**/*'
-  - label: 'dependencies'
-    files:
-      - 'requirements*.txt'
-      - 'pyproject.toml'
-      - 'Pipfile'
-      - 'Pipfile.lock'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'yarn.lock'
-      - '.pre-commit-config.yaml'
-    body:
-      - '/\[x\] dependency/i'
-  - label: 'documentation'
-    files:
-      - '*.md'
-      - '**/*.md'
-      - 'docs/**/*'
-  - label: 'bug'
-    body:
-      - '/\[x\] bugfix/i'
-  - label: 'enhancement'
-    body:
-      - '/\[x\] new feature/i'
-  - label: 'breaking-change'
-    body:
-      - '/\[x\] breaking change/i'
-  - label: 'code-quality'
-    body:
-      - '/\[x\] code quality/i'
+
+# Note: Autolabeling is handled by .github/workflows/labeler.yaml
+# using actions/labeler (file-based) and github/issue-labeler (body-based)
+# These support sync-labels to remove labels when patterns no longer match.
 
 version-resolver:
   major:

@@ -1,0 +1,54 @@
+# Configuration for actions/labeler - file-based labels
+# See: https://github.com/actions/labeler
+---
+pre-commit:
+  - changed-files:
+      - any-glob-to-any-file: '.pre-commit-config.yaml'
+
+javascript:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '*.ts'
+          - '*.js'
+          - 'ts/**/*'
+          - '.eslintrc.cjs'
+          - 'tsconfig.json'
+          - 'rollup.config.js'
+          - 'package.json'
+          - 'package-lock.json'
+          - 'yarn.lock'
+
+python:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '*.py'
+          - 'custom_components/**/*.py'
+          - 'tests/**/*.py'
+          - 'tox.ini'
+          - 'requirements*.txt'
+          - 'pyproject.toml'
+          - 'Pipfile'
+          - 'Pipfile.lock'
+
+github_actions:
+  - changed-files:
+      - any-glob-to-any-file: '.github/workflows/**/*'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'requirements*.txt'
+          - 'pyproject.toml'
+          - 'Pipfile'
+          - 'Pipfile.lock'
+          - 'package.json'
+          - 'package-lock.json'
+          - 'yarn.lock'
+          - '.pre-commit-config.yaml'
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '*.md'
+          - '**/*.md'
+          - 'docs/**/*'

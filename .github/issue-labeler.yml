@@ -1,0 +1,18 @@
+# Configuration for github/issue-labeler - body-based labels
+# See: https://github.com/github/issue-labeler
+# Uses regex patterns to match PR/issue body content
+---
+dependencies:
+  - '\[x\]\s*[Dd]ependency'
+
+bug:
+  - '\[x\]\s*[Bb]ugfix'
+
+enhancement:
+  - '\[x\]\s*[Nn]ew [Ff]eature'
+
+breaking-change:
+  - '\[x\]\s*[Bb]reaking [Cc]hange'
+
+code-quality:
+  - '\[x\]\s*[Cc]ode [Qq]uality'
