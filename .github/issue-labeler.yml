@@ -10,12 +10,11 @@ enhancement:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Nn]ew [Ff]eature'
 
 breaking-change:
-  # Checkbox in Type of change section
-  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Bb]reaking [Cc]hange'
-  # Breaking change section with content after HTML comment
-  - '# Breaking change(.|[\r\n])*?-->\s*\n+[A-Z][a-z]+(.|[\r\n])*?## Proposed change'
-  # Breaking change section with HTML comment removed
-  - '# Breaking change\s*\n+[A-Z][a-z]+(.|[\r\n])*?## Proposed change'
+  # Simple checkbox pattern - matches checked Breaking change checkbox
+  - '- \[x\] Breaking change'
+  - '- \[X\] Breaking change'
+  # Breaking change section header followed by content
+  - '# Breaking change\n\n[A-Z]'
 
 code-quality:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Cc]ode [Qq]uality'
