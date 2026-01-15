@@ -21,11 +21,13 @@ coverage:
         paths:
           - custom_components/
           - tests/
+        target: 90%
       typescript:
         flags:
           - typescript
         paths:
           - ts/
+        target: 90%
 
 flag_management:
   default_rules:
