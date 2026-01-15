@@ -1,7 +1,10 @@
 # Configuration for github/issue-labeler - body-based labels
 # See: https://github.com/github/issue-labeler
 # Uses regex patterns to match PR/issue body content
-# Checkbox patterns use (.|[\r\n])*? for cross-line matching ([\s\S] may not work in all engines)
+#
+# IMPORTANT: Multiple patterns in an array use AND logic (all must match).
+# Use regex alternation (|) within a single pattern for OR logic.
+# Patterns use (.|[\r\n])*? for cross-line matching ([\s\S] may not work in all engines)
 ---
 bug:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Bb]ugfix'
@@ -10,11 +13,10 @@ enhancement:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Nn]ew [Ff]eature'
 
 breaking-change:
-  # Simple checkbox pattern - matches checked Breaking change checkbox
-  - '- \[x\] Breaking change'
-  - '- \[X\] Breaking change'
-  # Breaking change section header followed by content
-  - '# Breaking change\n\n[A-Z]'
+  # OR logic: checkbox checked OR section has content
+  # Pattern 1: Checked checkbox after "Type of change" header
+  # Pattern 2: "# Breaking change" section with actual content (starts with capital letter)
+  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*Breaking change|# Breaking change\n\n[A-Z]'
 
 code-quality:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Cc]ode [Qq]uality'
