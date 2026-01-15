@@ -31,7 +31,7 @@ on:
 jobs:
   lint-and-build:
     # pre-commit.ci skips yarn-lint and yarn-build (Node.js not available), so CI needs this job
-    name: Lint and Build
+    name: Yarn Lint and Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
