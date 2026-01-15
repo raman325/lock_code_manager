@@ -10,7 +10,8 @@ enhancement:
   - '\[[xX]\]\s*[Nn]ew [Ff]eature'
 
 breaking-change:
-  - '\[[xX]\]\s*[Bb]reaking [Cc]hange'
+  # Checkbox pattern - requires "- " prefix to avoid matching inline code examples
+  - '- \[[xX]\]\s*[Bb]reaking [Cc]hange'
   # Match breaking change section with content after HTML comment.
   # Uses ^[\s\S]*? to find FIRST # Breaking change, requires ## Proposed change AFTER.
   # This ignores any # Breaking change in code blocks after ## Proposed change.
