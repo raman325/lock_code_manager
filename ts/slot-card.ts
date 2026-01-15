@@ -752,8 +752,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           class="header-last-used ${lastUsed ? 'clickable' : ''}"
                           title=${lastUsed
                               ? this._data?.last_used_lock
-                                  ? `Used on ${this._data.last_used_lock} - Click to view history`
-                                  : 'Click to view PIN usage history'
+                                  ? `Used on ${this._data.last_used_lock} - Click for details`
+                                  : 'Click for PIN usage details'
                               : 'This PIN has never been used'}
                           @click=${() => lastUsed && this._navigateToEventHistory()}
                       >
@@ -774,10 +774,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _navigateToEventHistory(): void {
         const eventEntityId = this._data?.event_entity_id;
         if (!eventEntityId) return;
-        // Navigate to entity history
-        const url = `/history?entity_id=${encodeURIComponent(eventEntityId)}`;
-        history.pushState(null, '', url);
-        window.dispatchEvent(new CustomEvent('location-changed'));
+        // Open the more-info dialog for this event entity
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: eventEntityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderPrimaryControls(
