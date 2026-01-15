@@ -13,7 +13,7 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "github_actions"
+      - "github-config"
   - package-ecosystem: pip
     directory: "/" # Location of package manifests
     schedule:

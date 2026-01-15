@@ -30,7 +30,7 @@ python:
           - 'Pipfile'
           - 'Pipfile.lock'
 
-github_actions:
+github-config:
   - changed-files:
       - any-glob-to-any-file: '.github/**/*'
 
