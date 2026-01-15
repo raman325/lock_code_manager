@@ -11,10 +11,11 @@ enhancement:
 
 breaking-change:
   - '\[[xX]\]\s*[Bb]reaking [Cc]hange'
-  # Match when breaking change section (at start of body) has content after HTML comment
-  - '^# Breaking change[\s\S]*?-->\s*\n+[A-Za-z][\s\S]*?## Proposed change'
-  # Match when HTML comment is removed and content added directly (must be at body start)
-  - '^# Breaking change\s*\n+[A-Za-z][\s\S]*?## Proposed change'
+  # Match breaking change section with content after HTML comment
+  # Requires: header at line start, content starts with capitalized word (natural language)
+  - '\n# Breaking change[\s\S]*?-->\s*\n+[A-Z][a-z]+\s[\s\S]*?\n## Proposed change'
+  # Match when HTML comment is removed and content added directly
+  - '\n# Breaking change\s*\n+[A-Z][a-z]+\s[\s\S]*?\n## Proposed change'
 
 code-quality:
   - '\[[xX]\]\s*[Cc]ode [Qq]uality'
