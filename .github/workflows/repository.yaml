@@ -7,6 +7,7 @@ on:
     branches: [main]
   pull_request:
     types:
+      - edited
       - labeled
       - opened
       - reopened
@@ -16,6 +17,7 @@ on:
   # with elevated permissions required for pull-requests: write
   pull_request_target:
     types:
+      - edited
       - labeled
       - opened
       - reopened

@@ -4,6 +4,8 @@
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
 - Test visual editor for both cards.
+- Explore alternative autolabeler workflows that can remove labels when patterns no longer
+  match (release-drafter only adds labels, never removes them).
 
 ## Testing
 
