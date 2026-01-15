@@ -112,7 +112,8 @@ jobs:
           # Checks that must pass IF they run (may be skipped by path filter)
           # Reusable workflow jobs are prefixed with caller job name
           # yamllint disable-line rule:line-length
-          IF_RUN_PASS: Python / Ruff,Python / Pytest (3.13),Python / Pytest (3.14),Frontend / Vitest,Frontend / Yarn Lint and Build
+          # yamllint disable-line rule:line-length
+          IF_RUN_PASS: Python / Setup,Python / Ruff,Python / Pytest (3.13),Python / Pytest (3.14),Frontend / Vitest,Frontend / Yarn Lint and Build
         run: |
           IFS=',' read -ra MUST <<< "$MUST_PASS"
           IFS=',' read -ra OPTIONAL <<< "$IF_RUN_PASS"

@@ -4,16 +4,37 @@ name: Python Checks
 on:
   workflow_call:
 
+env:
+  # Target Python version for coverage and static analysis
+  TARGET_PYTHON: "3.13"
+  # Additional Python versions to test (JSON array, can be empty: '[]')
+  OTHER_PYTHON_VERSIONS: '["3.14"]'
+
 jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      target-python: ${{ env.TARGET_PYTHON }}
+      python-versions: ${{ steps.versions.outputs.matrix }}
+    steps:
+      - name: Build version matrix
+        id: versions
+        run: |
+          # Combine target with other versions into a JSON array
+          MATRIX=$(echo '${{ env.OTHER_PYTHON_VERSIONS }}' | jq -c '. + ["${{ env.TARGET_PYTHON }}"] | unique | sort')
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
   ruff:
     name: Ruff
+    needs: setup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: ${{ needs.setup.outputs.target-python }}
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -27,11 +48,12 @@ jobs:
 
   pytest:
     name: Pytest (${{ matrix.python-version }})
+    needs: setup
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.14"]
+        python-version: ${{ fromJSON(needs.setup.outputs.python-versions) }}
     steps:
       - uses: actions/checkout@v6
       - name: Set up Python ${{ matrix.python-version }}
@@ -55,7 +77,7 @@ jobs:
           uv pip install --system pytest-cov pytest-github-actions-annotate-failures
           pytest ./tests/ --cov=custom_components/lock_code_manager/ --cov-report=xml
       - name: Upload coverage to Codecov
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == needs.setup.outputs.target-python
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
