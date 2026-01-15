@@ -1,16 +1,21 @@
 # Configuration for github/issue-labeler - body-based labels
 # See: https://github.com/github/issue-labeler
 # Uses regex patterns to match PR/issue body content
-# Note: [xX] matches both lowercase and uppercase X in checkboxes
+# All checkbox patterns require ## Type of change header first to avoid matching examples
 ---
 bug:
-  - '\[[xX]\]\s*[Bb]ugfix'
+  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Bb]ugfix'
 
 enhancement:
-  - '\[[xX]\]\s*[Nn]ew [Ff]eature'
+  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Nn]ew [Ff]eature'
 
 breaking-change:
-  - '\[[xX]\]\s*[Bb]reaking [Cc]hange'
+  # Checkbox in Type of change section
+  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Bb]reaking [Cc]hange'
+  # Breaking change section with content after HTML comment
+  - '^[\s\S]*?# Breaking change[\s\S]*?-->\s*\n+[A-Z][a-z]+[\s\S]*?## Proposed change'
+  # Breaking change section with HTML comment removed
+  - '^[\s\S]*?# Breaking change\s*\n+[A-Z][a-z]+[\s\S]*?## Proposed change'
 
 code-quality:
-  - '\[[xX]\]\s*[Cc]ode [Qq]uality'
+  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Cc]ode [Qq]uality'

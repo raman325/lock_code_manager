@@ -5,24 +5,11 @@ name: Repository
 on:
   push:
     branches: [main]
-  pull_request:
-    types:
-      - edited
-      - labeled
-      - opened
-      - reopened
-      - synchronize
-      - unlabeled
-  # pull_request_target is needed for fork PRs - it runs in the base repo context
-  # with elevated permissions required for pull-requests: write
+  # pull_request_target runs in base repo context with write permissions,
+  # needed for fork PRs. Safe for auto-merge since it only runs for trusted
+  # actors (dependabot, pre-commit-ci, or manually labeled PRs).
   pull_request_target:
-    types:
-      - edited
-      - labeled
-      - opened
-      - reopened
-      - synchronize
-      - unlabeled
+    types: [edited, labeled, opened, reopened, synchronize, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -54,10 +41,10 @@ jobs:
   auto-merge:
     name: Auto Merge
     runs-on: ubuntu-latest
-    # Only run on pull_request events (not push, pull_request_target, or workflow_dispatch)
+    # Only run on pull_request_target events (not push or workflow_dispatch)
     # and only for dependabot, pre-commit-ci, or PRs with auto-merge label
     if: >-
-      github.event_name == 'pull_request' && (
+      github.event_name == 'pull_request_target' && (
         github.event.pull_request.user.login == 'dependabot[bot]' ||
         github.event.pull_request.user.login == 'pre-commit-ci[bot]' ||
         contains(github.event.pull_request.labels.*.name, 'auto-merge')
