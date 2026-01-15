@@ -65,8 +65,44 @@ jobs:
             fi
 
             if [ "$IN_PROGRESS" -eq 0 ]; then
-              echo "All checks completed successfully!"
-              break
+              echo "All checks appear complete. Waiting 60s for late arrivals (e.g., Codecov)..."
+              sleep 60
+
+              # Re-check after settle period
+              CHECKS=$(gh api "repos/$REPO/commits/$SHA/check-runs" \
+                --jq '.check_runs | map({name: .name, status: .status, conclusion: .conclusion})')
+
+              IN_PROGRESS=$(echo "$CHECKS" | jq --arg current "$CURRENT_JOB" \
+                '[.[] | select(.name != $current and .status != "completed")] | length')
+
+              FAILED=$(echo "$CHECKS" | jq --arg current "$CURRENT_JOB" '
+                [.[] | select(
+                  .name != $current and
+                  .status == "completed" and
+                  .conclusion != "success" and
+                  .conclusion != "skipped" and
+                  .conclusion != "neutral"
+                )] | length')
+
+              if [ "$FAILED" -gt 0 ]; then
+                echo "::error::One or more checks failed after settle period"
+                echo "$CHECKS" | jq --arg current "$CURRENT_JOB" '
+                  .[] | select(
+                    .name != $current and
+                    .status == "completed" and
+                    .conclusion != "success" and
+                    .conclusion != "skipped" and
+                    .conclusion != "neutral"
+                  )'
+                exit 1
+              fi
+
+              if [ "$IN_PROGRESS" -eq 0 ]; then
+                echo "All checks completed successfully!"
+                break
+              fi
+
+              echo "New checks appeared, continuing to wait..."
             fi
 
             echo "Waiting 30 seconds..."
