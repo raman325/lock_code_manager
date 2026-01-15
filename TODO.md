@@ -9,8 +9,6 @@
   - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
   - Fix existing type errors (~30 errors as of Jan 2026)
 - Test visual editor for both cards.
-- Explore alternative autolabeler workflows that can remove labels when patterns no longer
-  match (release-drafter only adds labels, never removes them).
 
 ## Testing
 
