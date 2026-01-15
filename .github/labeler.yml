@@ -32,7 +32,9 @@ python:
 
 github-config:
   - changed-files:
-      - any-glob-to-any-file: '.github/**/*'
+      - any-glob-to-any-file:
+          - '.github/**/*'
+          - 'codecov.yml'
 
 dependencies:
   - changed-files:
