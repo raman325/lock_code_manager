@@ -1,27 +1,72 @@
 ---
-name: auto-merge
+name: Repository
 
-"on":
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types:
+      - labeled
+      - opened
+      - reopened
+      - synchronize
+      - unlabeled
+  # pull_request_target is needed for fork PRs - it runs in the base repo context
+  # with elevated permissions required for pull-requests: write
+  pull_request_target:
+    types:
+      - labeled
+      - opened
+      - reopened
+      - synchronize
+      - unlabeled
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
-
-# Cancel in-progress runs for the same PR (only latest should merge)
-concurrency:
-  group: auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  auto-merge:
+  update-release-draft:
+    name: Update Release Draft
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
-    # Run for dependabot, pre-commit-ci, or PRs with auto-merge label
+    concurrency:
+      # Use head_ref for PRs (branch name) or ref for pushes (refs/heads/main)
+      # This ensures PR updates are serialized while different PRs run concurrently
+      group: release-drafter-${{ github.head_ref || github.ref }}
+      cancel-in-progress: false
+    steps:
+      # Give GitHub API time to index newly merged PRs before querying
+      - name: Wait for PR indexing
+        if: github.event_name == 'push'
+        run: sleep 10
+      - uses: release-drafter/release-drafter@v6
+        with:
+          commitish: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-merge:
+    name: Auto Merge
+    runs-on: ubuntu-latest
+    # Only run on pull_request events (not push, pull_request_target, or workflow_dispatch)
+    # and only for dependabot, pre-commit-ci, or PRs with auto-merge label
     if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' ||
-      github.event.pull_request.user.login == 'pre-commit-ci[bot]' ||
-      contains(github.event.pull_request.labels.*.name, 'auto-merge')
+      github.event_name == 'pull_request' && (
+        github.event.pull_request.user.login == 'dependabot[bot]' ||
+        github.event.pull_request.user.login == 'pre-commit-ci[bot]' ||
+        contains(github.event.pull_request.labels.*.name, 'auto-merge')
+      )
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      # Cancel in-progress runs for the same PR (only latest should merge)
+      group: auto-merge-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       # Fetch Dependabot metadata (only runs for dependabot PRs)
       - name: Fetch Dependabot metadata

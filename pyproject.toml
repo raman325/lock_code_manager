@@ -1,3 +1,8 @@
+[project]
+name = "lock-code-manager"
+version = "0.0.0"
+requires-python = ">=3.13"
+
 [tool.ruff]
 lint.select = ["D", "E", "F", "G", "I", "PLC", "PLE", "PLR", "PLW", "UP", "W"]
 lint.ignore = [

@@ -7,11 +7,13 @@ coverage:
         paths:
           - custom_components/
           - tests/
+        threshold: 1%
       typescript:
         flags:
           - typescript
         paths:
           - ts/
+        threshold: 1%
     patch:
       python:
         flags:
