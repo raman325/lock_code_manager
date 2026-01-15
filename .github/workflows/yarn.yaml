@@ -12,6 +12,7 @@ on:
       - "package.json"
       - "rollup.config.js"
       - "tsconfig.json"
+      - ".github/workflows/yarn.yaml"
   pull_request:
     branches: [main]
     paths:
@@ -22,6 +23,7 @@ on:
       - "package.json"
       - "rollup.config.js"
       - "tsconfig.json"
+      - ".github/workflows/yarn.yaml"
 
 jobs:
   yarn:
