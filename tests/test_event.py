@@ -13,6 +13,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTION_TEXT,
@@ -23,7 +24,10 @@ from custom_components.lock_code_manager.const import (
     ATTR_TO,
     DOMAIN,
 )
-from custom_components.lock_code_manager.event import ATTR_UNSUPPORTED_LOCKS
+from custom_components.lock_code_manager.event import (
+    ATTR_UNSUPPORTED_LOCKS,
+    LockCodeManagerEventExtraStoredData,
+)
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import (
@@ -149,5 +153,86 @@ async def test_event_entity_unavailable_when_no_supported_locks(
 
         # Entity should be unavailable when no locks support code slot events
         assert state.state == STATE_UNAVAILABLE
+
+        await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_event_without_lock_entity_id_logs_warning(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog,
+):
+    """Test that event without lock entity ID logs a warning.
+
+    Note: We call _handle_event directly because the event filter accesses
+    ATTR_ENTITY_ID directly (would raise KeyError before reaching handler).
+    This tests the defensive code in _handle_event.
+    """
+    ent_reg = er.async_get(hass)
+    entry = ent_reg.async_get(SLOT_1_EVENT_ENTITY)
+    assert entry
+    entity = hass.data["entity_components"]["event"].get_entity(entry.entity_id)
+    assert entity
+
+    # Call _handle_event directly with event missing ATTR_ENTITY_ID
+    entity._handle_event(Event("test_event", {"slot_num": 1}))
+
+    assert "Received event without lock entity ID" in caplog.text
+
+
+async def test_extra_stored_data_from_dict_with_invalid_data():
+    """Test that from_dict returns None for invalid data."""
+    # Missing required key
+    result = LockCodeManagerEventExtraStoredData.from_dict({})
+    assert result is None
+
+    # Valid data
+    result = LockCodeManagerEventExtraStoredData.from_dict(
+        {"unsupported_locks": ["lock.test"]}
+    )
+    assert result is not None
+    assert result.unsupported_locks == ["lock.test"]
+
+
+async def test_unsupported_locks_attribute_with_mixed_locks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test unsupported_locks attribute when some locks don't support events."""
+
+    class MockLCMLockMixed(MockLCMLock):
+        """Mock lock where support depends on entity ID."""
+
+        @property
+        def supports_code_slot_events(self) -> bool:
+            """Only lock 1 supports events."""
+            return self.lock.entity_id == LOCK_1_ENTITY_ID
+
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockMixed},
+    ):
+        config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Mixed"
+        )
+        config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_EVENT_ENTITY)
+        assert state
+
+        # Event entity should be available (lock 1 supports events)
+        assert state.state != STATE_UNAVAILABLE
+
+        # event_types should only include lock 1
+        event_types = state.attributes.get("event_types", [])
+        assert LOCK_1_ENTITY_ID in event_types
+        assert LOCK_2_ENTITY_ID not in event_types
+
+        # unsupported_locks should include lock 2
+        unsupported = state.attributes.get(ATTR_UNSUPPORTED_LOCKS, [])
+        assert LOCK_2_ENTITY_ID in unsupported
 
         await hass.config_entries.async_unload(config_entry.entry_id)
