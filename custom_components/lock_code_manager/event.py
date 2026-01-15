@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import logging
-from typing import Any, Self
+from typing import Any
 
 from homeassistant.components.event import ATTR_EVENT_TYPE, EventEntity
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import ExtraStoredData
 
 from .const import EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
 from .data import LockCodeManagerConfigEntry
@@ -21,25 +19,6 @@ from .providers import BaseLock
 _LOGGER = logging.getLogger(__name__)
 
 ATTR_UNSUPPORTED_LOCKS = "unsupported_locks"
-
-
-@dataclass
-class LockCodeManagerEventExtraStoredData(ExtraStoredData):
-    """Extra stored data for lock code manager event entity."""
-
-    unsupported_locks: list[str]
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return a dict representation of the data."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, restored: dict[str, Any]) -> Self | None:
-        """Initialize from a dict."""
-        try:
-            return cls(restored["unsupported_locks"])
-        except KeyError:
-            return None
 
 
 async def async_setup_entry(
@@ -93,8 +72,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
             self, hass, ent_reg, config_entry, slot_num, key
         )
         self._attr_name = None
-        # Track unsupported locks (restored from extra stored data on startup)
-        self._unsupported_locks: list[str] = []
 
     def _get_supported_locks(self) -> list[BaseLock]:
         """Get locks that support code slot events."""
@@ -103,12 +80,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     def _get_unsupported_locks(self) -> list[BaseLock]:
         """Get locks that don't support code slot events."""
         return [lock for lock in self.locks if not lock.supports_code_slot_events]
-
-    def _update_unsupported_locks(self) -> None:
-        """Update the cached list of unsupported lock entity IDs."""
-        self._unsupported_locks = [
-            lock.lock.entity_id for lock in self._get_unsupported_locks()
-        ]
 
     def _compute_event_types(self) -> list[str]:
         """Compute current event_types from supported locks.
@@ -151,24 +122,13 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         """Return extra state attributes.
 
         Includes unsupported_locks list for locks that can't fire code slot events.
+        Computed dynamically to reflect any changes in lock capabilities.
         """
         attrs: dict[str, Any] = {}
-        if self._unsupported_locks:
-            attrs[ATTR_UNSUPPORTED_LOCKS] = self._unsupported_locks
+        unsupported = [lock.lock.entity_id for lock in self._get_unsupported_locks()]
+        if unsupported:
+            attrs[ATTR_UNSUPPORTED_LOCKS] = unsupported
         return attrs
-
-    @property
-    def extra_restore_state_data(self) -> LockCodeManagerEventExtraStoredData:
-        """Return extra data to be stored for restoration."""
-        return LockCodeManagerEventExtraStoredData(self._unsupported_locks)
-
-    async def _async_get_last_extra_data(
-        self,
-    ) -> LockCodeManagerEventExtraStoredData | None:
-        """Get last extra stored data."""
-        if (restored := await self.async_get_last_extra_data()) is None:
-            return None
-        return LockCodeManagerEventExtraStoredData.from_dict(restored.as_dict())
 
     @callback
     def _handle_event(self, event: Event) -> None:
@@ -188,16 +148,14 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     def _handle_add_locks(self, locks: list[BaseLock]) -> None:
         """Handle lock entities being added."""
         super()._handle_add_locks(locks)
-        # Update cached unsupported locks and state to reflect new event_types
-        self._update_unsupported_locks()
+        # Write state to reflect new event_types and unsupported_locks
         self.async_write_ha_state()
 
     @callback
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity being removed."""
         super()._handle_remove_lock(lock_entity_id)
-        # Update cached unsupported locks and state to reflect new event_types
-        self._update_unsupported_locks()
+        # Write state to reflect new event_types and unsupported_locks
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
@@ -205,15 +163,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         # EventEntity.async_added_to_hass restores __last_event_type from stored data
         await EventEntity.async_added_to_hass(self)
-
-        # Restore unsupported_locks from extra stored data
-        if restored := await self._async_get_last_extra_data():
-            self._unsupported_locks = restored.unsupported_locks
-
-        # Update unsupported locks from current locks if locks are available
-        # (may override restored state if locks have changed since last run)
-        if self.locks:
-            self._update_unsupported_locks()
 
         # Listen for lock state changed events
         self.async_on_remove(

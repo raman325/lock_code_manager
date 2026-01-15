@@ -24,10 +24,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_TO,
     DOMAIN,
 )
-from custom_components.lock_code_manager.event import (
-    ATTR_UNSUPPORTED_LOCKS,
-    LockCodeManagerEventExtraStoredData,
-)
+from custom_components.lock_code_manager.event import ATTR_UNSUPPORTED_LOCKS
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import (
@@ -179,29 +176,6 @@ async def test_event_without_lock_entity_id_logs_warning(
     entity._handle_event(Event("test_event", {"slot_num": 1}))
 
     assert "Received event without lock entity ID" in caplog.text
-
-
-async def test_extra_stored_data_from_dict_with_invalid_data():
-    """Test that from_dict returns None for invalid data."""
-    # Missing required key
-    result = LockCodeManagerEventExtraStoredData.from_dict({})
-    assert result is None
-
-    # Valid data
-    result = LockCodeManagerEventExtraStoredData.from_dict(
-        {"unsupported_locks": ["lock.test"]}
-    )
-    assert result is not None
-    assert result.unsupported_locks == ["lock.test"]
-
-
-async def test_extra_stored_data_as_dict():
-    """Test that as_dict returns the correct dict representation."""
-    data = LockCodeManagerEventExtraStoredData(
-        unsupported_locks=["lock.test1", "lock.test2"]
-    )
-    result = data.as_dict()
-    assert result == {"unsupported_locks": ["lock.test1", "lock.test2"]}
 
 
 async def test_handle_add_locks_updates_state(
