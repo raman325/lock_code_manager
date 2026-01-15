@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.event import ATTR_EVENT_TYPE, EventEntity
+from homeassistant.components.event import EventEntity
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -79,25 +79,8 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
     @property
     def event_types(self) -> list[str]:
-        """Return supported event types (lock entity IDs).
-
-        Includes supported lock entity IDs plus the last event type if it's
-        from a lock that was removed (to preserve history until next event).
-        """
-        supported_lock_ids = {
-            lock.lock.entity_id for lock in self._get_supported_locks()
-        }
-
-        # Include last event type if it exists and isn't in current locks
-        # This preserves history even if a lock was removed
-        # state_attributes contains {ATTR_EVENT_TYPE: last_event_type} from EventEntity
-        # Defensive check: state_attributes may be None during early initialization
-        attrs = self.state_attributes or {}
-        last_event_type = attrs.get(ATTR_EVENT_TYPE)
-        if last_event_type and last_event_type not in supported_lock_ids:
-            return list(supported_lock_ids | {last_event_type})
-
-        return list(supported_lock_ids)
+        """Return supported event types (lock entity IDs)."""
+        return [lock.lock.entity_id for lock in self._get_supported_locks()]
 
     @property
     def available(self) -> bool:
