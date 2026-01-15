@@ -39,8 +39,8 @@ jobs:
               - '.github/workflows/integration.yaml'
               - '.github/workflows/frontend-checks.yml'
 
-  python:
-    name: Python
+  integration:
+    name: Integration
     needs: check-changes
     if: needs.check-changes.outputs.python == 'true'
     uses: ./.github/workflows/python-checks.yml
