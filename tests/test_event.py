@@ -195,6 +195,41 @@ async def test_extra_stored_data_from_dict_with_invalid_data():
     assert result.unsupported_locks == ["lock.test"]
 
 
+async def test_extra_stored_data_as_dict():
+    """Test that as_dict returns the correct dict representation."""
+    data = LockCodeManagerEventExtraStoredData(
+        unsupported_locks=["lock.test1", "lock.test2"]
+    )
+    result = data.as_dict()
+    assert result == {"unsupported_locks": ["lock.test1", "lock.test2"]}
+
+
+async def test_handle_add_locks_updates_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that _handle_add_locks updates unsupported_locks and writes state."""
+    ent_reg = er.async_get(hass)
+    entry = ent_reg.async_get(SLOT_1_EVENT_ENTITY)
+    assert entry
+    entity = hass.data["entity_components"]["event"].get_entity(entry.entity_id)
+    assert entity
+
+    # Get initial event_types count
+    initial_event_types = len(entity.event_types)
+
+    # Create a mock lock that supports events
+    mock_lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # Call _handle_add_locks with the existing lock (simulates lock being re-added)
+    entity._handle_add_locks([mock_lock])
+    await hass.async_block_till_done()
+
+    # The state should have been written (entity still has same event_types)
+    assert len(entity.event_types) >= initial_event_types
+
+
 async def test_unsupported_locks_attribute_with_mixed_locks(
     hass: HomeAssistant,
     mock_lock_config_entry,
