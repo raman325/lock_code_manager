@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       python: ${{ steps.filter.outputs.python }}
+      hacs: ${{ steps.filter.outputs.hacs }}
+      hassfest: ${{ steps.filter.outputs.hassfest }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v6
@@ -27,6 +29,14 @@ jobs:
               - 'pyproject.toml'
               - '.github/workflows/integration.yaml'
               - '.github/workflows/python-checks.yml'
+            hacs:
+              - 'hacs.json'
+              - 'README.md'
+              - 'custom_components/**'
+              - '.github/workflows/integration.yaml'
+            hassfest:
+              - 'custom_components/**'
+              - '.github/workflows/integration.yaml'
             frontend:
               - '**.js'
               - '**.ts'
@@ -39,12 +49,33 @@ jobs:
               - '.github/workflows/integration.yaml'
               - '.github/workflows/frontend-checks.yml'
 
-  integration:
-    name: Integration
+  python:
+    name: Python
     needs: check-changes
     if: needs.check-changes.outputs.python == 'true'
     uses: ./.github/workflows/python-checks.yml
     secrets: inherit
+
+  hacs:
+    name: HACS
+    needs: check-changes
+    if: needs.check-changes.outputs.hacs == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: HACS Action
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  hassfest:
+    name: Hassfest
+    needs: check-changes
+    if: needs.check-changes.outputs.hassfest == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: home-assistant/actions/hassfest@master
 
   frontend:
     name: Frontend
