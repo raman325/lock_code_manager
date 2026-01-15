@@ -1,5 +1,5 @@
 ---
-name: Python
+name: Integration
 
 # yamllint disable-line rule:truthy
 on:
@@ -7,29 +7,25 @@ on:
     branches: [main]
     paths:
       - "**.py"
-      - ".github/workflows/python.yaml"
+      - ".github/workflows/integration.yaml"
   pull_request:
     branches: [main]
     paths:
       - "**.py"
       - "requirements*.txt"
       - "pyproject.toml"
-      - ".github/workflows/python.yaml"
+      - ".github/workflows/integration.yaml"
 
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.13"]
-
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -51,3 +47,20 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python
           files: coverage.xml
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: HACS Action
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  hassfest:
+    name: Hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: home-assistant/actions/hassfest@master
