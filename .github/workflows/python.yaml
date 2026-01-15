@@ -1,5 +1,5 @@
 ---
-name: Pytest
+name: Python
 
 # yamllint disable-line rule:truthy
 on:
@@ -7,18 +7,18 @@ on:
     branches: [main]
     paths:
       - "**.py"
-      - ".github/workflows/pytest.yaml"
+      - ".github/workflows/python.yaml"
   pull_request:
     branches: [main]
     paths:
       - "**.py"
       - "requirements*.txt"
       - "pyproject.toml"
-      - ".github/workflows/pytest.yaml"
+      - ".github/workflows/python.yaml"
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }} Test
+    name: Test
     runs-on: ubuntu-latest
     strategy:
       matrix:
