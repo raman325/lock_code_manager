@@ -8,7 +8,7 @@ from typing import Any
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback, split_entity_id
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -72,7 +72,7 @@ def get_locks_from_targets(
     invalid_entities: set[str] = set()
     unmanaged_entities: set[str] = set()
     for entity_id in entity_ids:
-        domain = entity_id.split(".", 1)[0] if "." in entity_id else ""
+        domain = split_entity_id(entity_id)[0]
         if domain != LOCK_DOMAIN:
             invalid_entities.add(entity_id)
             continue

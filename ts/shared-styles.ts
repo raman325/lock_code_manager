@@ -253,6 +253,11 @@ export const lcmCollapsibleStyles = css`
         color: var(--text-primary-color, #fff);
     }
 
+    .collapsible-badge.muted {
+        background: var(--lcm-section-bg);
+        color: var(--secondary-text-color);
+    }
+
     .collapsible-chevron {
         --mdc-icon-size: 20px;
         color: var(--secondary-text-color);

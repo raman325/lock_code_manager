@@ -10,10 +10,9 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
@@ -25,7 +24,7 @@ from homeassistant.util import slugify
 
 from . import providers
 from .const import (
-    CONF_CALENDAR,
+    CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
     CONF_NUM_SLOTS,
     CONF_NUMBER_OF_USES,
@@ -44,8 +43,8 @@ UI_CODE_SLOT_SCHEMA = vol.Schema(
         vol.Optional(CONF_NAME): cv.string,
         vol.Optional(CONF_PIN): cv.string,
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
-        vol.Optional(CONF_CALENDAR): sel.EntitySelector(
-            sel.EntitySelectorConfig(domain=CALENDAR_DOMAIN)
+        vol.Optional(CONF_ENTITY_ID): sel.EntitySelector(
+            sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
         ),
         vol.Optional(CONF_NUMBER_OF_USES): sel.TextSelector(
             sel.TextSelectorConfig(type=sel.TextSelectorType.NUMBER)
@@ -119,7 +118,7 @@ def _check_common_slots(
 class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Lock Code Manager."""
 
-    VERSION = 1
+    VERSION = 2
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self) -> None:

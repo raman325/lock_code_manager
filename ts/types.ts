@@ -184,6 +184,8 @@ export interface CalendarEventInfo {
     active: boolean;
     /** Event end time (ISO datetime) */
     end_time?: string;
+    /** Event start time (ISO datetime) */
+    start_time?: string;
     /** Event title/summary */
     summary?: string;
 }
@@ -196,6 +198,29 @@ export interface CalendarNextEventInfo {
     summary?: string;
 }
 
+/** Condition entity information (generic for any supported domain) */
+export interface ScheduleInfo {
+    /** Next state change time (ISO timestamp) - when schedule will toggle on/off */
+    next_event?: string;
+}
+
+export interface ConditionEntityInfo {
+    /** Calendar-specific data (only present when domain is 'calendar') */
+    calendar?: CalendarEventInfo;
+    /** Next calendar event (only present when domain is 'calendar' and state is off) */
+    calendar_next?: CalendarNextEventInfo;
+    /** Entity ID of the condition entity */
+    condition_entity_id: string;
+    /** Domain of the entity (calendar, binary_sensor, switch, schedule, input_boolean) */
+    domain: string;
+    /** Friendly name of the entity */
+    friendly_name?: string;
+    /** Schedule-specific data (only present when domain is 'schedule') */
+    schedule?: ScheduleInfo;
+    /** Current state of the entity */
+    state: string;
+}
+
 export interface SlotCardConditions {
     /** Current calendar event info */
     calendar?: CalendarEventInfo;
@@ -203,6 +228,8 @@ export interface SlotCardConditions {
     calendar_entity_id?: string;
     /** Next upcoming calendar event */
     calendar_next?: CalendarNextEventInfo;
+    /** Generic condition entity info (new unified approach) */
+    condition_entity?: ConditionEntityInfo;
     /** Number of uses remaining */
     number_of_uses?: number;
 }

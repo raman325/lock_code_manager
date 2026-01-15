@@ -1,5 +1,6 @@
 import {
     mdiCalendar,
+    mdiCalendarClock,
     mdiCalendarRemove,
     mdiChevronDown,
     mdiChevronUp,
@@ -8,7 +9,9 @@ import {
     mdiEyeOff,
     mdiKey,
     mdiLock,
-    mdiPound
+    mdiPound,
+    mdiToggleSwitch,
+    mdiToggleSwitchOutline
 } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
@@ -26,6 +29,7 @@ import {
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
+    ConditionEntityInfo,
     LockCodeManagerSlotCardConfig,
     SlotCardConditions,
     SlotCardData
@@ -347,15 +351,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-style: italic;
             }
 
-            /* Calendar condition */
-            .calendar-condition {
+            /* Unified condition entity styles */
+            .condition-entity {
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
                 padding: 8px 0;
             }
 
-            .calendar-condition.clickable {
+            .condition-entity.clickable {
                 border-radius: 8px;
                 cursor: pointer;
                 margin: 8px -8px 0;
@@ -363,75 +367,77 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 transition: background-color 0.2s;
             }
 
-            .calendar-condition.clickable:hover {
+            .condition-entity.clickable:hover {
                 background: var(--lcm-active-bg);
             }
 
-            .calendar-condition:first-child {
+            .condition-entity:first-child {
                 padding-top: 0;
             }
 
-            .calendar-condition.clickable:first-child {
+            .condition-entity.clickable:first-child {
                 margin-top: 0;
             }
 
-            .calendar-header {
-                align-items: center;
-                display: flex;
-                gap: 8px;
-            }
-
-            .calendar-status {
+            .condition-entity-header {
                 align-items: center;
                 display: flex;
                 gap: 6px;
             }
 
-            .calendar-status-icon {
+            .condition-entity-icon {
                 --mdc-icon-size: 18px;
+                flex-shrink: 0;
             }
 
-            .calendar-status-icon.active {
-                color: var(--lcm-disabled-color);
+            .condition-entity-icon.active {
+                color: var(--lcm-success-color);
             }
 
-            .calendar-status-icon.inactive {
+            .condition-entity-icon.inactive {
                 color: var(--lcm-warning-color);
             }
 
-            .calendar-status-text {
+            .condition-entity-status {
                 color: var(--primary-text-color);
                 font-size: 14px;
                 font-weight: 500;
             }
 
-            .calendar-event-summary {
-                color: var(--primary-text-color);
-                font-size: 13px;
-                margin-left: 22px;
-            }
-
-            .calendar-event-time {
+            .condition-entity-domain {
+                background: var(--lcm-section-bg);
+                border-radius: 4px;
                 color: var(--secondary-text-color);
-                font-size: 12px;
-                margin-left: 22px;
-            }
-
-            .calendar-next-event {
-                border-top: 1px solid var(--lcm-border-color);
-                color: var(--secondary-text-color);
-                font-size: 12px;
-                margin-left: 22px;
-                margin-top: 8px;
-                padding-top: 8px;
-            }
-
-            .calendar-next-event-label {
-                font-weight: 500;
-                text-transform: uppercase;
                 font-size: 10px;
-                letter-spacing: 0.05em;
-                margin-bottom: 2px;
+                font-weight: 500;
+                letter-spacing: 0.03em;
+                margin-left: auto;
+                padding: 2px 6px;
+                text-transform: uppercase;
+            }
+
+            .condition-entity-name {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                margin-left: 24px;
+            }
+
+            .condition-context {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                margin-left: 24px;
+            }
+
+            .condition-context-label {
+                font-weight: 500;
+                margin-right: 4px;
+            }
+
+            .condition-context-next {
+                border-top: 1px solid var(--lcm-border-color);
+                margin-top: 4px;
+                opacity: 0.8;
+                padding-top: 4px;
             }
 
             /* Lock Status Section */
@@ -690,6 +696,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Only show conditions section if at least one condition is configured
         const hasConditions =
             (conditions.number_of_uses !== undefined && conditions.number_of_uses !== null) ||
+            conditions.condition_entity !== undefined ||
             conditions.calendar !== undefined;
         const showConditions = this._config.show_conditions !== false && hasConditions;
 
@@ -914,18 +921,23 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderConditionsSection(conditions: SlotCardConditions): TemplateResult {
-        const { number_of_uses, calendar, calendar_next } = conditions;
+        const { number_of_uses, condition_entity } = conditions;
         const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
-        const hasCalendar = calendar !== undefined;
-        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
-        const calendarBlocking = hasCalendar && calendar.active === false;
-        const hasConditions = hasNumberOfUses || hasCalendar;
-        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasCalendar ? 1 : 0);
-        const blockingConditions = (usesBlocking ? 1 : 0) + (calendarBlocking ? 1 : 0);
+        const hasConditionEntity = condition_entity !== undefined;
 
+        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
+        const entityBlocking = hasConditionEntity && condition_entity.state !== 'on';
+
+        const hasConditions = hasNumberOfUses || hasConditionEntity;
+        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasConditionEntity ? 1 : 0);
+        const blockingConditions = (usesBlocking ? 1 : 0) + (entityBlocking ? 1 : 0);
+
+        // Show ✓ when all conditions pass (muted), ✗ when blocking (prominent)
+        const passingConditions = totalConditions - blockingConditions;
+        const allPassing = blockingConditions === 0;
         const headerExtra = hasConditions
-            ? html`<span class="collapsible-badge ${blockingConditions > 0 ? 'warning' : 'primary'}"
-                      >${blockingConditions}/${totalConditions}</span
+            ? html`<span class="collapsible-badge ${allPassing ? 'muted' : 'warning'}"
+                      >${allPassing ? '✓' : '✗'} ${passingConditions}/${totalConditions}</span
                   >
                   <span class="condition-blocking-icons">
                       ${hasNumberOfUses
@@ -937,13 +949,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                     : `${number_of_uses} uses remaining`}"
                             ></ha-svg-icon>`
                           : nothing}
-                      ${hasCalendar
+                      ${hasConditionEntity
                           ? html`<ha-svg-icon
-                                class="condition-icon ${calendarBlocking ? 'blocking' : ''}"
-                                .path=${calendarBlocking ? mdiCalendarRemove : mdiCalendar}
-                                title="${calendarBlocking
-                                    ? 'Calendar blocking access'
-                                    : 'Calendar allowing access'}"
+                                class="condition-icon ${entityBlocking ? 'blocking' : ''}"
+                                .path=${this._getConditionEntityIcon(
+                                    condition_entity.domain,
+                                    !entityBlocking
+                                )}
+                                title="${entityBlocking
+                                    ? 'Condition blocking access'
+                                    : 'Condition allowing access'}"
                             ></ha-svg-icon>`
                           : nothing}
                   </span>`
@@ -977,13 +992,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                       </div>
                   </div>`
                 : nothing}
-            ${hasCalendar
-                ? this._renderCalendarCondition(
-                      calendar,
-                      calendar_next,
-                      conditions.calendar_entity_id
-                  )
-                : nothing}
+            ${hasConditionEntity ? this._renderConditionEntity(condition_entity) : nothing}
         `;
 
         return this._renderCollapsible(
@@ -995,57 +1004,192 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         );
     }
 
-    private _renderCalendarCondition(
-        calendar: NonNullable<SlotCardConditions['calendar']>,
-        nextEvent?: SlotCardConditions['calendar_next'],
-        calendarEntityId?: string | null
-    ): TemplateResult {
-        const isActive = calendar.active;
-        const statusIcon = isActive ? mdiCalendar : mdiCalendarRemove;
-        const statusText = isActive ? 'Access allowed' : 'Access blocked';
+    /**
+     * Get the appropriate icon for a condition entity based on its domain.
+     * Uses icons consistent with Home Assistant core.
+     */
+    private _getConditionEntityIcon(domain: string, isActive: boolean): string {
+        switch (domain) {
+            case 'calendar':
+                return isActive ? mdiCalendar : mdiCalendarRemove;
+            case 'binary_sensor':
+                // HA core uses mdi:eye for generic binary sensors
+                return mdiEye;
+            case 'switch':
+                // HA core uses mdi:toggle-switch / mdi:toggle-switch-outline
+                return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
+            case 'schedule':
+                // HA core uses mdi:calendar-clock for schedule entities
+                return mdiCalendarClock;
+            case 'input_boolean':
+                // HA core uses mdi:toggle-switch-outline for input_boolean
+                return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
+            default:
+                return mdiEye;
+        }
+    }
+
+    /**
+     * Format a schedule date for display (today, tomorrow, or weekday).
+     * Returns empty string for today, "tomorrow " or "Mon " etc for other days.
+     */
+    private _formatScheduleDate(date: Date): string {
+        const now = new Date();
+        const isToday = date.toDateString() === now.toDateString();
+        if (isToday) return '';
+
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const isTomorrow = date.toDateString() === tomorrow.toDateString();
+        if (isTomorrow) return 'tomorrow ';
+
+        return `${date.toLocaleDateString([], { weekday: 'short' })} `;
+    }
+
+    /**
+     * Get a human-readable domain label for display in the UI.
+     */
+    private _getDomainLabel(domain: string): string {
+        const labels: Record<string, string> = {
+            binary_sensor: 'Sensor',
+            calendar: 'Calendar',
+            input_boolean: 'Toggle',
+            schedule: 'Schedule',
+            switch: 'Switch'
+        };
+        return labels[domain] ?? domain;
+    }
+
+    /**
+     * Render a unified condition entity display.
+     * Consistent structure across all domain types with domain-specific context.
+     */
+    private _renderConditionEntity(entity: ConditionEntityInfo): TemplateResult {
+        const isActive = entity.state === 'on';
+        const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
+        const statusText = isActive ? 'Not blocking' : 'Blocking access';
         const statusClass = isActive ? 'active' : 'inactive';
-        const isClickable = !!calendarEntityId;
+        const displayName = entity.friendly_name ?? entity.condition_entity_id;
+        const domainLabel = this._getDomainLabel(entity.domain);
+
+        // Build context lines based on domain
+        let contextLines: TemplateResult | typeof nothing = nothing;
+
+        if (entity.domain === 'calendar') {
+            if (isActive && entity.calendar) {
+                // Active calendar: show current event + next event preview
+                contextLines = html`
+                    ${entity.calendar.summary
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Event:</span>${entity.calendar
+                                  .summary}
+                          </div>`
+                        : nothing}
+                    ${entity.calendar.start_time
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Started:</span>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar.start_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                    ${entity.calendar.end_time
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Ends:</span>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar.end_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                    ${entity.calendar_next
+                        ? html`<div class="condition-context condition-context-next">
+                              <span class="condition-context-label">Next:</span>${entity
+                                  .calendar_next.summary ?? 'Event'}
+                              starts
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar_next.start_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                `;
+            } else if (!isActive && entity.calendar_next) {
+                // Inactive calendar: show next event details
+                contextLines = html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Next:</span>${entity.calendar_next
+                            .summary ?? 'Event'}
+                    </div>
+                    <div class="condition-context">
+                        <span class="condition-context-label">Starts:</span>
+                        <ha-relative-time
+                            .hass=${this._hass}
+                            .datetime=${entity.calendar_next.start_time}
+                        ></ha-relative-time>
+                    </div>
+                `;
+            }
+        } else if (entity.domain === 'schedule' && entity.schedule?.next_event) {
+            // Schedule: show timing info consistently
+            const nextEvent = new Date(entity.schedule.next_event);
+            const timeStr = nextEvent.toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit'
+            });
+            const dateStr = this._formatScheduleDate(nextEvent);
+
+            if (isActive) {
+                // Active schedule: show when it ends
+                contextLines = html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Ends:</span>
+                        ${dateStr}${timeStr}
+                    </div>
+                `;
+            } else {
+                // Inactive schedule: show when it starts
+                contextLines = html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Starts:</span>
+                        ${dateStr}${timeStr}
+                    </div>
+                `;
+            }
+        }
+        // input_boolean, switch, binary_sensor: no extra context needed
 
         return html`
             <div
-                class="calendar-condition ${isClickable ? 'clickable' : ''}"
-                @click=${isClickable ? () => this._navigateToCalendar(calendarEntityId) : nothing}
+                class="condition-entity clickable"
+                @click=${() => this._openEntityMoreInfo(entity.condition_entity_id)}
+                title="Click to view ${displayName}"
             >
-                <div class="calendar-header">
-                    <div class="calendar-status">
-                        <ha-svg-icon
-                            class="calendar-status-icon ${statusClass}"
-                            .path=${statusIcon}
-                        ></ha-svg-icon>
-                        <span class="calendar-status-text">${statusText}</span>
-                    </div>
+                <div class="condition-entity-header">
+                    <ha-svg-icon
+                        class="condition-entity-icon ${statusClass}"
+                        .path=${statusIcon}
+                    ></ha-svg-icon>
+                    <span class="condition-entity-status">${statusText}</span>
+                    <span class="condition-entity-domain">${domainLabel}</span>
                 </div>
-                ${isActive && calendar.summary
-                    ? html`<div class="calendar-event-summary">${calendar.summary}</div>`
-                    : nothing}
-                ${isActive && calendar.end_time
-                    ? html`<div class="calendar-event-time">
-                          Ends
-                          <ha-relative-time
-                              .hass=${this._hass}
-                              .datetime=${calendar.end_time}
-                          ></ha-relative-time>
-                      </div>`
-                    : nothing}
-                ${!isActive && nextEvent
-                    ? html`<div class="calendar-next-event">
-                          <div class="calendar-next-event-label">Next access</div>
-                          <div>
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${nextEvent.start_time}
-                              ></ha-relative-time
-                              >${nextEvent.summary ? ` — ${nextEvent.summary}` : ''}
-                          </div>
-                      </div>`
-                    : nothing}
+                <div class="condition-entity-name">${displayName}</div>
+                ${contextLines}
             </div>
         `;
+    }
+
+    /**
+     * Open the more-info dialog for an entity.
+     */
+    private _openEntityMoreInfo(entityId: string): void {
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderLockStatusSection(lockStatuses: LockSyncStatus[]): TemplateResult {
@@ -1313,14 +1457,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _dismissActionError(): void {
         this._actionError = undefined;
-    }
-
-    private _navigateToCalendar(calendarEntityId: string): void {
-        // Navigate to Home Assistant calendar view with this entity
-        // The calendar dashboard URL format is /calendar?entity_id=calendar.xxx
-        const url = `/calendar?entity_id=${encodeURIComponent(calendarEntityId)}`;
-        history.pushState(null, '', url);
-        window.dispatchEvent(new CustomEvent('location-changed'));
     }
 
     private _navigateToLock(lockEntityId: string): void {
