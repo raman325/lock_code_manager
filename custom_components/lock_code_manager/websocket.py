@@ -219,11 +219,9 @@ def async_get_entry(
 
 async def async_setup(hass: HomeAssistant) -> bool:
     """Enable the websocket_commands."""
-    websocket_api.async_register_command(hass, get_slot_calendar_data)
-    websocket_api.async_register_command(hass, get_config_entry_entities)
+    websocket_api.async_register_command(hass, get_config_entry_data)
     websocket_api.async_register_command(hass, subscribe_lock_codes)
     websocket_api.async_register_command(hass, subscribe_code_slot)
-    websocket_api.async_register_command(hass, get_locks)
     websocket_api.async_register_command(hass, set_lock_usercode)
 
     return True
@@ -231,48 +229,41 @@ async def async_setup(hass: HomeAssistant) -> bool:
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/get_slot_calendar_data",
+        vol.Required("type"): "lock_code_manager/get_config_entry_data",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
     }
 )
 @websocket_api.async_response
 @async_get_entry
-async def get_slot_calendar_data(
+async def get_config_entry_data(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Return lock_code_manager config entry data."""
-    connection.send_result(
-        msg["id"],
-        {
-            CONF_LOCKS: get_entry_data(config_entry, CONF_LOCKS, []),
-            CONF_SLOTS: {
-                k: v.get(CONF_CALENDAR)
-                for k, v in get_entry_data(config_entry, CONF_SLOTS, {}).items()
-            },
-        },
-    )
+    """Return complete config entry data for Lock Code Manager.
 
+    This is the primary data-fetching command for the frontend. It returns all
+    static configuration and entity registry data needed to render the dashboard.
 
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "lock_code_manager/get_config_entry_entities",
-        vol.Exclusive("config_entry_title", "entry"): str,
-        vol.Exclusive("config_entry_id", "entry"): str,
-    }
-)
-@websocket_api.async_response
-@async_get_entry
-async def get_config_entry_entities(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-    config_entry: ConfigEntry,
-) -> None:
-    """Return lock_code_manager config entry data."""
+    Frontend usage:
+    - generate-view.ts: Fetches slot numbers for section generation, lock entity
+      IDs for badges, and lock names for sorting/display
+    - slot-section-strategy.ts: Fetches entities for legacy slot card generation
+    - dashboard-strategy.ts: Fetches data for dashboard view generation
+    - view-strategy.ts: Fetches config entry and entities for view rendering
+
+    Returns:
+        config_entry: The config entry JSON fragment (entry_id, title, etc.)
+        entities: List of entity registry entries for this config entry
+        locks: List of lock objects with entity_id and friendly name
+        slots: Mapping of slot numbers to calendar entity IDs (or null)
+
+    """
+    all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
+    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+
     connection.send_result(
         msg["id"],
         {
@@ -283,6 +274,18 @@ async def get_config_entry_entities(
                     er.async_get(hass), config_entry.entry_id
                 )
             ],
+            CONF_LOCKS: [
+                {
+                    ATTR_ENTITY_ID: lock_id,
+                    CONF_NAME: _get_lock_friendly_name(hass, lock),
+                }
+                for lock_id, lock in all_locks.items()
+                if lock_id in entry_lock_ids
+            ],
+            CONF_SLOTS: {
+                k: v.get(CONF_CALENDAR)
+                for k, v in get_entry_data(config_entry, CONF_SLOTS, {}).items()
+            },
         },
     )
 
@@ -597,54 +600,6 @@ async def subscribe_lock_codes(
     connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
     _send_update()
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "lock_code_manager/get_locks",
-        vol.Exclusive("config_entry_title", "entry"): str,
-        vol.Exclusive("config_entry_id", "entry"): str,
-    }
-)
-@websocket_api.async_response
-async def get_locks(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> None:
-    """
-    Return LCM-managed locks, optionally scoped to a config entry.
-
-    Security note: When called without params, this enumerates all LCM-managed
-    locks. This is acceptable since lock entity IDs are already visible via the
-    Home Assistant API, and no sensitive data (codes) is exposed here.
-    """
-    all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-
-    # If config entry specified, filter to locks from that entry
-    if config_entry_id := msg.get("config_entry_id"):
-        entry = hass.config_entries.async_get_entry(config_entry_id)
-        entry_locks = get_entry_data(entry, CONF_LOCKS, []) if entry else []
-        locks = {k: v for k, v in all_locks.items() if k in entry_locks}
-    elif config_entry_title := msg.get("config_entry_title"):
-        entry = _find_config_entry_by_title(hass, config_entry_title)
-        entry_locks = get_entry_data(entry, CONF_LOCKS, []) if entry else []
-        locks = {k: v for k, v in all_locks.items() if k in entry_locks}
-    else:
-        locks = all_locks
-
-    connection.send_result(
-        msg["id"],
-        {
-            CONF_LOCKS: [
-                {
-                    ATTR_ENTITY_ID: lock_id,
-                    CONF_NAME: _get_lock_friendly_name(hass, lock),
-                }
-                for lock_id, lock in locks.items()
-            ]
-        },
-    )
 
 
 @dataclass

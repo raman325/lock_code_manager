@@ -27,10 +27,15 @@ function createDashboardMockHass(options: {
             if (msg.type === 'config_entries/get') {
                 return configEntries;
             }
-            if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+            if (msg.type === 'lock_code_manager/get_config_entry_data') {
                 const entryId = msg.config_entry_id as string;
+                const lockIds = locksPerEntry[entryId] ?? [];
                 return {
-                    locks: locksPerEntry[entryId] ?? [],
+                    config_entry: configEntries.find((e) => e.entry_id === entryId) ?? {},
+                    entities: [],
+                    locks: lockIds.map((id) => {
+                        return { entity_id: id, name: id };
+                    }),
                     slots: {}
                 };
             }

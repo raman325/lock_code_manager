@@ -44,50 +44,65 @@ from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 _LOGGER = logging.getLogger(__name__)
 
 
-async def test_get_slot_calendar_data(
+async def test_get_config_entry_data(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test get_slot_calendar_data WS API."""
+    """Test get_config_entry_data WS API."""
     ws_client = await hass_ws_client(hass)
 
     # Try API call with entry ID
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/get_slot_calendar_data",
+            "type": "lock_code_manager/get_config_entry_data",
             "config_entry_id": lock_code_manager_config_entry.entry_id,
         }
     )
     msg = await ws_client.receive_json()
     assert msg["success"]
-    assert msg["result"] == {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
-        CONF_SLOTS: {"1": None, "2": "calendar.test_1"},
-    }
+    result = msg["result"]
+
+    # Verify config_entry
+    config_entry = result[CONF_CONFIG_ENTRY]
+    assert config_entry["entry_id"] == lock_code_manager_config_entry.entry_id
+    assert config_entry["title"] == "Mock Title"
+
+    # Verify entities
+    assert len(result[CONF_ENTITIES]) == 19
+
+    # Verify locks (now objects with entity_id and name)
+    lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
+    assert LOCK_1_ENTITY_ID in lock_entity_ids
+    assert LOCK_2_ENTITY_ID in lock_entity_ids
+    # Verify name is included
+    lock_1 = next(
+        lock for lock in result[CONF_LOCKS] if lock[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+    )
+    assert CONF_NAME in lock_1
+
+    # Verify slots
+    assert result[CONF_SLOTS] == {"1": None, "2": "calendar.test_1"}
 
     # Try API call with entry title
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/get_slot_calendar_data",
+            "type": "lock_code_manager/get_config_entry_data",
             "config_entry_title": "mock-title",
         }
     )
     msg = await ws_client.receive_json()
     assert msg["success"]
-    assert msg["result"] == {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
-        CONF_SLOTS: {"1": None, "2": "calendar.test_1"},
-    }
+    assert result[CONF_SLOTS] == {"1": None, "2": "calendar.test_1"}
 
     # Try API call with invalid entry ID
     await ws_client.send_json(
         {
             "id": 3,
-            "type": "lock_code_manager/get_slot_calendar_data",
+            "type": "lock_code_manager/get_config_entry_data",
             "config_entry_id": "fake_entry_id",
         }
     )
@@ -96,7 +111,7 @@ async def test_get_slot_calendar_data(
 
     # Try API call without entry title or ID
     await ws_client.send_json(
-        {"id": 4, "type": "lock_code_manager/get_slot_calendar_data"}
+        {"id": 4, "type": "lock_code_manager/get_config_entry_data"}
     )
     msg = await ws_client.receive_json()
     assert not msg["success"]
@@ -108,39 +123,12 @@ async def test_get_slot_calendar_data(
     await ws_client.send_json(
         {
             "id": 5,
-            "type": "lock_code_manager/get_slot_calendar_data",
+            "type": "lock_code_manager/get_config_entry_data",
             "config_entry_id": lock_code_manager_config_entry.entry_id,
         }
     )
     msg = await ws_client.receive_json()
     assert not msg["success"]
-
-
-async def test_get_config_entry_entities(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test get_config_entry_entities WS API."""
-    ws_client = await hass_ws_client(hass)
-
-    # Try API call with entry ID
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/get_config_entry_entities",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-
-    result = msg["result"]
-    config_entry = result[CONF_CONFIG_ENTRY]
-    assert config_entry["entry_id"] == lock_code_manager_config_entry.entry_id
-    assert config_entry["title"] == "Mock Title"
-    assert len(result[CONF_ENTITIES]) == 19
 
 
 async def test_subscribe_lock_codes(
@@ -284,77 +272,6 @@ async def test_subscribe_lock_codes_ignores_metadata_changes(
     # Should NOT receive an update (metadata-only change filtered out)
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(ws_client.receive_json(), timeout=0.1)
-
-
-async def test_get_locks(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test get_locks WS API."""
-    ws_client = await hass_ws_client(hass)
-
-    # Get all locks (no params)
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/get_locks",
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-    result = msg["result"]
-    lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
-    assert LOCK_1_ENTITY_ID in lock_entity_ids
-    assert LOCK_2_ENTITY_ID in lock_entity_ids
-    # Verify name is included
-    lock_1 = next(
-        lock for lock in result[CONF_LOCKS] if lock[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
-    )
-    assert CONF_NAME in lock_1
-
-    # Get locks scoped to config entry by ID
-    await ws_client.send_json(
-        {
-            "id": 2,
-            "type": "lock_code_manager/get_locks",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-    result = msg["result"]
-    lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
-    assert LOCK_1_ENTITY_ID in lock_entity_ids
-    assert LOCK_2_ENTITY_ID in lock_entity_ids
-
-    # Get locks scoped to config entry by title
-    await ws_client.send_json(
-        {
-            "id": 3,
-            "type": "lock_code_manager/get_locks",
-            "config_entry_title": "mock-title",
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-    result = msg["result"]
-    lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
-    assert LOCK_1_ENTITY_ID in lock_entity_ids
-    assert LOCK_2_ENTITY_ID in lock_entity_ids
-
-    # Get locks with invalid config entry ID returns empty list
-    await ws_client.send_json(
-        {
-            "id": 4,
-            "type": "lock_code_manager/get_locks",
-            "config_entry_id": "fake_entry_id",
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-    assert msg["result"][CONF_LOCKS] == []
 
 
 async def test_subscribe_code_slot(
@@ -735,19 +652,19 @@ async def test_subscribe_code_slot_invalid_title(
     assert "title" in msg["error"]["message"]
 
 
-async def test_get_slot_calendar_data_invalid_title(
+async def test_get_config_entry_data_invalid_title(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test get_slot_calendar_data WS API with invalid config entry title."""
+    """Test get_config_entry_data WS API with invalid config entry title."""
     ws_client = await hass_ws_client(hass)
 
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/get_slot_calendar_data",
+            "type": "lock_code_manager/get_config_entry_data",
             "config_entry_title": "nonexistent-title",
         }
     )
