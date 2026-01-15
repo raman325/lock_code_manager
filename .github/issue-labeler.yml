@@ -16,7 +16,7 @@ breaking-change:
   # OR logic: checkbox checked OR section has content
   # Pattern 1: Checked checkbox after "Type of change" header
   # Pattern 2: "# Breaking change" section with actual content (starts with capital letter)
-  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*Breaking change|# Breaking change\n\n[A-Z]'
+  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Bb]reaking [Cc]hange|# [Bb]reaking [Cc]hange\s*\n\s*\n\s*[A-Z]'
 
 code-quality:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Cc]ode [Qq]uality'
