@@ -99,14 +99,83 @@ jobs:
           ACTOR: ${{ github.event.pull_request.user.login }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
 
-      # Wait for required CI checks (--required avoids deadlock with this workflow)
+      # Wait for specific CI checks (explicit list, not branch protection)
       - name: Wait for CI checks
         if: steps.eligible.outputs.result == 'true'
         timeout-minutes: 30
-        run: gh pr checks "$PR_URL" --watch --fail-fast --required
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          # Checks that must exist and pass (always run)
+          MUST_PASS: Check Changes
+          # Checks that must pass IF they run (may be skipped by path filter)
+          IF_RUN_PASS: Pytest,HACS,Hassfest,Vitest,Yarn Lint and Build
+        run: |
+          IFS=',' read -ra MUST <<< "$MUST_PASS"
+          IFS=',' read -ra OPTIONAL <<< "$IF_RUN_PASS"
+          ALL_CHECKS=("${MUST[@]}" "${OPTIONAL[@]}")
+          echo "Must pass: ${MUST[*]}"
+          echo "If run, must pass: ${OPTIONAL[*]}"
+
+          while true; do
+            ALL_DONE=true
+            ANY_FAILED=false
+            MUST_FOUND=0
+
+            for CHECK in "${ALL_CHECKS[@]}"; do
+              # Check may appear multiple times (e.g., "Check Changes" in multiple workflows)
+              STATUSES=$(gh api "repos/$REPO/commits/$SHA/check-runs" \
+                --jq "[.check_runs[] | select(.name == \"$CHECK\")] | map({s: .status, c: .conclusion})" \
+                2>/dev/null)
+
+              COUNT=$(echo "$STATUSES" | jq 'length')
+
+              if [ "$COUNT" -eq 0 ]; then
+                echo "$CHECK: not found"
+                continue
+              fi
+
+              # Track if this is a must-pass check
+              for M in "${MUST[@]}"; do
+                if [ "$CHECK" = "$M" ]; then
+                  MUST_FOUND=$((MUST_FOUND + COUNT))
+                  break
+                fi
+              done
+
+              # Check each instance
+              for i in $(seq 0 $((COUNT - 1))); do
+                STATUS=$(echo "$STATUSES" | jq -r ".[$i].s")
+                CONCLUSION=$(echo "$STATUSES" | jq -r ".[$i].c")
+
+                if [ "$STATUS" != "completed" ]; then
+                  echo "$CHECK [$i]: $STATUS"
+                  ALL_DONE=false
+                elif [ "$CONCLUSION" != "success" ] && [ "$CONCLUSION" != "skipped" ]; then
+                  echo "::error::$CHECK [$i] failed ($CONCLUSION)"
+                  ANY_FAILED=true
+                else
+                  echo "$CHECK [$i]: $CONCLUSION"
+                fi
+              done
+            done
+
+            if [ "$ANY_FAILED" = true ]; then
+              exit 1
+            fi
+
+            if [ "$ALL_DONE" = true ]; then
+              if [ "$MUST_FOUND" -eq 0 ]; then
+                echo "::error::No required checks found - something is wrong"
+                exit 1
+              fi
+              echo "All checks passed! (found $MUST_FOUND required check instances)"
+              break
+            fi
+
+            sleep 30
+          done
 
       # Merge after CI passes
       - name: Merge PR
