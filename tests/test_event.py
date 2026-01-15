@@ -236,3 +236,45 @@ async def test_unsupported_locks_attribute_with_mixed_locks(
         assert LOCK_2_ENTITY_ID in unsupported
 
         await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_removed_lock_preserved_in_event_types(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that removed lock's entity ID is preserved in event_types until next event.
+
+    When a lock is removed after firing an event, its entity ID should remain
+    in event_types to preserve history until a new event occurs.
+    """
+    lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # Fire an event from lock 1
+    lock.async_fire_code_slot_event(1, False, "test", Event("zwave_js_notification"))
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.attributes.get("event_type") == LOCK_1_ENTITY_ID
+
+    # Get the event entity directly to call _handle_remove_lock
+    ent_reg = er.async_get(hass)
+    entry = ent_reg.async_get(SLOT_1_EVENT_ENTITY)
+    assert entry
+    entity = hass.data["entity_components"]["event"].get_entity(entry.entity_id)
+    assert entity
+
+    # Verify lock 1 is in event_types before removal
+    assert LOCK_1_ENTITY_ID in entity.event_types
+    assert LOCK_2_ENTITY_ID in entity.event_types
+
+    # Remove lock 1
+    entity._handle_remove_lock(LOCK_1_ENTITY_ID)
+    await hass.async_block_till_done()
+
+    # Lock 1 should still be in event_types (preserved as last event type)
+    # even though it's no longer in the supported locks list
+    assert LOCK_1_ENTITY_ID in entity.event_types
+    # Lock 2 should still be there as a supported lock
+    assert LOCK_2_ENTITY_ID in entity.event_types

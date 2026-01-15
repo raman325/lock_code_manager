@@ -123,7 +123,9 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         # Include last event type if it exists and isn't in current locks
         # This preserves history even if a lock was removed
         # state_attributes contains {ATTR_EVENT_TYPE: last_event_type} from EventEntity
-        last_event_type = self.state_attributes.get(ATTR_EVENT_TYPE)
+        # Defensive check: state_attributes may be None during early initialization
+        attrs = self.state_attributes or {}
+        last_event_type = attrs.get(ATTR_EVENT_TYPE)
         if last_event_type and last_event_type not in supported_lock_ids:
             return list(supported_lock_ids | {last_event_type})
 
