@@ -1,21 +1,21 @@
 # Configuration for github/issue-labeler - body-based labels
 # See: https://github.com/github/issue-labeler
 # Uses regex patterns to match PR/issue body content
-# All checkbox patterns require ## Type of change header first to avoid matching examples
+# Checkbox patterns use (.|[\r\n])*? for cross-line matching ([\s\S] may not work in all engines)
 ---
 bug:
-  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Bb]ugfix'
+  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Bb]ugfix'
 
 enhancement:
-  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Nn]ew [Ff]eature'
+  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Nn]ew [Ff]eature'
 
 breaking-change:
   # Checkbox in Type of change section
-  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Bb]reaking [Cc]hange'
+  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Bb]reaking [Cc]hange'
   # Breaking change section with content after HTML comment
-  - '^[\s\S]*?# Breaking change[\s\S]*?-->\s*\n+[A-Z][a-z]+[\s\S]*?## Proposed change'
+  - '# Breaking change(.|[\r\n])*?-->\s*\n+[A-Z][a-z]+(.|[\r\n])*?## Proposed change'
   # Breaking change section with HTML comment removed
-  - '^[\s\S]*?# Breaking change\s*\n+[A-Z][a-z]+[\s\S]*?## Proposed change'
+  - '# Breaking change\s*\n+[A-Z][a-z]+(.|[\r\n])*?## Proposed change'
 
 code-quality:
-  - '## Type of change[\s\S]*?- \[[xX]\]\s*[Cc]ode [Qq]uality'
+  - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Cc]ode [Qq]uality'
