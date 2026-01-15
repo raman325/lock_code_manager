@@ -3,6 +3,11 @@
 ## New Items
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
+- Add type checking to CI and pre-commit:
+  - Add mypy (or alternative) to pre-commit hooks
+  - Add type checking CI job to python-checks.yml
+  - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
+  - Fix existing type errors (~30 errors as of Jan 2026)
 - Test visual editor for both cards.
 
 ## Testing

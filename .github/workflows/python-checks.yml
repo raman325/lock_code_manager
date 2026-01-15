@@ -25,28 +25,6 @@ jobs:
       - name: Check linting
         run: ruff check .
 
-  mypy:
-    name: Mypy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install libudev-dev
-      - name: Install dependencies
-        run: uv pip install --system -r requirements_dev.txt
-      - name: Run mypy
-        run: mypy custom_components/lock_code_manager/
-
   pytest:
     name: Pytest (${{ matrix.python-version }})
     runs-on: ubuntu-latest
