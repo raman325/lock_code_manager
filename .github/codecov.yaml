@@ -1,4 +1,8 @@
+---
 coverage:
+  precision: 2
+  round: down
+  range: "70...100"
   status:
     project:
       python:
@@ -15,6 +19,8 @@ coverage:
           - ts/
         threshold: 1%
     patch:
+      default:
+        target: 90%
       python:
         flags:
           - python
@@ -28,6 +34,14 @@ coverage:
         paths:
           - ts/
         target: 90%
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: false
+
+github_checks:
+  annotations: true
 
 flag_management:
   default_rules:
