@@ -10,6 +10,7 @@ coverage/
 .mypy_cache
 .ruff_cache
 .uv-cache
+uv.lock
 coverage
 htmlcov
 node_modules
