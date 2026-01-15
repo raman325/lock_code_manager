@@ -49,7 +49,7 @@ categories:
   - title: "🧹 Housekeeping"
     collapse-after: 1
     labels:
-      - "github_actions"
+      - "github-config"
     exclude-labels:
       - "python"
       - "javascript"

@@ -1,7 +1,13 @@
 # Configuration for github/issue-labeler - body-based labels
 # See: https://github.com/github/issue-labeler
 # Uses regex patterns to match PR/issue body content
-# Checkbox patterns use (.|[\r\n])*? for cross-line matching ([\s\S] may not work in all engines)
+#
+# IMPORTANT: Multiple patterns in an array use AND logic (all must match).
+# Use regex alternation (|) within a single pattern for OR logic.
+# Patterns use (.|[\r\n])*? for cross-line matching ([\s\S] may not work in all engines)
+#
+# YAML >- (folded block scalar) converts newlines to spaces, allowing multiline
+# regex patterns that map to document structure. Break at natural space boundaries.
 ---
 bug:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Bb]ugfix'
@@ -10,11 +16,24 @@ enhancement:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Nn]ew [Ff]eature'
 
 breaking-change:
-  # Simple checkbox pattern - matches checked Breaking change checkbox
-  - '- \[x\] Breaking change'
-  - '- \[X\] Breaking change'
-  # Breaking change section header followed by content
-  - '# Breaking change\n\n[A-Z]'
+  # Matches EITHER:
+  #   1. Checked "Breaking change" checkbox in "Type of change" section
+  #   2. Actual content in "# Breaking change" section (ignores HTML template comment)
+  #
+  # Pattern breakdown (line breaks become spaces via YAML >-):
+  #   ## Type of change(.|[\r\n])*?-     # "## Type of change" header + any content + checkbox dash
+  #   \[[xX]\]\s*[Bb]reaking             # checked checkbox [x] or [X]
+  #   [Cc]hange|#                         # "change" + OR alternation + section hash
+  #   [Bb]reaking                         # "# Breaking" (space added by line break)
+  #   [Cc]hange\s*                        # "change" + optional whitespace
+  #   (<!--(.|[\r\n])*?-->\s*)?           # optional HTML comment (template placeholder)
+  #   [A-Z]                               # actual content starts with capital letter
+  - >-
+    ## Type of change(.|[\r\n])*?-
+    \[[xX]\]\s*[Bb]reaking
+    [Cc]hange|#
+    [Bb]reaking
+    [Cc]hange\s*(<!--(.|[\r\n])*?-->\s*)?[A-Z]
 
 code-quality:
   - '## Type of change(.|[\r\n])*?- \[[xX]\]\s*[Cc]ode [Qq]uality'
