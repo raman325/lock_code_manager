@@ -110,10 +110,9 @@ jobs:
           # Checks that must exist and pass (always run)
           MUST_PASS: Check Changes,HACS,Hassfest
           # Checks that must pass IF they run (may be skipped by path filter)
-          # Reusable workflow jobs are prefixed with caller job name
+          # Use * suffix for pattern matching (e.g., "Python / Pytest *" matches any version)
           # yamllint disable-line rule:line-length
-          # yamllint disable-line rule:line-length
-          IF_RUN_PASS: Python / Setup,Python / Ruff,Python / Pytest (3.13),Python / Pytest (3.14),Frontend / Vitest,Frontend / Yarn Lint and Build
+          IF_RUN_PASS: Python / Setup,Python / Ruff,Python / Pytest *,Frontend / Vitest,Frontend / Yarn Lint and Build
         run: |
           IFS=',' read -ra MUST <<< "$MUST_PASS"
           IFS=',' read -ra OPTIONAL <<< "$IF_RUN_PASS"
@@ -121,18 +120,31 @@ jobs:
           echo "Must pass: ${MUST[*]}"
           echo "If run, must pass: ${OPTIONAL[*]}"
 
+          # Fetch all check runs once per iteration
+          fetch_checks() {
+            gh api "repos/$REPO/commits/$SHA/check-runs" --paginate \
+              --jq '.check_runs[] | {name: .name, status: .status, conclusion: .conclusion}' \
+              2>/dev/null
+          }
+
           while true; do
             ALL_DONE=true
             ANY_FAILED=false
             MUST_FOUND=0
+            CHECKS_JSON=$(fetch_checks)
 
             for CHECK in "${ALL_CHECKS[@]}"; do
-              # Check may appear multiple times (e.g., "Check Changes" in multiple workflows)
-              STATUSES=$(gh api "repos/$REPO/commits/$SHA/check-runs" \
-                --jq "[.check_runs[] | select(.name == \"$CHECK\")] | map({s: .status, c: .conclusion})" \
-                2>/dev/null)
+              # Check if this is a pattern (ends with *)
+              if [[ "$CHECK" == *'*' ]]; then
+                PREFIX="${CHECK%\*}"
+                MATCHES=$(echo "$CHECKS_JSON" | jq -s --arg p "$PREFIX" \
+                  '[.[] | select(.name | startswith($p))]')
+              else
+                MATCHES=$(echo "$CHECKS_JSON" | jq -s --arg n "$CHECK" \
+                  '[.[] | select(.name == $n)]')
+              fi
 
-              COUNT=$(echo "$STATUSES" | jq 'length')
+              COUNT=$(echo "$MATCHES" | jq 'length')
 
               if [ "$COUNT" -eq 0 ]; then
                 echo "$CHECK: not found"
@@ -148,25 +160,32 @@ jobs:
               done
 
               # Check each instance
-              for i in $(seq 0 $((COUNT - 1))); do
-                STATUS=$(echo "$STATUSES" | jq -r ".[$i].s")
-                CONCLUSION=$(echo "$STATUSES" | jq -r ".[$i].c")
+              echo "$MATCHES" | jq -c '.[]' | while read -r item; do
+                NAME=$(echo "$item" | jq -r '.name')
+                STATUS=$(echo "$item" | jq -r '.status')
+                CONCLUSION=$(echo "$item" | jq -r '.conclusion')
 
                 if [ "$STATUS" != "completed" ]; then
-                  echo "$CHECK [$i]: $STATUS"
-                  ALL_DONE=false
+                  echo "$NAME: $STATUS"
+                  echo "PENDING" >> /tmp/check_status
                 elif [ "$CONCLUSION" != "success" ] && [ "$CONCLUSION" != "skipped" ]; then
-                  echo "::error::$CHECK [$i] failed ($CONCLUSION)"
-                  ANY_FAILED=true
+                  echo "::error::$NAME failed ($CONCLUSION)"
+                  echo "FAILED" >> /tmp/check_status
                 else
-                  echo "$CHECK [$i]: $CONCLUSION"
+                  echo "$NAME: $CONCLUSION"
                 fi
               done
             done
 
-            if [ "$ANY_FAILED" = true ]; then
+            # Check for failures or pending (subshell writes to temp file)
+            if grep -q "FAILED" /tmp/check_status 2>/dev/null; then
+              rm -f /tmp/check_status
               exit 1
             fi
+            if grep -q "PENDING" /tmp/check_status 2>/dev/null; then
+              ALL_DONE=false
+            fi
+            rm -f /tmp/check_status
 
             if [ "$ALL_DONE" = true ]; then
               if [ "$MUST_FOUND" -eq 0 ]; then
