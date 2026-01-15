@@ -77,12 +77,9 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         """Get locks that support code slot events."""
         return [lock for lock in self.locks if lock.supports_code_slot_events]
 
-    def _get_unsupported_locks(self) -> list[BaseLock]:
-        """Get locks that don't support code slot events."""
-        return [lock for lock in self.locks if not lock.supports_code_slot_events]
-
-    def _compute_event_types(self) -> list[str]:
-        """Compute current event_types from supported locks.
+    @property
+    def event_types(self) -> list[str]:
+        """Return supported event types (lock entity IDs).
 
         Includes supported lock entity IDs plus the last event type if it's
         from a lock that was removed (to preserve history until next event).
@@ -103,11 +100,6 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         return list(supported_lock_ids)
 
     @property
-    def event_types(self) -> list[str]:
-        """Return supported event types (lock entity IDs)."""
-        return self._compute_event_types()
-
-    @property
     def available(self) -> bool:
         """Return True if entity is available.
 
@@ -125,7 +117,11 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         Computed dynamically to reflect any changes in lock capabilities.
         """
         attrs: dict[str, Any] = {}
-        unsupported = [lock.lock.entity_id for lock in self._get_unsupported_locks()]
+        unsupported = [
+            lock.lock.entity_id
+            for lock in self.locks
+            if not lock.supports_code_slot_events
+        ]
         if unsupported:
             attrs[ATTR_UNSUPPORTED_LOCKS] = unsupported
         return attrs
