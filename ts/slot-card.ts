@@ -125,14 +125,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-weight: 500;
             }
 
-            .header-badges {
+            .header-pills {
                 align-items: center;
                 display: flex;
                 flex-shrink: 0;
-                gap: 8px;
+                flex-wrap: wrap;
+                gap: 4px;
+                justify-content: flex-end;
             }
 
-            .header-badge {
+            .header-pill {
                 align-items: center;
                 background: var(--lcm-section-bg);
                 border-radius: 12px;
@@ -141,43 +143,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-size: 11px;
                 gap: 4px;
                 padding: 4px 8px;
+                white-space: nowrap;
             }
 
-            .header-badge ha-svg-icon {
+            .header-pill ha-svg-icon {
                 --mdc-icon-size: 14px;
                 flex-shrink: 0;
             }
 
-            .header-badge.clickable {
+            .header-pill.clickable {
                 cursor: pointer;
                 transition: background-color 0.2s;
             }
 
-            .header-badge.clickable:hover {
-                background: var(--lcm-section-bg-hover);
-            }
-
-            .header-last-used {
-                align-items: center;
-                background: var(--lcm-section-bg);
-                border-radius: 12px;
-                color: var(--secondary-text-color);
-                display: flex;
-                font-size: 11px;
-                gap: 4px;
-                padding: 4px 8px;
-            }
-
-            .header-last-used ha-svg-icon {
-                --mdc-icon-size: 14px;
-            }
-
-            .header-last-used.clickable {
-                cursor: pointer;
-                transition: background-color 0.2s;
-            }
-
-            .header-last-used.clickable:hover {
+            .header-pill.clickable:hover {
                 background: var(--lcm-section-bg-hover);
             }
 
@@ -784,6 +763,27 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 background: var(--error-color);
                 color: white;
             }
+
+            /* Confirmation dialog styles */
+            .confirm-dialog-content {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                line-height: 1.5;
+                padding: 8px 0;
+            }
+
+            mwc-button.destructive {
+                --mdc-theme-primary: var(--error-color);
+            }
+
+            /* Make dialog buttons more obviously interactive */
+            ha-dialog mwc-button {
+                cursor: pointer;
+            }
+
+            ha-dialog mwc-button:hover {
+                opacity: 0.8;
+            }
         `
     ];
 
@@ -802,6 +802,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogNumberOfUses: number | null = null;
     @state() private _dialogSaving = false;
+
+    // Confirmation dialog state
+    @state() private _confirmDialog: {
+        onConfirm: () => void;
+        text: string;
+        title: string;
+    } | null = null;
 
     _hass?: HomeAssistant;
 
@@ -973,16 +980,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
+                ${this._confirmDialog ? this._renderConfirmDialog() : nothing}
             </ha-card>
         `;
     }
 
     private _renderHeader(): TemplateResult {
         const lockCount = this._data?.locks?.length ?? 0;
+        const showLockCount = this._config?.show_lock_count !== false;
         const lastUsed = this._data?.last_used;
         const eventEntityId = this._data?.event_entity_id;
         const eventEntityState = eventEntityId ? this._hass?.states[eventEntityId] : undefined;
         const showLastUsed = eventEntityState && eventEntityState.state !== 'unavailable';
+
+        const showPills = (showLockCount && lockCount > 0) || showLastUsed;
 
         return html`
             <div class="header">
@@ -993,39 +1004,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     <div class="header-info">
                         <span class="header-title">Code Slot ${this._config?.slot}</span>
                     </div>
-                    ${lockCount > 0
-                        ? html`<div class="header-badges">
-                              <span
-                                  class="header-badge clickable"
-                                  title=${this._data?.locks?.map((l) => l.name).join(', ') ?? ''}
-                                  @click=${this._toggleLockStatus}
-                              >
-                                  <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
-                                  ${lockCount}
-                              </span>
+                    ${showPills
+                        ? html`<div class="header-pills">
+                              ${showLockCount && lockCount > 0
+                                  ? html`<span
+                                        class="header-pill clickable"
+                                        title=${this._data?.locks?.map((l) => l.name).join(', ') ??
+                                        ''}
+                                        @click=${this._toggleLockStatus}
+                                    >
+                                        <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
+                                        ${lockCount}
+                                    </span>`
+                                  : nothing}
+                              ${showLastUsed
+                                  ? html`<span
+                                        class="header-pill ${lastUsed ? 'clickable' : ''}"
+                                        title=${lastUsed
+                                            ? this._data?.last_used_lock
+                                                ? `Used on ${this._data.last_used_lock} - Click for details`
+                                                : 'Click for PIN usage details'
+                                            : 'This PIN has never been used'}
+                                        @click=${() => lastUsed && this._navigateToEventHistory()}
+                                    >
+                                        <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
+                                        ${lastUsed
+                                            ? html`${this._data?.last_used_lock ?? 'Used'}
+                                                  <ha-relative-time
+                                                      .hass=${this._hass}
+                                                      .datetime=${lastUsed}
+                                                  ></ha-relative-time>`
+                                            : 'Never used'}
+                                    </span>`
+                                  : nothing}
                           </div>`
                         : nothing}
                 </div>
-                ${showLastUsed
-                    ? html`<div
-                          class="header-last-used ${lastUsed ? 'clickable' : ''}"
-                          title=${lastUsed
-                              ? this._data?.last_used_lock
-                                  ? `Used on ${this._data.last_used_lock} - Click for details`
-                                  : 'Click for PIN usage details'
-                              : 'This PIN has never been used'}
-                          @click=${() => lastUsed && this._navigateToEventHistory()}
-                      >
-                          <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
-                          ${lastUsed
-                              ? html`${this._data?.last_used_lock ?? 'Used'}
-                                    <ha-relative-time
-                                        .hass=${this._hass}
-                                        .datetime=${lastUsed}
-                                    ></ha-relative-time>`
-                              : 'Never used'}
-                      </div>`
-                    : nothing}
             </div>
         `;
     }
@@ -1714,36 +1728,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._dialogSaving = false;
     }
 
-    private async _deleteConditionEntity(): Promise<void> {
-        if (!confirm('Remove the condition entity from this slot?')) {
-            return;
-        }
-        try {
-            await this._updateSlotCondition({ entity_id: null });
-            // Force re-subscribe to get updated data
-            this._unsubscribe();
-            void this._subscribe();
-        } catch (err) {
-            this._setActionError(
-                `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
-            );
-        }
+    private _deleteConditionEntity(): void {
+        this._confirmDialog = {
+            onConfirm: async () => {
+                try {
+                    await this._updateSlotCondition({ entity_id: null });
+                    // Force re-subscribe to get updated data
+                    this._unsubscribe();
+                    void this._subscribe();
+                } catch (err) {
+                    this._setActionError(
+                        `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    );
+                }
+            },
+            text: 'This will remove the condition entity from controlling when this PIN is active.',
+            title: 'Remove condition entity?'
+        };
     }
 
-    private async _deleteNumberOfUses(): Promise<void> {
-        if (!confirm('Remove use tracking from this slot?')) {
-            return;
-        }
-        try {
-            await this._updateSlotCondition({ number_of_uses: null });
-            // Force re-subscribe to get updated data
-            this._unsubscribe();
-            void this._subscribe();
-        } catch (err) {
-            this._setActionError(
-                `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
-            );
-        }
+    private _deleteNumberOfUses(): void {
+        this._confirmDialog = {
+            onConfirm: async () => {
+                try {
+                    await this._updateSlotCondition({ number_of_uses: null });
+                    // Force re-subscribe to get updated data
+                    this._unsubscribe();
+                    void this._subscribe();
+                } catch (err) {
+                    this._setActionError(
+                        `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    );
+                }
+            },
+            text: 'This will stop tracking how many times this PIN can be used.',
+            title: 'Remove use tracking?'
+        };
     }
 
     private async _updateSlotCondition(updates: {
@@ -1881,6 +1901,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     .disabled=${this._dialogSaving}
                 >
                     ${this._dialogSaving ? 'Saving...' : 'Save'}
+                </mwc-button>
+            </ha-dialog>
+        `;
+    }
+
+    private _renderConfirmDialog(): TemplateResult {
+        if (!this._confirmDialog) return html``;
+
+        return html`
+            <ha-dialog open @closed=${() => (this._confirmDialog = null)}>
+                <div slot="heading">${this._confirmDialog.title}</div>
+                <div class="confirm-dialog-content">${this._confirmDialog.text}</div>
+                <mwc-button slot="secondaryAction" @click=${() => (this._confirmDialog = null)}>
+                    Cancel
+                </mwc-button>
+                <mwc-button
+                    slot="primaryAction"
+                    class="destructive"
+                    @click=${() => {
+                        this._confirmDialog?.onConfirm();
+                        this._confirmDialog = null;
+                    }}
+                >
+                    Remove
                 </mwc-button>
             </ha-dialog>
         `;
