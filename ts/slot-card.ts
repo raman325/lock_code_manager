@@ -1579,15 +1579,31 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   <div class="dialog-section-description">
                                       PIN is active only when this entity is "on"
                                   </div>
-                                  <select
+                                  <input
+                                      type="text"
                                       class="entity-select"
+                                      list="condition-entity-list"
+                                      placeholder="Search or select entity..."
                                       .value=${this._dialogEntityId ?? ''}
-                                      @change=${(e: Event) => {
-                                          this._dialogEntityId =
-                                              (e.target as HTMLSelectElement).value || null;
+                                      @input=${(e: Event) => {
+                                          const val = (e.target as HTMLInputElement).value;
+                                          // Only set if it's a valid entity ID
+                                          if (this._hass?.states[val]) {
+                                              this._dialogEntityId = val;
+                                          } else if (val === '') {
+                                              this._dialogEntityId = null;
+                                          }
                                       }}
-                                  >
-                                      <option value="">Select an entity...</option>
+                                      @change=${(e: Event) => {
+                                          const val = (e.target as HTMLInputElement).value;
+                                          if (this._hass?.states[val]) {
+                                              this._dialogEntityId = val;
+                                          } else if (val === '') {
+                                              this._dialogEntityId = null;
+                                          }
+                                      }}
+                                  />
+                                  <datalist id="condition-entity-list">
                                       ${this._hass
                                           ? Object.keys(this._hass.states)
                                                 .filter((eid) =>
@@ -1604,17 +1620,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                                     (eid) => html`
                                                         <option
                                                             value=${eid}
-                                                            ?selected=${eid ===
-                                                            this._dialogEntityId}
-                                                        >
-                                                            ${this._hass.states[eid]?.attributes
-                                                                ?.friendly_name ?? eid}
-                                                            (${eid})
-                                                        </option>
+                                                            label="${this._hass.states[eid]
+                                                                ?.attributes?.friendly_name ?? eid}"
+                                                        ></option>
                                                     `
                                                 )
                                           : nothing}
-                                  </select>
+                                  </datalist>
                                   ${hasExistingEntity
                                       ? html`<button
                                             class="dialog-clear-button"
