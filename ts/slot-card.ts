@@ -796,6 +796,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             mwc-button.destructive {
                 --mdc-theme-primary: var(--error-color);
             }
+
+            /* Make dialog buttons more obviously interactive */
+            ha-dialog mwc-button {
+                cursor: pointer;
+            }
+
+            ha-dialog mwc-button:hover {
+                opacity: 0.8;
+            }
         `
     ];
 
