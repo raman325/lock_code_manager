@@ -77,7 +77,13 @@ class LockCodesCard extends LockCodesCardBase {
             .slots-grid {
                 display: grid;
                 gap: 10px;
-                grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            @media (max-width: 400px) {
+                .slots-grid {
+                    grid-template-columns: 1fr;
+                }
             }
 
             .slot-chip {
@@ -86,6 +92,8 @@ class LockCodesCard extends LockCodesCardBase {
                 display: flex;
                 flex-direction: column;
                 gap: 6px;
+                min-width: 0;
+                overflow: hidden;
                 padding: 12px 12px 14px;
                 position: relative;
             }
@@ -221,6 +229,7 @@ class LockCodesCard extends LockCodesCardBase {
                 font-family: var(--lcm-code-font);
                 font-size: 14px;
                 font-weight: 500;
+                min-width: 0;
                 letter-spacing: var(--lcm-code-letter-spacing);
                 min-width: 0;
                 outline: none;
@@ -384,6 +393,9 @@ class LockCodesCard extends LockCodesCardBase {
     _data?: LockCoordinatorData;
     _error?: string;
 
+    /** Whether codes were revealed before editing started */
+    private _wasRevealedBeforeEdit = false;
+
     set hass(hass: HomeAssistant) {
         this._hass = hass;
         void this._subscribe();
@@ -459,6 +471,8 @@ class LockCodesCard extends LockCodesCardBase {
     // Editing methods for unmanaged slots
     private _startEditing(e: Event, slot: LockCoordinatorSlotData): void {
         e.stopPropagation();
+        // Save current reveal state before editing
+        this._wasRevealedBeforeEdit = this._revealed;
         // For editing, we need the actual code - trigger reveal if masked
         if (!this._revealed) {
             this._revealed = true;
@@ -493,6 +507,12 @@ class LockCodesCard extends LockCodesCardBase {
     private _cancelEdit(): void {
         this._editingSlot = null;
         this._editValue = '';
+        // Restore reveal state if it was changed for editing
+        if (this._revealed !== this._wasRevealedBeforeEdit) {
+            this._revealed = this._wasRevealedBeforeEdit;
+            this._unsubscribe();
+            void this._subscribe();
+        }
     }
 
     private async _saveCode(slot: number | string): Promise<void> {
@@ -536,15 +556,96 @@ class LockCodesCard extends LockCodesCardBase {
         }
 
         const groups = this._groupSlots(slots);
+        const result: TemplateResult[] = [];
+
+        // Track slots borrowed from empty groups so we can adjust their ranges
+        const borrowedSlots = new Set<number | string>();
+
+        // First pass: identify slots to borrow from empty groups
+        for (let i = 0; i < groups.length; i++) {
+            const group = groups[i];
+            const prevGroup = i > 0 ? groups[i - 1] : null;
+            const nextGroup = i < groups.length - 1 ? groups[i + 1] : null;
+
+            if (group.type === 'active' && group.slots.length === 1) {
+                const [slot] = group.slots;
+                const slotNum = typeof slot.slot === 'string' ? parseInt(slot.slot, 10) : slot.slot;
+                const isOdd = slotNum % 2 === 1;
+
+                if (isOdd && nextGroup?.type === 'empty' && nextGroup.slots.length > 0) {
+                    // Odd slot before empty range - borrow first slot from empty range
+                    borrowedSlots.add(nextGroup.slots[0].slot);
+                } else if (!isOdd && prevGroup?.type === 'empty' && prevGroup.slots.length > 0) {
+                    // Even slot after empty range - borrow last slot from empty range
+                    borrowedSlots.add(prevGroup.slots[prevGroup.slots.length - 1].slot);
+                }
+            }
+        }
+
+        // Second pass: render with borrowed slots
+        for (let i = 0; i < groups.length; i++) {
+            const group = groups[i];
+            const prevGroup = i > 0 ? groups[i - 1] : null;
+            const nextGroup = i < groups.length - 1 ? groups[i + 1] : null;
+
+            if (group.type === 'active') {
+                if (group.slots.length === 1) {
+                    const [slot] = group.slots;
+                    const slotNum =
+                        typeof slot.slot === 'string' ? parseInt(slot.slot, 10) : slot.slot;
+                    const isOdd = slotNum % 2 === 1;
+
+                    if (isOdd && nextGroup?.type === 'empty' && nextGroup.slots.length > 0) {
+                        // Odd slot on left, borrowed empty slot on right
+                        result.push(this._renderSlotChip(slot, false));
+                        result.push(this._renderEmptySlotChip(nextGroup.slots[0]));
+                    } else if (
+                        !isOdd &&
+                        prevGroup?.type === 'empty' &&
+                        prevGroup.slots.length > 0
+                    ) {
+                        // Borrowed empty slot on left, even slot on right
+                        result.push(
+                            this._renderEmptySlotChip(prevGroup.slots[prevGroup.slots.length - 1])
+                        );
+                        result.push(this._renderSlotChip(slot, false));
+                    } else {
+                        // No adjacent empty group to borrow from - use full width
+                        result.push(this._renderSlotChip(slot, true));
+                    }
+                } else {
+                    // Multiple slots - render normally
+                    for (const slot of group.slots) {
+                        result.push(this._renderSlotChip(slot, false));
+                    }
+                }
+            } else {
+                // Empty group - filter out borrowed slots and render if any remain
+                const remainingSlots = group.slots.filter((s) => !borrowedSlots.has(s.slot));
+                if (remainingSlots.length > 0) {
+                    result.push(
+                        this._renderEmptySummary({
+                            ...group,
+                            rangeLabel: this._formatSlotRange(remainingSlots),
+                            slots: remainingSlots
+                        })
+                    );
+                }
+            }
+        }
+
+        return html`<div class="slots-grid">${result}</div>`;
+    }
+
+    private _renderEmptySlotChip(slot: LockCoordinatorSlotData): TemplateResult {
         return html`
-            <div class="slots-grid">
-                ${groups.map((group) =>
-                    group.type === 'active'
-                        ? group.slots.map((slot) =>
-                              this._renderSlotChip(slot, group.slots.length === 1)
-                          )
-                        : this._renderEmptySummary(group)
-                )}
+            <div class="slot-chip empty">
+                <div class="slot-top">
+                    <span class="slot-label">Slot ${slot.slot}</span>
+                    <div class="slot-badges">
+                        <span class="lcm-badge empty">Empty</span>
+                    </div>
+                </div>
             </div>
         `;
     }
@@ -726,7 +827,7 @@ class LockCodesCard extends LockCodesCardBase {
                             type="text"
                             inputmode="numeric"
                             pattern="[0-9]*"
-                            placeholder="Enter PIN or leave empty to clear"
+                            placeholder="PIN"
                             .value=${this._editValue}
                             @input=${this._handleEditInput}
                             @keydown=${this._handleEditKeydown}
