@@ -69,6 +69,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     show_code_sensors?: boolean;
     /** Show conditions section */
     show_conditions?: boolean;
+    /** Show lock count badge in card header (default: true) */
+    show_lock_count?: boolean;
     /** Show lock status section */
     show_lock_status?: boolean;
     /** Show sync status per lock */
@@ -156,6 +158,8 @@ export interface LockCodeManagerSlotCardConfig {
     show_code_sensors?: boolean;
     /** Show conditions section (default: true) */
     show_conditions?: boolean;
+    /** Show lock count badge in card header (default: true) */
+    show_lock_count?: boolean;
     /** Show lock status section (default: true) */
     show_lock_status?: boolean;
     /** Show sync status per lock in lock status (default: true) */

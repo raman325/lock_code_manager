@@ -979,6 +979,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderHeader(): TemplateResult {
         const lockCount = this._data?.locks?.length ?? 0;
+        const showLockCount = this._config?.show_lock_count !== false;
         const lastUsed = this._data?.last_used;
         const eventEntityId = this._data?.event_entity_id;
         const eventEntityState = eventEntityId ? this._hass?.states[eventEntityId] : undefined;
@@ -993,7 +994,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     <div class="header-info">
                         <span class="header-title">Code Slot ${this._config?.slot}</span>
                     </div>
-                    ${lockCount > 0
+                    ${showLockCount && lockCount > 0
                         ? html`<div class="header-badges">
                               <span
                                   class="header-badge clickable"

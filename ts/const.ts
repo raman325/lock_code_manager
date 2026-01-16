@@ -38,6 +38,7 @@ export const DOMAIN = 'lock_code_manager';
 export const DEFAULT_CODE_DISPLAY = 'masked_with_reveal';
 export const DEFAULT_SHOW_CODE_SENSORS = true;
 export const DEFAULT_SHOW_CONDITIONS = true;
+export const DEFAULT_SHOW_LOCK_COUNT = true;
 export const DEFAULT_SHOW_PER_CONFIGURATION_LOCK_CARDS = true;
 export const DEFAULT_SHOW_LOCK_CARDS = true;
 export const DEFAULT_SHOW_LOCK_STATUS = true;

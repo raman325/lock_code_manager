@@ -62,6 +62,7 @@ export async function generateView(
         });
 
     // Generate sections using section strategies (strategies handle both new and legacy card modes)
+    // Hide lock count on individual cards since lock badges are shown at view level
     const sections: LovelaceSectionConfig[] = slots.map((slotNum) => {
         return {
             strategy: {
@@ -70,6 +71,7 @@ export async function generateView(
                 config_entry_id: configEntry.entry_id,
                 show_code_sensors,
                 show_conditions,
+                show_lock_count: false,
                 show_lock_status,
                 show_lock_sync,
                 slot: slotNum,
