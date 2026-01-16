@@ -126,11 +126,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             }
 
             .header-pills {
-                align-items: flex-end;
+                align-items: center;
                 display: flex;
-                flex-direction: column;
                 flex-shrink: 0;
+                flex-wrap: wrap;
                 gap: 4px;
+                justify-content: flex-end;
             }
 
             .header-pill {
