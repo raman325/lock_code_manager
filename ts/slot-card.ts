@@ -784,6 +784,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 background: var(--error-color);
                 color: white;
             }
+
+            /* Confirmation dialog styles */
+            .confirm-dialog-content {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                line-height: 1.5;
+                padding: 8px 0;
+            }
+
+            mwc-button.destructive {
+                --mdc-theme-primary: var(--error-color);
+            }
         `
     ];
 
@@ -802,6 +814,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogNumberOfUses: number | null = null;
     @state() private _dialogSaving = false;
+
+    // Confirmation dialog state
+    @state() private _confirmDialog: {
+        onConfirm: () => void;
+        text: string;
+        title: string;
+    } | null = null;
 
     _hass?: HomeAssistant;
 
@@ -973,6 +992,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
+                ${this._confirmDialog ? this._renderConfirmDialog() : nothing}
             </ha-card>
         `;
     }
@@ -1715,36 +1735,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._dialogSaving = false;
     }
 
-    private async _deleteConditionEntity(): Promise<void> {
-        if (!confirm('Remove the condition entity from this slot?')) {
-            return;
-        }
-        try {
-            await this._updateSlotCondition({ entity_id: null });
-            // Force re-subscribe to get updated data
-            this._unsubscribe();
-            void this._subscribe();
-        } catch (err) {
-            this._setActionError(
-                `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
-            );
-        }
+    private _deleteConditionEntity(): void {
+        this._confirmDialog = {
+            onConfirm: async () => {
+                try {
+                    await this._updateSlotCondition({ entity_id: null });
+                    // Force re-subscribe to get updated data
+                    this._unsubscribe();
+                    void this._subscribe();
+                } catch (err) {
+                    this._setActionError(
+                        `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    );
+                }
+            },
+            text: 'This will remove the condition entity from controlling when this PIN is active.',
+            title: 'Remove condition entity?'
+        };
     }
 
-    private async _deleteNumberOfUses(): Promise<void> {
-        if (!confirm('Remove use tracking from this slot?')) {
-            return;
-        }
-        try {
-            await this._updateSlotCondition({ number_of_uses: null });
-            // Force re-subscribe to get updated data
-            this._unsubscribe();
-            void this._subscribe();
-        } catch (err) {
-            this._setActionError(
-                `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
-            );
-        }
+    private _deleteNumberOfUses(): void {
+        this._confirmDialog = {
+            onConfirm: async () => {
+                try {
+                    await this._updateSlotCondition({ number_of_uses: null });
+                    // Force re-subscribe to get updated data
+                    this._unsubscribe();
+                    void this._subscribe();
+                } catch (err) {
+                    this._setActionError(
+                        `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    );
+                }
+            },
+            text: 'This will stop tracking how many times this PIN can be used.',
+            title: 'Remove use tracking?'
+        };
     }
 
     private async _updateSlotCondition(updates: {
@@ -1882,6 +1908,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     .disabled=${this._dialogSaving}
                 >
                     ${this._dialogSaving ? 'Saving...' : 'Save'}
+                </mwc-button>
+            </ha-dialog>
+        `;
+    }
+
+    private _renderConfirmDialog(): TemplateResult {
+        if (!this._confirmDialog) return html``;
+
+        return html`
+            <ha-dialog open @closed=${() => (this._confirmDialog = null)}>
+                <div slot="heading">${this._confirmDialog.title}</div>
+                <div class="confirm-dialog-content">${this._confirmDialog.text}</div>
+                <mwc-button slot="secondaryAction" @click=${() => (this._confirmDialog = null)}>
+                    Cancel
+                </mwc-button>
+                <mwc-button
+                    slot="primaryAction"
+                    class="destructive"
+                    @click=${() => {
+                        this._confirmDialog?.onConfirm();
+                        this._confirmDialog = null;
+                    }}
+                >
+                    Remove
                 </mwc-button>
             </ha-dialog>
         `;
