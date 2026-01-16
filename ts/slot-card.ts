@@ -1574,25 +1574,21 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   <div class="dialog-section-description">
                                       PIN is active only when this entity is "on"
                                   </div>
-                                  <ha-selector
+                                  <ha-entity-picker
                                       .hass=${this._hass}
                                       .value=${this._dialogEntityId ?? ''}
-                                      .selector=${{
-                                          entity: {
-                                              domain: [
-                                                  'calendar',
-                                                  'schedule',
-                                                  'binary_sensor',
-                                                  'switch',
-                                                  'input_boolean'
-                                              ]
-                                          }
-                                      }}
+                                      .includeDomains=${[
+                                          'calendar',
+                                          'schedule',
+                                          'binary_sensor',
+                                          'switch',
+                                          'input_boolean'
+                                      ]}
                                       .label=${'Select entity'}
                                       @value-changed=${(e: CustomEvent) => {
                                           this._dialogEntityId = e.detail.value || null;
                                       }}
-                                  ></ha-selector>
+                                  ></ha-entity-picker>
                                   ${hasExistingEntity
                                       ? html`<button
                                             class="dialog-clear-button"
@@ -1627,7 +1623,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                               this._dialogEnableUses = !this._dialogEnableUses;
                                           }}
                                       >
-                                          Enable use tracking
+                                          Enable number of use tracking
                                       </label>
                                   </div>
                                   ${this._dialogEnableUses
