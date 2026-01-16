@@ -1229,6 +1229,11 @@ async def update_slot_condition(
 
     # Only update if data actually changed
     if data != config_entry.data:
-        hass.config_entries.async_update_entry(config_entry, data=data)
+        # Set options to trigger async_update_listener which will:
+        # 1. Create/remove entities as needed
+        # 2. Copy options to data and clear options
+        # We must NOT update data directly here, as the listener compares
+        # config_entry.data (old) with config_entry.options (new) to detect changes
+        hass.config_entries.async_update_entry(config_entry, options=data)
 
     connection.send_result(msg["id"], {"success": True})

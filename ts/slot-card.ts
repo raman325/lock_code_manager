@@ -5,7 +5,7 @@ import {
     mdiChevronDown,
     mdiChevronUp,
     mdiClock,
-    mdiCog,
+    mdiDelete,
     mdiEye,
     mdiEyeOff,
     mdiKey,
@@ -348,6 +348,49 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-size: 14px;
             }
 
+            /* Unified condition item (matches condition-entity structure) */
+            .condition-item {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                padding: 8px 0;
+            }
+
+            .condition-item-header {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+            }
+
+            .condition-item-detail {
+                font-size: 13px;
+                margin-left: 28px;
+            }
+
+            /* Inline edit container for number of uses */
+            .condition-edit-container {
+                position: relative;
+            }
+
+            .condition-edit-container .edit-input {
+                background: var(--card-background-color);
+                border: 1px solid var(--primary-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 14px;
+                padding: 4px 8px;
+                width: 60px;
+            }
+
+            .condition-edit-container .edit-help {
+                color: var(--secondary-text-color);
+                font-size: 10px;
+                left: 0;
+                position: absolute;
+                top: 100%;
+                white-space: nowrap;
+            }
+
             .no-conditions {
                 color: var(--secondary-text-color);
                 font-size: 13px;
@@ -547,12 +590,19 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 opacity: 1;
             }
 
-            /* Condition edit icons */
-            .condition-edit-icon {
+            /* Condition action icons */
+            .condition-action-icons {
+                align-items: center;
+                display: flex;
+                gap: 4px;
+                margin-left: auto;
+            }
+
+            .condition-edit-icon,
+            .condition-delete-icon {
                 --mdc-icon-size: 18px;
                 color: var(--secondary-text-color);
                 cursor: pointer;
-                margin-left: auto;
                 opacity: 0.6;
                 transition: opacity 0.2s;
             }
@@ -561,59 +611,101 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 opacity: 1;
             }
 
-            .condition-entity-header .condition-edit-icon {
+            .condition-delete-icon:hover {
+                color: var(--error-color);
+                opacity: 1;
+            }
+
+            .condition-entity-header .condition-action-icons {
                 margin-left: 8px;
             }
 
-            /* Manage conditions row */
-            .manage-conditions-row {
+            /* Add condition links - compact inline style */
+            .add-condition-links {
+                align-items: center;
+                color: var(--secondary-text-color);
+                display: flex;
+                flex-wrap: wrap;
+                font-size: 13px;
+                gap: 4px;
+                padding: 4px 0;
+            }
+
+            .add-condition-link {
+                color: var(--primary-color);
+                cursor: pointer;
+                text-decoration: none;
+            }
+
+            .add-condition-link:hover {
+                text-decoration: underline;
+            }
+
+            .add-condition-separator {
+                color: var(--divider-color);
+                margin: 0 4px;
+            }
+
+            /* Empty conditions header row */
+            .empty-conditions-header {
                 align-items: center;
                 background: var(--lcm-section-bg);
                 border-radius: 8px;
-                color: var(--primary-color);
-                cursor: pointer;
                 display: flex;
                 gap: 8px;
                 padding: 12px;
-                transition: background-color 0.2s;
             }
 
-            .manage-conditions-row:hover {
-                background: var(--lcm-section-bg-hover);
-            }
-
-            .manage-conditions-row ha-svg-icon {
-                --mdc-icon-size: 20px;
-            }
-
-            .manage-conditions-row span {
-                font-size: 14px;
+            .empty-conditions-title {
+                color: var(--secondary-text-color);
+                font-size: 11px;
                 font-weight: 500;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
             }
 
-            /* Add condition row */
-            .add-condition-row {
+            .empty-conditions-badge {
+                background: var(--lcm-section-bg-hover);
+                border-radius: 10px;
+                color: var(--secondary-text-color);
+                font-size: 11px;
+                padding: 2px 8px;
+            }
+
+            .empty-conditions-spacer {
+                flex: 1;
+            }
+
+            .empty-conditions-actions {
                 align-items: center;
-                border-radius: 8px;
+                display: flex;
+                gap: 4px;
+            }
+
+            .empty-conditions-btn {
+                --mdc-icon-size: 18px;
+                align-items: center;
+                background: transparent;
+                border: 1px solid var(--divider-color);
+                border-radius: 14px;
                 color: var(--primary-color);
                 cursor: pointer;
                 display: flex;
-                gap: 8px;
-                margin-top: 8px;
-                padding: 8px;
-                transition: background-color 0.2s;
+                font-size: 11px;
+                gap: 2px;
+                padding: 4px 8px;
+                transition:
+                    background-color 0.2s,
+                    border-color 0.2s;
             }
 
-            .add-condition-row:hover {
+            .empty-conditions-btn:hover {
                 background: var(--lcm-active-bg);
+                border-color: var(--primary-color);
             }
 
-            .add-condition-row ha-svg-icon {
-                --mdc-icon-size: 18px;
-            }
-
-            .add-condition-row span {
-                font-size: 13px;
+            .empty-conditions-btn ha-svg-icon {
+                --mdc-icon-size: 14px;
             }
 
             /* Dialog styles */
@@ -706,10 +798,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     // Condition dialog state
     @state() private _showConditionDialog = false;
-    @state() private _dialogMode: 'entity' | 'uses' | 'both' = 'both';
+    @state() private _dialogMode: 'add-entity' | 'edit-entity' | 'add-uses' = 'add-entity';
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogNumberOfUses: number | null = null;
-    @state() private _dialogEnableUses = false;
     @state() private _dialogSaving = false;
 
     _hass?: HomeAssistant;
@@ -1128,56 +1219,74 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Determine what conditions can still be added
         const canAddUses = !hasNumberOfUses;
         const canAddEntity = !hasConditionEntity;
-        const canAddMore = canAddUses || canAddEntity;
+
+        const usesStatusText = usesBlocking ? 'No uses left' : 'Uses available';
+        const usesStatusClass = usesBlocking ? 'inactive' : 'active';
 
         const content = html`
             ${hasNumberOfUses
-                ? html`<div class="condition-row">
-                      <ha-svg-icon
-                          class="condition-row-icon ${usesBlocking ? 'blocking' : ''}"
-                          .path=${mdiPound}
-                      ></ha-svg-icon>
-                      <span class="condition-label">Uses remaining</span>
-                      <div style="flex: 1;">
-                          ${this._editingField === 'numberOfUses'
-                              ? html`<input
-                                        class="edit-input"
-                                        type="number"
-                                        inputmode="numeric"
-                                        min="0"
-                                        .value=${String(number_of_uses ?? 0)}
-                                        @blur=${this._handleEditBlur}
-                                        @keydown=${this._handleEditKeydown}
-                                    />
-                                    <div class="edit-help">Enter to save, Esc to cancel</div>`
-                              : html`<span
-                                    class="condition-value editable"
-                                    @click=${() => this._startEditing('numberOfUses')}
-                                    >${number_of_uses}</span
-                                >`}
+                ? html`<div class="condition-item">
+                      <div class="condition-item-header">
+                          <ha-svg-icon
+                              class="condition-entity-icon ${usesStatusClass}"
+                              .path=${mdiPound}
+                          ></ha-svg-icon>
+                          <span class="condition-entity-status">${usesStatusText}</span>
+                          <span class="condition-entity-domain"># of Uses</span>
+                          <span class="condition-action-icons">
+                              <ha-svg-icon
+                                  class="condition-delete-icon"
+                                  .path=${mdiDelete}
+                                  title="Remove use tracking"
+                                  @click=${(e: Event) => {
+                                      e.stopPropagation();
+                                      this._deleteNumberOfUses();
+                                  }}
+                              ></ha-svg-icon>
+                          </span>
                       </div>
-                      <ha-svg-icon
-                          class="condition-edit-icon"
-                          .path=${mdiPencil}
-                          title="Edit number of uses"
-                          @click=${(e: Event) => {
-                              e.stopPropagation();
-                              this._openConditionDialog('uses');
-                          }}
-                      ></ha-svg-icon>
+                      <div class="condition-item-detail">
+                          <div class="condition-edit-container">
+                              ${this._editingField === 'numberOfUses'
+                                  ? html`<input
+                                            class="edit-input"
+                                            type="number"
+                                            inputmode="numeric"
+                                            min="0"
+                                            .value=${String(number_of_uses ?? 0)}
+                                            @blur=${this._handleEditBlur}
+                                            @keydown=${this._handleEditKeydown}
+                                        />
+                                        <div class="edit-help">Enter to save, Esc to cancel</div>`
+                                  : html`<span
+                                        class="condition-value editable"
+                                        @click=${() => this._startEditing('numberOfUses')}
+                                        >${number_of_uses} uses remaining</span
+                                    >`}
+                          </div>
+                      </div>
                   </div>`
                 : nothing}
             ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
-            ${canAddMore
-                ? html`<div
-                      class="add-condition-row"
-                      @click=${() =>
-                          this._openConditionDialog(
-                              canAddUses && canAddEntity ? 'both' : canAddUses ? 'uses' : 'entity'
-                          )}
-                  >
-                      <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
-                      <span>Add condition</span>
+            ${canAddUses || canAddEntity
+                ? html`<div class="add-condition-links">
+                      ${canAddUses
+                          ? html`<span
+                                class="add-condition-link"
+                                @click=${() => this._openConditionDialog('add-uses')}
+                                >+ Add # of uses limit</span
+                            >`
+                          : nothing}
+                      ${canAddUses && canAddEntity
+                          ? html`<span class="add-condition-separator">•</span>`
+                          : nothing}
+                      ${canAddEntity
+                          ? html`<span
+                                class="add-condition-link"
+                                @click=${() => this._openConditionDialog('add-entity')}
+                                >+ Add on/off entity</span
+                            >`
+                          : nothing}
                   </div>`
                 : nothing}
         `;
@@ -1213,6 +1322,23 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
             default:
                 return mdiEye;
+        }
+    }
+
+    /**
+     * Get domain-specific status text for condition entities.
+     */
+    private _getConditionStatusText(domain: string, isActive: boolean): string {
+        const accessText = isActive ? 'Access allowed' : 'Access blocked';
+        switch (domain) {
+            case 'calendar':
+                return isActive ? `Event active – ${accessText}` : `No event – ${accessText}`;
+            case 'schedule':
+                return isActive
+                    ? `In schedule – ${accessText}`
+                    : `Outside schedule – ${accessText}`;
+            default:
+                return isActive ? `On – ${accessText}` : `Off – ${accessText}`;
         }
     }
 
@@ -1254,7 +1380,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _renderConditionEntity(entity: ConditionEntityInfo, showEdit = false): TemplateResult {
         const isActive = entity.state === 'on';
         const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
-        const statusText = isActive ? 'Not blocking' : 'Blocking access';
+        const statusText = this._getConditionStatusText(entity.domain, isActive);
         const statusClass = isActive ? 'active' : 'inactive';
         const displayName = entity.friendly_name ?? entity.condition_entity_id;
         const domainLabel = this._getDomainLabel(entity.domain);
@@ -1361,15 +1487,26 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     <span class="condition-entity-status">${statusText}</span>
                     <span class="condition-entity-domain">${domainLabel}</span>
                     ${showEdit
-                        ? html`<ha-svg-icon
-                              class="condition-edit-icon"
-                              .path=${mdiPencil}
-                              title="Edit condition entity"
-                              @click=${(e: Event) => {
-                                  e.stopPropagation();
-                                  this._openConditionDialog('entity');
-                              }}
-                          ></ha-svg-icon>`
+                        ? html`<span class="condition-action-icons">
+                              <ha-svg-icon
+                                  class="condition-edit-icon"
+                                  .path=${mdiPencil}
+                                  title="Edit condition entity"
+                                  @click=${(e: Event) => {
+                                      e.stopPropagation();
+                                      this._openConditionDialog('edit-entity');
+                                  }}
+                              ></ha-svg-icon>
+                              <ha-svg-icon
+                                  class="condition-delete-icon"
+                                  .path=${mdiDelete}
+                                  title="Remove condition entity"
+                                  @click=${(e: Event) => {
+                                      e.stopPropagation();
+                                      this._deleteConditionEntity();
+                                  }}
+                              ></ha-svg-icon>
+                          </span>`
                         : nothing}
                 </div>
                 <div class="condition-entity-name">${displayName}</div>
@@ -1528,23 +1665,46 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderManageConditionsRow(): TemplateResult {
         return html`
-            <div class="manage-conditions-row" @click=${() => this._openConditionDialog('both')}>
-                <ha-svg-icon .path=${mdiCog}></ha-svg-icon>
-                <span>Manage Conditions</span>
+            <div class="empty-conditions-header">
+                <span class="empty-conditions-title">Conditions</span>
+                <span class="empty-conditions-badge">0/0</span>
+                <span class="empty-conditions-spacer"></span>
+                <div class="empty-conditions-actions">
+                    <button
+                        class="empty-conditions-btn"
+                        @click=${() => this._openConditionDialog('add-uses')}
+                        title="Add number of uses limit"
+                    >
+                        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
+                        # of Uses
+                    </button>
+                    <button
+                        class="empty-conditions-btn"
+                        @click=${() => this._openConditionDialog('add-entity')}
+                        title="Add on/off condition entity"
+                    >
+                        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
+                        On/Off Entity
+                    </button>
+                </div>
             </div>
         `;
     }
 
-    private _openConditionDialog(mode: 'entity' | 'uses' | 'both'): void {
+    private _openConditionDialog(mode: 'add-entity' | 'edit-entity' | 'add-uses'): void {
         this._dialogMode = mode;
         const conditions = this._data?.conditions;
 
-        // Initialize dialog state from current values
-        this._dialogEntityId = conditions?.condition_entity?.condition_entity_id ?? null;
-        const currentUses = conditions?.number_of_uses;
-        this._dialogEnableUses = currentUses !== undefined && currentUses !== null;
-        // Default to 5 if adding new
-        this._dialogNumberOfUses = currentUses ?? 5;
+        if (mode === 'edit-entity') {
+            // Initialize with current entity
+            this._dialogEntityId = conditions?.condition_entity?.condition_entity_id ?? null;
+        } else if (mode === 'add-entity') {
+            // Start fresh for adding
+            this._dialogEntityId = null;
+        } else if (mode === 'add-uses') {
+            // Default to 5 for new use tracking
+            this._dialogNumberOfUses = 5;
+        }
 
         this._showConditionDialog = true;
     }
@@ -1554,28 +1714,79 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._dialogSaving = false;
     }
 
+    private async _deleteConditionEntity(): Promise<void> {
+        if (!confirm('Remove the condition entity from this slot?')) {
+            return;
+        }
+        try {
+            await this._updateSlotCondition({ entity_id: null });
+            // Force re-subscribe to get updated data
+            this._unsubscribe();
+            void this._subscribe();
+        } catch (err) {
+            this._setActionError(
+                `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
+            );
+        }
+    }
+
+    private async _deleteNumberOfUses(): Promise<void> {
+        if (!confirm('Remove use tracking from this slot?')) {
+            return;
+        }
+        try {
+            await this._updateSlotCondition({ number_of_uses: null });
+            // Force re-subscribe to get updated data
+            this._unsubscribe();
+            void this._subscribe();
+        } catch (err) {
+            this._setActionError(
+                `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
+            );
+        }
+    }
+
+    private async _updateSlotCondition(updates: {
+        entity_id?: string | null;
+        number_of_uses?: number | null;
+    }): Promise<void> {
+        if (!this._hass || !this._config) {
+            throw new Error('Not initialized');
+        }
+
+        const msg: MessageBase & Record<string, unknown> = {
+            slot: this._config.slot,
+            type: 'lock_code_manager/update_slot_condition',
+            ...updates
+        };
+
+        if (this._config.config_entry_id) {
+            msg.config_entry_id = this._config.config_entry_id;
+        } else if (this._config.config_entry_title) {
+            msg.config_entry_title = this._config.config_entry_title;
+        }
+
+        await this._hass.callWS(msg);
+    }
+
     private _renderConditionDialog(): TemplateResult {
-        const showEntitySection = this._dialogMode === 'entity' || this._dialogMode === 'both';
-        const showUsesSection = this._dialogMode === 'uses' || this._dialogMode === 'both';
-        const hasExistingEntity = this._data?.conditions?.condition_entity !== undefined;
-        const hasExistingUses =
-            this._data?.conditions?.number_of_uses !== undefined &&
-            this._data?.conditions?.number_of_uses !== null;
+        const isEntityMode =
+            this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity';
+        const isAddUsesMode = this._dialogMode === 'add-uses';
 
         const dialogTitle =
-            this._dialogMode === 'entity'
-                ? 'Edit Condition Entity'
-                : this._dialogMode === 'uses'
-                  ? 'Edit Number of Uses'
-                  : 'Manage Conditions';
+            this._dialogMode === 'add-entity'
+                ? 'Add Condition Entity'
+                : this._dialogMode === 'edit-entity'
+                  ? 'Edit Condition Entity'
+                  : 'Add Use Tracking';
 
         return html`
             <ha-dialog open @closed=${this._closeConditionDialog} .heading=${dialogTitle}>
                 <div class="dialog-content">
-                    ${showEntitySection
+                    ${isEntityMode
                         ? html`
                               <div class="dialog-section">
-                                  <div class="dialog-section-header">Condition Entity</div>
                                   <div class="dialog-section-description">
                                       PIN is active only when this entity is "on"
                                   </div>
@@ -1585,6 +1796,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                       list="condition-entity-list"
                                       placeholder="Search or select entity..."
                                       .value=${this._dialogEntityId ?? ''}
+                                      @focus=${(e: Event) => {
+                                          // Select all on focus for easier replacement
+                                          (e.target as HTMLInputElement).select();
+                                      }}
                                       @input=${(e: Event) => {
                                           const val = (e.target as HTMLInputElement).value;
                                           // Only set if it's a valid entity ID
@@ -1627,85 +1842,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                                 )
                                           : nothing}
                                   </datalist>
-                                  ${hasExistingEntity || this._dialogEntityId
-                                      ? html`<button
-                                            class="dialog-clear-button"
-                                            @click=${() => {
-                                                this._dialogEntityId = null;
-                                                // Also clear the input element directly
-                                                const input =
-                                                    this.shadowRoot?.querySelector<HTMLInputElement>(
-                                                        '.entity-select'
-                                                    );
-                                                if (input) input.value = '';
-                                            }}
-                                        >
-                                            Clear entity
-                                        </button>`
-                                      : nothing}
                               </div>
                           `
                         : nothing}
-                    ${showUsesSection
+                    ${isAddUsesMode
                         ? html`
                               <div class="dialog-section">
-                                  <div class="dialog-section-header">Number of Uses</div>
                                   <div class="dialog-section-description">
-                                      Limit how many times this PIN can be used
+                                      Set the initial number of uses for this PIN
                                   </div>
-                                  <div class="dialog-checkbox-row">
-                                      <ha-checkbox
-                                          .checked=${this._dialogEnableUses}
-                                          @change=${(e: Event) => {
-                                              this._dialogEnableUses = (
-                                                  e.target as HTMLInputElement
-                                              ).checked;
+                                  <div class="dialog-number-input">
+                                      <label>Initial uses:</label>
+                                      <input
+                                          type="number"
+                                          min="1"
+                                          .value=${String(this._dialogNumberOfUses ?? 5)}
+                                          @input=${(e: Event) => {
+                                              const val = parseInt(
+                                                  (e.target as HTMLInputElement).value,
+                                                  10
+                                              );
+                                              if (!isNaN(val) && val > 0) {
+                                                  this._dialogNumberOfUses = val;
+                                              }
                                           }}
-                                      ></ha-checkbox>
-                                      <label
-                                          @click=${() => {
-                                              this._dialogEnableUses = !this._dialogEnableUses;
-                                          }}
-                                      >
-                                          Enable number of use tracking
-                                      </label>
+                                      />
                                   </div>
-                                  ${this._dialogEnableUses
-                                      ? html`<div class="dialog-number-input">
-                                            <label>Initial uses:</label>
-                                            <input
-                                                type="number"
-                                                min="1"
-                                                .value=${String(this._dialogNumberOfUses ?? 5)}
-                                                @input=${(e: Event) => {
-                                                    const val = parseInt(
-                                                        (e.target as HTMLInputElement).value,
-                                                        10
-                                                    );
-                                                    if (!isNaN(val) && val > 0) {
-                                                        this._dialogNumberOfUses = val;
-                                                    }
-                                                }}
-                                            />
-                                        </div>`
-                                      : hasExistingUses
-                                        ? html`<div
-                                              class="dialog-section-description"
-                                              style="color: var(--warning-color);"
-                                          >
-                                              Use tracking will be removed
-                                          </div>`
-                                        : nothing}
                               </div>
                           `
                         : nothing}
                 </div>
-                <mwc-button slot="secondaryAction" @click=${this._closeConditionDialog}>
+                <mwc-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
                     Cancel
                 </mwc-button>
                 <mwc-button
                     slot="primaryAction"
-                    @click=${this._saveConditionChanges}
+                    @click=${() => this._saveConditionChanges()}
                     .disabled=${this._dialogSaving}
                 >
                     ${this._dialogSaving ? 'Saving...' : 'Save'}
@@ -1715,7 +1887,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private async _saveConditionChanges(): Promise<void> {
-        if (!this._hass || !this._config) return;
+        if (!this._hass || !this._config) {
+            this._setActionError('Card not initialized');
+            return;
+        }
 
         this._dialogSaving = true;
 
@@ -1725,28 +1900,31 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 type: 'lock_code_manager/update_slot_condition'
             };
 
-            // Add config entry identifier
             if (this._config.config_entry_id) {
                 msg.config_entry_id = this._config.config_entry_id;
             } else if (this._config.config_entry_title) {
                 msg.config_entry_title = this._config.config_entry_title;
+            } else {
+                throw new Error('No config entry identifier');
             }
 
-            // Add entity_id if in entity or both mode
-            if (this._dialogMode === 'entity' || this._dialogMode === 'both') {
+            if (this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity') {
                 msg.entity_id = this._dialogEntityId;
-            }
-
-            // Add number_of_uses if in uses or both mode
-            if (this._dialogMode === 'uses' || this._dialogMode === 'both') {
-                msg.number_of_uses = this._dialogEnableUses ? this._dialogNumberOfUses : null;
+            } else if (this._dialogMode === 'add-uses') {
+                msg.number_of_uses = this._dialogNumberOfUses ?? 5;
+            } else {
+                throw new Error(`Unknown dialog mode: ${this._dialogMode}`);
             }
 
             await this._hass.callWS(msg);
             this._closeConditionDialog();
+            // Force re-subscribe to get updated data since config changes
+            // don't trigger entity state changes
+            this._unsubscribe();
+            void this._subscribe();
         } catch (err) {
             this._setActionError(
-                `Failed to update conditions: ${err instanceof Error ? err.message : 'Unknown error'}`
+                `Failed to save: ${err instanceof Error ? err.message : String(err)}`
             );
             this._dialogSaving = false;
         }

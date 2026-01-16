@@ -20,6 +20,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_CALENDAR,
@@ -1838,3 +1839,47 @@ class TestUpdateSlotCondition:
             )
             msg = await ws_client.receive_json()
             assert msg["success"], f"Failed for domain {domain}: {msg}"
+
+    async def test_number_entity_created_on_add(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """Test that number entity is created when adding number_of_uses."""
+        ws_client = await hass_ws_client(hass)
+        ent_reg = er.async_get(hass)
+        entry_id = lock_code_manager_config_entry.entry_id
+
+        # Entity ID uses the config entry title (slugified)
+        number_entity_id = "number.mock_title_code_slot_1_number_of_uses"
+
+        # Verify no number entity exists for slot 1 before the update
+        assert ent_reg.async_get(number_entity_id) is None
+
+        # Add number_of_uses to slot 1
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/update_slot_condition",
+                "config_entry_id": entry_id,
+                "slot": 1,
+                "number_of_uses": 10,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Wait for entity creation
+        await hass.async_block_till_done()
+
+        # Verify number entity was created
+        entity_entry = ent_reg.async_get(number_entity_id)
+        assert entity_entry is not None, "Number entity was not created"
+        assert entity_entry.config_entry_id == entry_id
+
+        # Verify entity has the correct state
+        state = hass.states.get(number_entity_id)
+        assert state is not None, "Number entity state not found"
+        assert float(state.state) == 10
