@@ -1193,15 +1193,15 @@ async def update_slot_condition(
         return
 
     # Verify entity exists if provided
-    if CONF_ENTITY_ID in msg:
-        entity_id = msg[CONF_ENTITY_ID]
-        if entity_id is not None and not hass.states.get(entity_id):
-            connection.send_error(
-                msg["id"],
-                websocket_api.const.ERR_NOT_FOUND,
-                f"Entity {entity_id} not found",
-            )
-            return
+    if (entity_id := msg.get(CONF_ENTITY_ID)) is not None and not hass.states.get(
+        entity_id
+    ):
+        connection.send_error(
+            msg["id"],
+            websocket_api.const.ERR_NOT_FOUND,
+            f"Entity {entity_id} not found",
+        )
+        return
 
     # Update config entry data
     data = copy.deepcopy(dict(config_entry.data))
