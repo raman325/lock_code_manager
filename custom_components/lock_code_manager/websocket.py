@@ -1226,6 +1226,9 @@ async def update_slot_condition(
             slot_config[CONF_NUMBER_OF_USES] = num_uses
 
     data[CONF_SLOTS][slot_key] = slot_config
-    hass.config_entries.async_update_entry(config_entry, data=data)
+
+    # Only update if data actually changed
+    if data != config_entry.data:
+        hass.config_entries.async_update_entry(config_entry, data=data)
 
     connection.send_result(msg["id"], {"success": True})
