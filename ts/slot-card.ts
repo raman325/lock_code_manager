@@ -1574,21 +1574,25 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   <div class="dialog-section-description">
                                       PIN is active only when this entity is "on"
                                   </div>
-                                  <ha-entity-picker
+                                  <ha-selector
                                       .hass=${this._hass}
                                       .value=${this._dialogEntityId ?? ''}
-                                      .includeDomains=${[
-                                          'calendar',
-                                          'schedule',
-                                          'binary_sensor',
-                                          'switch',
-                                          'input_boolean'
-                                      ]}
+                                      .selector=${{
+                                          entity: {
+                                              domain: [
+                                                  'calendar',
+                                                  'schedule',
+                                                  'binary_sensor',
+                                                  'switch',
+                                                  'input_boolean'
+                                              ]
+                                          }
+                                      }}
                                       .label=${'Select entity'}
                                       @value-changed=${(e: CustomEvent) => {
                                           this._dialogEntityId = e.detail.value || null;
                                       }}
-                                  ></ha-entity-picker>
+                                  ></ha-selector>
                                   ${hasExistingEntity
                                       ? html`<button
                                             class="dialog-clear-button"
