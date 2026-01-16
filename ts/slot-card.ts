@@ -1574,21 +1574,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   <div class="dialog-section-description">
                                       PIN is active only when this entity is "on"
                                   </div>
-                                  <ha-entity-picker
-                                      .hass=${this._hass}
+                                  <select
+                                      style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color);"
                                       .value=${this._dialogEntityId ?? ''}
-                                      .includeDomains=${[
-                                          'calendar',
-                                          'schedule',
-                                          'binary_sensor',
-                                          'switch',
-                                          'input_boolean'
-                                      ]}
-                                      .label=${'Select entity'}
-                                      @value-changed=${(e: CustomEvent) => {
-                                          this._dialogEntityId = e.detail.value || null;
+                                      @change=${(e: Event) => {
+                                          this._dialogEntityId =
+                                              (e.target as HTMLSelectElement).value || null;
                                       }}
-                                  ></ha-entity-picker>
+                                  >
+                                      <option value="">Select an entity...</option>
+                                      ${this._hass
+                                          ? Object.keys(this._hass.states)
+                                                .filter((eid) =>
+                                                    [
+                                                        'calendar',
+                                                        'schedule',
+                                                        'binary_sensor',
+                                                        'switch',
+                                                        'input_boolean'
+                                                    ].includes(eid.split('.')[0])
+                                                )
+                                                .sort()
+                                                .map(
+                                                    (eid) => html`
+                                                        <option
+                                                            value=${eid}
+                                                            ?selected=${eid ===
+                                                            this._dialogEntityId}
+                                                        >
+                                                            ${this._hass.states[eid]?.attributes
+                                                                ?.friendly_name ?? eid}
+                                                            (${eid})
+                                                        </option>
+                                                    `
+                                                )
+                                          : nothing}
+                                  </select>
                                   ${hasExistingEntity
                                       ? html`<button
                                             class="dialog-clear-button"
