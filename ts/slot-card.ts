@@ -5,10 +5,13 @@ import {
     mdiChevronDown,
     mdiChevronUp,
     mdiClock,
+    mdiCog,
     mdiEye,
     mdiEyeOff,
     mdiKey,
     mdiLock,
+    mdiPencil,
+    mdiPlus,
     mdiPound,
     mdiToggleSwitch,
     mdiToggleSwitchOutline
@@ -543,6 +546,142 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             .action-error-dismiss:hover {
                 opacity: 1;
             }
+
+            /* Condition edit icons */
+            .condition-edit-icon {
+                --mdc-icon-size: 18px;
+                color: var(--secondary-text-color);
+                cursor: pointer;
+                margin-left: auto;
+                opacity: 0.6;
+                transition: opacity 0.2s;
+            }
+
+            .condition-edit-icon:hover {
+                opacity: 1;
+            }
+
+            .condition-entity-header .condition-edit-icon {
+                margin-left: 8px;
+            }
+
+            /* Manage conditions row */
+            .manage-conditions-row {
+                align-items: center;
+                background: var(--lcm-section-bg);
+                border-radius: 8px;
+                color: var(--primary-color);
+                cursor: pointer;
+                display: flex;
+                gap: 8px;
+                padding: 12px;
+                transition: background-color 0.2s;
+            }
+
+            .manage-conditions-row:hover {
+                background: var(--lcm-section-bg-hover);
+            }
+
+            .manage-conditions-row ha-svg-icon {
+                --mdc-icon-size: 20px;
+            }
+
+            .manage-conditions-row span {
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            /* Add condition row */
+            .add-condition-row {
+                align-items: center;
+                border-radius: 8px;
+                color: var(--primary-color);
+                cursor: pointer;
+                display: flex;
+                gap: 8px;
+                margin-top: 8px;
+                padding: 8px;
+                transition: background-color 0.2s;
+            }
+
+            .add-condition-row:hover {
+                background: var(--lcm-active-bg);
+            }
+
+            .add-condition-row ha-svg-icon {
+                --mdc-icon-size: 18px;
+            }
+
+            .add-condition-row span {
+                font-size: 13px;
+            }
+
+            /* Dialog styles */
+            .dialog-content {
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+                min-width: 300px;
+            }
+
+            .dialog-section {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .dialog-section-header {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            .dialog-section-description {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+            }
+
+            .dialog-checkbox-row {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+            }
+
+            .dialog-checkbox-row label {
+                color: var(--primary-text-color);
+                cursor: pointer;
+                font-size: 14px;
+            }
+
+            .dialog-number-input {
+                margin-top: 8px;
+            }
+
+            .dialog-number-input input {
+                background: var(--input-background-color, var(--card-background-color));
+                border: 1px solid var(--divider-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 14px;
+                padding: 8px 12px;
+                width: 100px;
+            }
+
+            .dialog-clear-button {
+                background: none;
+                border: 1px solid var(--divider-color);
+                border-radius: 4px;
+                color: var(--error-color);
+                cursor: pointer;
+                font-size: 13px;
+                margin-top: 8px;
+                padding: 6px 12px;
+            }
+
+            .dialog-clear-button:hover {
+                background: var(--error-color);
+                color: white;
+            }
         `
     ];
 
@@ -554,6 +693,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _conditionsExpanded = false;
     @state() private _editingField: 'name' | 'pin' | 'numberOfUses' | null = null;
     @state() private _lockStatusExpanded = false;
+
+    // Condition dialog state
+    @state() private _showConditionDialog = false;
+    @state() private _dialogMode: 'entity' | 'uses' | 'both' = 'both';
+    @state() private _dialogEntityId: string | null = null;
+    @state() private _dialogNumberOfUses: number | null = null;
+    @state() private _dialogEnableUses = false;
+    @state() private _dialogSaving = false;
 
     _hass?: HomeAssistant;
 
@@ -699,6 +846,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             conditions.condition_entity !== undefined ||
             conditions.calendar !== undefined;
         const showConditions = this._config.show_conditions !== false && hasConditions;
+        // Show "Manage Conditions" row when no conditions exist
+        const showManageConditions = this._config.show_conditions !== false && !hasConditions;
 
         return html`
             <ha-card>
@@ -718,9 +867,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 <div class="content">
                     ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
+                    ${showManageConditions ? this._renderManageConditionsRow() : nothing}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
+                ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
             </ha-card>
         `;
     }
@@ -964,6 +1115,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                   </span>`
             : undefined;
 
+        // Determine what conditions can still be added
+        const canAddUses = !hasNumberOfUses;
+        const canAddEntity = !hasConditionEntity;
+        const canAddMore = canAddUses || canAddEntity;
+
         const content = html`
             ${hasNumberOfUses
                 ? html`<div class="condition-row">
@@ -990,9 +1146,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                     >${number_of_uses}</span
                                 >`}
                       </div>
+                      <ha-svg-icon
+                          class="condition-edit-icon"
+                          .path=${mdiPencil}
+                          title="Edit number of uses"
+                          @click=${(e: Event) => {
+                              e.stopPropagation();
+                              this._openConditionDialog('uses');
+                          }}
+                      ></ha-svg-icon>
                   </div>`
                 : nothing}
-            ${hasConditionEntity ? this._renderConditionEntity(condition_entity) : nothing}
+            ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
+            ${canAddMore
+                ? html`<div
+                      class="add-condition-row"
+                      @click=${() =>
+                          this._openConditionDialog(
+                              canAddUses && canAddEntity ? 'both' : canAddUses ? 'uses' : 'entity'
+                          )}
+                  >
+                      <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
+                      <span>Add condition</span>
+                  </div>`
+                : nothing}
         `;
 
         return this._renderCollapsible(
@@ -1064,7 +1241,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * Render a unified condition entity display.
      * Consistent structure across all domain types with domain-specific context.
      */
-    private _renderConditionEntity(entity: ConditionEntityInfo): TemplateResult {
+    private _renderConditionEntity(entity: ConditionEntityInfo, showEdit = false): TemplateResult {
         const isActive = entity.state === 'on';
         const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
         const statusText = isActive ? 'Not blocking' : 'Blocking access';
@@ -1173,6 +1350,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ></ha-svg-icon>
                     <span class="condition-entity-status">${statusText}</span>
                     <span class="condition-entity-domain">${domainLabel}</span>
+                    ${showEdit
+                        ? html`<ha-svg-icon
+                              class="condition-edit-icon"
+                              .path=${mdiPencil}
+                              title="Edit condition entity"
+                              @click=${(e: Event) => {
+                                  e.stopPropagation();
+                                  this._openConditionDialog('entity');
+                              }}
+                          ></ha-svg-icon>`
+                        : nothing}
                 </div>
                 <div class="condition-entity-name">${displayName}</div>
                 ${contextLines}
@@ -1326,6 +1514,193 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _toggleLockStatus(): void {
         this._lockStatusExpanded = !this._lockStatusExpanded;
+    }
+
+    private _renderManageConditionsRow(): TemplateResult {
+        return html`
+            <div class="manage-conditions-row" @click=${() => this._openConditionDialog('both')}>
+                <ha-svg-icon .path=${mdiCog}></ha-svg-icon>
+                <span>Manage Conditions</span>
+            </div>
+        `;
+    }
+
+    private _openConditionDialog(mode: 'entity' | 'uses' | 'both'): void {
+        this._dialogMode = mode;
+        const conditions = this._data?.conditions;
+
+        // Initialize dialog state from current values
+        this._dialogEntityId = conditions?.condition_entity?.condition_entity_id ?? null;
+        const currentUses = conditions?.number_of_uses;
+        this._dialogEnableUses = currentUses !== undefined && currentUses !== null;
+        // Default to 5 if adding new
+        this._dialogNumberOfUses = currentUses ?? 5;
+
+        this._showConditionDialog = true;
+    }
+
+    private _closeConditionDialog(): void {
+        this._showConditionDialog = false;
+        this._dialogSaving = false;
+    }
+
+    private _renderConditionDialog(): TemplateResult {
+        const showEntitySection = this._dialogMode === 'entity' || this._dialogMode === 'both';
+        const showUsesSection = this._dialogMode === 'uses' || this._dialogMode === 'both';
+        const hasExistingEntity = this._data?.conditions?.condition_entity !== undefined;
+        const hasExistingUses =
+            this._data?.conditions?.number_of_uses !== undefined &&
+            this._data?.conditions?.number_of_uses !== null;
+
+        const dialogTitle =
+            this._dialogMode === 'entity'
+                ? 'Edit Condition Entity'
+                : this._dialogMode === 'uses'
+                  ? 'Edit Number of Uses'
+                  : 'Manage Conditions';
+
+        return html`
+            <ha-dialog open @closed=${this._closeConditionDialog} .heading=${dialogTitle}>
+                <div class="dialog-content">
+                    ${showEntitySection
+                        ? html`
+                              <div class="dialog-section">
+                                  <div class="dialog-section-header">Condition Entity</div>
+                                  <div class="dialog-section-description">
+                                      PIN is active only when this entity is "on"
+                                  </div>
+                                  <ha-entity-picker
+                                      .hass=${this._hass}
+                                      .value=${this._dialogEntityId ?? ''}
+                                      .includeDomains=${[
+                                          'calendar',
+                                          'schedule',
+                                          'binary_sensor',
+                                          'switch',
+                                          'input_boolean'
+                                      ]}
+                                      @value-changed=${(e: CustomEvent) => {
+                                          this._dialogEntityId = e.detail.value || null;
+                                      }}
+                                      allow-custom-entity
+                                  ></ha-entity-picker>
+                                  ${hasExistingEntity
+                                      ? html`<button
+                                            class="dialog-clear-button"
+                                            @click=${() => {
+                                                this._dialogEntityId = null;
+                                            }}
+                                        >
+                                            Clear entity
+                                        </button>`
+                                      : nothing}
+                              </div>
+                          `
+                        : nothing}
+                    ${showUsesSection
+                        ? html`
+                              <div class="dialog-section">
+                                  <div class="dialog-section-header">Number of Uses</div>
+                                  <div class="dialog-section-description">
+                                      Limit how many times this PIN can be used
+                                  </div>
+                                  <div class="dialog-checkbox-row">
+                                      <ha-checkbox
+                                          .checked=${this._dialogEnableUses}
+                                          @change=${(e: Event) => {
+                                              this._dialogEnableUses = (
+                                                  e.target as HTMLInputElement
+                                              ).checked;
+                                          }}
+                                      ></ha-checkbox>
+                                      <label
+                                          @click=${() => {
+                                              this._dialogEnableUses = !this._dialogEnableUses;
+                                          }}
+                                      >
+                                          Enable use tracking
+                                      </label>
+                                  </div>
+                                  ${this._dialogEnableUses
+                                      ? html`<div class="dialog-number-input">
+                                            <label>Initial uses:</label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                .value=${String(this._dialogNumberOfUses ?? 5)}
+                                                @input=${(e: Event) => {
+                                                    const val = parseInt(
+                                                        (e.target as HTMLInputElement).value,
+                                                        10
+                                                    );
+                                                    if (!isNaN(val) && val > 0) {
+                                                        this._dialogNumberOfUses = val;
+                                                    }
+                                                }}
+                                            />
+                                        </div>`
+                                      : hasExistingUses
+                                        ? html`<div
+                                              class="dialog-section-description"
+                                              style="color: var(--warning-color);"
+                                          >
+                                              Use tracking will be removed
+                                          </div>`
+                                        : nothing}
+                              </div>
+                          `
+                        : nothing}
+                </div>
+                <mwc-button slot="secondaryAction" @click=${this._closeConditionDialog}>
+                    Cancel
+                </mwc-button>
+                <mwc-button
+                    slot="primaryAction"
+                    @click=${this._saveConditionChanges}
+                    .disabled=${this._dialogSaving}
+                >
+                    ${this._dialogSaving ? 'Saving...' : 'Save'}
+                </mwc-button>
+            </ha-dialog>
+        `;
+    }
+
+    private async _saveConditionChanges(): Promise<void> {
+        if (!this._hass || !this._config) return;
+
+        this._dialogSaving = true;
+
+        try {
+            const msg: MessageBase & Record<string, unknown> = {
+                slot: this._config.slot,
+                type: 'lock_code_manager/update_slot_condition'
+            };
+
+            // Add config entry identifier
+            if (this._config.config_entry_id) {
+                msg.config_entry_id = this._config.config_entry_id;
+            } else if (this._config.config_entry_title) {
+                msg.config_entry_title = this._config.config_entry_title;
+            }
+
+            // Add entity_id if in entity or both mode
+            if (this._dialogMode === 'entity' || this._dialogMode === 'both') {
+                msg.entity_id = this._dialogEntityId;
+            }
+
+            // Add number_of_uses if in uses or both mode
+            if (this._dialogMode === 'uses' || this._dialogMode === 'both') {
+                msg.number_of_uses = this._dialogEnableUses ? this._dialogNumberOfUses : null;
+            }
+
+            await this._hass.callWS(msg);
+            this._closeConditionDialog();
+        } catch (err) {
+            this._setActionError(
+                `Failed to update conditions: ${err instanceof Error ? err.message : 'Unknown error'}`
+            );
+            this._dialogSaving = false;
+        }
     }
 
     private async _handleEnabledToggle(e: Event): Promise<void> {

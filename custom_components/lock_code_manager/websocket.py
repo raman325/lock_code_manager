@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
+import copy
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
@@ -18,6 +19,7 @@ from homeassistant.components.calendar import (
     SERVICE_GET_EVENTS,
 )
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
+from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.schedule import (
     ATTR_NEXT_EVENT as SCHEDULE_ATTR_NEXT_EVENT,
@@ -44,7 +46,7 @@ from homeassistant.core import (
     callback,
     split_entity_id,
 )
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util, slugify
 
@@ -265,6 +267,7 @@ async def async_setup(hass: HomeAssistant) -> bool:
     websocket_api.async_register_command(hass, subscribe_lock_codes)
     websocket_api.async_register_command(hass, subscribe_code_slot)
     websocket_api.async_register_command(hass, set_lock_usercode)
+    websocket_api.async_register_command(hass, update_slot_condition)
 
     return True
 
@@ -1132,3 +1135,97 @@ async def set_lock_usercode(
             websocket_api.const.ERR_UNKNOWN_ERROR,
             str(err),
         )
+
+
+# Supported domains for condition entities
+CONDITION_ENTITY_DOMAINS = frozenset(
+    {
+        BINARY_SENSOR_DOMAIN,
+        CALENDAR_DOMAIN,
+        INPUT_BOOLEAN_DOMAIN,
+        SCHEDULE_DOMAIN,
+        SWITCH_DOMAIN,
+    }
+)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lock_code_manager/update_slot_condition",
+        vol.Exclusive("config_entry_title", "entry"): str,
+        vol.Exclusive("config_entry_id", "entry"): str,
+        vol.Required(ATTR_SLOT): int,
+        vol.Optional(CONF_ENTITY_ID): vol.Any(
+            cv.entity_domain(CONDITION_ENTITY_DOMAINS), None
+        ),
+        vol.Optional(CONF_NUMBER_OF_USES): vol.Any(
+            vol.All(vol.Coerce(int), vol.Range(min=1)), None
+        ),
+    }
+)
+@websocket_api.async_response
+@async_get_entry
+async def update_slot_condition(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+    config_entry: ConfigEntry,
+) -> None:
+    """Update condition settings for a slot.
+
+    Allows adding, changing, or removing:
+    - entity_id: Condition entity (calendar, schedule, binary_sensor, switch, input_boolean)
+    - number_of_uses: Usage tracking (positive int to enable, None to disable)
+
+    Only fields present in the message are updated. To remove a field, pass None/null.
+    """
+    slot_num = msg[ATTR_SLOT]
+
+    # Validate slot exists
+    slots = get_entry_data(config_entry, CONF_SLOTS, {})
+    slot_key = slot_num if slot_num in slots else str(slot_num)
+    if slot_key not in slots:
+        connection.send_error(
+            msg["id"],
+            websocket_api.const.ERR_NOT_FOUND,
+            f"Slot {slot_num} not found in config entry",
+        )
+        return
+
+    # Verify entity exists if provided
+    if CONF_ENTITY_ID in msg:
+        entity_id = msg[CONF_ENTITY_ID]
+        if entity_id is not None and not hass.states.get(entity_id):
+            connection.send_error(
+                msg["id"],
+                websocket_api.const.ERR_NOT_FOUND,
+                f"Entity {entity_id} not found",
+            )
+            return
+
+    # Update config entry data
+    data = copy.deepcopy(dict(config_entry.data))
+    slot_config = data[CONF_SLOTS][slot_key]
+
+    # Update entity_id if present in message
+    if CONF_ENTITY_ID in msg:
+        entity_id = msg[CONF_ENTITY_ID]
+        if entity_id is None:
+            # Remove the key entirely
+            slot_config.pop(CONF_ENTITY_ID, None)
+        else:
+            slot_config[CONF_ENTITY_ID] = entity_id
+
+    # Update number_of_uses if present in message
+    if CONF_NUMBER_OF_USES in msg:
+        num_uses = msg[CONF_NUMBER_OF_USES]
+        if num_uses is None:
+            # Remove the key entirely (disables tracking, removes entity)
+            slot_config.pop(CONF_NUMBER_OF_USES, None)
+        else:
+            slot_config[CONF_NUMBER_OF_USES] = num_uses
+
+    data[CONF_SLOTS][slot_key] = slot_config
+    hass.config_entries.async_update_entry(config_entry, data=data)
+
+    connection.send_result(msg["id"], {"success": True})
