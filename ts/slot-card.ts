@@ -624,6 +624,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 min-width: 300px;
             }
 
+            .dialog-content ha-entity-picker {
+                display: block;
+                width: 100%;
+            }
+
             .dialog-section {
                 display: flex;
                 flex-direction: column;
@@ -1579,10 +1584,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                           'switch',
                                           'input_boolean'
                                       ]}
+                                      .label=${'Select entity'}
                                       @value-changed=${(e: CustomEvent) => {
                                           this._dialogEntityId = e.detail.value || null;
                                       }}
-                                      allow-custom-entity
                                   ></ha-entity-picker>
                                   ${hasExistingEntity
                                       ? html`<button
