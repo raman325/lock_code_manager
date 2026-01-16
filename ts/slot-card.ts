@@ -19,7 +19,6 @@ import {
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
-import { Ref, createRef, ref } from 'lit/directives/ref.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import {
@@ -625,8 +624,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 min-width: 300px;
             }
 
-            .dialog-content ha-entity-picker {
-                display: block;
+            .entity-select {
+                background: var(--card-background-color);
+                border: 1px solid var(--divider-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 14px;
+                padding: 8px;
                 width: 100%;
             }
 
@@ -709,9 +713,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _dialogSaving = false;
 
     _hass?: HomeAssistant;
-
-    // Ref for entity picker (to set properties after render)
-    private _entityPickerRef: Ref<HTMLElement> = createRef();
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -806,26 +807,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 input.focus();
                 input.select();
             }
-        }
-
-        // Set entity picker properties after render (workaround for dialog rendering issue)
-        if (this._showConditionDialog && this._entityPickerRef.value && this._hass) {
-            const picker = this._entityPickerRef.value as HTMLElement & {
-                hass: HomeAssistant;
-                includeDomains: string[];
-                label: string;
-                value: string;
-            };
-            picker.hass = this._hass;
-            picker.value = this._dialogEntityId ?? '';
-            picker.includeDomains = [
-                'calendar',
-                'schedule',
-                'binary_sensor',
-                'switch',
-                'input_boolean'
-            ];
-            picker.label = 'Select entity';
         }
     }
 
@@ -1598,12 +1579,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   <div class="dialog-section-description">
                                       PIN is active only when this entity is "on"
                                   </div>
-                                  <ha-entity-picker
-                                      ${ref(this._entityPickerRef)}
-                                      @value-changed=${(e: CustomEvent) => {
-                                          this._dialogEntityId = e.detail.value || null;
+                                  <select
+                                      class="entity-select"
+                                      .value=${this._dialogEntityId ?? ''}
+                                      @change=${(e: Event) => {
+                                          this._dialogEntityId =
+                                              (e.target as HTMLSelectElement).value || null;
                                       }}
-                                  ></ha-entity-picker>
+                                  >
+                                      <option value="">Select an entity...</option>
+                                      ${this._hass
+                                          ? Object.keys(this._hass.states)
+                                                .filter((eid) =>
+                                                    [
+                                                        'calendar',
+                                                        'schedule',
+                                                        'binary_sensor',
+                                                        'switch',
+                                                        'input_boolean'
+                                                    ].includes(eid.split('.')[0])
+                                                )
+                                                .sort()
+                                                .map(
+                                                    (eid) => html`
+                                                        <option
+                                                            value=${eid}
+                                                            ?selected=${eid ===
+                                                            this._dialogEntityId}
+                                                        >
+                                                            ${this._hass.states[eid]?.attributes
+                                                                ?.friendly_name ?? eid}
+                                                            (${eid})
+                                                        </option>
+                                                    `
+                                                )
+                                          : nothing}
+                                  </select>
                                   ${hasExistingEntity
                                       ? html`<button
                                             class="dialog-clear-button"
