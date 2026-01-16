@@ -1627,11 +1627,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                                 )
                                           : nothing}
                                   </datalist>
-                                  ${hasExistingEntity
+                                  ${hasExistingEntity || this._dialogEntityId
                                       ? html`<button
                                             class="dialog-clear-button"
                                             @click=${() => {
                                                 this._dialogEntityId = null;
+                                                // Also clear the input element directly
+                                                const input =
+                                                    this.shadowRoot?.querySelector<HTMLInputElement>(
+                                                        '.entity-select'
+                                                    );
+                                                if (input) input.value = '';
                                             }}
                                         >
                                             Clear entity
