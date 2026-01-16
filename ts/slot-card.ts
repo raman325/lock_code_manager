@@ -125,14 +125,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-weight: 500;
             }
 
-            .header-badges {
-                align-items: center;
+            .header-pills {
+                align-items: flex-end;
                 display: flex;
+                flex-direction: column;
                 flex-shrink: 0;
-                gap: 8px;
+                gap: 4px;
             }
 
-            .header-badge {
+            .header-pill {
                 align-items: center;
                 background: var(--lcm-section-bg);
                 border-radius: 12px;
@@ -141,43 +142,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-size: 11px;
                 gap: 4px;
                 padding: 4px 8px;
+                white-space: nowrap;
             }
 
-            .header-badge ha-svg-icon {
+            .header-pill ha-svg-icon {
                 --mdc-icon-size: 14px;
                 flex-shrink: 0;
             }
 
-            .header-badge.clickable {
+            .header-pill.clickable {
                 cursor: pointer;
                 transition: background-color 0.2s;
             }
 
-            .header-badge.clickable:hover {
-                background: var(--lcm-section-bg-hover);
-            }
-
-            .header-last-used {
-                align-items: center;
-                background: var(--lcm-section-bg);
-                border-radius: 12px;
-                color: var(--secondary-text-color);
-                display: flex;
-                font-size: 11px;
-                gap: 4px;
-                padding: 4px 8px;
-            }
-
-            .header-last-used ha-svg-icon {
-                --mdc-icon-size: 14px;
-            }
-
-            .header-last-used.clickable {
-                cursor: pointer;
-                transition: background-color 0.2s;
-            }
-
-            .header-last-used.clickable:hover {
+            .header-pill.clickable:hover {
                 background: var(--lcm-section-bg-hover);
             }
 
@@ -1014,6 +992,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const eventEntityState = eventEntityId ? this._hass?.states[eventEntityId] : undefined;
         const showLastUsed = eventEntityState && eventEntityState.state !== 'unavailable';
 
+        const showPills = (showLockCount && lockCount > 0) || showLastUsed;
+
         return html`
             <div class="header">
                 <div class="header-top">
@@ -1023,39 +1003,42 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     <div class="header-info">
                         <span class="header-title">Code Slot ${this._config?.slot}</span>
                     </div>
-                    ${showLockCount && lockCount > 0
-                        ? html`<div class="header-badges">
-                              <span
-                                  class="header-badge clickable"
-                                  title=${this._data?.locks?.map((l) => l.name).join(', ') ?? ''}
-                                  @click=${this._toggleLockStatus}
-                              >
-                                  <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
-                                  ${lockCount}
-                              </span>
+                    ${showPills
+                        ? html`<div class="header-pills">
+                              ${showLockCount && lockCount > 0
+                                  ? html`<span
+                                        class="header-pill clickable"
+                                        title=${this._data?.locks?.map((l) => l.name).join(', ') ??
+                                        ''}
+                                        @click=${this._toggleLockStatus}
+                                    >
+                                        <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
+                                        ${lockCount}
+                                    </span>`
+                                  : nothing}
+                              ${showLastUsed
+                                  ? html`<span
+                                        class="header-pill ${lastUsed ? 'clickable' : ''}"
+                                        title=${lastUsed
+                                            ? this._data?.last_used_lock
+                                                ? `Used on ${this._data.last_used_lock} - Click for details`
+                                                : 'Click for PIN usage details'
+                                            : 'This PIN has never been used'}
+                                        @click=${() => lastUsed && this._navigateToEventHistory()}
+                                    >
+                                        <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
+                                        ${lastUsed
+                                            ? html`${this._data?.last_used_lock ?? 'Used'}
+                                                  <ha-relative-time
+                                                      .hass=${this._hass}
+                                                      .datetime=${lastUsed}
+                                                  ></ha-relative-time>`
+                                            : 'Never used'}
+                                    </span>`
+                                  : nothing}
                           </div>`
                         : nothing}
                 </div>
-                ${showLastUsed
-                    ? html`<div
-                          class="header-last-used ${lastUsed ? 'clickable' : ''}"
-                          title=${lastUsed
-                              ? this._data?.last_used_lock
-                                  ? `Used on ${this._data.last_used_lock} - Click for details`
-                                  : 'Click for PIN usage details'
-                              : 'This PIN has never been used'}
-                          @click=${() => lastUsed && this._navigateToEventHistory()}
-                      >
-                          <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
-                          ${lastUsed
-                              ? html`${this._data?.last_used_lock ?? 'Used'}
-                                    <ha-relative-time
-                                        .hass=${this._hass}
-                                        .datetime=${lastUsed}
-                                    ></ha-relative-time>`
-                              : 'Never used'}
-                      </div>`
-                    : nothing}
             </div>
         `;
     }
