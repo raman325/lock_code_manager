@@ -392,13 +392,14 @@ class ZWaveJSLock(BaseLock):
         Returns True if the value was changed, False if already set to this value.
         """
         # Check if the code is already set to this value (avoid unnecessary network call)
+        usercode_str = str(usercode)
         try:
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
                 # Handle masked codes (all asterisks) - resolve to expected PIN
-                if self._is_masked_code(current_code) and str(
-                    usercode
-                ) == self._resolve_masked_code(code_slot):
+                if self._is_masked_code(
+                    current_code
+                ) and usercode_str == self._resolve_masked_code(code_slot):
                     _LOGGER.debug(
                         "Lock %s slot %s has masked PIN matching expected, "
                         "skipping set",
@@ -407,7 +408,7 @@ class ZWaveJSLock(BaseLock):
                     )
                     return False
                 # Direct match - code is already set
-                if str(usercode) == current_code:
+                if usercode_str == current_code:
                     _LOGGER.debug(
                         "Lock %s slot %s already has this PIN, skipping set",
                         self.lock.entity_id,
