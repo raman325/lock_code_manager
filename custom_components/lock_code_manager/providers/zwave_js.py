@@ -132,25 +132,27 @@ class ZWaveJSLock(BaseLock):
 
         return True, ""
 
-    def _is_masked_pin(self, value: str) -> bool:
-        """Check if a usercode value is masked (all asterisks)."""
-        return bool(value) and value == "*" * len(value)
-
-    def _get_expected_pin(self, code_slot: int) -> str | None:
-        """Resolve a masked usercode to the expected PIN value.
+    def _resolve_pin_if_masked(self, value: str, code_slot: int) -> str | None:
+        """Resolve a PIN value, looking up expected PIN if masked.
 
         Some locks return masked values (all asterisks) instead of the actual PIN.
-        This method looks up the expected PIN from LCM entities for managed slots.
+        This method returns the value as-is if not masked, or looks up the expected
+        PIN from LCM entities if masked.
 
         Args:
+            value: The PIN value (may be masked like "****")
             code_slot: The code slot number
 
         Returns:
-            The expected PIN if slot is managed, active, and has valid PIN
-            None if resolution fails (slot not in LCM, entities unavailable, etc.)
+            The PIN value if not masked, or expected PIN if masked and resolvable
+            None if masked but resolution fails
 
         """
-        # Find config entry managing this lock and slot
+        # If not masked, return as-is
+        if not value or value != "*" * len(value):
+            return value
+
+        # Masked - look up expected PIN from LCM entities
         try:
             config_entry = next(
                 entry
@@ -159,10 +161,8 @@ class ZWaveJSLock(BaseLock):
                 and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
             )
         except StopIteration:
-            # Slot doesn't exist in LCM configuration
             return None
 
-        # Look up entities
         base_unique_id = f"{config_entry.entry_id}|{code_slot}"
         active_entity_id = self.ent_reg.async_get_entity_id(
             SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
@@ -234,35 +234,31 @@ class ZWaveJSLock(BaseLock):
             else:
                 value = str(new_value)
 
-            # Handle masked codes (all asterisks) - resolve to expected PIN
+            # Resolve masked codes (all asterisks) to expected PIN
             # This prevents infinite sync loops when locks return masked values
-            if self._is_masked_pin(value):
-                resolved = self._get_expected_pin(code_slot)
-                if resolved is None:
-                    # Can't resolve masked code, skip update to prevent loop
-                    _LOGGER.debug(
-                        "Lock %s: skipping masked code update for slot %s "
-                        "(unable to resolve)",
-                        self.lock.entity_id,
-                        code_slot,
-                    )
-                    return
-                value = resolved
+            if (resolved := self._resolve_pin_if_masked(value, code_slot)) is None:
+                _LOGGER.debug(
+                    "Lock %s: skipping masked code update for slot %s "
+                    "(unable to resolve)",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return
 
             # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
-            if self.coordinator and self.coordinator.data.get(code_slot) == value:
+            if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
                 return
 
             _LOGGER.debug(
                 "Lock %s received push update for slot %s: %s",
                 self.lock.entity_id,
                 code_slot,
-                "****" if value else "(cleared)",
+                "****" if resolved else "(cleared)",
             )
 
             # Push update to coordinator
             if self.coordinator:
-                self.coordinator.push_update({code_slot: value})
+                self.coordinator.push_update({code_slot: resolved})
 
         try:
             self._value_update_unsub = self.node.on("value updated", on_value_updated)
@@ -396,19 +392,8 @@ class ZWaveJSLock(BaseLock):
         try:
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
-                # Handle masked codes (all asterisks) - resolve to expected PIN
-                if self._is_masked_pin(
-                    current_code
-                ) and usercode == self._get_expected_pin(code_slot):
-                    _LOGGER.debug(
-                        "Lock %s slot %s has masked PIN matching expected, "
-                        "skipping set",
-                        self.lock.entity_id,
-                        code_slot,
-                    )
-                    return False
-                # Direct match - code is already set
-                if usercode == current_code:
+                # Resolve masked codes and compare
+                if usercode == self._resolve_pin_if_masked(current_code, code_slot):
                     _LOGGER.debug(
                         "Lock %s slot %s already has this PIN, skipping set",
                         self.lock.entity_id,
@@ -515,17 +500,10 @@ class ZWaveJSLock(BaseLock):
             if not in_use:
                 slots_not_enabled.append(code_slot)
                 data[code_slot] = ""
-            # Handle masked usercodes (all *'s) - resolve to expected PIN
-            elif self._is_masked_pin(usercode):
-                resolved = self._get_expected_pin(code_slot)
-                if resolved:
-                    slots_with_pin.append(code_slot)
-                    data[code_slot] = resolved
-                # Can't resolve - skip slot entirely, making it unavailable
-                # until entities are ready and resolution succeeds
-            else:
+            # Resolve PIN (handles masked codes), skip if unresolvable
+            elif resolved := self._resolve_pin_if_masked(usercode, code_slot):
                 slots_with_pin.append(code_slot)
-                data[code_slot] = usercode or ""
+                data[code_slot] = resolved
 
         _LOGGER.debug(
             "Lock %s: %s slots with PIN %s, %s slots not enabled %s",
