@@ -395,19 +395,19 @@ class ZWaveJSLock(BaseLock):
         try:
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
-                # Handle masked codes (all asterisks) first - direct comparison
-                # is meaningless for masked values like "****"
-                if self._is_masked_code(current_code):
-                    if str(usercode) == self._resolve_masked_code(code_slot):
-                        _LOGGER.debug(
-                            "Lock %s slot %s has masked PIN matching expected, "
-                            "skipping set",
-                            self.lock.entity_id,
-                            code_slot,
-                        )
-                        return False
+                # Handle masked codes (all asterisks) - resolve to expected PIN
+                if self._is_masked_code(current_code) and str(
+                    usercode
+                ) == self._resolve_masked_code(code_slot):
+                    _LOGGER.debug(
+                        "Lock %s slot %s has masked PIN matching expected, "
+                        "skipping set",
+                        self.lock.entity_id,
+                        code_slot,
+                    )
+                    return False
                 # Direct match - code is already set
-                elif str(usercode) == current_code:
+                if str(usercode) == current_code:
                     _LOGGER.debug(
                         "Lock %s slot %s already has this PIN, skipping set",
                         self.lock.entity_id,
