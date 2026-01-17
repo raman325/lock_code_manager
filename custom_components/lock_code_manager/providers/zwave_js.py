@@ -393,16 +393,28 @@ class ZWaveJSLock(BaseLock):
         """
         # Check if the code is already set to this value (avoid unnecessary network call)
         try:
-            current = get_usercode(self.node, code_slot)
-            if current.get("in_use") and str(current.get("usercode", "")) == str(
-                usercode
-            ):
-                _LOGGER.debug(
-                    "Lock %s slot %s already has this PIN, skipping set",
-                    self.lock.entity_id,
-                    code_slot,
-                )
-                return False
+            if (current := get_usercode(self.node, code_slot)).get("in_use"):
+                current_code = str(current.get("usercode", ""))
+                # Direct match - code is already set
+                if current_code == str(usercode):
+                    _LOGGER.debug(
+                        "Lock %s slot %s already has this PIN, skipping set",
+                        self.lock.entity_id,
+                        code_slot,
+                    )
+                    return False
+                # Handle masked codes (all asterisks) - resolve to expected PIN
+                # Some locks return masked values instead of actual PINs
+                if self._is_masked_code(current_code) and self._resolve_masked_code(
+                    code_slot
+                ) == str(usercode):
+                    _LOGGER.debug(
+                        "Lock %s slot %s has masked PIN matching expected, "
+                        "skipping set",
+                        self.lock.entity_id,
+                        code_slot,
+                    )
+                    return False
         except Exception:
             # If we can't check the cache, proceed with the set
             pass

@@ -186,6 +186,139 @@ async def test_set_usercode_skips_when_unchanged(
     await zwave_js_lock.async_unload(False)
 
 
+async def test_set_usercode_skips_when_masked_code_matches(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that set_usercode returns False when masked code resolves to same PIN.
+
+    Some locks (like Yale) return masked PINs (****) instead of actual codes.
+    When the masked code resolves to the same PIN we're trying to set, we should
+    skip the set operation to prevent battery drain from repeated writes.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Mock the cache to return a masked code
+    masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+            return_value=masked_slot,
+        ),
+        patch.object(
+            zwave_js_lock, "_resolve_masked_code", return_value="5678"
+        ) as mock_resolve,
+        patch.object(
+            zwave_js_lock, "async_call_service", new_callable=AsyncMock
+        ) as mock_service,
+    ):
+        # Try to set the same PIN that the masked code resolves to
+        result = await zwave_js_lock.async_set_usercode(2, "5678", "Test User")
+
+        # Should skip the set operation
+        assert result is False
+        mock_resolve.assert_called_once_with(2)
+        mock_service.assert_not_called()
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_set_usercode_proceeds_when_masked_code_differs(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that set_usercode proceeds when masked code resolves to different PIN.
+
+    When the masked code resolves to a different PIN than what we're trying to set,
+    the set operation should proceed normally.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Mock the cache to return a masked code
+    masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+            return_value=masked_slot,
+        ),
+        patch.object(zwave_js_lock, "_resolve_masked_code", return_value="1234"),
+        patch.object(
+            zwave_js_lock, "async_call_service", new_callable=AsyncMock
+        ) as mock_service,
+    ):
+        # Try to set a different PIN than what the masked code resolves to
+        result = await zwave_js_lock.async_set_usercode(2, "5678", "Test User")
+
+        # Should proceed with the set operation
+        assert result is True
+        mock_service.assert_called_once()
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_set_usercode_proceeds_when_masked_code_unresolvable(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that set_usercode proceeds when masked code cannot be resolved.
+
+    When the masked code cannot be resolved (e.g., slot not managed by LCM),
+    the set operation should proceed to ensure the code gets set.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Mock the cache to return a masked code
+    masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+            return_value=masked_slot,
+        ),
+        patch.object(zwave_js_lock, "_resolve_masked_code", return_value=None),
+        patch.object(
+            zwave_js_lock, "async_call_service", new_callable=AsyncMock
+        ) as mock_service,
+    ):
+        # Try to set a PIN when masked code can't be resolved
+        result = await zwave_js_lock.async_set_usercode(2, "5678", "Test User")
+
+        # Should proceed with the set operation
+        assert result is True
+        mock_service.assert_called_once()
+
+    await zwave_js_lock.async_unload(False)
+
+
 async def test_clear_usercode_calls_service(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
