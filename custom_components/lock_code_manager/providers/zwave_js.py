@@ -132,11 +132,11 @@ class ZWaveJSLock(BaseLock):
 
         return True, ""
 
-    def _is_masked_code(self, value: str) -> bool:
+    def _is_masked(self, value: str) -> bool:
         """Check if a usercode value is masked (all asterisks)."""
         return bool(value) and value == "*" * len(value)
 
-    def _resolve_masked_code(self, code_slot: int) -> str | None:
+    def _resolve_masked(self, code_slot: int) -> str | None:
         """Resolve a masked usercode to the expected PIN value.
 
         Some locks return masked values (all asterisks) instead of the actual PIN.
@@ -236,8 +236,8 @@ class ZWaveJSLock(BaseLock):
 
             # Handle masked codes (all asterisks) - resolve to expected PIN
             # This prevents infinite sync loops when locks return masked values
-            if self._is_masked_code(value):
-                resolved = self._resolve_masked_code(code_slot)
+            if self._is_masked(value):
+                resolved = self._resolve_masked(code_slot)
                 if resolved is None:
                     # Can't resolve masked code, skip update to prevent loop
                     _LOGGER.debug(
@@ -397,9 +397,9 @@ class ZWaveJSLock(BaseLock):
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
                 # Handle masked codes (all asterisks) - resolve to expected PIN
-                if self._is_masked_code(
-                    current_code
-                ) and usercode == self._resolve_masked_code(code_slot):
+                if self._is_masked(current_code) and usercode == self._resolve_masked(
+                    code_slot
+                ):
                     _LOGGER.debug(
                         "Lock %s slot %s has masked PIN matching expected, "
                         "skipping set",
@@ -516,8 +516,8 @@ class ZWaveJSLock(BaseLock):
                 slots_not_enabled.append(code_slot)
                 data[code_slot] = ""
             # Handle masked usercodes (all *'s) - resolve to expected PIN
-            elif self._is_masked_code(usercode):
-                resolved = self._resolve_masked_code(code_slot)
+            elif self._is_masked(usercode):
+                resolved = self._resolve_masked(code_slot)
                 if resolved:
                     slots_with_pin.append(code_slot)
                     data[code_slot] = resolved
