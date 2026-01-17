@@ -23,38 +23,6 @@ entities.
   code changes for don't need a response). Resolve all comments as you address them or respond to them.
   Provide a summary of what was done or not done and ask for confirmation before committing the changes.
 - When running hass, pre-commit, or any other python driven commands, always run from the venv
--
-
-## Codex Agent Context (2025-02 Session)
-
-- `BaseLock` now performs its own rate limiting + connection checks without Tenacity.
-  Tenacity was removed from all dependency lists (manifest + requirements_*), and
-  operations fail fast with `LockDisconnected` if the lock isn't connected—don't
-  reintroduce Tenacity unless absolutely necessary.
-- We added a lightweight retry scheduler in `LockCodeManagerCodeSlotInSyncEntity`: when a
-  sync fails because the lock is offline, the entity schedules its own retry instead of
-  blocking HA. Expect to see `_retry_unsub` state on those entities during tests.
-- The in-sync entity now waits for dependent entity states/availability before acting,
-  ignores irrelevant/unavailable events, and schedules a 10s retry on `LockDisconnected`.
-  New coverage: `test_in_sync_waits_for_missing_pin_state`, `test_entities_track_availability`,
-  the reconnect paths in `test_handles_disconnected_lock_on_set/clear`, and
-  `test_startup_out_of_sync_slots_sync_once` (verifies we sync each slot once without
-  extra calls).
-- Provider connection failures no longer advance rate-limit timing; see
-  `test_connection_failure_does_not_rate_limit_next_operation` for regression coverage.
-- Lovelace strategy resource: only needs to be registered once globally; if HA is in YAML
-  mode we skip removal on unload (mirrors ha_scrypted handling). New test
-  `test_resource_unload_skips_yaml_mode` covers the YAML guard.
-- Claude and Codex collaborated on the startup flapping fix (see "Startup Code Flapping
-  Issue" below). Connection handling is no longer regressed after this session, but keep
-  an eye on `tests/_base/test_provider.py::test_*disconnected` and
-  `tests/test_binary_sensor.py::test_handles_disconnected_lock_on_*` whenever touching
-  provider logic.
-- A focused test command that confirms the connection/retry behaviour is
-  `source venv/bin/activate && pytest tests/_base/test_provider.py -k disconnected -q`.
-- This session also added the `AGENTS.md` mirror of `CLAUDE.md` so future coding agents
-  (e.g., GPT-based) can track their own context along with Claude's notes. Keep both
-  files updated when architecture/process guidance changes.
 
 ## Architecture
 
@@ -66,14 +34,16 @@ entities.
 - `_base.py`: `BaseLock` abstract class defining the provider interface
 - `zwave_js.py`: Z-Wave JS lock implementation
 - `virtual.py`: Virtual lock implementation for testing
-- Each provider implements: `get_usercodes()`, `set_usercode()`, `clear_usercode()`, `is_connection_up()`, `hard_refresh_codes()`
+- Each provider implements: `async_get_usercodes()`, `async_set_usercode()`, `async_clear_usercode()`,
+  `async_is_connection_up()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
 
 **Coordinator** (`coordinator.py`)
 
 - `LockUsercodeUpdateCoordinator`: Home Assistant DataUpdateCoordinator that polls lock providers for usercode state
 - Each lock instance has its own coordinator
-- Default scan interval: 1 minute (configurable per provider)
+- Default scan interval: 1 minute (configurable via `usercode_scan_interval` property)
+- Supports push-based updates via `coordinator.push_update()` for providers with `supports_push = True`
 
 **Main Module** (`__init__.py`)
 
@@ -90,20 +60,20 @@ entities.
 
 ### Entities
 
-- `binary_sensor.py`: PIN enabled/in-sync status
+- `binary_sensor.py`: PIN active status (enabled + conditions met) and per-lock in-sync status
 - `sensor.py`: Per-lock slot PIN sensors showing current codes on each lock
 - `text.py`: Name and PIN configuration entities
-- `number.py`: Number of uses configuration
+- `number.py`: Number of uses tracking (decrements on PIN use)
 - `switch.py`: Slot enabled/disabled toggle
-- `event.py`: PIN usage events
+- `event.py`: PIN usage events (fires when code slot is used to lock/unlock)
 
 ### Data Flow
 
 1. User configures slots and locks via config flow
 2. `async_update_listener()` creates coordinator and provider instances for each lock
 3. Lock provider sets up listeners for lock-specific events (e.g., Z-Wave JS notification events)
-4. Coordinator polls provider's `get_usercodes()` to keep state in sync
-5. When slot config changes (name, PIN, enabled), entities call provider's `set_usercode()` or `clear_usercode()`
+4. Coordinator polls provider's `async_get_usercodes()` to keep state in sync (or receives push updates)
+5. When slot config changes (name, PIN, enabled), entities call provider's `async_set_usercode()` or `async_clear_usercode()`
 6. Provider fires `EVENT_LOCK_STATE_CHANGED` events when locks are operated with PINs
 
 ### Key Design Patterns
@@ -112,12 +82,14 @@ entities.
   `data`, options flow updates go to `options`, then merged back to `data`
 - **Internal methods**: Providers expose `async_internal_*` methods that wrap public
   methods with asyncio locks to prevent race conditions
+- **Rate limiting**: `BaseLock._execute_rate_limited()` enforces 2-second minimum delay
+  between operations and serializes all lock operations via `_aio_lock`
 - **Dispatcher signals**: Heavily used for dynamic entity management without tight coupling
 - **Reauth flow**: Automatically triggered if configured lock entities are removed
 
-### User Codes Data Card - Slot State Logic
+### Lock Codes Card - Slot State Logic
 
-The `lock-code-manager-lock-data` card displays lock slot states with the following data model:
+The `lcm-lock-codes` card displays lock slot states with the following data model:
 
 **Data Fields from Websocket:**
 
@@ -195,11 +167,21 @@ Creates Python 3.13 venv, installs dependencies with uv, sets up pre-commit hook
 
 ### Testing
 
+**Python tests:**
+
 ```bash
 pytest                          # Run all tests
 pytest tests/test_init.py      # Run specific test file
 pytest -k test_name            # Run tests matching pattern
 pytest --cov                   # Run with coverage
+```
+
+**TypeScript tests:**
+
+```bash
+yarn test                       # Run all frontend tests (vitest)
+yarn test:watch                 # Watch mode
+yarn test:coverage              # Run with coverage
 ```
 
 ### Linting
@@ -241,154 +223,99 @@ yarn watch                     # Watch mode for development
 2. Subclass `BaseLock` from `providers/_base.py`
 3. Implement required abstract methods:
    - `domain` property: return integration domain string
-   - `is_connection_up()`: check if lock is reachable
-   - `get_usercodes()`: return dict of slot→code mappings
-   - `set_usercode()`: program a code to a slot
-   - `clear_usercode()`: remove code from slot
+   - `async_is_connection_up()`: check if lock is reachable
+   - `async_get_usercodes()`: return dict of slot→code mappings
+   - `async_set_usercode()`: program a code to a slot
+   - `async_clear_usercode()`: remove code from slot
 4. Override `setup()` to register event listeners
 5. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
 6. Add tests in `tests/<provider>/test_provider.py`
+
+### Optional Provider Properties
+
+| Property | Default | Description |
+| -------- | ------- | ----------- |
+| `usercode_scan_interval` | 1 minute | Polling interval for usercodes |
+| `hard_refresh_interval` | None | Interval for full code refresh (detects out-of-band changes) |
+| `connection_check_interval` | 30 seconds | Interval for connection state checks |
+| `supports_push` | False | Enable push-based updates instead of polling |
+| `supports_code_slot_events` | True | Whether lock fires code slot used events |
+
+### Push Support
+
+If `supports_push` returns `True`, implement:
+
+- `subscribe_push_updates()`: Subscribe to real-time updates, call `coordinator.push_update({slot: value})`
+- `unsubscribe_push_updates()`: Clean up subscriptions
 
 ## Important Constraints
 
 - Slots are numeric (usually 1-100) but can be strings for some lock types
 - Multiple config entries can share the same lock but not the same slot
-- Entity unique IDs: `{entry_id}|{slot}|{entity_type}`
+- Entity unique IDs: `{entry_id}|{slot}|{entity_type}` (per-lock entities add `|{lock_entity_id}`)
 - Lock device is linked to config entry via `dev_reg.async_update_device()`
 
-## Home Assistant Compatibility Notes
+## Websocket API
 
-### Recent Breaking Changes (2024.11+)
+Commands in `websocket.py` for frontend communication:
 
-**2024.11:**
+| Command | Purpose |
+| ------- | ------- |
+| `lock_code_manager/get_config_entry_data` | Fetch config entry, entities, locks, and slots |
+| `lock_code_manager/subscribe_code_slot` | Real-time subscription for slot card updates |
+| `lock_code_manager/subscribe_lock_codes` | Real-time subscription for lock codes card |
+| `lock_code_manager/set_lock_usercode` | Set/clear usercode on unmanaged slots |
+| `lock_code_manager/update_slot_condition` | Add/edit/remove slot conditions (entity_id, number_of_uses) |
 
-- Reauth and reconfigure flows must be linked to a config entry
-- Extended deprecation period for `hass.helpers`
+## Frontend
 
-**2024.12:**
+### Slot Card (`custom:lcm-slot`)
 
-- Z-Wave JS requires zwave-js-server 1.39.0+ (schema 39)
-- Z-Wave JS UI add-on requires v3.17.0+
-- Removed deprecated Z-Wave lock service descriptions
-- Python 3.13 upgrade
-- Update entity `in_progress` attribute now always boolean
-- New `update_percentage` attribute (0-100 or None) for update entities
+Primary card for managing individual code slots. Features:
 
-### Recommended API Updates
+- **Inline editing**: Name, PIN, and number of uses editable directly in card
+- **Condition management**: Add/edit/remove condition entities and number of uses via dialog
+- **Lock status**: Per-lock sync status, actual code on lock (masked/revealed)
+- **Collapsible sections**: Conditions and lock status can be collapsed
+- **Real-time updates**: WebSocket subscription for instant state changes
 
-**Config Entry Management:**
+**Config options:**
 
-- Prefer `ConfigEntry.runtime_data` over `hass.data` for storing runtime information
-- Can explicitly set `config_entry` in DataUpdateCoordinators
-- New helper properties available for config entries
+| Option | Default | Description |
+| ------ | ------- | ----------- |
+| `slot` | required | Slot number to display |
+| `config_entry_id` | - | Config entry ID (or use `config_entry_title`) |
+| `code_display` | `masked_with_reveal` | `masked`, `unmasked`, or `masked_with_reveal` |
+| `show_conditions` | true | Show conditions section |
+| `show_lock_status` | true | Show lock status section |
+| `show_lock_sync` | true | Show sync status per lock |
+| `show_code_sensors` | true | Show actual codes on locks |
+| `show_lock_count` | true | Show lock count badge |
+| `collapsed_sections` | [] | Sections to collapse by default: `conditions`, `lock_status` |
 
-**DataUpdateCoordinator:**
+### Lock Codes Card (`custom:lcm-lock-codes`)
 
-- `_async_setup()` method available (since 2024.8) for one-time initialization
-- Automatically called during `async_config_entry_first_refresh()`
-- Provides same error handling as `_async_update_data` (ConfigEntryError, ConfigEntryAuthFailed)
+Lock-centric view showing all slots on a single lock (managed and unmanaged).
 
-**Z-Wave JS Updates:**
+**Config options:**
 
-- New `node_capabilities` and `invoke_cc_api` websocket commands
-- Can get/set custom config parameters for nodes
-- Better support for non-dimmable color lights
+| Option | Default | Description |
+| ------ | ------- | ----------- |
+| `lock_entity_id` | required | Lock entity to display slots for |
+| `code_display` | `masked_with_reveal` | `masked`, `unmasked`, or `masked_with_reveal` |
+| `title` | - | Optional card title override |
 
-**Deprecations to Watch:**
+### Lovelace Strategies
 
-- `OptionsFlowWithConfigEntry` deprecated for core integrations
-- Camera `async_handle_web_rtc_offer` and `frontend_stream_type` deprecated
-- `homeassistant.util.dt.utc_to_timestamp` deprecated
+- `custom:lock-code-manager` - Dashboard strategy auto-generating views per config entry
+- `custom:lock-code-manager` - View strategy for a single config entry
+- `custom:lock-code-manager-slot` - Section strategy for individual slots
+- `custom:lock-code-manager-lock` - Section strategy for lock codes sections
 
-## Bug Fixes and Investigations
+### Condition Entities
 
-### Startup Code Flapping Issue (2025-09-29)
+Slots can have condition entities that control when the PIN is active:
 
-**Problem:** Integration flapped between clearing/setting codes on startup when
-codes were already synced, causing battery drain.
-
-**Root Cause:** Race condition - in-sync entity checked status before coordinator
-had stable lock state data.
-
-**Solution:** Added `_initial_state_loaded` flag to prevent sync operations on
-first load. On initial load, entity reads all states and sets in-sync status
-WITHOUT triggering operations. Normal sync executes only after initial state is
-stable.
-
-**Files:** `binary_sensor.py`, `tests/test_binary_sensor.py`
-**Tests:** `test_startup_no_code_flapping_when_synced`, `test_startup_detects_out_of_sync_code`
-
-### Home Assistant Compatibility Fixes (2025-10-02)
-
-Fixed three critical compatibility issues for HA Core 2025.7-2025.11+:
-
-| Issue | Problem | Solution | File |
-| ----- | ------- | -------- | ---- |
-| **Config Import** (2025.11) | Deprecated `Config` import from `homeassistant.core` | Changed to `homeassistant.core_config.Config` | `__init__.py` |
-| **register_static_path** (2025.7+) | Synchronous API blocks event loop | Changed to `async_register_static_paths()` with `StaticPathConfig` | `__init__.py` |
-| **Z-Wave JS DATA_CLIENT** (2025.8+) | Deprecated dictionary access pattern | Changed to `getattr(zwave_data, "_client_driver_map", {})` and `client_entry.client` | `providers/zwave_js.py` |
-
-**Result:** Full compatibility with HA Core 2025.7+, all deprecation warnings eliminated.
-
-### Python 3.13 Upgrade and Home Assistant 2025.10 Compatibility (2025-10-05)
-
-**Problem:** Test failures with outdated dependencies (Python 3.12,
-pytest-homeassistant 85 versions behind).
-
-**Solution:** Upgraded to Python 3.13, pytest-homeassistant 0.13.286, zeroconf
-0.147.2, zwave-js-server-python 0.67.1.
-
-**API Compatibility Fixes:**
-
-| API Change | Before | After | Files |
-| ---------- | ------ | ----- | ----- |
-| pytest-asyncio 1.2.0+ | `def aiohttp_client(event_loop, ...)` | `def aiohttp_client(...)` | `tests/conftest.py` |
-| Config Entry Setup | `async_forward_entry_setup(entry, platform)` | `async_forward_entry_setups(entry, [platform])` | `__init__.py`, `tests/conftest.py` |
-| Entity Registry | `er.RegistryEntry("lock.test", ...)` | `entity_reg.async_get_or_create(...)` | `tests/*_provider.py` |
-| Lovelace Data | `hass.data[LL_DOMAIN].get("resources")` | `hass.data[LL_DOMAIN].resources` | `__init__.py`, `tests/test_init.py` |
-
-**Result:** All 37 tests passing, full compatibility with Python 3.13 and HA 2025.10+.
-
-### Entity Creation Blocking Issue (2025-11-04)
-
-**Problem:** No entities created - integration blocked waiting for Z-Wave JS
-connection during startup.
-
-**Root Cause:** Infinite `while` loop blocked `async_update_listener()` waiting
-for lock connection, preventing dispatcher signals for entity creation.
-
-**Solution:**
-
-1. Removed blocking wait loop - create entities regardless of connection state
-2. Added `LockDisconnected` exception and connection checks in `async_internal_*` methods
-3. Added error handling in sync logic to catch `LockDisconnected` during startup
-4. Reverted defensive UI changes (PR #534, #594) that made entities optional -
-   entities should always exist
-
-**Key Lessons:** Fix root causes not symptoms. Making entities optional masked
-the bug. Entities show "unavailable" until lock connects. UI fails fast if
-entities truly missing.
-
-**Files:** `__init__.py`, `providers/_base.py`, `binary_sensor.py`, `ts/types.ts`, `ts/generate-view.ts`
-
-### Rate Limiting and Network Flooding Prevention (2025-11-15)
-
-**Problem:** Integration flooded Z-Wave network with rapid operations during
-startup (10 slots = 20 operations in <5 seconds), causing communication failures
-and battery drain.
-
-**Root Cause:** No serialization, no rate limiting, excessive coordinator refreshes after each operation.
-
-**Solution:** Decorator-based rate limiting system at `BaseLock` level using
-`@rate_limited_operation`:
-
-- Enforces 2-second minimum delay between ANY operations (`time.monotonic()`)
-- Single `_aio_lock` serializes all operations (get, set, clear, refresh)
-- Connection checking before write operations (raises `LockDisconnected`)
-- Type-safe with `Concatenate` and `ParamSpec` (passes mypy)
-
-**Impact:** 10 out-of-sync slots: Before 20 ops in ~5s → After 20 ops in ~40s.
-Network flooding prevented ✅, battery drain minimized ✅.
-
-**Files:** `providers/_base.py` (decorator + fields), `binary_sensor.py` (kept refresh, changed logs to DEBUG)
-**Tests:** 5 new tests in `tests/_base/test_provider.py` - all 37 tests passing, ~95% coverage
+- **Supported domains**: `calendar`, `schedule`, `binary_sensor`, `switch`, `input_boolean`
+- **Behavior**: PIN is active only when condition entity state is `on`
+- **Calendar integration**: Shows current/next event details in slot card UI
