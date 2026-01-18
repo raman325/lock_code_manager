@@ -10,7 +10,13 @@ from typing import Any
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass
-from zwave_js_server.const.command_class.lock import ATTR_CODE_SLOT, ATTR_USERCODE
+from zwave_js_server.const.command_class.lock import (
+    ATTR_CODE_SLOT,
+    ATTR_USERCODE,
+    LOCK_USERCODE_PROPERTY,
+    LOCK_USERCODE_STATUS_PROPERTY,
+    CodeSlotStatus,
+)
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
@@ -18,7 +24,7 @@ from zwave_js_server.const.command_class.notification import (
 from zwave_js_server.model.node import Node
 from zwave_js_server.util.lock import get_usercode, get_usercodes
 
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
@@ -38,14 +44,13 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
-    CONF_ENABLED,
     CONF_PIN,
     STATE_ON,
 )
 from homeassistant.core import Event, callback
 from homeassistant.helpers.event import async_call_later
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from ..const import ATTR_ACTIVE, CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
 from ._base import BaseLock
@@ -163,9 +168,12 @@ class ZWaveJSLock(BaseLock):
         except StopIteration:
             return None
 
+        # Use ATTR_ACTIVE binary sensor (not CONF_ENABLED switch) to match what
+        # sync logic expects. ATTR_ACTIVE considers conditions, so we only resolve
+        # masked codes when sync expects a PIN on the lock.
         base_unique_id = f"{config_entry.entry_id}|{code_slot}"
         active_entity_id = self.ent_reg.async_get_entity_id(
-            SWITCH_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_ENABLED}"
+            BINARY_SENSOR_DOMAIN, DOMAIN, f"{base_unique_id}|{ATTR_ACTIVE}"
         )
         pin_entity_id = self.ent_reg.async_get_entity_id(
             TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
@@ -211,10 +219,14 @@ class ZWaveJSLock(BaseLock):
         def on_value_updated(event: dict[str, Any]) -> None:
             """Handle value update events from Z-Wave JS."""
             args: dict[str, Any] = event["args"]
-            # Filter for User Code CC userCode property only (not userIdStatus)
-            if (
-                args.get("commandClass") != CommandClass.USER_CODE
-                or args.get("property") != "userCode"
+            # Filter for User Code CC - handle both userCode and userIdStatus
+            if args.get("commandClass") != CommandClass.USER_CODE:
+                return
+
+            property_name = args.get("property")
+            if property_name not in (
+                LOCK_USERCODE_PROPERTY,
+                LOCK_USERCODE_STATUS_PROPERTY,
             ):
                 return
 
@@ -224,6 +236,21 @@ class ZWaveJSLock(BaseLock):
             if code_slot == 0:
                 return
 
+            # Handle userIdStatus updates - slot cleared is a fast path
+            if property_name == LOCK_USERCODE_STATUS_PROPERTY:
+                status = args.get("newValue")
+                if status == CodeSlotStatus.AVAILABLE:
+                    # Slot was cleared - update coordinator if needed
+                    if self.coordinator and self.coordinator.data.get(code_slot) != "":
+                        _LOGGER.debug(
+                            "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
+                            self.lock.entity_id,
+                            code_slot,
+                        )
+                        self.coordinator.push_update({code_slot: ""})
+                return
+
+            # Handle userCode updates
             # newValue is the raw PIN string (or None/empty/"0000" if cleared)
             new_value = args.get("newValue")
             # Treat empty, None, or all-zeros as cleared
