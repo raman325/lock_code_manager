@@ -30,6 +30,24 @@ The code was written to make it (I think) easy to add support for locks in other
 integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you
 want to learn more about that and take a stab at it. Contributors welcome!
 
+## Integrations That Cannot Currently Be Supported
+
+Many lock integrations don't yet have Lock Code Manager providers, but could potentially be
+added in the future. The integrations listed below are different - they **cannot** be
+supported due to fundamental limitations in their underlying libraries or protocols.
+
+The Home Assistant lock platform only requires lock/unlock operations. User code management
+is optional, and these integrations don't expose it.
+
+| Integration | Reason |
+| ----------- | ------ |
+| **ESPHome** | The ESPHome lock component only supports lock/unlock/open commands. User code management would need to be implemented in ESPHome's firmware and API first. |
+| **Yale/August** (`august`, `yale`, `yalexs_ble`, `yale_smart_alarm`) | The underlying libraries have limited support. The `yalexs` library (used by both `august` and `yale`) can read PINs via `async_get_pins()` but has no methods to create, update, or delete them. The `yalexs-ble` and `yalesmartalarmclient` libraries don't expose any PIN management. Support would require upstream library changes. |
+
+If you're interested in adding support for one of these integrations, the blocker is
+typically the underlying Python library - not Lock Code Manager itself. Contributing user
+code management features to those libraries would enable LCM support.
+
 ## Installation
 
 The best way to install this integration is via HACS.
