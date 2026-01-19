@@ -4,7 +4,7 @@ ci:
 minimum_pre_commit_version: 3.2.0
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.11
+    rev: v0.14.13
     hooks:
       - id: ruff-check
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -60,7 +60,7 @@ repos:
         additional_dependencies: ["yarn@1.22.21"]
 
   - repo: https://github.com/adrienverge/yamllint.git
-    rev: 79a6b2b1392eaf49cdd32ac4f14be1a809bbd8f7  # frozen: v1.37.1
+    rev: cba56bcde1fdd01c1deb3f945e69764c291a6530  # frozen: v1.38.0
     hooks:
       - id: yamllint
         types: [yaml]
