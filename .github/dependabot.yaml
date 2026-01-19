@@ -22,6 +22,11 @@ updates:
     labels:
       - "dependencies"
       - "python"
+    groups:
+      homeassistant:
+        patterns:
+          - "homeassistant"
+          - "pytest-homeassistant-custom-component"
   - package-ecosystem: npm
     directory: "/" # Location of package manifests
     schedule:
