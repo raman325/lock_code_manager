@@ -263,7 +263,8 @@ class ZWaveJSLock(BaseLock):
 
             # Resolve masked codes (all asterisks) to expected PIN
             # This prevents infinite sync loops when locks return masked values
-            if (resolved := self._resolve_pin_if_masked(value, code_slot)) is None:
+            resolved = self._resolve_pin_if_masked(value, code_slot)
+            if resolved is None:
                 _LOGGER.debug(
                     "Lock %s: skipping masked code update for slot %s "
                     "(unable to resolve)",
