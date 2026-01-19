@@ -518,21 +518,19 @@ class ZWaveJSLock(BaseLock):
             slots = self._get_usercodes_from_cache()
             slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
 
-        slots_with_pin: list[int] = []
-        slots_not_enabled: list[int] = []
         for slot in slots:
             code_slot = int(slot["code_slot"])
             usercode: str = slot["usercode"] or ""
             in_use: bool | None = slot["in_use"]
 
             if not in_use:
-                slots_not_enabled.append(code_slot)
                 data[code_slot] = ""
             # Resolve PIN (handles masked codes), skip if unresolvable
             elif resolved := self._resolve_pin_if_masked(usercode, code_slot):
-                slots_with_pin.append(code_slot)
                 data[code_slot] = resolved
 
+        slots_with_pin = [s for s, v in data.items() if v]
+        slots_not_enabled = [s for s, v in data.items() if not v]
         _LOGGER.debug(
             "Lock %s: %s slots with PIN %s, %s slots not enabled %s",
             self.lock.entity_id,
