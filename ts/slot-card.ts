@@ -1,14 +1,20 @@
 import {
     mdiCalendar,
+    mdiCalendarClock,
     mdiCalendarRemove,
     mdiChevronDown,
     mdiChevronUp,
     mdiClock,
+    mdiDelete,
     mdiEye,
     mdiEyeOff,
     mdiKey,
     mdiLock,
-    mdiPound
+    mdiPencil,
+    mdiPlus,
+    mdiPound,
+    mdiToggleSwitch,
+    mdiToggleSwitchOutline
 } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
@@ -26,6 +32,7 @@ import {
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
+    ConditionEntityInfo,
     LockCodeManagerSlotCardConfig,
     SlotCardConditions,
     SlotCardData
@@ -118,14 +125,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-weight: 500;
             }
 
-            .header-badges {
+            .header-pills {
                 align-items: center;
                 display: flex;
                 flex-shrink: 0;
-                gap: 8px;
+                flex-wrap: wrap;
+                gap: 4px;
+                justify-content: flex-end;
             }
 
-            .header-badge {
+            .header-pill {
                 align-items: center;
                 background: var(--lcm-section-bg);
                 border-radius: 12px;
@@ -134,43 +143,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-size: 11px;
                 gap: 4px;
                 padding: 4px 8px;
+                white-space: nowrap;
             }
 
-            .header-badge ha-svg-icon {
+            .header-pill ha-svg-icon {
                 --mdc-icon-size: 14px;
                 flex-shrink: 0;
             }
 
-            .header-badge.clickable {
+            .header-pill.clickable {
                 cursor: pointer;
                 transition: background-color 0.2s;
             }
 
-            .header-badge.clickable:hover {
-                background: var(--lcm-section-bg-hover);
-            }
-
-            .header-last-used {
-                align-items: center;
-                background: var(--lcm-section-bg);
-                border-radius: 12px;
-                color: var(--secondary-text-color);
-                display: flex;
-                font-size: 11px;
-                gap: 4px;
-                padding: 4px 8px;
-            }
-
-            .header-last-used ha-svg-icon {
-                --mdc-icon-size: 14px;
-            }
-
-            .header-last-used.clickable {
-                cursor: pointer;
-                transition: background-color 0.2s;
-            }
-
-            .header-last-used.clickable:hover {
+            .header-pill.clickable:hover {
                 background: var(--lcm-section-bg-hover);
             }
 
@@ -341,21 +327,64 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-size: 14px;
             }
 
-            .no-conditions {
-                color: var(--secondary-text-color);
-                font-size: 13px;
-                font-style: italic;
-            }
-
-            /* Calendar condition */
-            .calendar-condition {
+            /* Unified condition item (matches condition-entity structure) */
+            .condition-item {
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
                 padding: 8px 0;
             }
 
-            .calendar-condition.clickable {
+            .condition-item-header {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+            }
+
+            .condition-item-detail {
+                font-size: 13px;
+                margin-left: 28px;
+            }
+
+            /* Inline edit container for number of uses */
+            .condition-edit-container {
+                position: relative;
+            }
+
+            .condition-edit-container .edit-input {
+                background: var(--card-background-color);
+                border: 1px solid var(--primary-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 14px;
+                padding: 4px 8px;
+                width: 60px;
+            }
+
+            .condition-edit-container .edit-help {
+                color: var(--secondary-text-color);
+                font-size: 10px;
+                left: 0;
+                position: absolute;
+                top: 100%;
+                white-space: nowrap;
+            }
+
+            .no-conditions {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                font-style: italic;
+            }
+
+            /* Unified condition entity styles */
+            .condition-entity {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                padding: 8px 0;
+            }
+
+            .condition-entity.clickable {
                 border-radius: 8px;
                 cursor: pointer;
                 margin: 8px -8px 0;
@@ -363,75 +392,77 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 transition: background-color 0.2s;
             }
 
-            .calendar-condition.clickable:hover {
+            .condition-entity.clickable:hover {
                 background: var(--lcm-active-bg);
             }
 
-            .calendar-condition:first-child {
+            .condition-entity:first-child {
                 padding-top: 0;
             }
 
-            .calendar-condition.clickable:first-child {
+            .condition-entity.clickable:first-child {
                 margin-top: 0;
             }
 
-            .calendar-header {
-                align-items: center;
-                display: flex;
-                gap: 8px;
-            }
-
-            .calendar-status {
+            .condition-entity-header {
                 align-items: center;
                 display: flex;
                 gap: 6px;
             }
 
-            .calendar-status-icon {
+            .condition-entity-icon {
                 --mdc-icon-size: 18px;
+                flex-shrink: 0;
             }
 
-            .calendar-status-icon.active {
-                color: var(--lcm-disabled-color);
+            .condition-entity-icon.active {
+                color: var(--lcm-success-color);
             }
 
-            .calendar-status-icon.inactive {
+            .condition-entity-icon.inactive {
                 color: var(--lcm-warning-color);
             }
 
-            .calendar-status-text {
+            .condition-entity-status {
                 color: var(--primary-text-color);
                 font-size: 14px;
                 font-weight: 500;
             }
 
-            .calendar-event-summary {
-                color: var(--primary-text-color);
-                font-size: 13px;
-                margin-left: 22px;
-            }
-
-            .calendar-event-time {
+            .condition-entity-domain {
+                background: var(--lcm-section-bg);
+                border-radius: 4px;
                 color: var(--secondary-text-color);
-                font-size: 12px;
-                margin-left: 22px;
-            }
-
-            .calendar-next-event {
-                border-top: 1px solid var(--lcm-border-color);
-                color: var(--secondary-text-color);
-                font-size: 12px;
-                margin-left: 22px;
-                margin-top: 8px;
-                padding-top: 8px;
-            }
-
-            .calendar-next-event-label {
-                font-weight: 500;
-                text-transform: uppercase;
                 font-size: 10px;
-                letter-spacing: 0.05em;
-                margin-bottom: 2px;
+                font-weight: 500;
+                letter-spacing: 0.03em;
+                margin-left: auto;
+                padding: 2px 6px;
+                text-transform: uppercase;
+            }
+
+            .condition-entity-name {
+                color: var(--secondary-text-color);
+                font-size: 13px;
+                margin-left: 24px;
+            }
+
+            .condition-context {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                margin-left: 24px;
+            }
+
+            .condition-context-label {
+                font-weight: 500;
+                margin-right: 4px;
+            }
+
+            .condition-context-next {
+                border-top: 1px solid var(--lcm-border-color);
+                margin-top: 4px;
+                opacity: 0.8;
+                padding-top: 4px;
             }
 
             /* Lock Status Section */
@@ -537,6 +568,222 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             .action-error-dismiss:hover {
                 opacity: 1;
             }
+
+            /* Condition action icons */
+            .condition-action-icons {
+                align-items: center;
+                display: flex;
+                gap: 4px;
+                margin-left: auto;
+            }
+
+            .condition-edit-icon,
+            .condition-delete-icon {
+                --mdc-icon-size: 18px;
+                color: var(--secondary-text-color);
+                cursor: pointer;
+                opacity: 0.6;
+                transition: opacity 0.2s;
+            }
+
+            .condition-edit-icon:hover {
+                opacity: 1;
+            }
+
+            .condition-delete-icon:hover {
+                color: var(--error-color);
+                opacity: 1;
+            }
+
+            .condition-entity-header .condition-action-icons {
+                margin-left: 8px;
+            }
+
+            /* Add condition links - compact inline style */
+            .add-condition-links {
+                align-items: center;
+                color: var(--secondary-text-color);
+                display: flex;
+                flex-wrap: wrap;
+                font-size: 13px;
+                gap: 4px;
+                padding: 4px 0;
+            }
+
+            .add-condition-link {
+                color: var(--primary-color);
+                cursor: pointer;
+                text-decoration: none;
+            }
+
+            .add-condition-link:hover {
+                text-decoration: underline;
+            }
+
+            .add-condition-separator {
+                color: var(--divider-color);
+                margin: 0 4px;
+            }
+
+            /* Empty conditions header row */
+            .empty-conditions-header {
+                align-items: center;
+                background: var(--lcm-section-bg);
+                border-radius: 8px;
+                display: flex;
+                gap: 8px;
+                padding: 12px;
+            }
+
+            .empty-conditions-title {
+                color: var(--secondary-text-color);
+                font-size: 11px;
+                font-weight: 500;
+                letter-spacing: 0.05em;
+                text-transform: uppercase;
+            }
+
+            .empty-conditions-badge {
+                background: var(--lcm-section-bg-hover);
+                border-radius: 10px;
+                color: var(--secondary-text-color);
+                font-size: 11px;
+                padding: 2px 8px;
+            }
+
+            .empty-conditions-spacer {
+                flex: 1;
+            }
+
+            .empty-conditions-actions {
+                align-items: center;
+                display: flex;
+                gap: 4px;
+            }
+
+            .empty-conditions-btn {
+                --mdc-icon-size: 18px;
+                align-items: center;
+                background: transparent;
+                border: 1px solid var(--divider-color);
+                border-radius: 14px;
+                color: var(--primary-color);
+                cursor: pointer;
+                display: flex;
+                font-size: 11px;
+                gap: 2px;
+                padding: 4px 8px;
+                transition:
+                    background-color 0.2s,
+                    border-color 0.2s;
+            }
+
+            .empty-conditions-btn:hover {
+                background: var(--lcm-active-bg);
+                border-color: var(--primary-color);
+            }
+
+            .empty-conditions-btn ha-svg-icon {
+                --mdc-icon-size: 14px;
+            }
+
+            /* Dialog styles */
+            .dialog-content {
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+                min-width: 300px;
+            }
+
+            .entity-select {
+                background: var(--card-background-color);
+                border: 1px solid var(--divider-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 14px;
+                padding: 8px;
+                width: 100%;
+            }
+
+            .dialog-section {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+
+            .dialog-section-header {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            .dialog-section-description {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+            }
+
+            .dialog-checkbox-row {
+                align-items: center;
+                display: flex;
+                gap: 8px;
+            }
+
+            .dialog-checkbox-row label {
+                color: var(--primary-text-color);
+                cursor: pointer;
+                font-size: 14px;
+            }
+
+            .dialog-number-input {
+                margin-top: 8px;
+            }
+
+            .dialog-number-input input {
+                background: var(--input-background-color, var(--card-background-color));
+                border: 1px solid var(--divider-color);
+                border-radius: 4px;
+                color: var(--primary-text-color);
+                font-size: 14px;
+                padding: 8px 12px;
+                width: 100px;
+            }
+
+            .dialog-clear-button {
+                background: none;
+                border: 1px solid var(--divider-color);
+                border-radius: 4px;
+                color: var(--error-color);
+                cursor: pointer;
+                font-size: 13px;
+                margin-top: 8px;
+                padding: 6px 12px;
+            }
+
+            .dialog-clear-button:hover {
+                background: var(--error-color);
+                color: white;
+            }
+
+            /* Confirmation dialog styles */
+            .confirm-dialog-content {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                line-height: 1.5;
+                padding: 8px 0;
+            }
+
+            mwc-button.destructive {
+                --mdc-theme-primary: var(--error-color);
+            }
+
+            /* Make dialog buttons more obviously interactive */
+            ha-dialog mwc-button {
+                cursor: pointer;
+            }
+
+            ha-dialog mwc-button:hover {
+                opacity: 0.8;
+            }
         `
     ];
 
@@ -548,6 +795,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _conditionsExpanded = false;
     @state() private _editingField: 'name' | 'pin' | 'numberOfUses' | null = null;
     @state() private _lockStatusExpanded = false;
+
+    // Condition dialog state
+    @state() private _showConditionDialog = false;
+    @state() private _dialogMode: 'add-entity' | 'edit-entity' | 'add-uses' = 'add-entity';
+    @state() private _dialogEntityId: string | null = null;
+    @state() private _dialogNumberOfUses: number | null = null;
+    @state() private _dialogSaving = false;
+
+    // Confirmation dialog state
+    @state() private _confirmDialog: {
+        onConfirm: () => void;
+        text: string;
+        title: string;
+    } | null = null;
 
     _hass?: HomeAssistant;
 
@@ -690,8 +951,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Only show conditions section if at least one condition is configured
         const hasConditions =
             (conditions.number_of_uses !== undefined && conditions.number_of_uses !== null) ||
+            conditions.condition_entity !== undefined ||
             conditions.calendar !== undefined;
         const showConditions = this._config.show_conditions !== false && hasConditions;
+        // Show "Manage Conditions" row when no conditions exist
+        const showManageConditions = this._config.show_conditions !== false && !hasConditions;
 
         return html`
             <ha-card>
@@ -711,16 +975,25 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 <div class="content">
                     ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
+                    ${showManageConditions ? this._renderManageConditionsRow() : nothing}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
+                ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
+                ${this._confirmDialog ? this._renderConfirmDialog() : nothing}
             </ha-card>
         `;
     }
 
     private _renderHeader(): TemplateResult {
         const lockCount = this._data?.locks?.length ?? 0;
+        const showLockCount = this._config?.show_lock_count !== false;
         const lastUsed = this._data?.last_used;
+        const eventEntityId = this._data?.event_entity_id;
+        const eventEntityState = eventEntityId ? this._hass?.states[eventEntityId] : undefined;
+        const showLastUsed = eventEntityState && eventEntityState.state !== 'unavailable';
+
+        const showPills = (showLockCount && lockCount > 0) || showLastUsed;
 
         return html`
             <div class="header">
@@ -731,36 +1004,41 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     <div class="header-info">
                         <span class="header-title">Code Slot ${this._config?.slot}</span>
                     </div>
-                    ${lockCount > 0
-                        ? html`<div class="header-badges">
-                              <span
-                                  class="header-badge clickable"
-                                  title=${this._data?.locks?.map((l) => l.name).join(', ') ?? ''}
-                                  @click=${this._toggleLockStatus}
-                              >
-                                  <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
-                                  ${lockCount}
-                              </span>
+                    ${showPills
+                        ? html`<div class="header-pills">
+                              ${showLockCount && lockCount > 0
+                                  ? html`<span
+                                        class="header-pill clickable"
+                                        title=${this._data?.locks?.map((l) => l.name).join(', ') ??
+                                        ''}
+                                        @click=${this._toggleLockStatus}
+                                    >
+                                        <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
+                                        ${lockCount}
+                                    </span>`
+                                  : nothing}
+                              ${showLastUsed
+                                  ? html`<span
+                                        class="header-pill ${lastUsed ? 'clickable' : ''}"
+                                        title=${lastUsed
+                                            ? this._data?.last_used_lock
+                                                ? `Used on ${this._data.last_used_lock} - Click for details`
+                                                : 'Click for PIN usage details'
+                                            : 'This PIN has never been used'}
+                                        @click=${() => lastUsed && this._navigateToEventHistory()}
+                                    >
+                                        <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
+                                        ${lastUsed
+                                            ? html`${this._data?.last_used_lock ?? 'Used'}
+                                                  <ha-relative-time
+                                                      .hass=${this._hass}
+                                                      .datetime=${lastUsed}
+                                                  ></ha-relative-time>`
+                                            : 'Never used'}
+                                    </span>`
+                                  : nothing}
                           </div>`
                         : nothing}
-                </div>
-                <div
-                    class="header-last-used ${lastUsed ? 'clickable' : ''}"
-                    title=${lastUsed
-                        ? this._data?.last_used_lock
-                            ? `Used on ${this._data.last_used_lock} - Click to view history`
-                            : 'Click to view PIN usage history'
-                        : 'This PIN has never been used'}
-                    @click=${() => lastUsed && this._navigateToEventHistory()}
-                >
-                    <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
-                    ${lastUsed
-                        ? html`${this._data?.last_used_lock ?? 'Used'}
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${lastUsed}
-                              ></ha-relative-time>`
-                        : 'Never used'}
                 </div>
             </div>
         `;
@@ -769,10 +1047,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _navigateToEventHistory(): void {
         const eventEntityId = this._data?.event_entity_id;
         if (!eventEntityId) return;
-        // Navigate to entity history
-        const url = `/history?entity_id=${encodeURIComponent(eventEntityId)}`;
-        history.pushState(null, '', url);
-        window.dispatchEvent(new CustomEvent('location-changed'));
+        // Open the more-info dialog for this event entity
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: eventEntityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderPrimaryControls(
@@ -906,18 +1187,23 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderConditionsSection(conditions: SlotCardConditions): TemplateResult {
-        const { number_of_uses, calendar, calendar_next } = conditions;
+        const { number_of_uses, condition_entity } = conditions;
         const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
-        const hasCalendar = calendar !== undefined;
-        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
-        const calendarBlocking = hasCalendar && calendar.active === false;
-        const hasConditions = hasNumberOfUses || hasCalendar;
-        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasCalendar ? 1 : 0);
-        const blockingConditions = (usesBlocking ? 1 : 0) + (calendarBlocking ? 1 : 0);
+        const hasConditionEntity = condition_entity !== undefined;
 
+        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
+        const entityBlocking = hasConditionEntity && condition_entity.state !== 'on';
+
+        const hasConditions = hasNumberOfUses || hasConditionEntity;
+        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasConditionEntity ? 1 : 0);
+        const blockingConditions = (usesBlocking ? 1 : 0) + (entityBlocking ? 1 : 0);
+
+        // Show ✓ when all conditions pass (muted), ✗ when blocking (prominent)
+        const passingConditions = totalConditions - blockingConditions;
+        const allPassing = blockingConditions === 0;
         const headerExtra = hasConditions
-            ? html`<span class="collapsible-badge ${blockingConditions > 0 ? 'warning' : 'primary'}"
-                      >${blockingConditions}/${totalConditions}</span
+            ? html`<span class="collapsible-badge ${allPassing ? 'muted' : 'warning'}"
+                      >${allPassing ? '✓' : '✗'} ${passingConditions}/${totalConditions}</span
                   >
                   <span class="condition-blocking-icons">
                       ${hasNumberOfUses
@@ -929,52 +1215,93 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                     : `${number_of_uses} uses remaining`}"
                             ></ha-svg-icon>`
                           : nothing}
-                      ${hasCalendar
+                      ${hasConditionEntity
                           ? html`<ha-svg-icon
-                                class="condition-icon ${calendarBlocking ? 'blocking' : ''}"
-                                .path=${calendarBlocking ? mdiCalendarRemove : mdiCalendar}
-                                title="${calendarBlocking
-                                    ? 'Calendar blocking access'
-                                    : 'Calendar allowing access'}"
+                                class="condition-icon ${entityBlocking ? 'blocking' : ''}"
+                                .path=${this._getConditionEntityIcon(
+                                    condition_entity.domain,
+                                    !entityBlocking
+                                )}
+                                title="${entityBlocking
+                                    ? 'Condition blocking access'
+                                    : 'Condition allowing access'}"
                             ></ha-svg-icon>`
                           : nothing}
                   </span>`
             : undefined;
 
+        // Determine what conditions can still be added
+        const canAddUses = !hasNumberOfUses;
+        const canAddEntity = !hasConditionEntity;
+
+        const usesStatusText = usesBlocking ? 'No uses left' : 'Uses available';
+        const usesStatusClass = usesBlocking ? 'inactive' : 'active';
+
         const content = html`
             ${hasNumberOfUses
-                ? html`<div class="condition-row">
-                      <ha-svg-icon
-                          class="condition-row-icon ${usesBlocking ? 'blocking' : ''}"
-                          .path=${mdiPound}
-                      ></ha-svg-icon>
-                      <span class="condition-label">Uses remaining</span>
-                      <div style="flex: 1;">
-                          ${this._editingField === 'numberOfUses'
-                              ? html`<input
-                                        class="edit-input"
-                                        type="number"
-                                        inputmode="numeric"
-                                        min="0"
-                                        .value=${String(number_of_uses ?? 0)}
-                                        @blur=${this._handleEditBlur}
-                                        @keydown=${this._handleEditKeydown}
-                                    />
-                                    <div class="edit-help">Enter to save, Esc to cancel</div>`
-                              : html`<span
-                                    class="condition-value editable"
-                                    @click=${() => this._startEditing('numberOfUses')}
-                                    >${number_of_uses}</span
-                                >`}
+                ? html`<div class="condition-item">
+                      <div class="condition-item-header">
+                          <ha-svg-icon
+                              class="condition-entity-icon ${usesStatusClass}"
+                              .path=${mdiPound}
+                          ></ha-svg-icon>
+                          <span class="condition-entity-status">${usesStatusText}</span>
+                          <span class="condition-entity-domain"># of Uses</span>
+                          <span class="condition-action-icons">
+                              <ha-svg-icon
+                                  class="condition-delete-icon"
+                                  .path=${mdiDelete}
+                                  title="Remove use tracking"
+                                  @click=${(e: Event) => {
+                                      e.stopPropagation();
+                                      this._deleteNumberOfUses();
+                                  }}
+                              ></ha-svg-icon>
+                          </span>
+                      </div>
+                      <div class="condition-item-detail">
+                          <div class="condition-edit-container">
+                              ${this._editingField === 'numberOfUses'
+                                  ? html`<input
+                                            class="edit-input"
+                                            type="number"
+                                            inputmode="numeric"
+                                            min="0"
+                                            .value=${String(number_of_uses ?? 0)}
+                                            @blur=${this._handleEditBlur}
+                                            @keydown=${this._handleEditKeydown}
+                                        />
+                                        <div class="edit-help">Enter to save, Esc to cancel</div>`
+                                  : html`<span
+                                        class="condition-value editable"
+                                        @click=${() => this._startEditing('numberOfUses')}
+                                        >${number_of_uses} uses remaining</span
+                                    >`}
+                          </div>
                       </div>
                   </div>`
                 : nothing}
-            ${hasCalendar
-                ? this._renderCalendarCondition(
-                      calendar,
-                      calendar_next,
-                      conditions.calendar_entity_id
-                  )
+            ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
+            ${canAddUses || canAddEntity
+                ? html`<div class="add-condition-links">
+                      ${canAddUses
+                          ? html`<span
+                                class="add-condition-link"
+                                @click=${() => this._openConditionDialog('add-uses')}
+                                >+ Add # of uses limit</span
+                            >`
+                          : nothing}
+                      ${canAddUses && canAddEntity
+                          ? html`<span class="add-condition-separator">•</span>`
+                          : nothing}
+                      ${canAddEntity
+                          ? html`<span
+                                class="add-condition-link"
+                                @click=${() => this._openConditionDialog('add-entity')}
+                                >+ Add on/off entity</span
+                            >`
+                          : nothing}
+                  </div>`
                 : nothing}
         `;
 
@@ -987,57 +1314,231 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         );
     }
 
-    private _renderCalendarCondition(
-        calendar: NonNullable<SlotCardConditions['calendar']>,
-        nextEvent?: SlotCardConditions['calendar_next'],
-        calendarEntityId?: string | null
-    ): TemplateResult {
-        const isActive = calendar.active;
-        const statusIcon = isActive ? mdiCalendar : mdiCalendarRemove;
-        const statusText = isActive ? 'Access allowed' : 'Access blocked';
+    /**
+     * Get the appropriate icon for a condition entity based on its domain.
+     * Uses icons consistent with Home Assistant core.
+     */
+    private _getConditionEntityIcon(domain: string, isActive: boolean): string {
+        switch (domain) {
+            case 'calendar':
+                return isActive ? mdiCalendar : mdiCalendarRemove;
+            case 'binary_sensor':
+                // HA core uses mdi:eye for generic binary sensors
+                return mdiEye;
+            case 'switch':
+                // HA core uses mdi:toggle-switch / mdi:toggle-switch-outline
+                return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
+            case 'schedule':
+                // HA core uses mdi:calendar-clock for schedule entities
+                return mdiCalendarClock;
+            case 'input_boolean':
+                // HA core uses mdi:toggle-switch-outline for input_boolean
+                return isActive ? mdiToggleSwitch : mdiToggleSwitchOutline;
+            default:
+                return mdiEye;
+        }
+    }
+
+    /**
+     * Get domain-specific status text for condition entities.
+     */
+    private _getConditionStatusText(domain: string, isActive: boolean): string {
+        const accessText = isActive ? 'Access allowed' : 'Access blocked';
+        switch (domain) {
+            case 'calendar':
+                return isActive ? `Event active – ${accessText}` : `No event – ${accessText}`;
+            case 'schedule':
+                return isActive
+                    ? `In schedule – ${accessText}`
+                    : `Outside schedule – ${accessText}`;
+            default:
+                return isActive ? `On – ${accessText}` : `Off – ${accessText}`;
+        }
+    }
+
+    /**
+     * Format a schedule date for display (today, tomorrow, or weekday).
+     * Returns empty string for today, "tomorrow " or "Mon " etc for other days.
+     */
+    private _formatScheduleDate(date: Date): string {
+        const now = new Date();
+        const isToday = date.toDateString() === now.toDateString();
+        if (isToday) return '';
+
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const isTomorrow = date.toDateString() === tomorrow.toDateString();
+        if (isTomorrow) return 'tomorrow ';
+
+        return `${date.toLocaleDateString([], { weekday: 'short' })} `;
+    }
+
+    /**
+     * Get a human-readable domain label for display in the UI.
+     */
+    private _getDomainLabel(domain: string): string {
+        const labels: Record<string, string> = {
+            binary_sensor: 'Sensor',
+            calendar: 'Calendar',
+            input_boolean: 'Toggle',
+            schedule: 'Schedule',
+            switch: 'Switch'
+        };
+        return labels[domain] ?? domain;
+    }
+
+    /**
+     * Render a unified condition entity display.
+     * Consistent structure across all domain types with domain-specific context.
+     */
+    private _renderConditionEntity(entity: ConditionEntityInfo, showEdit = false): TemplateResult {
+        const isActive = entity.state === 'on';
+        const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
+        const statusText = this._getConditionStatusText(entity.domain, isActive);
         const statusClass = isActive ? 'active' : 'inactive';
-        const isClickable = !!calendarEntityId;
+        const displayName = entity.friendly_name ?? entity.condition_entity_id;
+        const domainLabel = this._getDomainLabel(entity.domain);
+
+        // Build context lines based on domain
+        let contextLines: TemplateResult | typeof nothing = nothing;
+
+        if (entity.domain === 'calendar') {
+            if (isActive && entity.calendar) {
+                // Active calendar: show current event + next event preview
+                contextLines = html`
+                    ${entity.calendar.summary
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Event:</span>${entity.calendar
+                                  .summary}
+                          </div>`
+                        : nothing}
+                    ${entity.calendar.start_time
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Started:</span>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar.start_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                    ${entity.calendar.end_time
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Ends:</span>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar.end_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                    ${entity.calendar_next
+                        ? html`<div class="condition-context condition-context-next">
+                              <span class="condition-context-label">Next:</span>${entity
+                                  .calendar_next.summary ?? 'Event'}
+                              starts
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar_next.start_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                `;
+            } else if (!isActive && entity.calendar_next) {
+                // Inactive calendar: show next event details
+                contextLines = html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Next:</span>${entity.calendar_next
+                            .summary ?? 'Event'}
+                    </div>
+                    <div class="condition-context">
+                        <span class="condition-context-label">Starts:</span>
+                        <ha-relative-time
+                            .hass=${this._hass}
+                            .datetime=${entity.calendar_next.start_time}
+                        ></ha-relative-time>
+                    </div>
+                `;
+            }
+        } else if (entity.domain === 'schedule' && entity.schedule?.next_event) {
+            // Schedule: show timing info consistently
+            const nextEvent = new Date(entity.schedule.next_event);
+            const timeStr = nextEvent.toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit'
+            });
+            const dateStr = this._formatScheduleDate(nextEvent);
+
+            if (isActive) {
+                // Active schedule: show when it ends
+                contextLines = html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Ends:</span>
+                        ${dateStr}${timeStr}
+                    </div>
+                `;
+            } else {
+                // Inactive schedule: show when it starts
+                contextLines = html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Starts:</span>
+                        ${dateStr}${timeStr}
+                    </div>
+                `;
+            }
+        }
+        // input_boolean, switch, binary_sensor: no extra context needed
 
         return html`
             <div
-                class="calendar-condition ${isClickable ? 'clickable' : ''}"
-                @click=${isClickable ? () => this._navigateToCalendar(calendarEntityId) : nothing}
+                class="condition-entity clickable"
+                @click=${() => this._openEntityMoreInfo(entity.condition_entity_id)}
+                title="Click to view ${displayName}"
             >
-                <div class="calendar-header">
-                    <div class="calendar-status">
-                        <ha-svg-icon
-                            class="calendar-status-icon ${statusClass}"
-                            .path=${statusIcon}
-                        ></ha-svg-icon>
-                        <span class="calendar-status-text">${statusText}</span>
-                    </div>
+                <div class="condition-entity-header">
+                    <ha-svg-icon
+                        class="condition-entity-icon ${statusClass}"
+                        .path=${statusIcon}
+                    ></ha-svg-icon>
+                    <span class="condition-entity-status">${statusText}</span>
+                    <span class="condition-entity-domain">${domainLabel}</span>
+                    ${showEdit
+                        ? html`<span class="condition-action-icons">
+                              <ha-svg-icon
+                                  class="condition-edit-icon"
+                                  .path=${mdiPencil}
+                                  title="Edit condition entity"
+                                  @click=${(e: Event) => {
+                                      e.stopPropagation();
+                                      this._openConditionDialog('edit-entity');
+                                  }}
+                              ></ha-svg-icon>
+                              <ha-svg-icon
+                                  class="condition-delete-icon"
+                                  .path=${mdiDelete}
+                                  title="Remove condition entity"
+                                  @click=${(e: Event) => {
+                                      e.stopPropagation();
+                                      this._deleteConditionEntity();
+                                  }}
+                              ></ha-svg-icon>
+                          </span>`
+                        : nothing}
                 </div>
-                ${isActive && calendar.summary
-                    ? html`<div class="calendar-event-summary">${calendar.summary}</div>`
-                    : nothing}
-                ${isActive && calendar.end_time
-                    ? html`<div class="calendar-event-time">
-                          Ends
-                          <ha-relative-time
-                              .hass=${this._hass}
-                              .datetime=${calendar.end_time}
-                          ></ha-relative-time>
-                      </div>`
-                    : nothing}
-                ${!isActive && nextEvent
-                    ? html`<div class="calendar-next-event">
-                          <div class="calendar-next-event-label">Next access</div>
-                          <div>
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${nextEvent.start_time}
-                              ></ha-relative-time
-                              >${nextEvent.summary ? ` — ${nextEvent.summary}` : ''}
-                          </div>
-                      </div>`
-                    : nothing}
+                <div class="condition-entity-name">${displayName}</div>
+                ${contextLines}
             </div>
         `;
+    }
+
+    /**
+     * Open the more-info dialog for an entity.
+     */
+    private _openEntityMoreInfo(entityId: string): void {
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderLockStatusSection(lockStatuses: LockSyncStatus[]): TemplateResult {
@@ -1176,6 +1677,303 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._lockStatusExpanded = !this._lockStatusExpanded;
     }
 
+    private _renderManageConditionsRow(): TemplateResult {
+        return html`
+            <div class="empty-conditions-header">
+                <span class="empty-conditions-title">Conditions</span>
+                <span class="empty-conditions-badge">0/0</span>
+                <span class="empty-conditions-spacer"></span>
+                <div class="empty-conditions-actions">
+                    <button
+                        class="empty-conditions-btn"
+                        @click=${() => this._openConditionDialog('add-uses')}
+                        title="Add number of uses limit"
+                    >
+                        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
+                        # of Uses
+                    </button>
+                    <button
+                        class="empty-conditions-btn"
+                        @click=${() => this._openConditionDialog('add-entity')}
+                        title="Add on/off condition entity"
+                    >
+                        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
+                        On/Off Entity
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    private _openConditionDialog(mode: 'add-entity' | 'edit-entity' | 'add-uses'): void {
+        this._dialogMode = mode;
+        const conditions = this._data?.conditions;
+
+        if (mode === 'edit-entity') {
+            // Initialize with current entity
+            this._dialogEntityId = conditions?.condition_entity?.condition_entity_id ?? null;
+        } else if (mode === 'add-entity') {
+            // Start fresh for adding
+            this._dialogEntityId = null;
+        } else if (mode === 'add-uses') {
+            // Default to 5 for new use tracking
+            this._dialogNumberOfUses = 5;
+        }
+
+        this._showConditionDialog = true;
+    }
+
+    private _closeConditionDialog(): void {
+        this._showConditionDialog = false;
+        this._dialogSaving = false;
+    }
+
+    private _deleteConditionEntity(): void {
+        this._confirmDialog = {
+            onConfirm: async () => {
+                try {
+                    await this._updateSlotCondition({ entity_id: null });
+                    // Force re-subscribe to get updated data
+                    this._unsubscribe();
+                    void this._subscribe();
+                } catch (err) {
+                    this._setActionError(
+                        `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    );
+                }
+            },
+            text: 'This will remove the condition entity from controlling when this PIN is active.',
+            title: 'Remove condition entity?'
+        };
+    }
+
+    private _deleteNumberOfUses(): void {
+        this._confirmDialog = {
+            onConfirm: async () => {
+                try {
+                    await this._updateSlotCondition({ number_of_uses: null });
+                    // Force re-subscribe to get updated data
+                    this._unsubscribe();
+                    void this._subscribe();
+                } catch (err) {
+                    this._setActionError(
+                        `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
+                    );
+                }
+            },
+            text: 'This will stop tracking how many times this PIN can be used.',
+            title: 'Remove use tracking?'
+        };
+    }
+
+    private async _updateSlotCondition(updates: {
+        entity_id?: string | null;
+        number_of_uses?: number | null;
+    }): Promise<void> {
+        if (!this._hass || !this._config) {
+            throw new Error('Not initialized');
+        }
+
+        const msg: MessageBase & Record<string, unknown> = {
+            slot: this._config.slot,
+            type: 'lock_code_manager/update_slot_condition',
+            ...updates
+        };
+
+        if (this._config.config_entry_id) {
+            msg.config_entry_id = this._config.config_entry_id;
+        } else if (this._config.config_entry_title) {
+            msg.config_entry_title = this._config.config_entry_title;
+        }
+
+        await this._hass.callWS(msg);
+    }
+
+    private _renderConditionDialog(): TemplateResult {
+        const isEntityMode =
+            this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity';
+        const isAddUsesMode = this._dialogMode === 'add-uses';
+
+        const dialogTitle =
+            this._dialogMode === 'add-entity'
+                ? 'Add Condition Entity'
+                : this._dialogMode === 'edit-entity'
+                  ? 'Edit Condition Entity'
+                  : 'Add Use Tracking';
+
+        return html`
+            <ha-dialog open @closed=${this._closeConditionDialog} .heading=${dialogTitle}>
+                <div class="dialog-content">
+                    ${isEntityMode
+                        ? html`
+                              <div class="dialog-section">
+                                  <div class="dialog-section-description">
+                                      PIN is active only when this entity is "on"
+                                  </div>
+                                  <input
+                                      type="text"
+                                      class="entity-select"
+                                      list="condition-entity-list"
+                                      placeholder="Search or select entity..."
+                                      .value=${this._dialogEntityId ?? ''}
+                                      @focus=${(e: Event) => {
+                                          // Select all on focus for easier replacement
+                                          (e.target as HTMLInputElement).select();
+                                      }}
+                                      @input=${(e: Event) => {
+                                          const val = (e.target as HTMLInputElement).value;
+                                          // Only set if it's a valid entity ID
+                                          if (this._hass?.states[val]) {
+                                              this._dialogEntityId = val;
+                                          } else if (val === '') {
+                                              this._dialogEntityId = null;
+                                          }
+                                      }}
+                                      @change=${(e: Event) => {
+                                          const val = (e.target as HTMLInputElement).value;
+                                          if (this._hass?.states[val]) {
+                                              this._dialogEntityId = val;
+                                          } else if (val === '') {
+                                              this._dialogEntityId = null;
+                                          }
+                                      }}
+                                  />
+                                  <datalist id="condition-entity-list">
+                                      ${this._hass
+                                          ? Object.keys(this._hass.states)
+                                                .filter((eid) =>
+                                                    [
+                                                        'calendar',
+                                                        'schedule',
+                                                        'binary_sensor',
+                                                        'switch',
+                                                        'input_boolean'
+                                                    ].includes(eid.split('.')[0])
+                                                )
+                                                .sort()
+                                                .map(
+                                                    (eid) => html`
+                                                        <option
+                                                            value=${eid}
+                                                            label="${this._hass.states[eid]
+                                                                ?.attributes?.friendly_name ?? eid}"
+                                                        ></option>
+                                                    `
+                                                )
+                                          : nothing}
+                                  </datalist>
+                              </div>
+                          `
+                        : nothing}
+                    ${isAddUsesMode
+                        ? html`
+                              <div class="dialog-section">
+                                  <div class="dialog-section-description">
+                                      Set the initial number of uses for this PIN
+                                  </div>
+                                  <div class="dialog-number-input">
+                                      <label>Initial uses:</label>
+                                      <input
+                                          type="number"
+                                          min="1"
+                                          .value=${String(this._dialogNumberOfUses ?? 5)}
+                                          @input=${(e: Event) => {
+                                              const val = parseInt(
+                                                  (e.target as HTMLInputElement).value,
+                                                  10
+                                              );
+                                              if (!isNaN(val) && val > 0) {
+                                                  this._dialogNumberOfUses = val;
+                                              }
+                                          }}
+                                      />
+                                  </div>
+                              </div>
+                          `
+                        : nothing}
+                </div>
+                <mwc-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
+                    Cancel
+                </mwc-button>
+                <mwc-button
+                    slot="primaryAction"
+                    @click=${() => this._saveConditionChanges()}
+                    .disabled=${this._dialogSaving}
+                >
+                    ${this._dialogSaving ? 'Saving...' : 'Save'}
+                </mwc-button>
+            </ha-dialog>
+        `;
+    }
+
+    private _renderConfirmDialog(): TemplateResult {
+        if (!this._confirmDialog) return html``;
+
+        return html`
+            <ha-dialog open @closed=${() => (this._confirmDialog = null)}>
+                <div slot="heading">${this._confirmDialog.title}</div>
+                <div class="confirm-dialog-content">${this._confirmDialog.text}</div>
+                <mwc-button slot="secondaryAction" @click=${() => (this._confirmDialog = null)}>
+                    Cancel
+                </mwc-button>
+                <mwc-button
+                    slot="primaryAction"
+                    class="destructive"
+                    @click=${() => {
+                        this._confirmDialog?.onConfirm();
+                        this._confirmDialog = null;
+                    }}
+                >
+                    Remove
+                </mwc-button>
+            </ha-dialog>
+        `;
+    }
+
+    private async _saveConditionChanges(): Promise<void> {
+        if (!this._hass || !this._config) {
+            this._setActionError('Card not initialized');
+            return;
+        }
+
+        this._dialogSaving = true;
+
+        try {
+            const msg: MessageBase & Record<string, unknown> = {
+                slot: this._config.slot,
+                type: 'lock_code_manager/update_slot_condition'
+            };
+
+            if (this._config.config_entry_id) {
+                msg.config_entry_id = this._config.config_entry_id;
+            } else if (this._config.config_entry_title) {
+                msg.config_entry_title = this._config.config_entry_title;
+            } else {
+                throw new Error('No config entry identifier');
+            }
+
+            if (this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity') {
+                msg.entity_id = this._dialogEntityId;
+            } else if (this._dialogMode === 'add-uses') {
+                msg.number_of_uses = this._dialogNumberOfUses ?? 5;
+            } else {
+                throw new Error(`Unknown dialog mode: ${this._dialogMode}`);
+            }
+
+            await this._hass.callWS(msg);
+            this._closeConditionDialog();
+            // Force re-subscribe to get updated data since config changes
+            // don't trigger entity state changes
+            this._unsubscribe();
+            void this._subscribe();
+        } catch (err) {
+            this._setActionError(
+                `Failed to save: ${err instanceof Error ? err.message : String(err)}`
+            );
+            this._dialogSaving = false;
+        }
+    }
+
     private async _handleEnabledToggle(e: Event): Promise<void> {
         const target = e.target as HTMLInputElement;
         const newState = target.checked;
@@ -1305,14 +2103,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _dismissActionError(): void {
         this._actionError = undefined;
-    }
-
-    private _navigateToCalendar(calendarEntityId: string): void {
-        // Navigate to Home Assistant calendar view with this entity
-        // The calendar dashboard URL format is /calendar?entity_id=calendar.xxx
-        const url = `/calendar?entity_id=${encodeURIComponent(calendarEntityId)}`;
-        history.pushState(null, '', url);
-        window.dispatchEvent(new CustomEvent('location-changed'));
     }
 
     private _navigateToLock(lockEntityId: string): void {

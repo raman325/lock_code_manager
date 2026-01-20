@@ -592,4 +592,51 @@ describe('LockCodeManagerSlotCard logic', () => {
             });
         });
     });
+
+    describe('last used pill visibility', () => {
+        interface EntityState {
+            state: string;
+        }
+
+        function shouldShowLastUsed(
+            eventEntityId: string | undefined,
+            states: Record<string, EntityState | undefined>
+        ): boolean {
+            const eventEntityState = eventEntityId ? states[eventEntityId] : undefined;
+            return !!(eventEntityState && eventEntityState.state !== 'unavailable');
+        }
+
+        it('shows pill when event entity is available', () => {
+            const states = {
+                'event.slot_1': { state: '2024-01-15T00:00:00Z' }
+            };
+            expect(shouldShowLastUsed('event.slot_1', states)).toBe(true);
+        });
+
+        it('shows pill when event entity state is unknown', () => {
+            const states = {
+                'event.slot_1': { state: 'unknown' }
+            };
+            expect(shouldShowLastUsed('event.slot_1', states)).toBe(true);
+        });
+
+        it('hides pill when event entity is unavailable', () => {
+            const states = {
+                'event.slot_1': { state: 'unavailable' }
+            };
+            expect(shouldShowLastUsed('event.slot_1', states)).toBe(false);
+        });
+
+        it('hides pill when event entity id is undefined', () => {
+            const states = {
+                'event.slot_1': { state: '2024-01-15T00:00:00Z' }
+            };
+            expect(shouldShowLastUsed(undefined, states)).toBe(false);
+        });
+
+        it('hides pill when event entity is not in states', () => {
+            const states: Record<string, EntityState | undefined> = {};
+            expect(shouldShowLastUsed('event.slot_1', states)).toBe(false);
+        });
+    });
 });

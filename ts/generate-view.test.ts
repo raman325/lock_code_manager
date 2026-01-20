@@ -22,7 +22,7 @@ import { EntityRegistryEntry, LovelaceResource } from './ha_type_stubs';
 import { createMockHass } from './test/mock-hass';
 import {
     ConfigEntryJSONFragment,
-    LockCodeManagerConfigEntryData,
+    LockCodeManagerConfigEntryDataResponse,
     LockCodeManagerEntityEntry,
     SlotMapping
 } from './types';
@@ -304,8 +304,13 @@ describe('generateEntityCards', () => {
 });
 
 describe('getSlotMapping', () => {
-    const configEntryData: LockCodeManagerConfigEntryData = {
-        locks: ['lock.front', 'lock.back'],
+    const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+        config_entry: mockConfigEntry,
+        entities: [],
+        locks: [
+            { entity_id: 'lock.front', name: 'Front Lock' },
+            { entity_id: 'lock.back', name: 'Back Lock' }
+        ],
         slots: { 1: 'calendar.slot_1', 2: null }
     };
 
@@ -595,15 +600,17 @@ describe('generateView', () => {
     };
 
     it('generates a view with badges and cards', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
             slots: { 1: null }
         };
         const lovelaceResources: LovelaceResource[] = [];
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -650,14 +657,16 @@ describe('generateView', () => {
     });
 
     it('only includes lock entity badges (no template badges)', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
             slots: { 1: null, 2: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -701,14 +710,16 @@ describe('generateView', () => {
     });
 
     it('generates one card per slot', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
             slots: { 1: null, 2: null, 3: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -733,14 +744,16 @@ describe('generateView', () => {
     });
 
     it('passes use_slot_cards=false to section strategy for legacy mode', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
             slots: { 1: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 return undefined;
@@ -773,14 +786,19 @@ describe('generateView', () => {
     });
 
     it('sorts locks alphabetically in badges', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.z_back', 'lock.a_front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [
+                { entity_id: 'lock.z_back', name: 'Back Lock' },
+                { entity_id: 'lock.a_front', name: 'Front Lock' }
+            ],
             slots: { 1: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -814,14 +832,16 @@ describe('generateView', () => {
     });
 
     it('uses new slot cards when use_slot_cards is true', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
             slots: { 1: null, 2: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -874,14 +894,19 @@ describe('generateView lock codes cards', () => {
     };
 
     it('adds lock codes cards directly to cards array (not wrapped in grid)', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front', 'lock.back'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [
+                { entity_id: 'lock.front', name: 'Front Lock' },
+                { entity_id: 'lock.back', name: 'Back Lock' }
+            ],
             slots: { 1: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -922,14 +947,20 @@ describe('generateView lock codes cards', () => {
     });
 
     it('sorts lock codes cards alphabetically by friendly name', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.z_garage', 'lock.a_front', 'lock.m_back'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [
+                { entity_id: 'lock.z_garage', name: 'Garage' },
+                { entity_id: 'lock.a_front', name: 'Front Door' },
+                { entity_id: 'lock.m_back', name: 'Back Door' }
+            ],
             slots: { 1: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -970,14 +1001,16 @@ describe('generateView lock codes cards', () => {
     });
 
     it('includes code_display in lock codes cards', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
             slots: { 1: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {
@@ -1009,14 +1042,19 @@ describe('generateView lock codes cards', () => {
     });
 
     it('does not add lock codes cards when show_all_codes_for_locks is false', async () => {
-        const configEntryData: LockCodeManagerConfigEntryData = {
-            locks: ['lock.front', 'lock.back'],
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [
+                { entity_id: 'lock.front', name: 'Front Lock' },
+                { entity_id: 'lock.back', name: 'Back Lock' }
+            ],
             slots: { 1: null }
         };
 
         const hass = createMockHass({
             callWS: (msg) => {
-                if (msg.type === 'lock_code_manager/get_slot_calendar_data') {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
                     return configEntryData;
                 }
                 if (msg.type === 'lovelace/resources') {

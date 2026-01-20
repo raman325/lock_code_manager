@@ -23,6 +23,7 @@ from homeassistant.components.text import (
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
+    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
@@ -37,7 +38,6 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
-    CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
@@ -185,7 +185,7 @@ async def test_binary_sensor_entity(
     assert service_calls.get("set_usercode", []) == initial_set_calls
 
     new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS][2][CONF_CALENDAR] = "calendar.test_2"
+    new_config[CONF_SLOTS][2][CONF_ENTITY_ID] = "calendar.test_2"
 
     hass.config_entries.async_update_entry(
         lock_code_manager_config_entry, options=new_config
@@ -718,6 +718,104 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, (
         "Slot should be in sync after coordinator-triggered sync"
+    )
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_condition_entity_subscription_updates_on_config_change(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test that condition entity subscription updates when config entry changes."""
+    # Create two input_booleans to use as condition entities
+    hass.states.async_set("input_boolean.access_1", STATE_ON)
+    hass.states.async_set("input_boolean.access_2", STATE_OFF)
+    await hass.async_block_till_done()
+
+    # Set up a slot with the first input_boolean as condition
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "test1",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "input_boolean.access_1",
+            },
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test Condition Subscription",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    active_entity = "binary_sensor.test_lcm_code_slot_1_active"
+
+    # Initial state: access_1 is ON, so slot should be active
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_ON, "Slot should be active when condition entity is ON"
+
+    # Turn off access_1 - slot should become inactive
+    hass.states.async_set("input_boolean.access_1", STATE_OFF)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_OFF, (
+        "Slot should be inactive when condition entity is OFF"
+    )
+
+    # Turn it back on
+    hass.states.async_set("input_boolean.access_1", STATE_ON)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_ON, "Slot should be active when condition entity is ON"
+
+    # Now update the config entry to use a different condition entity
+    new_config = copy.deepcopy(config)
+    new_config[CONF_SLOTS][1][CONF_ENTITY_ID] = "input_boolean.access_2"
+
+    hass.config_entries.async_update_entry(config_entry, data=new_config)
+    await hass.async_block_till_done()
+
+    # Now the slot should be inactive because access_2 is OFF
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_OFF, (
+        "Slot should be inactive after switching to condition entity that is OFF"
+    )
+
+    # The slot should now react to access_2, NOT access_1
+    # Turn on access_2 - slot should become active
+    hass.states.async_set("input_boolean.access_2", STATE_ON)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_ON, "Slot should react to new condition entity"
+
+    # Turn off access_2
+    hass.states.async_set("input_boolean.access_2", STATE_OFF)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_OFF, (
+        "Slot should react to new condition entity being OFF"
+    )
+
+    # Verify the slot does NOT react to the old condition entity anymore
+    # Turn on access_1 - slot should stay inactive
+    hass.states.async_set("input_boolean.access_1", STATE_ON)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(active_entity)
+    assert state.state == STATE_OFF, (
+        "Slot should NOT react to old condition entity after config change"
     )
 
     await hass.config_entries.async_unload(config_entry.entry_id)

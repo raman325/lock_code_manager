@@ -6,7 +6,19 @@ export const IN_SYNC_KEY = 'in_sync';
 // Condition keys
 export const CONDITION_NUMBER_OF_USES = 'number_of_uses';
 export const CONDITION_CALENDAR = 'calendar';
-export const CONDITION_KEYS = [CONDITION_NUMBER_OF_USES, CONDITION_CALENDAR];
+export const CONDITION_ENTITY = 'condition_entity';
+export const CONDITION_KEYS = [CONDITION_NUMBER_OF_USES, CONDITION_CALENDAR, CONDITION_ENTITY];
+
+// Supported condition entity domains
+export const CONDITION_ENTITY_DOMAINS = [
+    'calendar',
+    'binary_sensor',
+    'switch',
+    'schedule',
+    'input_boolean'
+] as const;
+
+export type ConditionEntityDomain = (typeof CONDITION_ENTITY_DOMAINS)[number];
 export const DIVIDER_CARD = {
     type: 'divider'
 };
@@ -26,6 +38,7 @@ export const DOMAIN = 'lock_code_manager';
 export const DEFAULT_CODE_DISPLAY = 'masked_with_reveal';
 export const DEFAULT_SHOW_CODE_SENSORS = true;
 export const DEFAULT_SHOW_CONDITIONS = true;
+export const DEFAULT_SHOW_LOCK_COUNT = true;
 export const DEFAULT_SHOW_PER_CONFIGURATION_LOCK_CARDS = true;
 export const DEFAULT_SHOW_LOCK_CARDS = true;
 export const DEFAULT_SHOW_LOCK_STATUS = true;

@@ -4,6 +4,7 @@ import {
     DEFAULT_CODE_DISPLAY,
     DEFAULT_SHOW_CODE_SENSORS,
     DEFAULT_SHOW_CONDITIONS,
+    DEFAULT_SHOW_LOCK_COUNT,
     DEFAULT_SHOW_LOCK_STATUS,
     DEFAULT_SHOW_LOCK_SYNC,
     DEFAULT_USE_SLOT_CARDS,
@@ -18,8 +19,7 @@ import {
     LovelaceSectionConfig
 } from './ha_type_stubs';
 import {
-    LockCodeManagerConfigEntryData,
-    LockCodeManagerEntitiesResponse,
+    LockCodeManagerConfigEntryDataResponse,
     LockCodeManagerSlotSectionStrategyConfig
 } from './types';
 
@@ -34,6 +34,7 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
             config_entry_id,
             show_code_sensors = DEFAULT_SHOW_CODE_SENSORS,
             show_conditions = DEFAULT_SHOW_CONDITIONS,
+            show_lock_count = DEFAULT_SHOW_LOCK_COUNT,
             show_lock_status = DEFAULT_SHOW_LOCK_STATUS,
             show_lock_sync = DEFAULT_SHOW_LOCK_SYNC,
             slot,
@@ -47,6 +48,7 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
                 config_entry_id,
                 show_code_sensors,
                 show_conditions,
+                show_lock_count,
                 show_lock_status,
                 show_lock_sync,
                 slot,
@@ -64,21 +66,17 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
         }
 
         // Legacy entities card mode - fetch data and generate
-        const [{ config_entry, entities }, configEntryData, lovelaceResources] = await Promise.all([
-            hass.callWS<LockCodeManagerEntitiesResponse>({
+        const [configEntryData, lovelaceResources] = await Promise.all([
+            hass.callWS<LockCodeManagerConfigEntryDataResponse>({
                 config_entry_id,
-                type: 'lock_code_manager/get_config_entry_entities'
-            }),
-            hass.callWS<LockCodeManagerConfigEntryData>({
-                config_entry_id,
-                type: 'lock_code_manager/get_slot_calendar_data'
+                type: 'lock_code_manager/get_config_entry_data'
             }),
             hass.callWS<LovelaceResource[]>({
                 type: 'lovelace/resources'
             })
         ]);
 
-        const sortedEntities = entities
+        const sortedEntities = configEntryData.entities
             .map((entity: EntityRegistryEntry) => createLockCodeManagerEntity(entity))
             .sort((a, b) => a.slotNum - b.slotNum);
 
@@ -91,7 +89,7 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
 
         const card = generateSlotCard(
             hass,
-            config_entry,
+            configEntryData.config_entry,
             slotMapping,
             useFoldEntityRow,
             show_code_sensors,

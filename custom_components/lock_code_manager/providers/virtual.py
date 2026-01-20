@@ -34,6 +34,11 @@ class VirtualLock(BaseLock):
         """Return integration domain."""
         return "virtual"
 
+    @property
+    def supports_code_slot_events(self) -> bool:
+        """Return whether this lock supports code slot events."""
+        return False
+
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock."""
         self._store = Store(

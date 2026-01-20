@@ -19,7 +19,7 @@ import {
 import { slugify } from './slugify';
 import {
     ConfigEntryJSONFragment,
-    LockCodeManagerConfigEntryData,
+    LockCodeManagerConfigEntryDataResponse,
     LockCodeManagerEntityEntry,
     SlotMapping
 } from './types';
@@ -37,9 +37,9 @@ export async function generateView(
     show_lock_status = true,
     collapsed_sections?: ('conditions' | 'lock_status')[]
 ): Promise<LovelaceViewConfig> {
-    const configEntryData = await hass.callWS<LockCodeManagerConfigEntryData>({
+    const configEntryData = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
         config_entry_id: configEntry.entry_id,
-        type: 'lock_code_manager/get_slot_calendar_data'
+        type: 'lock_code_manager/get_config_entry_data'
     });
 
     const slots = Object.keys(configEntryData.slots).map((slotNum) => parseInt(slotNum, 10));
@@ -52,16 +52,17 @@ export async function generateView(
     // Lock state badges - show each lock with its current state
     // Entity badges automatically show friendly name and lock/unlock state
     configEntryData.locks
-        .sort((a, b) => a.localeCompare(b))
-        .forEach((lockEntityId) => {
+        .sort((a, b) => a.entity_id.localeCompare(b.entity_id))
+        .forEach((lock) => {
             badges.push({
-                entity: lockEntityId,
+                entity: lock.entity_id,
                 show_name: true,
                 type: 'entity'
             });
         });
 
     // Generate sections using section strategies (strategies handle both new and legacy card modes)
+    // Hide lock count on individual cards since lock badges are shown at view level
     const sections: LovelaceSectionConfig[] = slots.map((slotNum) => {
         return {
             strategy: {
@@ -70,6 +71,7 @@ export async function generateView(
                 config_entry_id: configEntry.entry_id,
                 show_code_sensors,
                 show_conditions,
+                show_lock_count: false,
                 show_lock_status,
                 show_lock_sync,
                 slot: slotNum,
@@ -80,17 +82,16 @@ export async function generateView(
     });
 
     if (show_lock_cards) {
-        const sortedLockIds = [...configEntryData.locks].sort((a, b) => {
-            const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
-            const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
-            return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
-        });
+        // Sort locks by name (already included in response)
+        const sortedLocks = [...configEntryData.locks].sort((a, b) =>
+            a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        );
         // Add lock codes sections using section strategy
-        sortedLockIds.forEach((lockEntityId) => {
+        sortedLocks.forEach((lock) => {
             sections.push({
                 strategy: {
                     code_display,
-                    lock_entity_id: lockEntityId,
+                    lock_entity_id: lock.entity_id,
                     type: 'custom:lock-code-manager-lock'
                 }
             });
@@ -272,7 +273,7 @@ export function generateNewSlotCard(
 export function getSlotMapping(
     slotNum: number,
     lockCodeManagerEntities: LockCodeManagerEntityEntry[],
-    configEntryData: LockCodeManagerConfigEntryData
+    configEntryData: LockCodeManagerConfigEntryDataResponse
 ): SlotMapping {
     const mainEntities: LockCodeManagerEntityEntry[] = [];
     const conditionEntities: LockCodeManagerEntityEntry[] = [];

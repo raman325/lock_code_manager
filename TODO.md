@@ -240,6 +240,46 @@ class SlotStatus(StrEnum):
 **Priority:** Medium
 **Status:** Not started
 
+### Add Optional Flags to `get_config_entry_data` Websocket Command
+
+**Context:** PR #787 consolidated multiple websocket commands into a single
+`get_config_entry_data` command that returns `{config_entry, entities, locks, slots}`.
+However, not all callers need all the data:
+
+| Caller | config_entry | entities | locks | slots |
+| ------ | ------------ | -------- | ----- | ----- |
+| `view-strategy.ts` | ✅ | ❌ | ❌ | ❌ |
+| `generate-view.ts` | ❌ | ❌ | ✅ | ✅ |
+| `slot-section-strategy.ts` (legacy) | ✅ | ✅ | ❌ | ✅ |
+| `dashboard-strategy.ts` | ❌ | ❌ | ✅ | ❌ |
+| `lock-codes-card-editor.ts` | ❌ | ❌ | ✅ | ❌ |
+
+**Cost Analysis:**
+
+- `config_entry` - Very cheap (just `config_entry.as_json_fragment`)
+- `slots` - Very cheap (extracts calendar IDs from config)
+- `locks` - Moderate (iterates locks, gets friendly names via state lookups)
+- `entities` - Most expensive (queries entity registry, maps to `as_partial_dict`)
+
+**Proposed Change:** Add optional `include_entities` and `include_locks` flags
+(default `True` for backwards compatibility). Skip `config_entry` and `slots`
+flags since they're essentially free.
+
+```python
+vol.Optional("include_entities", default=True): bool,
+vol.Optional("include_locks", default=True): bool,
+```
+
+**Benefits:**
+
+- `view-strategy.ts` can skip both entities and locks
+- `dashboard-strategy.ts` and `lock-codes-card-editor.ts` can skip entities
+- Legacy `slot-section-strategy.ts` can skip locks
+
+**Estimated Effort:** Low (2-4 hours)
+**Priority:** Low
+**Status:** Not started
+
 ### Entity Registry Change Detection
 
 Track entity registry updates and warn if LCM entities change entity IDs (reload
@@ -396,11 +436,10 @@ and integrate relevant new features.
 **Smart Home Platforms:**
 
 - `deconz` - deCONZ (Zigbee/Z-Wave gateway)
-- `esphome` - ESPHome devices
 - `homematic` - Homematic (CCU)
 - `homematicip_cloud` - Homematic IP Cloud
 - `homekit_controller` - HomeKit accessories
-- `matter` - Matter protocol
+- `matter` - Matter protocol (PR open)
 - `mqtt` - MQTT locks
 - `smartthings` - SmartThings
 - `zha` - Zigbee Home Automation
@@ -410,7 +449,6 @@ and integrate relevant new features.
 **Brand-Specific Integrations:**
 
 - `abode` - Abode Security
-- `august` - August Smart Locks
 - `bmw_connected_drive` - BMW Connected Drive
 - `dormakaba_dkey` - Dormakaba dkey
 - `igloohome` - igloohome
@@ -422,15 +460,17 @@ and integrate relevant new features.
 - `switchbot` - SwitchBot Lock
 - `switchbot_cloud` - SwitchBot Cloud
 - `tedee` - Tedee Smart Lock
-- `yale` - Yale Access (August partnership)
-- `yalexs_ble` - Yale/August BLE
 - `yolink` - YoLink
 
 **Security Systems:**
 
 - `simplisafe` - SimpliSafe
 - `verisure` - Verisure
-- `yale_smart_alarm` - Yale Smart Alarm
+
+**Cannot Be Supported** (see README for details):
+
+- `esphome` - No user code API in ESPHome
+- `august`, `yale`, `yalexs_ble`, `yale_smart_alarm` - Library limitations
 
 **Vehicle Integrations:**
 
@@ -468,16 +508,14 @@ and integrate relevant new features.
 **High Priority** (popular, widely used):
 
 1. **ZHA (Zigbee Home Automation)** - Very popular, supports many lock brands
-2. **Matter** - Future-proof, industry standard
-3. **ESPHome** - DIY community, custom locks
-4. **MQTT** - Generic protocol, many custom implementations
+2. **Matter** - Future-proof, industry standard (PR open)
+3. **MQTT** - Generic protocol, many custom implementations
 
 **Medium Priority** (brand-specific, popular):
 
-1. **August/Yale** (`august`, `yale`, `yalexs_ble`) - Popular smart lock brand
-2. **Nuki** - Popular in Europe
-3. **Schlage** - Popular in North America
-4. **SwitchBot** - Growing popularity
+1. **Nuki** - Popular in Europe
+2. **Schlage** - Popular in North America
+3. **SwitchBot** - Growing popularity
 
 **Low Priority** (niche or less common):
 

@@ -69,6 +69,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     show_code_sensors?: boolean;
     /** Show conditions section */
     show_conditions?: boolean;
+    /** Show lock count badge in card header (default: true) */
+    show_lock_count?: boolean;
     /** Show lock status section */
     show_lock_status?: boolean;
     /** Show sync status per lock */
@@ -88,9 +90,15 @@ export interface LockCodeManagerLockSectionStrategyConfig {
     type: 'custom:lock-code-manager-lock';
 }
 
-export interface LockCodeManagerEntitiesResponse {
+/**
+ * Response from get_config_entry_data websocket command.
+ * Contains all static configuration data needed to render the dashboard.
+ */
+export interface LockCodeManagerConfigEntryDataResponse {
     config_entry: ConfigEntryJSONFragment;
     entities: EntityRegistryEntry[];
+    locks: LockInfo[];
+    slots: { [key: number]: string | null };
 }
 
 export interface LockCoordinatorSlotData {
@@ -128,11 +136,6 @@ export interface LockCoordinatorData {
     slots: LockCoordinatorSlotData[];
 }
 
-export interface LockCodeManagerConfigEntryData {
-    locks: string[];
-    slots: { [key: number]: string | null };
-}
-
 export type CodeDisplayMode = 'masked' | 'unmasked' | 'masked_with_reveal';
 
 export interface LockCodesCardConfig {
@@ -155,6 +158,8 @@ export interface LockCodeManagerSlotCardConfig {
     show_code_sensors?: boolean;
     /** Show conditions section (default: true) */
     show_conditions?: boolean;
+    /** Show lock count badge in card header (default: true) */
+    show_lock_count?: boolean;
     /** Show lock status section (default: true) */
     show_lock_status?: boolean;
     /** Show sync status per lock in lock status (default: true) */
@@ -183,6 +188,8 @@ export interface CalendarEventInfo {
     active: boolean;
     /** Event end time (ISO datetime) */
     end_time?: string;
+    /** Event start time (ISO datetime) */
+    start_time?: string;
     /** Event title/summary */
     summary?: string;
 }
@@ -195,6 +202,29 @@ export interface CalendarNextEventInfo {
     summary?: string;
 }
 
+/** Condition entity information (generic for any supported domain) */
+export interface ScheduleInfo {
+    /** Next state change time (ISO timestamp) - when schedule will toggle on/off */
+    next_event?: string;
+}
+
+export interface ConditionEntityInfo {
+    /** Calendar-specific data (only present when domain is 'calendar') */
+    calendar?: CalendarEventInfo;
+    /** Next calendar event (only present when domain is 'calendar' and state is off) */
+    calendar_next?: CalendarNextEventInfo;
+    /** Entity ID of the condition entity */
+    condition_entity_id: string;
+    /** Domain of the entity (calendar, binary_sensor, switch, schedule, input_boolean) */
+    domain: string;
+    /** Friendly name of the entity */
+    friendly_name?: string;
+    /** Schedule-specific data (only present when domain is 'schedule') */
+    schedule?: ScheduleInfo;
+    /** Current state of the entity */
+    state: string;
+}
+
 export interface SlotCardConditions {
     /** Current calendar event info */
     calendar?: CalendarEventInfo;
@@ -202,6 +232,8 @@ export interface SlotCardConditions {
     calendar_entity_id?: string;
     /** Next upcoming calendar event */
     calendar_next?: CalendarNextEventInfo;
+    /** Generic condition entity info (new unified approach) */
+    condition_entity?: ConditionEntityInfo;
     /** Number of uses remaining */
     number_of_uses?: number;
 }
@@ -245,10 +277,6 @@ export interface SlotCardData {
 export interface LockInfo {
     entity_id: string;
     name: string;
-}
-
-export interface GetLocksResponse {
-    locks: LockInfo[];
 }
 
 export interface ConfigEntryJSONFragment {

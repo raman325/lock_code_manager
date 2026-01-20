@@ -1,7 +1,13 @@
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { CodeDisplayMode, GetLocksResponse, LockCodesCardConfig, LockInfo } from './types';
+import {
+    CodeDisplayMode,
+    ConfigEntryJSONFragment,
+    LockCodeManagerConfigEntryDataResponse,
+    LockCodesCardConfig,
+    LockInfo
+} from './types';
 
 const CODE_DISPLAY_OPTIONS: Array<{ label: string; value: CodeDisplayMode }> = [
     { label: 'Masked with Reveal', value: 'masked_with_reveal' },
@@ -103,10 +109,33 @@ class LockCodesCardEditor extends LitElement {
         }
         this._loading = true;
         try {
-            const result = await this._hass.callWS<GetLocksResponse>({
-                type: 'lock_code_manager/get_locks'
+            // First get all LCM config entries
+            const configEntries = await this._hass.callWS<ConfigEntryJSONFragment[]>({
+                domain: 'lock_code_manager',
+                type: 'config_entries/get'
             });
-            this._locks = result.locks;
+
+            // Fetch locks from each config entry in parallel and combine (dedupe by entity_id)
+            const hass = this._hass;
+            const results = await Promise.allSettled(
+                configEntries.map((entry) =>
+                    hass.callWS<LockCodeManagerConfigEntryDataResponse>({
+                        config_entry_id: entry.entry_id,
+                        type: 'lock_code_manager/get_config_entry_data'
+                    })
+                )
+            );
+
+            const lockMap = new Map<string, LockInfo>();
+            for (const result of results) {
+                if (result.status === 'fulfilled') {
+                    for (const lock of result.value.locks) {
+                        lockMap.set(lock.entity_id, lock);
+                    }
+                }
+                // Skip rejected promises (e.g., config entries not loaded)
+            }
+            this._locks = Array.from(lockMap.values());
         } catch {
             this._locks = [];
         }

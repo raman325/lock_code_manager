@@ -10,8 +10,9 @@ import { slugify } from './slugify';
 import { createErrorView } from './strategy-utils';
 import {
     GetConfigEntriesResponse,
-    LockCodeManagerConfigEntryData,
-    LockCodeManagerDashboardStrategyConfig
+    LockCodeManagerConfigEntryDataResponse,
+    LockCodeManagerDashboardStrategyConfig,
+    LockInfo
 } from './types';
 
 /** Message shown when no LCM configurations exist */
@@ -68,45 +69,41 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
             config.show_all_codes_for_locks ??
             DEFAULT_SHOW_ALL_LOCK_CARDS_VIEW;
         if (showAllLockCardsView) {
-            const lockEntityIds = new Set<string>();
+            const locksMap = new Map<string, LockInfo>();
             await Promise.all(
                 configEntries.map(async (configEntry) => {
-                    const data = await hass.callWS<LockCodeManagerConfigEntryData>({
+                    const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
                         config_entry_id: configEntry.entry_id,
-                        type: 'lock_code_manager/get_slot_calendar_data'
+                        type: 'lock_code_manager/get_config_entry_data'
                     });
-                    data.locks.forEach((lockEntityId) => lockEntityIds.add(lockEntityId));
+                    data.locks.forEach((lock) => locksMap.set(lock.entity_id, lock));
                 })
             );
 
-            const sortedLockEntityIds = Array.from(lockEntityIds).sort((a, b) => {
-                const nameA = hass.states[a]?.attributes?.friendly_name ?? a;
-                const nameB = hass.states[b]?.attributes?.friendly_name ?? b;
-                return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
-            });
+            const sortedLocks = Array.from(locksMap.values()).sort((a, b) =>
+                a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+            );
 
             // Create sections for each lock (same layout as view strategy)
             const sections =
-                sortedLockEntityIds.length > 0
-                    ? sortedLockEntityIds.map((lockEntityId) => {
-                          const lockState = hass.states[lockEntityId];
-                          const lockName = lockState?.attributes?.friendly_name ?? lockEntityId;
+                sortedLocks.length > 0
+                    ? sortedLocks.map((lock) => {
                           return {
                               cards: [
                                   {
                                       code_display: config.code_display ?? DEFAULT_CODE_DISPLAY,
-                                      lock_entity_id: lockEntityId,
+                                      lock_entity_id: lock.entity_id,
                                       type: 'custom:lcm-lock-codes'
                                   }
                               ],
-                              title: lockName,
+                              title: lock.name,
                               type: 'grid'
                           };
                       })
                     : undefined;
 
             const cards =
-                sortedLockEntityIds.length === 0
+                sortedLocks.length === 0
                     ? [
                           {
                               content: '# No locks found to display.',

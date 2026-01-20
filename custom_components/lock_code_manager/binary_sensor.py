@@ -15,6 +15,7 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.const import (
+    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     STATE_OFF,
@@ -22,7 +23,6 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
     EntityCategory,
-    Platform,
 )
 from homeassistant.core import (
     Event,
@@ -44,7 +44,6 @@ from .const import (
     ATTR_ACTIVE,
     ATTR_CODE,
     ATTR_IN_SYNC,
-    CONF_CALENDAR,
     CONF_NUMBER_OF_USES,
     DOMAIN,
     EVENT_PIN_USED,
@@ -117,6 +116,20 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
     """Active binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _condition_entity_unsub: Callable[[], None] | None = None
+    _subscribed_condition_entity_id: str | None = None
+
+    @property
+    def _condition_entity_id(self) -> str | None:
+        """Return condition entity ID for this slot."""
+        return get_slot_data(self.config_entry, self.slot_num).get(CONF_ENTITY_ID)
+
+    @callback
+    def _cleanup_condition_subscription(self) -> None:
+        """Clean up condition entity subscription if one exists."""
+        if self._condition_entity_unsub:
+            self._condition_entity_unsub()
+            self._condition_entity_unsub = None
 
     @callback
     def _update_state(self, _: datetime | None = None) -> None:
@@ -133,7 +146,8 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
 
-            if key == CONF_CALENDAR and (hass_state := self.hass.states.get(state)):
+            # Handle condition entity - ON means access granted
+            if key == CONF_ENTITY_ID and (hass_state := self.hass.states.get(state)):
                 states[key] = (
                     hass_state.state == STATE_ON
                     if hass_state.state in (STATE_ON, STATE_OFF)
@@ -164,28 +178,58 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         """Update listener."""
         if config_entry.options:
             return
+        # Re-subscribe if condition entity changed
+        self._update_condition_entity_subscription()
         self._update_state()
 
     @callback
-    def _handle_calendar_state_changes(
+    def _handle_condition_entity_state_change(
         self, event: Event[EventStateChangedData]
     ) -> None:
-        """Handle calendar state changes."""
-        if event.data["entity_id"] == self._calendar_entity_id:
-            self._update_state()
+        """Handle condition entity state change."""
+        self._update_state()
+
+    @callback
+    def _update_condition_entity_subscription(self) -> None:
+        """Update subscription for condition entity if it changed."""
+        current_entity_id = self._condition_entity_id
+        old_entity_id = self._subscribed_condition_entity_id
+
+        # No change needed if entity ID hasn't changed
+        if current_entity_id == old_entity_id:
+            return
+
+        # Unsubscribe from old entity if we had one
+        self._cleanup_condition_subscription()
+
+        # Subscribe to new entity if we have one
+        if current_entity_id:
+            self._condition_entity_unsub = async_track_state_change_event(
+                self.hass,
+                [current_entity_id],
+                self._handle_condition_entity_state_change,
+            )
+
+        self._subscribed_condition_entity_id = current_entity_id
+        _LOGGER.debug(
+            "%s (%s): Updated condition entity subscription for %s: %s -> %s",
+            self.config_entry.entry_id,
+            self.config_entry.title,
+            self.entity_id,
+            old_entity_id,
+            current_entity_id,
+        )
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
-        self.async_on_remove(
-            async_track_state_change_filtered(
-                self.hass,
-                TrackStates(False, set(), {Platform.CALENDAR}),
-                self._handle_calendar_state_changes,
-            ).async_remove
-        )
+        # Register cleanup for condition entity subscription (called on entity removal)
+        self.async_on_remove(self._cleanup_condition_subscription)
+
+        # Track state changes for configured condition entity
+        self._update_condition_entity_subscription()
 
         self.async_on_remove(
             self.config_entry.add_update_listener(self._config_entry_update_listener)
@@ -230,6 +274,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
         self._tracked_entity_ids: set[str] = set()
         self._retry_unsub: Callable[[], None] | None = None
         self._retry_active = False
+        self._state_tracking_unsub: Callable[[], None] | None = None
+        self._tracking_all_states: bool = False
 
     @property
     def should_poll(self) -> bool:
@@ -410,6 +456,12 @@ class LockCodeManagerCodeSlotInSyncEntity(
         if not self._build_entity_id_map():
             return None
 
+        # NOTE: We intentionally don't call _update_state_tracking_filter() here.
+        # While it would be nice to switch from tracking all states to only specific
+        # entities, modifying subscriptions from within a callback causes timing issues.
+        # The performance impact of tracking all states is minimal since this method
+        # has early-return guards that skip processing for irrelevant entities.
+
         if self._attr_is_on is None and int(self.slot_num) not in self.coordinator.data:
             _LOGGER.debug(
                 "%s (%s): Slot %s not yet in coordinator data, skipping",
@@ -562,19 +614,54 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
 
-        if self._build_entity_id_map():
-            self.async_on_remove(
-                async_track_state_change_event(
-                    self.hass, self._tracked_entity_ids, self._async_update_state
-                )
-            )
-        else:
-            self.async_on_remove(
-                async_track_state_change_filtered(
-                    self.hass, TrackStates(True, set(), set()), self._async_update_state
-                ).async_remove
-            )
+        # Register cleanup for state tracking subscription
+        self.async_on_remove(self._cleanup_state_tracking)
+
+        self._setup_state_tracking()
         await self._async_update_state()
+
+    @callback
+    def _cleanup_state_tracking(self) -> None:
+        """Clean up state tracking subscription if one exists."""
+        if self._state_tracking_unsub:
+            self._state_tracking_unsub()
+            self._state_tracking_unsub = None
+            self._tracking_all_states = False
+
+    @callback
+    def _setup_state_tracking(self) -> None:
+        """Set up state change tracking for dependent entities.
+
+        If all entity IDs are available, tracks only those specific entities.
+        Otherwise, tracks all state changes until entities become available.
+        """
+        # Clean up existing subscription before setting up new one
+        self._cleanup_state_tracking()
+
+        if self._build_entity_id_map():
+            # All entities found - track only those
+            self._state_tracking_unsub = async_track_state_change_event(
+                self.hass, self._tracked_entity_ids, self._async_update_state
+            )
+            self._tracking_all_states = False
+        else:
+            # Some entities not yet registered - track all states temporarily
+            # _async_update_state has guards that return early if entities aren't ready
+            tracker = async_track_state_change_filtered(
+                self.hass,
+                TrackStates(True, set(), set()),
+                self._async_update_state,
+            )
+            self._state_tracking_unsub = tracker.async_remove
+            self._tracking_all_states = True
+            _LOGGER.debug(
+                "%s (%s): Waiting for dependent entities for %s slot %s, "
+                "tracking all state changes",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.lock.lock.entity_id,
+                self.slot_num,
+            )
 
     async def _async_remove(self) -> None:
         """Handle removal cleanup."""
