@@ -285,6 +285,38 @@ vol.Optional("include_locks", default=True): bool,
 Track entity registry updates and warn if LCM entities change entity IDs (reload
 required).
 
+### Add Provider Diagnostic Data Method
+
+Add `get_diagnostic_data()` method to `BaseLock` for exposing provider-specific
+diagnostic information. Keymaster has this pattern with `get_platform_data()`.
+
+**Example Implementation:**
+
+```python
+# In BaseLock
+def get_diagnostic_data(self) -> dict[str, Any]:
+    """Return provider-specific diagnostic data."""
+    return {}
+
+# In ZWaveJSLock
+def get_diagnostic_data(self) -> dict[str, Any]:
+    return {
+        "node_id": self.node.node_id,
+        "home_id": self.node.client.driver.controller.home_id,
+        "client_connected": self.node.client.connected,
+        "config_entry_state": self.lock_config_entry.state.value,
+    }
+```
+
+**Benefits:**
+
+- Easier troubleshooting of provider-specific issues
+- Can be exposed via diagnostics platform or websocket
+
+**Estimated Effort:** Low (2-4 hours)
+**Priority:** Low
+**Status:** Not started
+
 ### Drift Detection Failure Alerting
 
 Add mechanism to alert users when drift detection consistently fails over
