@@ -18,7 +18,6 @@ from custom_components.lock_code_manager.const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.exceptions import LockDisconnected
-from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
@@ -48,7 +47,7 @@ class MockLCMLockWithPush(MockLCMLock):
 
 
 async def test_base(hass: HomeAssistant):
-    """Test base class."""
+    """Test base class properties and defaults."""
     entity_reg = er.async_get(hass)
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
@@ -61,15 +60,15 @@ async def test_base(hass: HomeAssistant):
         config_entry=config_entry,
     )
 
-    lock = BaseLock(
+    # Use MockLCMLock since BaseLock is now abstract
+    lock = MockLCMLock(
         hass,
         dr.async_get(hass),
         entity_reg,
         config_entry,
         lock_entity,
     )
-    # Mock coordinator refreshes since BaseLock doesn't implement
-    # the abstract methods needed for a real refresh.
+    # Mock coordinator refreshes
     with (
         patch(
             "custom_components.lock_code_manager.coordinator."
@@ -84,21 +83,8 @@ async def test_base(hass: HomeAssistant):
     assert lock.coordinator is not None
     assert await lock.async_unload(False) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
-    with pytest.raises(NotImplementedError):
-        assert lock.domain
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_is_connection_up()
-    # Note: hard_refresh, set, and clear operations now check connection first,
-    # so they raise NotImplementedError from is_connection_up() instead of
-    # the expected error from the unimplemented method
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_hard_refresh_codes()
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_clear_usercode(1)
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_set_usercode(1, 1)
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_get_usercodes()
+    # MockLCMLock implements domain
+    assert lock.domain == "test"
 
 
 async def test_config_entry_state_change_resubscribes(
@@ -465,7 +451,8 @@ async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
         config_entry=config_entry,
     )
 
-    lock = BaseLock(
+    # Use MockLCMLock since BaseLock is now abstract
+    lock = MockLCMLock(
         hass,
         dr.async_get(hass),
         entity_reg,

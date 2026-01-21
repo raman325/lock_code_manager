@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
 
 
 @dataclass(repr=False, eq=False)
-class BaseLock:
+class BaseLock(ABC):
     """
     Base class for lock provider implementations.
 
@@ -202,9 +203,9 @@ class BaseLock:
         raise ProviderNotImplementedError(self, method_name, guidance)
 
     @property
+    @abstractmethod
     def domain(self) -> str:
         """Return integration domain."""
-        raise NotImplementedError()
 
     @property
     def usercode_scan_interval(self) -> timedelta:
@@ -476,7 +477,7 @@ class BaseLock:
         """
         self._raise_not_implemented(
             "set_usercode",
-            "Override this method to set a usercode on the lock.",
+            "Override this method or async_set_usercode to set a usercode on the lock.",
         )
 
     async def async_set_usercode(
@@ -519,7 +520,7 @@ class BaseLock:
         """
         self._raise_not_implemented(
             "clear_usercode",
-            "Override this method to clear a usercode from the lock.",
+            "Override this method or async_clear_usercode to clear a usercode from the lock.",
         )
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -560,7 +561,7 @@ class BaseLock:
         """
         self._raise_not_implemented(
             "get_usercodes",
-            "Override this method to retrieve usercodes from the lock.",
+            "Override this method or async_get_usercodes to retrieve usercodes from the lock.",
         )
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
