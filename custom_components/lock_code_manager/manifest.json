@@ -9,6 +9,7 @@
     "schedule",
     "template",
     "virtual",
+    "zha",
     "zwave_js"
   ],
   "codeowners": [
