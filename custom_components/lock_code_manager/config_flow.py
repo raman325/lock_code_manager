@@ -211,6 +211,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
 
             # Check for excluded platforms using try/except/else pattern
+            # self.ent_reg is set in async_step_user which always runs first
             if entity_id := user_input.get(CONF_ENTITY_ID):
                 try:
                     excluded = next(
