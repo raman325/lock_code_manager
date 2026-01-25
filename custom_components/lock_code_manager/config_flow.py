@@ -212,12 +212,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
             # Check for excluded platforms using try/except/else pattern
             if entity_id := user_input.get(CONF_ENTITY_ID):
-                ent_reg = er.async_get(self.hass)
+                if not self.ent_reg:
+                    self.ent_reg = er.async_get(self.hass)
                 try:
                     excluded = next(
                         p
                         for p in EXCLUDED_CONDITION_PLATFORMS
-                        if (entry := ent_reg.async_get(entity_id))
+                        if (entry := self.ent_reg.async_get(entity_id))
                         and entry.platform == p
                     )
                 except StopIteration:
