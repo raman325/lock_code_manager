@@ -5,7 +5,7 @@
       "locks_updated": "The locks for your config entry have been updated."
     },
     "error": {
-      "excluded_platform": "Entities from the {integration} integration are not supported as condition entities. See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations) for details.",
+      "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations) for details.",
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
