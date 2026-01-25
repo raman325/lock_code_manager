@@ -212,8 +212,6 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
             # Check for excluded platforms using try/except/else pattern
             if entity_id := user_input.get(CONF_ENTITY_ID):
-                if not self.ent_reg:
-                    self.ent_reg = er.async_get(self.hass)
                 try:
                     excluded = next(
                         p
