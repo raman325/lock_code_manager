@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant, callback
@@ -641,3 +642,433 @@ async def test_drift_check_handles_hard_refresh_error(
 
         # Data should remain unchanged
         assert coordinator.data == {1: "1234"}
+
+
+# =========================================================================
+# Sync Operation Tests
+# =========================================================================
+
+
+async def test_get_sync_state_returns_none_for_unknown_slot(
+    hass: HomeAssistant,
+):
+    """Test that get_sync_state returns None for slots not in _sync_state."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+
+    # No sync state set, should return None
+    assert coordinator.get_sync_state(1) is None
+    assert coordinator.get_sync_state(99) is None
+
+
+async def test_get_sync_state_returns_correct_state(
+    hass: HomeAssistant,
+):
+    """Test that get_sync_state returns the correct sync state."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+
+    # Set internal state directly
+    coordinator._sync_state[1] = True
+    coordinator._sync_state[2] = False
+
+    assert coordinator.get_sync_state(1) is True
+    assert coordinator.get_sync_state(2) is False
+
+
+async def test_mark_synced_sets_state_and_notifies(
+    hass: HomeAssistant,
+):
+    """Test that mark_synced sets sync state and notifies listeners."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+
+    listener_called = False
+
+    @callback
+    def listener():
+        nonlocal listener_called
+        listener_called = True
+
+    coordinator.async_add_listener(listener)
+
+    # Mark slot 1 as synced
+    coordinator.mark_synced(1)
+
+    assert coordinator.get_sync_state(1) is True
+    assert listener_called
+
+
+async def test_mark_synced_cancels_pending_retry(
+    hass: HomeAssistant,
+):
+    """Test that mark_synced cancels any pending retry for the slot."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+
+    # Simulate a pending retry
+    cancel_called = False
+
+    def fake_cancel():
+        nonlocal cancel_called
+        cancel_called = True
+
+    coordinator._pending_retries[1] = fake_cancel
+
+    # Mark as synced should cancel the pending retry
+    coordinator.mark_synced(1)
+
+    assert cancel_called
+    assert 1 not in coordinator._pending_retries
+
+
+async def test_mark_synced_no_op_if_already_synced(
+    hass: HomeAssistant,
+):
+    """Test that mark_synced doesn't notify if already synced."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+    coordinator._sync_state[1] = True  # Already synced
+
+    listener_called = False
+
+    @callback
+    def listener():
+        nonlocal listener_called
+        listener_called = True
+
+    coordinator.async_add_listener(listener)
+
+    # Mark synced again - should be a no-op
+    coordinator.mark_synced(1)
+
+    assert not listener_called
+
+
+async def test_async_request_sync_set_operation_success(
+    hass: HomeAssistant,
+):
+    """Test async_request_sync for a successful set operation."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: ""}
+
+    mock_set = AsyncMock()
+    mock_refresh = AsyncMock()
+
+    with (
+        patch.object(lock, "async_internal_set_usercode", mock_set),
+        patch.object(coordinator, "async_request_refresh", mock_refresh),
+    ):
+        result = await coordinator.async_request_sync(1, "set", "1234", "Test User")
+
+    assert result is True
+    mock_set.assert_called_once_with(1, "1234", "Test User")
+    mock_refresh.assert_called_once()
+
+
+async def test_async_request_sync_clear_operation_success(
+    hass: HomeAssistant,
+):
+    """Test async_request_sync for a successful clear operation."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+
+    mock_clear = AsyncMock()
+    mock_refresh = AsyncMock()
+
+    with (
+        patch.object(lock, "async_internal_clear_usercode", mock_clear),
+        patch.object(coordinator, "async_request_refresh", mock_refresh),
+    ):
+        result = await coordinator.async_request_sync(1, "clear")
+
+    assert result is True
+    mock_clear.assert_called_once_with(1)
+    mock_refresh.assert_called_once()
+
+
+async def test_async_request_sync_marks_out_of_sync_immediately(
+    hass: HomeAssistant,
+):
+    """Test that async_request_sync marks slot as out of sync before operation."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+    coordinator._sync_state[1] = True  # Start as synced
+
+    sync_state_during_operation = None
+
+    async def capture_state(*args, **kwargs):
+        nonlocal sync_state_during_operation
+        sync_state_during_operation = coordinator.get_sync_state(1)
+
+    with (
+        patch.object(lock, "async_internal_set_usercode", capture_state),
+        patch.object(coordinator, "async_request_refresh", AsyncMock()),
+    ):
+        await coordinator.async_request_sync(1, "set", "5678")
+
+    # During the operation, sync state should have been False
+    assert sync_state_during_operation is False
+
+
+async def test_async_request_sync_cancels_existing_retry(
+    hass: HomeAssistant,
+):
+    """Test that async_request_sync cancels any pending retry for the slot."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+
+    # Simulate a pending retry
+    cancel_called = False
+
+    def fake_cancel():
+        nonlocal cancel_called
+        cancel_called = True
+
+    coordinator._pending_retries[1] = fake_cancel
+
+    with (
+        patch.object(lock, "async_internal_set_usercode", AsyncMock()),
+        patch.object(coordinator, "async_request_refresh", AsyncMock()),
+    ):
+        await coordinator.async_request_sync(1, "set", "5678")
+
+    assert cancel_called
+    # After success, no new retry should be pending
+    assert 1 not in coordinator._pending_retries
+
+
+async def test_async_request_sync_schedules_retry_on_lock_disconnected(
+    hass: HomeAssistant,
+):
+    """Test that async_request_sync schedules retry on LockDisconnected."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+
+    mock_set = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+
+    with patch.object(lock, "async_internal_set_usercode", mock_set):
+        result = await coordinator.async_request_sync(1, "set", "5678")
+
+    assert result is False
+    # A retry should be scheduled
+    assert 1 in coordinator._pending_retries
+
+
+async def test_async_request_sync_raises_on_missing_usercode_for_set(
+    hass: HomeAssistant,
+):
+    """Test that async_request_sync raises ValueError if usercode is None for set."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: ""}
+
+    with pytest.raises(ValueError, match="usercode is required"):
+        await coordinator.async_request_sync(1, "set", None)
+
+
+async def test_cancel_retry_cancels_and_removes(
+    hass: HomeAssistant,
+):
+    """Test that _cancel_retry cancels the callback and removes from dict."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+
+    cancel_called = False
+
+    def fake_cancel():
+        nonlocal cancel_called
+        cancel_called = True
+
+    coordinator._pending_retries[1] = fake_cancel
+
+    coordinator._cancel_retry(1)
+
+    assert cancel_called
+    assert 1 not in coordinator._pending_retries
+
+
+async def test_cancel_retry_no_op_for_unknown_slot(
+    hass: HomeAssistant,
+):
+    """Test that _cancel_retry is a no-op for slots without pending retries."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+
+    # Should not raise
+    coordinator._cancel_retry(99)
+
+
+async def test_new_request_replaces_pending_retry(
+    hass: HomeAssistant,
+):
+    """Test that a new sync request replaces a pending retry with new operation."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock", config_entry=config_entry
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass, dr.async_get(hass), entity_reg, config_entry, lock_entity
+    )
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    coordinator.data = {1: "1234"}
+
+    # First request fails, schedules retry for "set"
+    mock_set = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_set_usercode", mock_set):
+        await coordinator.async_request_sync(1, "set", "5678")
+
+    old_retry = coordinator._pending_retries.get(1)
+    assert old_retry is not None
+
+    # Second request for "clear" should replace the "set" retry
+    mock_clear = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_clear_usercode", mock_clear):
+        await coordinator.async_request_sync(1, "clear")
+
+    # Old retry should have been cancelled and replaced
+    new_retry = coordinator._pending_retries.get(1)
+    assert new_retry is not None
+    assert new_retry is not old_retry
