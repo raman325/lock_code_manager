@@ -97,6 +97,10 @@ CONDITION_ENTITY_DOMAINS = [
     "input_boolean",
 ]
 
+# Platforms (integrations) excluded from being condition entities
+# These create switch/binary_sensor entities but their states don't map to access control
+EXCLUDED_CONDITION_PLATFORMS = frozenset({"scheduler"})
+
 # Defaults
 DEFAULT_NUM_SLOTS = 3
 DEFAULT_START = 1

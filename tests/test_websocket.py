@@ -1883,3 +1883,73 @@ class TestUpdateSlotCondition:
         state = hass.states.get(number_entity_id)
         assert state is not None, "Number entity state not found"
         assert float(state.state) == 10
+
+    async def test_reject_scheduler_condition_entity(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """Test that scheduler-component entities are rejected as conditions."""
+        ws_client = await hass_ws_client(hass)
+
+        # Create a mock scheduler entity in registry
+        ent_reg = er.async_get(hass)
+        ent_reg.async_get_or_create(
+            "switch",
+            "scheduler",  # platform
+            "test_schedule",
+            suggested_object_id="my_schedule",
+        )
+        hass.states.async_set("switch.my_schedule", "on")
+        await hass.async_block_till_done()
+
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/update_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                "slot": 1,
+                "entity_id": "switch.my_schedule",
+            }
+        )
+        result = await ws_client.receive_json()
+
+        assert result["success"] is False
+        assert result["error"]["code"] == "not_supported"
+        assert "scheduler" in result["error"]["message"]
+
+    async def test_allow_schedule_helper_condition_entity(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """Test that native schedule helper entities are allowed."""
+        ws_client = await hass_ws_client(hass)
+
+        # Create a mock schedule helper entity (native HA)
+        ent_reg = er.async_get(hass)
+        ent_reg.async_get_or_create(
+            "schedule",
+            "schedule",  # platform (native helper)
+            "work_hours",
+            suggested_object_id="work_hours",
+        )
+        hass.states.async_set("schedule.work_hours", "on")
+        await hass.async_block_till_done()
+
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/update_slot_condition",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                "slot": 1,
+                "entity_id": "schedule.work_hours",
+            }
+        )
+        result = await ws_client.receive_json()
+
+        assert result["success"] is True

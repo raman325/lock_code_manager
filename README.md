@@ -48,6 +48,17 @@ If you're interested in adding support for one of these integrations, the blocke
 typically the underlying Python library - not Lock Code Manager itself. Contributing user
 code management features to those libraries would enable LCM support.
 
+## Condition Entity Integrations Not Supported
+
+Some integrations create switch or binary_sensor entities that appear compatible but have
+semantics that don't map to Lock Code Manager's access control model:
+
+| Integration | Reason |
+| ----------- | ------ |
+| **[scheduler-component](https://github.com/nielsfaber/scheduler-component)** | Creates switch entities for task scheduling, not time-based access. The `on` state means "schedule is enabled and waiting," not "access is currently allowed." Use the native [Schedule helper](https://www.home-assistant.io/integrations/schedule/) instead. |
+
+See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations) for details.
+
 ## Installation
 
 The best way to install this integration is via HACS.
