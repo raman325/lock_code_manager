@@ -440,6 +440,11 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
         )
+        # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
+        # value cache updates asynchronously via push notification. Update coordinator
+        # immediately to prevent sync loops from reading stale cache data.
+        if self.coordinator:
+            self.coordinator.push_update({code_slot: usercode})
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -469,6 +474,11 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
         )
+        # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
+        # value cache updates asynchronously via push notification. Update coordinator
+        # immediately to prevent sync loops from reading stale cache data.
+        if self.coordinator:
+            self.coordinator.push_update({code_slot: ""})
         return True
 
     def _get_usercodes_from_cache(self) -> list[dict[str, Any]]:
