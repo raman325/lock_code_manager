@@ -17,12 +17,26 @@ entities.
 - `git` and `gh` commands are automatically approved
 - When making changes to ts files, before handing it back over to me, run yarn test and build and fix any issues.
 - When making changes to python files, before handing it back over to me, run pytest in the venv and fix any issues.
-- When creating a PR, ALWAYS use the PULL_REQUEST_TEMPLATE.md template
+- When creating a PR, ALWAYS use the .github/PULL_REQUEST_TEMPLATE.md template
 - When submitting a PR, note that Copilot will eventually add review comments which you must review -
   either make changes as needed or explain why you are not addressing a comment (comments that you make
   code changes for don't need a response). Resolve all comments as you address them or respond to them.
   Provide a summary of what was done or not done and ask for confirmation before committing the changes.
 - When running hass, pre-commit, or any other python driven commands, always run from the venv
+- Before committing, ensure pre-commit succeeds and tests pass.
+
+## External repositories/directories that are relevant
+
+- `../lock_code_manager.wiki/` - hosts the GitHub wiki for this project. Changes are automatically live when pushed, and
+  changes related to user facing changes in the integration should only be pushed when that code is released.
+- `../home-assistant/` the `home-assistant/core` repo (I am a member of the `home-assistant` Organization)
+- `../zwave-js-server/` a server that enables clients like `zwave-js-server-python` to interact with the Z-Wave JS driver
+  over WebSockets. (`zwave-js/zwave-js-server`)
+- `../zwave-js-server-python` the Python library that the HA zwave_js integration uses to communication with Z-Wave JS
+  (`home-assistant-libs/zwave-js-server-python`)
+- `../frontend/` the `home-assistant/frontend` repo
+- `../keymaster/` the `FutureTense/keymaster` repo, another integration to manage lock user codes
+- `~/.homeassistant/` the config folder that is used when I run HA locally for testing purposes
 
 ## Architecture
 
@@ -248,6 +262,38 @@ If `supports_push` returns `True`, implement:
 - `subscribe_push_updates()`: Subscribe to real-time updates, call `coordinator.push_update({slot: value})`
 - `unsubscribe_push_updates()`: Clean up subscriptions
 
+### Optimistic Updates
+
+For providers where the underlying integration's value cache updates asynchronously (e.g., Z-Wave JS
+push notifications), implement optimistic updates to prevent sync loops:
+
+```python
+async def async_set_usercode(self, code_slot: int, usercode: int | str, ...) -> bool:
+    # ... perform the set operation ...
+    await self._call_service_to_set_code(code_slot, usercode)
+
+    # Optimistic update: command succeeded, update coordinator immediately
+    if self.coordinator:
+        self.coordinator.push_update({code_slot: usercode})
+    return True
+
+async def async_clear_usercode(self, code_slot: int) -> bool:
+    # ... perform the clear operation ...
+    await self._call_service_to_clear_code(code_slot)
+
+    # Optimistic update
+    if self.coordinator:
+        self.coordinator.push_update({code_slot: ""})
+    return True
+```
+
+**When needed:** The Z-Wave command is acknowledged by the lock (via Supervision CC), but the JS value
+cache updates later via push notification. Without optimistic updates, the coordinator refresh reads
+stale cache data, sees a mismatch, and triggers repeated sync attempts.
+
+**When NOT needed:** Providers with synchronous caches (like Virtual) don't need this - `get_usercodes()`
+returns the updated value immediately after set/clear.
+
 ## Important Constraints
 
 - Slots are numeric (usually 1-100) but can be strings for some lock types
@@ -314,8 +360,31 @@ Lock-centric view showing all slots on a single lock (managed and unmanaged).
 
 ### Condition Entities
 
-Slots can have condition entities that control when the PIN is active:
+Slots can have condition entities that control when the PIN is active. The PIN is only active when
+the condition entity state is `on` (for calendars, this means an event is in progress).
 
-- **Supported domains**: `calendar`, `schedule`, `binary_sensor`, `switch`, `input_boolean`
-- **Behavior**: PIN is active only when condition entity state is `on`
-- **Calendar integration**: Shows current/next event details in slot card UI
+**Supported domains** (defined in `CONDITION_ENTITY_DOMAINS` in `const.py`):
+
+| Domain | Active When | Use Case |
+| ------ | ----------- | -------- |
+| `calendar` | Event in progress | Time-based access via calendar events |
+| `schedule` | Within scheduled time range | HA Schedule helper for recurring windows |
+| `binary_sensor` | State is `on` | Custom logic via templates, presence, etc. |
+| `switch` | State is `on` | Manual toggle control |
+| `input_boolean` | State is `on` | Simple on/off control via UI |
+
+**UI Features:**
+
+- Calendar and schedule entities show next event details in the slot card
+- Condition can be added/edited/removed via the slot card's condition dialog
+
+**Excluded Integrations:**
+
+Some integrations create entities in supported domains but have state semantics incompatible with
+access control. These are blocked via `EXCLUDED_CONDITION_PLATFORMS` in `const.py`:
+
+| Integration | Reason |
+| ----------- | ------ |
+| `scheduler` (scheduler-component) | `on` means "schedule enabled", not "access allowed now" |
+
+Validation occurs in both `config_flow.py` (UI configuration) and `websocket.py` (slot card editing).
