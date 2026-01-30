@@ -210,22 +210,16 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             if user_input.get(CONF_ENABLED) and not user_input.get(CONF_PIN):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
 
-            # Check for excluded platforms using try/except/else pattern
+            # Check for excluded platforms with a single registry lookup
             # self.ent_reg is set in async_step_user which always runs first
             if entity_id := user_input.get(CONF_ENTITY_ID):
-                try:
-                    excluded = next(
-                        p
-                        for p in EXCLUDED_CONDITION_PLATFORMS
-                        if (entry := self.ent_reg.async_get(entity_id))
-                        and entry.platform == p
-                    )
-                except StopIteration:
-                    pass  # Platform is allowed
-                else:
-                    # Found an excluded platform
+                entity_entry = self.ent_reg.async_get(entity_id)
+                if (
+                    entity_entry
+                    and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS
+                ):
                     errors[CONF_ENTITY_ID] = "excluded_platform"
-                    description_placeholders["integration"] = excluded
+                    description_placeholders["integration"] = entity_entry.platform
 
             if not errors:
                 self.data[CONF_SLOTS][int(self.slots_to_configure.pop(0))] = (

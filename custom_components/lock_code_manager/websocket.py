@@ -1204,26 +1204,18 @@ async def update_slot_condition(
         )
         return
 
-    # Check for excluded platforms using try/except/else pattern
+    # Check for excluded platforms with a single registry lookup
     if entity_id is not None:
         ent_reg = er.async_get(hass)
-        try:
-            excluded = next(
-                p
-                for p in EXCLUDED_CONDITION_PLATFORMS
-                if (entry := ent_reg.async_get(entity_id)) and entry.platform == p
-            )
-        except StopIteration:
-            pass  # Platform is allowed
-        else:
-            # Found an excluded platform
+        entity_entry = ent_reg.async_get(entity_id)
+        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
             connection.send_error(
                 msg["id"],
                 websocket_api.const.ERR_NOT_SUPPORTED,
-                f"Entities from the '{excluded}' integration are not supported as "
-                "condition entities. See the [wiki](https://github.com/raman325/"
-                "lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations) "
-                "for details.",
+                f"Entities from the '{entity_entry.platform}' integration are not "
+                "supported as condition entities. See the wiki for details: "
+                "https://github.com/raman325/lock_code_manager/wiki/"
+                "Unsupported-Condition-Entity-Integrations",
             )
             return
 
