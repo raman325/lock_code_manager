@@ -1,9 +1,5 @@
 # Lock Code Manager
 
-> NOTE: This integration is in very early stages, so expect things to not work as expected.
-> Feel free to open issues to report anything you find, but I would not recommend using
-> this for production usage yet.
-
 Lock Code Manager is a Home Assistant integration that allows you to more easily manage
 your usercodes on your locks. Once you have configured it, the integration will set and
 clear codes on your locks as needed depending on how you decide to configure them.
