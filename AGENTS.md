@@ -32,7 +32,7 @@ entities.
 - `../home-assistant/` the `home-assistant/core` repo (I am a member of the `home-assistant` Organization)
 - `../zwave-js-server/` a server that enables clients like `zwave-js-server-python` to interact with the Z-Wave JS driver
   over WebSockets. (`zwave-js/zwave-js-server`)
-- `../zwave-js-server-python` the Python library that the HA zwave_js integration uses to communication with Z-Wave JS
+- `../zwave-js-server-python` the Python library that the HA zwave_js integration uses to communicate with Z-Wave JS
   (`home-assistant-libs/zwave-js-server-python`)
 - `../frontend/` the `home-assistant/frontend` repo
 - `../keymaster/` the `FutureTense/keymaster` repo, another integration to manage lock user codes
