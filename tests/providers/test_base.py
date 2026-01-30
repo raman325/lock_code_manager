@@ -122,14 +122,14 @@ async def test_config_entry_state_change_resubscribes(
 
         lock.subscribe_calls = 0
         lock.unsubscribe_calls = 0
-        lock.coordinator.async_refresh = AsyncMock()
+        lock.coordinator.async_request_refresh = AsyncMock()
 
         await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
         await hass.async_block_till_done()
 
         assert lock.unsubscribe_calls == 1
         assert lock.subscribe_calls == 1
-        lock.coordinator.async_refresh.assert_awaited()
+        lock.coordinator.async_request_refresh.assert_awaited()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
@@ -223,9 +223,19 @@ async def test_rate_limiting_set_usercode(
     # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
 
+    # Reset service call tracking to isolate this test from setup-induced calls
+    # (the coordinator sync logic may trigger calls during startup)
+    hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"] = []
+
+    # Cancel any pending coordinator retries to prevent interference
+    for slot_num in list(lock_provider.coordinator._pending_retries.keys()):
+        lock_provider.coordinator._cancel_retry(slot_num)
+
+    # Use slots 99 and 100 which don't have entities - this prevents the binary
+    # sensor sync logic from interfering with our rate limiting measurements
     # First operation should execute immediately
     start_time = time.monotonic()
-    await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
+    await lock_provider.async_internal_set_usercode(99, "1111", "Test 1")
     first_duration = time.monotonic() - start_time
 
     # First operation should be fast (< 0.2 seconds without rate limiting delay)
@@ -233,7 +243,7 @@ async def test_rate_limiting_set_usercode(
 
     # Second operation should be rate limited
     start_time = time.monotonic()
-    await lock_provider.async_internal_set_usercode(2, "2222", "Test 2")
+    await lock_provider.async_internal_set_usercode(100, "2222", "Test 2")
     second_duration = time.monotonic() - start_time
 
     # Second operation should take at least the rate limit time
