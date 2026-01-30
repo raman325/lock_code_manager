@@ -7,8 +7,9 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import SOURCE_REAUTH, SOURCE_USER
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
@@ -252,3 +253,32 @@ async def test_config_flow_two_entries_same_locks(
         {CONF_SLOTS: {3: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
     )
     assert result["type"] == "create_entry"
+
+
+async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
+    """Test that scheduler-component entities are rejected during config flow."""
+    # Create a mock scheduler entity in registry
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "switch",
+        "scheduler",  # platform
+        "test_schedule",
+        suggested_object_id="my_schedule",
+    )
+    hass.states.async_set("switch.my_schedule", "on")
+    await hass.async_block_till_done()
+
+    flow_id = await _start_ui_config_flow(hass)
+
+    # Try to configure slot 1 with a scheduler entity as condition
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_ENABLED: True, CONF_PIN: "1234", CONF_ENTITY_ID: "switch.my_schedule"},
+    )
+
+    # Should show error for excluded platform
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+    assert result["errors"] == {CONF_ENTITY_ID: "excluded_platform"}
+    # Verify placeholder is set for the error message
+    assert result["description_placeholders"].get("integration") == "scheduler"

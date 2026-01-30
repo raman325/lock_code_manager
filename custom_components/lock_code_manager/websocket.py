@@ -95,6 +95,7 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
+    EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
 from .providers import BaseLock
@@ -1202,6 +1203,21 @@ async def update_slot_condition(
             f"Entity {entity_id} not found",
         )
         return
+
+    # Check for excluded platforms with a single registry lookup
+    if entity_id is not None:
+        ent_reg = er.async_get(hass)
+        entity_entry = ent_reg.async_get(entity_id)
+        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
+            connection.send_error(
+                msg["id"],
+                websocket_api.const.ERR_NOT_SUPPORTED,
+                f"Entities from the '{entity_entry.platform}' integration are not "
+                "supported as condition entities. See the wiki for details: "
+                "https://github.com/raman325/lock_code_manager/wiki/"
+                "Unsupported-Condition-Entity-Integrations",
+            )
+            return
 
     # Update config entry data
     data = copy.deepcopy(dict(config_entry.data))

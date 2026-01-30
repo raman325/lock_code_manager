@@ -33,6 +33,7 @@ from .const import (
     DEFAULT_NUM_SLOTS,
     DEFAULT_START,
     DOMAIN,
+    EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
 
@@ -199,12 +200,28 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle code slots step."""
-        errors = {}
+        errors: dict[str, str] = {}
+        description_placeholders: dict[str, Any] = {
+            "slot_num": self.slots_to_configure[0]
+        }
         self.data.setdefault(CONF_SLOTS, {})
+
         if user_input is not None:
             if user_input.get(CONF_ENABLED) and not user_input.get(CONF_PIN):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
-            else:
+
+            # Check for excluded platforms with a single registry lookup
+            # self.ent_reg is set in async_step_user which always runs first
+            if entity_id := user_input.get(CONF_ENTITY_ID):
+                entity_entry = self.ent_reg.async_get(entity_id)
+                if (
+                    entity_entry
+                    and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS
+                ):
+                    errors[CONF_ENTITY_ID] = "excluded_platform"
+                    description_placeholders["integration"] = entity_entry.platform
+
+            if not errors:
                 self.data[CONF_SLOTS][int(self.slots_to_configure.pop(0))] = (
                     CODE_SLOT_SCHEMA(user_input)
                 )
@@ -215,7 +232,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="code_slot",
             data_schema=UI_CODE_SLOT_SCHEMA,
             errors=errors,
-            description_placeholders={"slot_num": self.slots_to_configure[0]},
+            description_placeholders=description_placeholders,
             last_step=len(self.slots_to_configure) == 1,
         )
 
