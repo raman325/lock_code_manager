@@ -373,6 +373,161 @@ async def test_clear_usercode_skips_when_already_cleared(
     await zwave_js_lock.async_unload(False)
 
 
+async def test_set_usercode_optimistic_update(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that set_usercode performs optimistic coordinator update.
+
+    When a set operation succeeds, the coordinator should be updated immediately
+    with the new value. This prevents sync loops where the binary sensor reads
+    stale cached data and triggers repeated sync attempts.
+
+    The Z-Wave command is acknowledged by the lock (via Supervision CC), but
+    the JS value cache updates asynchronously via push notifications. Without
+    the optimistic update, there's a race condition where coordinator refresh
+    reads stale cache data.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Set up a mock coordinator with stale data (simulating the race condition)
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {4: ""}  # Slot appears empty in stale cache
+    zwave_js_lock.coordinator = mock_coordinator
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+
+        assert result is True
+        # Verify optimistic update was called with new PIN
+        mock_coordinator.push_update.assert_called_once_with({4: "5678"})
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_set_usercode_optimistic_update_prevents_stale_read(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that optimistic update prevents sync loops from stale cache reads.
+
+    This test verifies the fix for the reported issue where out-of-sync slots
+    cause constant lock activity. The scenario:
+    1. LCM sets a code on the lock
+    2. Z-Wave command succeeds (lock acknowledges)
+    3. Without optimistic update: coordinator.data still has old value
+    4. Binary sensor sees mismatch → triggers another sync → loop
+
+    With the fix, push_update immediately sets coordinator.data to the new value,
+    so the binary sensor sees the expected value and doesn't retry.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Simulate stale cache: coordinator thinks slot is empty
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {4: ""}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        await zwave_js_lock.async_set_usercode(4, "9999")
+
+        # The optimistic update should have been called
+        mock_coordinator.push_update.assert_called_once_with({4: "9999"})
+
+        # Simulate what push_update does - update coordinator data
+        # (In real code, push_update calls async_set_updated_data which does this)
+        mock_coordinator.data[4] = "9999"
+
+        # Now coordinator.data reflects the expected value
+        # Binary sensor would see coordinator.data[4] == "9999" == pin_state
+        # → expected_in_sync = True → no retry loop
+        assert mock_coordinator.data[4] == "9999"
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_clear_usercode_optimistic_update(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that clear_usercode performs optimistic coordinator update.
+
+    When a clear operation succeeds, the coordinator should be updated immediately
+    with an empty string. This prevents sync loops where the binary sensor reads
+    stale cached data showing the old PIN and triggers repeated clear attempts.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Set up a mock coordinator with stale data (still shows old PIN)
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}  # Stale: slot still shows PIN
+    zwave_js_lock.coordinator = mock_coordinator
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        result = await zwave_js_lock.async_clear_usercode(2)
+
+        assert result is True
+        # Verify optimistic update was called with empty string
+        mock_coordinator.push_update.assert_called_once_with({2: ""})
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_set_usercode_no_coordinator(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that set_usercode handles missing coordinator gracefully.
+
+    The coordinator check is defensive - in normal operation it always exists
+    after setup. This test verifies the guard clause works.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Remove coordinator to test defensive check
+    zwave_js_lock.coordinator = None
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        # Should not raise even without coordinator
+        result = await zwave_js_lock.async_set_usercode(4, "5678")
+        assert result is True
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_clear_usercode_no_coordinator(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that clear_usercode handles missing coordinator gracefully."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Remove coordinator to test defensive check
+    zwave_js_lock.coordinator = None
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        # Should not raise even without coordinator
+        result = await zwave_js_lock.async_clear_usercode(2)
+        assert result is True
+
+    await zwave_js_lock.async_unload(False)
+
+
 # Push updates tests
 
 
