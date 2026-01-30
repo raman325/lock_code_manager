@@ -470,6 +470,19 @@ class BaseLock:
         If the provider cannot determine whether a change occurred, return True
         to ensure the coordinator refreshes and verifies the state.
 
+        Optimistic Updates
+        ------------------
+        For providers where the underlying integration's value cache updates
+        asynchronously (e.g., Z-Wave JS push notifications), the base class
+        coordinator refresh may read stale data, causing sync loops.
+
+        In these cases, call ``self.coordinator.push_update({code_slot: usercode})``
+        after a successful set operation to update coordinator data immediately.
+        This prevents the sync sensor from seeing a mismatch and retrying.
+
+        Providers with synchronous caches (like Virtual) don't need this as
+        get_usercodes() returns the updated value immediately.
+
         Raises:
             LockDisconnected: If the lock cannot be communicated with.
 
@@ -512,6 +525,19 @@ class BaseLock:
         Returns True if the value was changed, False if already cleared.
         If the provider cannot determine whether a change occurred, return True
         to ensure the coordinator refreshes and verifies the state.
+
+        Optimistic Updates
+        ------------------
+        For providers where the underlying integration's value cache updates
+        asynchronously (e.g., Z-Wave JS push notifications), the base class
+        coordinator refresh may read stale data, causing sync loops.
+
+        In these cases, call ``self.coordinator.push_update({code_slot: ""})``
+        after a successful clear operation to update coordinator data immediately.
+        This prevents the sync sensor from seeing a mismatch and retrying.
+
+        Providers with synchronous caches (like Virtual) don't need this as
+        get_usercodes() returns the updated value immediately.
 
         Raises:
             LockDisconnected: If the lock cannot be communicated with.
