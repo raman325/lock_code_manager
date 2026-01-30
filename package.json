@@ -52,7 +52,7 @@
     "markdownlint-cli": "^0.47.0",
     "prettier": "^3.8.1",
     "prettier-plugin-package": "^2.0.0",
-    "rollup": "^4.57.0",
+    "rollup": "^4.57.1",
     "ts-node": "^10.9.2",
     "tslib": "^2.8.1",
     "typescript": "^5.9.3",
