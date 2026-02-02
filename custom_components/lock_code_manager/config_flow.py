@@ -220,6 +220,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 ):
                     errors[CONF_ENTITY_ID] = "excluded_platform"
                     description_placeholders["integration"] = entity_entry.platform
+                    description_placeholders["docs_url"] = (
+                        "https://github.com/raman325/lock_code_manager/wiki/"
+                        "Unsupported-Condition-Entity-Integrations"
+                    )
 
             if not errors:
                 self.data[CONF_SLOTS][int(self.slots_to_configure.pop(0))] = (
