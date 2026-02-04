@@ -203,14 +203,12 @@ Return current usercode state. This may read from a cache or query the device.
 
 ```python
 def get_usercodes(self) -> dict[int, int | str]:
-    """Return dictionary mapping slot numbers to usercodes.
-
-    Returns:
-        Dict with slot number as key, usercode as value.
-        Use empty string "" for cleared/unused slots.
+    """
+    Return dictionary mapping slot numbers to usercodes.
 
     Raises:
         LockDisconnected: If lock cannot be communicated with.
+
     """
     return {
         1: "1234",   # Slot 1 has code
@@ -234,17 +232,9 @@ def set_usercode(
 ) -> bool:
     """Set a usercode on a code slot.
 
-    Args:
-        code_slot: The slot number to set.
-        usercode: The PIN code to set.
-        name: Optional name for the slot (some locks support this).
-
-    Returns:
-        True if the value was changed, False if already set to this value.
-        If you can't determine whether a change occurred, return True.
-
     Raises:
         LockDisconnected: If the lock cannot be communicated with.
+
     """
     # Check if already set to this value (optional optimization)
     if self._cache.get(code_slot) == str(usercode):
@@ -261,17 +251,12 @@ Clear a usercode from a specific slot.
 
 ```python
 def clear_usercode(self, code_slot: int) -> bool:
-    """Clear a usercode from a code slot.
-
-    Args:
-        code_slot: The slot number to clear.
-
-    Returns:
-        True if the value was changed, False if already cleared.
-        If you can't determine whether a change occurred, return True.
+    """
+    Clear a usercode from a code slot.
 
     Raises:
         LockDisconnected: If the lock cannot be communicated with.
+
     """
     if code_slot not in self._cache or self._cache[code_slot] == "":
         return False
@@ -300,16 +285,15 @@ Re-fetch codes directly from the device, bypassing any cache. Required if `hard_
 
 ```python
 def hard_refresh_codes(self) -> dict[int, int | str]:
-    """Force refresh from device and return all codes.
+    """
+    Force refresh from device and return all codes.
 
     This should bypass any caching layer and query the
     physical device directly.
 
-    Returns:
-        Dict with slot number as key, usercode as value.
-
     Raises:
         LockDisconnected: If lock cannot be communicated with.
+
     """
     self._cache = self._device.fetch_all_codes()
     return self.get_usercodes()

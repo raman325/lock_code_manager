@@ -300,7 +300,7 @@ async def get_config_entry_data(
     - dashboard-strategy.ts: Fetches data for dashboard view generation
     - view-strategy.ts: Fetches config entry and entities for view rendering
 
-    Returns:
+    Sends:
         config_entry: The config entry JSON fragment (entry_id, title, etc.)
         entities: List of entity registry entries for this config entry
         locks: List of lock objects with entity_id and friendly name

@@ -791,7 +791,7 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
 # Masked usercode tests
 
 
-async def test_get_usercodes_masked_pin_unmanaged_slot_skipped(
+async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
@@ -800,10 +800,10 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_skipped(
 
     This test verifies behavior when the lock cache contains:
     - Slot 1: Managed by LCM, has real code "9999" -> should be returned
-    - Slot 5: NOT managed by LCM, has masked code "****" -> should be skipped
+    - Slot 5: NOT managed by LCM, has masked code "****" -> returns masked value
 
-    Unmanaged slots with masked PINs can't be resolved since there's no LCM
-    config entry to look up the expected PIN, so they're skipped entirely.
+    Unmanaged slots with masked PINs return the masked value so sync logic
+    knows a PIN exists on the lock, even if we can't resolve the actual value.
     """
     # Configure LCM to only manage slot 1 (not slot 5)
     lcm_entry = MockConfigEntry(
@@ -822,16 +822,23 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_skipped(
         {"code_slot": 5, "usercode": "****", "in_use": True},  # NOT managed, masked
     ]
 
-    with patch.object(
-        zwave_js_lock, "_get_usercodes_from_cache", return_value=masked_slots
+    with (
+        patch.object(
+            zwave_js_lock, "_get_usercodes_from_cache", return_value=masked_slots
+        ),
+        # Slot 5 not in Z-Wave node data, so code_slot_in_use returns None
+        patch.object(
+            zwave_js_lock,
+            "code_slot_in_use",
+            side_effect=lambda s: True if s == 1 else None,
+        ),
     ):
         codes = await zwave_js_lock.async_get_usercodes()
 
         # Slot 1 should have its code
         assert codes[1] == "9999"
-        # Slot 5 should be skipped entirely (not in result) since it's masked
-        # and can't be resolved
-        assert 5 not in codes
+        # Slot 5 returns masked value (so sync logic knows a PIN exists)
+        assert codes[5] == "****"
 
     await zwave_js_lock.async_unload(False)
 
@@ -1082,19 +1089,26 @@ async def test_resolve_pin_if_masked_returns_pin_when_active(
     hass.states.async_set(pin_entry.entity_id, "5678")
     await hass.async_block_till_done()
 
-    # _resolve_pin_if_masked should return the PIN value when given a masked code
-    result = zwave_js_lock._resolve_pin_if_masked("****", 3)
-    assert result == "5678"
+    # Mock code_slot_in_use to return True (slot has a code on the lock)
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
+        # _resolve_pin_if_masked should return the PIN value when given a masked code
+        result = zwave_js_lock._resolve_pin_if_masked("****", 3)
+        assert result == "5678"
 
     await zwave_js_lock.async_unload(False)
 
 
-async def test_resolve_pin_if_masked_returns_none_when_inactive(
+async def test_resolve_pin_if_masked_returns_masked_value_when_inactive(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns None when slot is inactive."""
+    """Test _resolve_pin_if_masked returns masked value when slot is inactive.
+
+    When the slot is managed but active=OFF (slot not enabled), the masked
+    code is returned as-is. This ensures sync logic knows a PIN is set on
+    the lock, even though the slot isn't currently active in LCM.
+    """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1127,19 +1141,27 @@ async def test_resolve_pin_if_masked_returns_none_when_inactive(
     hass.states.async_set(pin_entry.entity_id, "5678")
     await hass.async_block_till_done()
 
-    # _resolve_pin_if_masked should return None (slot is inactive)
-    result = zwave_js_lock._resolve_pin_if_masked("****", 3)
-    assert result is None
+    # Mock code_slot_in_use to return True (slot has a code on the lock)
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
+        # _resolve_pin_if_masked should return the masked value (not None)
+        # so sync logic knows a PIN exists on the lock
+        result = zwave_js_lock._resolve_pin_if_masked("****", 3)
+        assert result == "****"
 
     await zwave_js_lock.async_unload(False)
 
 
-async def test_resolve_pin_if_masked_returns_none_when_pin_not_numeric(
+async def test_resolve_pin_if_masked_returns_pin_even_if_not_numeric(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns None when PIN is not numeric."""
+    """Test _resolve_pin_if_masked returns PIN state even if not strictly numeric.
+
+    The .isnumeric() check was removed to handle edge cases where PINs might
+    be stored in non-standard formats. When active=ON, the PIN entity state
+    is returned regardless of format.
+    """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1167,24 +1189,30 @@ async def test_resolve_pin_if_masked_returns_none_when_pin_not_numeric(
         config_entry=lcm_entry,
     )
 
-    # Set states: active=ON, pin="not_numeric"
+    # Set states: active=ON, pin="unknown" (non-numeric)
     hass.states.async_set(active_entry.entity_id, "on")
     hass.states.async_set(pin_entry.entity_id, "unknown")
     await hass.async_block_till_done()
 
-    # _resolve_pin_if_masked should return None (PIN not numeric)
-    result = zwave_js_lock._resolve_pin_if_masked("****", 3)
-    assert result is None
+    # Mock code_slot_in_use to return True (slot has a code on the lock)
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
+        # _resolve_pin_if_masked should return the PIN state as-is
+        result = zwave_js_lock._resolve_pin_if_masked("****", 3)
+        assert result == "unknown"
 
     await zwave_js_lock.async_unload(False)
 
 
-async def test_resolve_pin_if_masked_returns_none_for_unmanaged_slot(
+async def test_resolve_pin_if_masked_returns_masked_for_unmanaged_slot(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns None for slots not managed by LCM."""
+    """Test _resolve_pin_if_masked returns masked value for slots not managed by LCM.
+
+    When code_slot_in_use returns None (slot not in Z-Wave node data), the
+    masked value is returned as-is so sync logic knows a PIN exists.
+    """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1195,19 +1223,26 @@ async def test_resolve_pin_if_masked_returns_none_for_unmanaged_slot(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup(lcm_entry)
 
-    # _resolve_pin_if_masked should return None for slot 99 (not managed)
-    result = zwave_js_lock._resolve_pin_if_masked("****", 99)
-    assert result is None
+    # Mock code_slot_in_use to return None (slot not in node data)
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=None):
+        # _resolve_pin_if_masked returns masked value (slot_in_use is falsy)
+        result = zwave_js_lock._resolve_pin_if_masked("****", 99)
+        assert result == "****"
 
     await zwave_js_lock.async_unload(False)
 
 
-async def test_resolve_pin_if_masked_returns_none_when_entities_missing(
+async def test_resolve_pin_if_masked_returns_masked_when_entities_missing(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns None when entities are not registered."""
+    """Test _resolve_pin_if_masked returns masked value when entities are not registered.
+
+    When slot is in use but entities are missing (config entry exists but entities
+    not created yet), the method returns None for the entity lookup, which then
+    falls back to returning the masked value.
+    """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1220,9 +1255,12 @@ async def test_resolve_pin_if_masked_returns_none_when_entities_missing(
 
     # Don't create any entities - they're "missing"
 
-    # _resolve_pin_if_masked should return None (entities not found)
-    result = zwave_js_lock._resolve_pin_if_masked("****", 3)
-    assert result is None
+    # Mock code_slot_in_use to return True (slot has a code on the lock)
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
+        # _resolve_pin_if_masked returns None when entities not found
+        # (can't look up active state or PIN)
+        result = zwave_js_lock._resolve_pin_if_masked("****", 3)
+        assert result is None
 
     await zwave_js_lock.async_unload(False)
 
@@ -1379,3 +1417,115 @@ async def test_push_update_user_id_status_enabled_ignored(
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
+
+
+# code_slot_in_use tests
+
+
+async def test_code_slot_in_use_returns_true(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """Test code_slot_in_use returns True when slot is in use."""
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        return_value={"in_use": True, "usercode": "1234"},
+    ):
+        result = zwave_js_lock.code_slot_in_use(1)
+        assert result is True
+
+
+async def test_code_slot_in_use_returns_false(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """Test code_slot_in_use returns False when slot is not in use."""
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        return_value={"in_use": False, "usercode": ""},
+    ):
+        result = zwave_js_lock.code_slot_in_use(1)
+        assert result is False
+
+
+async def test_code_slot_in_use_returns_none_on_key_error(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """Test code_slot_in_use returns None when KeyError occurs."""
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        side_effect=KeyError("slot not found"),
+    ):
+        result = zwave_js_lock.code_slot_in_use(99)
+        assert result is None
+
+
+async def test_code_slot_in_use_returns_none_on_value_error(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """Test code_slot_in_use returns None when ValueError occurs."""
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        side_effect=ValueError("invalid slot"),
+    ):
+        result = zwave_js_lock.code_slot_in_use(0)
+        assert result is None
+
+
+# All-zeros handling tests
+
+
+async def test_resolve_pin_if_masked_all_zeros_slot_not_in_use(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """Test _resolve_pin_if_masked treats all-zeros as cleared when slot not in use.
+
+    Some locks return all zeros (e.g., "0000") instead of a blank value when
+    a slot is cleared. When the slot is confirmed not in use, these should
+    be treated as cleared (empty string).
+    """
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=False):
+        # All zeros with slot not in use → empty string (cleared)
+        assert zwave_js_lock._resolve_pin_if_masked("0000", 1) == ""
+        assert zwave_js_lock._resolve_pin_if_masked("000000", 1) == ""
+        assert zwave_js_lock._resolve_pin_if_masked("00", 1) == ""
+
+
+async def test_resolve_pin_if_masked_all_zeros_slot_in_use(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test _resolve_pin_if_masked returns all-zeros as-is when slot is in use.
+
+    When a slot is marked as in use, all-zeros should be returned as-is
+    since it might be a valid PIN (though unusual).
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
+        # All zeros with slot in use → returned as-is (not masked asterisks)
+        result = zwave_js_lock._resolve_pin_if_masked("0000", 1)
+        assert result == "0000"
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_resolve_pin_if_masked_all_zeros_slot_unknown(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """Test _resolve_pin_if_masked returns all-zeros as-is when slot status unknown.
+
+    When code_slot_in_use returns None (unable to determine status),
+    all-zeros should be returned as-is to be safe.
+    """
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=None):
+        # All zeros with unknown slot status → returned as-is
+        result = zwave_js_lock._resolve_pin_if_masked("0000", 1)
+        assert result == "0000"

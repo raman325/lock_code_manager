@@ -12,6 +12,7 @@ from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.lock import (
     ATTR_CODE_SLOT,
+    ATTR_IN_USE,
     ATTR_USERCODE,
     LOCK_USERCODE_PROPERTY,
     LOCK_USERCODE_STATUS_PROPERTY,
@@ -137,6 +138,13 @@ class ZWaveJSLock(BaseLock):
 
         return True, ""
 
+    def code_slot_in_use(self, code_slot: int) -> bool | None:
+        """Return whether a code slot is in use."""
+        try:
+            return get_usercode(self.node, code_slot)[ATTR_IN_USE]
+        except (KeyError, ValueError):
+            return None
+
     def _resolve_pin_if_masked(self, value: str, code_slot: int) -> str | None:
         """Resolve a PIN value, looking up expected PIN if masked.
 
@@ -144,17 +152,16 @@ class ZWaveJSLock(BaseLock):
         This method returns the value as-is if not masked, or looks up the expected
         PIN from LCM entities if masked.
 
-        Args:
-            value: The PIN value (may be masked like "****")
-            code_slot: The code slot number
-
-        Returns:
-            The PIN value if not masked, or expected PIN if masked and resolvable
-            None if masked but resolution fails
-
         """
+        slot_in_use = self.code_slot_in_use(code_slot)
+
+        if value == "0" * len(value) and slot_in_use is False:
+            # Some locks return all zeros instead of a blank value when cleared - treat
+            # as unmasked cleared value
+            return ""
+
         # If not masked, return as-is
-        if not value or value != "*" * len(value):
+        if not value or not (value == "*" * len(value) and slot_in_use):
             return value
 
         # Masked - look up expected PIN from LCM entities
@@ -188,7 +195,7 @@ class ZWaveJSLock(BaseLock):
         if not active_state or not pin_state:
             return None
 
-        if active_state.state == STATE_ON and pin_state.state.isnumeric():
+        if active_state.state == STATE_ON:
             _LOGGER.debug(
                 "PIN is masked for lock %s code slot %s, assuming value from PIN entity %s",
                 self.lock.entity_id,
@@ -196,7 +203,11 @@ class ZWaveJSLock(BaseLock):
                 pin_entity_id,
             )
             return pin_state.state
-        return None
+
+        # Fall back to returning masked value if active state is not ON (e.g. slot not
+        # enabled) - we don't care what the value is, just that there is one so that
+        # the sync logic treats this slot as having a PIN set on the lock
+        return value
 
     @callback
     def subscribe_push_updates(self) -> None:

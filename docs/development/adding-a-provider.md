@@ -109,14 +109,12 @@ Return current usercodes from the lock:
 
 ```python
 def get_usercodes(self) -> dict[int, int | str]:
-    """Get dictionary of code slots and usercodes.
-
-    Returns:
-        Dict mapping slot number to usercode.
-        Empty string "" for cleared/unused slots.
+    """
+    Get dictionary of code slots and usercodes.
 
     Raises:
         LockDisconnected: If lock cannot be communicated with.
+
     """
     try:
         # Get usercodes from your integration
@@ -140,13 +138,12 @@ Set a usercode on a slot:
 def set_usercode(
     self, code_slot: int, usercode: int | str, name: str | None = None
 ) -> bool:
-    """Set a usercode on a code slot.
-
-    Returns:
-        True if value changed, False if already set to this value.
+    """
+    Set a usercode on a code slot.
 
     Raises:
         LockDisconnected: If lock cannot be communicated with.
+
     """
     try:
         device = self._get_device()
@@ -170,13 +167,12 @@ Clear a usercode from a slot:
 
 ```python
 def clear_usercode(self, code_slot: int) -> bool:
-    """Clear a usercode from a code slot.
-
-    Returns:
-        True if value changed, False if already cleared.
+    """
+    Clear a usercode from a code slot.
 
     Raises:
         LockDisconnected: If lock cannot be communicated with.
+
     """
     try:
         device = self._get_device()

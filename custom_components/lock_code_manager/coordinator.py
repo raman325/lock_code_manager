@@ -64,15 +64,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
 
     @callback
     def push_update(self, updates: dict[int, int | str]) -> None:
-        """
-        Push one or more slot updates and notify listening entities.
-
-        Args:
-            updates: Dict mapping slot numbers to usercode values.
-                     Single: {1: "1234"}
-                     Bulk: {1: "1234", 2: "5678", 3: ""}
-
-        """
+        """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
 
