@@ -1237,11 +1237,11 @@ async def test_resolve_pin_if_masked_returns_masked_when_entities_missing(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns masked value when entities are not registered.
+    """Test _resolve_pin_if_masked returns None when entities are not registered.
 
     When slot is in use but entities are missing (config entry exists but entities
-    not created yet), the method returns None for the entity lookup, which then
-    falls back to returning the masked value.
+    not created yet), the method returns None because it cannot look up the
+    active state or PIN.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
