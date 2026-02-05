@@ -1529,3 +1529,220 @@ async def test_resolve_pin_if_masked_all_zeros_slot_unknown(
         # All zeros with unknown slot status → returned as-is
         result = zwave_js_lock._resolve_pin_if_masked("0000", 1)
         assert result == "0000"
+
+
+# _slot_expects_pin tests
+
+
+async def test_slot_expects_pin_returns_true_when_active_with_pin(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test _slot_expects_pin returns True when active=ON and PIN is set."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Create the active and PIN entities
+    ent_reg = er.async_get(hass)
+    base_unique_id = f"{lcm_entry.entry_id}|2"
+
+    active_entry = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{base_unique_id}|active",
+        config_entry=lcm_entry,
+    )
+    pin_entry = ent_reg.async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{base_unique_id}|pin",
+        config_entry=lcm_entry,
+    )
+
+    # Set states: active=ON, pin="1234"
+    hass.states.async_set(active_entry.entity_id, "on")
+    hass.states.async_set(pin_entry.entity_id, "1234")
+    await hass.async_block_till_done()
+
+    assert zwave_js_lock._slot_expects_pin(2) is True
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_slot_expects_pin_returns_false_when_inactive(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test _slot_expects_pin returns False when active=OFF."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Create the active and PIN entities
+    ent_reg = er.async_get(hass)
+    base_unique_id = f"{lcm_entry.entry_id}|2"
+
+    active_entry = ent_reg.async_get_or_create(
+        "binary_sensor",
+        DOMAIN,
+        f"{base_unique_id}|active",
+        config_entry=lcm_entry,
+    )
+    pin_entry = ent_reg.async_get_or_create(
+        "text",
+        DOMAIN,
+        f"{base_unique_id}|pin",
+        config_entry=lcm_entry,
+    )
+
+    # Set states: active=OFF, pin="1234"
+    hass.states.async_set(active_entry.entity_id, "off")
+    hass.states.async_set(pin_entry.entity_id, "1234")
+    await hass.async_block_till_done()
+
+    assert zwave_js_lock._slot_expects_pin(2) is False
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_slot_expects_pin_returns_false_for_unmanaged_slot(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test _slot_expects_pin returns False for unmanaged slot."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}},  # Only slot 1 managed
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Slot 99 is not managed
+    assert zwave_js_lock._slot_expects_pin(99) is False
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_push_update_user_id_status_available_ignored_when_slot_expects_pin(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that userIdStatus=AVAILABLE is ignored when slot expects a PIN.
+
+    This prevents sync loops where the lock sends stale AVAILABLE status
+    after a code was successfully set.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Set up a mock coordinator with existing PIN
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}  # Slot has a PIN
+    zwave_js_lock.coordinator = mock_coordinator
+
+    # Subscribe to push updates
+    zwave_js_lock.subscribe_push_updates()
+
+    # Mock _slot_expects_pin to return True (LCM expects a PIN on this slot)
+    with patch.object(zwave_js_lock, "_slot_expects_pin", return_value=True):
+        # Simulate userIdStatus=AVAILABLE event (stale status from lock)
+        event = ZwaveEvent(
+            type="value updated",
+            data={
+                "args": {
+                    "commandClass": CommandClass.USER_CODE,
+                    "property": LOCK_USERCODE_STATUS_PROPERTY,
+                    "propertyKey": 2,
+                    "newValue": CodeSlotStatus.AVAILABLE,
+                },
+            },
+        )
+        lock_schlage_be469.emit("value updated", event.data)
+        await hass.async_block_till_done()
+
+        # Coordinator should NOT be updated (AVAILABLE ignored)
+        mock_coordinator.push_update.assert_not_called()
+
+    zwave_js_lock.unsubscribe_push_updates()
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_push_update_user_id_status_available_clears_when_slot_inactive(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that userIdStatus=AVAILABLE clears slot when LCM doesn't expect a PIN.
+
+    When the slot is inactive (active=OFF), AVAILABLE status should clear
+    the coordinator as expected.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    # Set up a mock coordinator with existing PIN
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}  # Slot has a PIN
+    zwave_js_lock.coordinator = mock_coordinator
+
+    # Subscribe to push updates
+    zwave_js_lock.subscribe_push_updates()
+
+    # Mock _slot_expects_pin to return False (slot is inactive)
+    with patch.object(zwave_js_lock, "_slot_expects_pin", return_value=False):
+        # Simulate userIdStatus=AVAILABLE event
+        event = ZwaveEvent(
+            type="value updated",
+            data={
+                "args": {
+                    "commandClass": CommandClass.USER_CODE,
+                    "property": LOCK_USERCODE_STATUS_PROPERTY,
+                    "propertyKey": 2,
+                    "newValue": CodeSlotStatus.AVAILABLE,
+                },
+            },
+        )
+        lock_schlage_be469.emit("value updated", event.data)
+        await hass.async_block_till_done()
+
+        # Coordinator SHOULD be updated (slot cleared)
+        mock_coordinator.push_update.assert_called_once_with({2: ""})
+
+    zwave_js_lock.unsubscribe_push_updates()
+    await zwave_js_lock.async_unload(False)

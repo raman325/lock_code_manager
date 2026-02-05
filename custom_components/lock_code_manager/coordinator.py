@@ -68,9 +68,13 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         if not updates:
             return
 
-        # Merge updates into a new dict to ensure proper change detection
-        # (avoids passing the same object reference to listeners)
-        self.async_set_updated_data({**self.data, **updates})
+        new_data = {**self.data, **updates}
+        # Skip update if data hasn't actually changed to avoid redundant logging
+        # and unnecessary listener notifications
+        if new_data == self.data:
+            return
+
+        self.async_set_updated_data(new_data)
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Update usercodes."""

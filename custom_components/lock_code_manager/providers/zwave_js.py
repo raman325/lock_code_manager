@@ -145,8 +145,59 @@ class ZWaveJSLock(BaseLock):
         except (KeyError, ValueError):
             return None
 
+    def _get_slot_entity_states(self, code_slot: int) -> tuple[str, str, str] | None:
+        """
+        Get active state, PIN value, and PIN entity ID for a managed slot.
+
+        Returns tuple of (active_state, pin_value, pin_entity_id) if the slot is
+        managed by LCM and entities exist, None otherwise.
+        """
+        try:
+            config_entry = next(
+                entry
+                for entry in self.hass.config_entries.async_entries(DOMAIN)
+                if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
+                and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
+            )
+        except StopIteration:
+            return None
+
+        base_unique_id = f"{config_entry.entry_id}|{code_slot}"
+        active_entity_id = self.ent_reg.async_get_entity_id(
+            BINARY_SENSOR_DOMAIN, DOMAIN, f"{base_unique_id}|{ATTR_ACTIVE}"
+        )
+        pin_entity_id = self.ent_reg.async_get_entity_id(
+            TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
+        )
+
+        if not active_entity_id or not pin_entity_id:
+            return None
+
+        active_state = self.hass.states.get(active_entity_id)
+        pin_state = self.hass.states.get(pin_entity_id)
+
+        if not active_state or not pin_state:
+            return None
+
+        return (active_state.state, pin_state.state, pin_entity_id)
+
+    def _slot_expects_pin(self, code_slot: int) -> bool:
+        """
+        Check if LCM expects a PIN on this slot (active=ON with PIN set).
+
+        Used to ignore stale userIdStatus=AVAILABLE events from locks that report
+        old status after a code was successfully set.
+        """
+        states = self._get_slot_entity_states(code_slot)
+        if states is None:
+            return False
+
+        active_state, pin_value, _ = states
+        return active_state == STATE_ON and bool(pin_value)
+
     def _resolve_pin_if_masked(self, value: str, code_slot: int) -> str | None:
-        """Resolve a PIN value, looking up expected PIN if masked.
+        """
+        Resolve a PIN value, looking up expected PIN if masked.
 
         Some locks return masked values (all asterisks) instead of the actual PIN.
         This method returns the value as-is if not masked, or looks up the expected
@@ -165,44 +216,23 @@ class ZWaveJSLock(BaseLock):
             return value
 
         # Masked - look up expected PIN from LCM entities
-        try:
-            config_entry = next(
-                entry
-                for entry in self.hass.config_entries.async_entries(DOMAIN)
-                if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
-                and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
-            )
-        except StopIteration:
-            return None
-
         # Use ATTR_ACTIVE binary sensor (not CONF_ENABLED switch) to match what
         # sync logic expects. ATTR_ACTIVE considers conditions, so we only resolve
         # masked codes when sync expects a PIN on the lock.
-        base_unique_id = f"{config_entry.entry_id}|{code_slot}"
-        active_entity_id = self.ent_reg.async_get_entity_id(
-            BINARY_SENSOR_DOMAIN, DOMAIN, f"{base_unique_id}|{ATTR_ACTIVE}"
-        )
-        pin_entity_id = self.ent_reg.async_get_entity_id(
-            TEXT_DOMAIN, DOMAIN, f"{base_unique_id}|{CONF_PIN}"
-        )
-
-        if not active_entity_id or not pin_entity_id:
+        states = self._get_slot_entity_states(code_slot)
+        if states is None:
             return None
 
-        active_state = self.hass.states.get(active_entity_id)
-        pin_state = self.hass.states.get(pin_entity_id)
+        active_state, pin_value, pin_entity_id = states
 
-        if not active_state or not pin_state:
-            return None
-
-        if active_state.state == STATE_ON:
+        if active_state == STATE_ON:
             _LOGGER.debug(
                 "PIN is masked for lock %s code slot %s, assuming value from PIN entity %s",
                 self.lock.entity_id,
                 code_slot,
                 pin_entity_id,
             )
-            return pin_state.state
+            return pin_value
 
         # Fall back to returning masked value if active state is not ON (e.g. slot not
         # enabled) - we don't care what the value is, just that there is one so that
@@ -251,6 +281,18 @@ class ZWaveJSLock(BaseLock):
             if property_name == LOCK_USERCODE_STATUS_PROPERTY:
                 status = args.get("newValue")
                 if status == CodeSlotStatus.AVAILABLE:
+                    # Ignore AVAILABLE status if LCM expects a PIN on this slot.
+                    # Some locks send stale AVAILABLE events after a code was set,
+                    # which would cause infinite sync loops.
+                    if self._slot_expects_pin(code_slot):
+                        _LOGGER.debug(
+                            "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
+                            "(LCM expects PIN on this slot)",
+                            self.lock.entity_id,
+                            code_slot,
+                        )
+                        return
+
                     # Slot was cleared - update coordinator if needed
                     if self.coordinator and self.coordinator.data.get(code_slot) != "":
                         _LOGGER.debug(
