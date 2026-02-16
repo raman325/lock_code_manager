@@ -1771,6 +1771,85 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
     await zwave_js_lock.async_unload(False)
 
 
+async def test_push_events_suppressed_during_hard_refresh(
+    hass: HomeAssistant,
+    zwave_js_lock_v2: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469_v2: Node,
+) -> None:
+    """Test that value-updated events are ignored during hard refresh.
+
+    During async_hard_refresh_codes, the Z-Wave JS driver re-queries slot
+    values which emits value-updated events. These events carry intermediate
+    cache state and should be ignored to prevent stale data from overwriting
+    the final refresh result.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock_v2.lock.entity_id],
+            CONF_SLOTS: {"1": {}, "2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock_v2.async_setup(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {1: "1111", 2: "2222"}
+    zwave_js_lock_v2.coordinator = mock_coordinator
+
+    # Subscribe to push updates
+    zwave_js_lock_v2.subscribe_push_updates()
+
+    # Simulate a hard refresh that emits value-updated events mid-refresh
+    original_refresh = zwave_js_lock_v2._async_refresh_usercode_cache
+
+    async def refresh_with_event():
+        """Simulate refresh that triggers value-updated events."""
+        # Emit a value-updated event while refresh is in progress
+        lock_schlage_be469_v2.emit(
+            "value updated",
+            {
+                "args": {
+                    "commandClass": CommandClass.USER_CODE,
+                    "property": "userCode",
+                    "propertyKey": 1,
+                    "newValue": "stale_value",
+                },
+            },
+        )
+        await original_refresh()
+
+    with patch.object(
+        zwave_js_lock_v2,
+        "_async_refresh_usercode_cache",
+        side_effect=refresh_with_event,
+    ):
+        await zwave_js_lock_v2.async_hard_refresh_codes()
+
+    # The stale event should have been suppressed
+    mock_coordinator.push_update.assert_not_called()
+
+    # After refresh completes, events should work again
+    lock_schlage_be469_v2.emit(
+        "value updated",
+        {
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": "userCode",
+                "propertyKey": 1,
+                "newValue": "9999",
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    mock_coordinator.push_update.assert_called_once_with({1: "9999"})
+
+    zwave_js_lock_v2.unsubscribe_push_updates()
+    await zwave_js_lock_v2.async_unload(False)
+
+
 async def test_push_update_user_id_status_available_clears_when_slot_inactive(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,

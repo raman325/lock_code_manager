@@ -89,6 +89,7 @@ class ZWaveJSLock(BaseLock):
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
     _push_retry_cancel: Callable[[], None] | None = field(init=False, default=None)
+    _hard_refresh_in_progress: bool = field(init=False, default=False)
 
     @property
     def node(self) -> Node:
@@ -292,6 +293,9 @@ class ZWaveJSLock(BaseLock):
         @callback
         def on_value_updated(event: dict[str, Any]) -> None:
             """Handle value update events from Z-Wave JS."""
+            if self._hard_refresh_in_progress:
+                return
+
             args: dict[str, Any] = event["args"]
             # Filter for User Code CC - handle both userCode and userIdStatus
             if args.get("commandClass") != CommandClass.USER_CODE:
@@ -492,9 +496,17 @@ class ZWaveJSLock(BaseLock):
         Uses Z-Wave JS's refresh_cc_values which handles checksum optimization
         internally - it will skip re-fetching codes if the checksum hasn't changed.
         Returns codes in the same format as async_get_usercodes().
+
+        Sets _hard_refresh_in_progress flag to suppress push handler events
+        during the refresh. The driver emits value-updated events as it
+        re-queries each slot, which carry intermediate cache state.
         """
-        await self._async_refresh_usercode_cache()
-        return await self.async_get_usercodes()
+        self._hard_refresh_in_progress = True
+        try:
+            await self._async_refresh_usercode_cache()
+            return await self.async_get_usercodes()
+        finally:
+            self._hard_refresh_in_progress = False
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
