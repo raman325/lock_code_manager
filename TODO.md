@@ -323,6 +323,25 @@ Add mechanism to alert users when drift detection consistently fails over
 extended periods (e.g., lock offline). Currently failures are logged but there is
 no visibility to users or entities.
 
+### Configurable Hard Refresh Interval
+
+Make `hard_refresh_interval` a user-configurable option in the config flow.
+Currently hardcoded to 30 minutes (V1) and 1 hour (V2).
+
+**Estimated Effort:** Low (2-4 hours)
+**Priority:** Low
+**Status:** Not started
+
+### Split Hard Refresh Between Managed and Unmanaged Slots
+
+Managed slots (those with LCM config) should be hard refreshed at the normal
+interval (e.g., 30 min). Unmanaged slots only need occasional drift awareness
+(e.g., once a day) since they're not actively synced by LCM.
+
+**Estimated Effort:** Medium (4-8 hours)
+**Priority:** Low
+**Status:** Not started
+
 ## Features
 
 ### Add Schedule and Entity Condition Types
