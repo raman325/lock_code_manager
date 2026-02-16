@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+import functools
 import logging
 from typing import Any
 
@@ -96,15 +97,23 @@ class ZWaveJSLock(BaseLock):
             self.hass, self.lock.entity_id, self.ent_reg
         )
 
+    @functools.cached_property
+    def _usercode_cc_version(self) -> int:
+        """Return the User Code CC version supported by this node."""
+        for cc in self.node.command_classes:
+            if cc.id == CommandClass.USER_CODE:
+                return cc.version
+        return 1
+
     @property
     def supports_push(self) -> bool:
-        """
-        Return whether this lock supports push-based updates.
+        """Return whether this lock supports push-based updates.
 
-        Z-Wave JS emits value update events when the cache changes, so we
-        subscribe to those instead of polling.
+        V2 nodes emit reliable value-updated events via Lifeline.
+        V1 nodes don't reliably send unsolicited User Code Reports,
+        so we use polling instead.
         """
-        return True
+        return self._usercode_cc_version >= 2
 
     @property
     def supports_code_slot_events(self) -> bool:
@@ -112,9 +121,33 @@ class ZWaveJSLock(BaseLock):
         return True
 
     @property
+    def usercode_scan_interval(self) -> timedelta:
+        """Return scan interval for usercodes.
+
+        V1 only - reads from Z-Wave JS cache (cheap, no Z-Wave traffic).
+        """
+        return timedelta(minutes=2)
+
+    @property
+    def hard_refresh_interval(self) -> timedelta:
+        """Return interval between hard refreshes.
+
+        V1: 30 minutes (queries each slot individually, expensive).
+        V2: 1 hour (uses checksum optimization, usually no traffic).
+        """
+        if self._usercode_cc_version >= 2:
+            return timedelta(hours=1)
+        return timedelta(minutes=30)
+
+    @property
     def connection_check_interval(self) -> timedelta | None:
-        """Z-Wave JS exposes config entry state changes, so skip polling."""
-        return None
+        """Return interval for connection state checks.
+
+        V2 uses config entry state changes. V1 needs periodic polling.
+        """
+        if self._usercode_cc_version >= 2:
+            return None
+        return timedelta(seconds=30)
 
     def _get_client_state(self) -> tuple[bool, str]:
         """Return whether the Z-Wave JS client is ready and a retry reason."""
@@ -442,6 +475,9 @@ class ZWaveJSLock(BaseLock):
         for listener in self._listeners:
             listener()
         self._listeners.clear()
+        # Always clean up push subscriptions regardless of supports_push,
+        # in case subscribe_push_updates() was called explicitly.
+        self.unsubscribe_push_updates()
         await super().async_unload(remove_permanently)
 
     async def async_is_connection_up(self) -> bool:

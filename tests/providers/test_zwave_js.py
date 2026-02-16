@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -54,6 +55,25 @@ async def zwave_js_lock_fixture(
     return lock
 
 
+@pytest.fixture(name="zwave_js_lock_v2")
+async def zwave_js_lock_v2_fixture(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469_v2: Node,
+) -> ZWaveJSLock:
+    """Create a ZWaveJSLock with User Code CC V2 for testing."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    return ZWaveJSLock(
+        hass=hass,
+        dev_reg=dev_reg,
+        ent_reg=ent_reg,
+        lock_config_entry=zwave_integration,
+        lock=lock_entity,
+    )
+
+
 # Properties tests
 
 
@@ -63,13 +83,69 @@ async def test_domain(zwave_js_lock: ZWaveJSLock) -> None:
 
 
 async def test_supports_push(zwave_js_lock: ZWaveJSLock) -> None:
-    """Test that Z-Wave JS locks support push updates."""
-    assert zwave_js_lock.supports_push is True
+    """Test that V1 Z-Wave JS locks do not support push updates."""
+    assert zwave_js_lock.supports_push is False
 
 
-async def test_connection_check_interval_is_none(zwave_js_lock: ZWaveJSLock) -> None:
-    """Test that connection check interval is None (uses config entry state)."""
-    assert zwave_js_lock.connection_check_interval is None
+async def test_connection_check_interval(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 connection check interval polls every 30 seconds."""
+    assert zwave_js_lock.connection_check_interval == timedelta(seconds=30)
+
+
+# CC version detection tests
+
+
+async def test_usercode_cc_version_v1(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 lock reports correct CC version."""
+    assert zwave_js_lock._usercode_cc_version == 1
+
+
+async def test_usercode_cc_version_v2(zwave_js_lock_v2: ZWaveJSLock) -> None:
+    """Test that V2 lock reports correct CC version."""
+    assert zwave_js_lock_v2._usercode_cc_version == 2
+
+
+# V1 property tests
+
+
+async def test_v1_does_not_support_push(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 locks do not support push updates."""
+    assert zwave_js_lock.supports_push is False
+
+
+async def test_v1_usercode_scan_interval(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 locks poll every 2 minutes."""
+    assert zwave_js_lock.usercode_scan_interval == timedelta(minutes=2)
+
+
+async def test_v1_hard_refresh_interval(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 locks hard refresh every 30 minutes."""
+    assert zwave_js_lock.hard_refresh_interval == timedelta(minutes=30)
+
+
+async def test_v1_connection_check_interval(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 locks poll connection state every 30 seconds."""
+    assert zwave_js_lock.connection_check_interval == timedelta(seconds=30)
+
+
+# V2 property tests
+
+
+async def test_v2_supports_push(zwave_js_lock_v2: ZWaveJSLock) -> None:
+    """Test that V2 locks support push updates."""
+    assert zwave_js_lock_v2.supports_push is True
+
+
+async def test_v2_hard_refresh_interval(zwave_js_lock_v2: ZWaveJSLock) -> None:
+    """Test that V2 locks hard refresh every hour."""
+    assert zwave_js_lock_v2.hard_refresh_interval == timedelta(hours=1)
+
+
+async def test_v2_connection_check_interval_is_none(
+    zwave_js_lock_v2: ZWaveJSLock,
+) -> None:
+    """Test that V2 connection check is None (uses config entry state)."""
+    assert zwave_js_lock_v2.connection_check_interval is None
 
 
 async def test_node_property(
