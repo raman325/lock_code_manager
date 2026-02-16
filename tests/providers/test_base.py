@@ -391,17 +391,21 @@ async def test_async_call_service_raises_lock_disconnected_on_error(
     hass.services.async_remove("test_domain", "failing_service")
 
 
-async def test_set_usercode_refreshes_coordinator_on_change(
+async def test_set_usercode_does_not_refresh_coordinator(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_internal_set_usercode refreshes coordinator when value changes."""
+    """Test that async_internal_set_usercode does not call async_request_refresh.
+
+    Set/clear rely on optimistic push_update() (push providers) or the next poll
+    cycle (poll providers). Calling async_request_refresh after set/clear defeats
+    optimistic updates by reading potentially stale cache.
+    """
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
-    # Track coordinator refreshes
     refresh_count = 0
     original_refresh = coordinator.async_request_refresh
 
@@ -411,29 +415,22 @@ async def test_set_usercode_refreshes_coordinator_on_change(
         return await original_refresh()
 
     with patch.object(coordinator, "async_request_refresh", track_refresh):
-        # Setting a new usercode should trigger a coordinator refresh
         await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count == 1
-
-        # Setting the same usercode should NOT trigger refresh (no change)
-        await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count == 1  # Still 1, no new refresh
+        assert refresh_count == 0
 
 
-async def test_clear_usercode_refreshes_coordinator_on_change(
+async def test_clear_usercode_does_not_refresh_coordinator(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_internal_clear_usercode refreshes coordinator when value changes."""
+    """Test that async_internal_clear_usercode does not call async_request_refresh."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
-    # First set a usercode so we can clear it
     await lock_provider.async_internal_set_usercode(4, "4444", "Test 4")
 
-    # Track coordinator refreshes
     refresh_count = 0
     original_refresh = coordinator.async_request_refresh
 
@@ -443,13 +440,8 @@ async def test_clear_usercode_refreshes_coordinator_on_change(
         return await original_refresh()
 
     with patch.object(coordinator, "async_request_refresh", track_refresh):
-        # Clearing an existing usercode should trigger a coordinator refresh
         await lock_provider.async_internal_clear_usercode(4)
-        assert refresh_count == 1
-
-        # Clearing a non-existent slot should NOT trigger refresh (no change)
-        await lock_provider.async_internal_clear_usercode(999)
-        assert refresh_count == 1  # Still 1, no new refresh
+        assert refresh_count == 0
 
 
 async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
