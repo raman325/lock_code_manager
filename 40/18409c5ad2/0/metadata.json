@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "4018409c5ad2",
+  "session_id": "112658aa-8e2f-43a4-9f8b-a690dfce9b04",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-16T03:23:36.654368Z",
+  "branch": "fix/usercode-cc-v1-support",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/dependabot.yaml",
+    "README.md",
+    "TODO-zwave-js-cleanup.md",
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/manifest.json",
+    "custom_components/lock_code_manager/providers/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "docs/plans/2026-02-15-usercode-cc-v1-support-design.md",
+    "docs/plans/2026-02-15-usercode-cc-v1-support.md",
+    "requirements_test.txt",
+    "tests/providers/test_base.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "64acdbd5-59ea-45f3-9236-006d3717ee3f",
+  "checkpoint_transcript_start": 3375,
+  "transcript_lines_at_start": 3375,
+  "token_usage": {
+    "input_tokens": 326,
+    "cache_creation_tokens": 216831,
+    "cache_read_tokens": 4415206,
+    "output_tokens": 7175,
+    "api_call_count": 40
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-16T03:23:34.60666Z",
+    "agent_lines": 321,
+    "human_added": 395,
+    "human_modified": 628,
+    "human_removed": 0,
+    "total_committed": 716,
+    "agent_percentage": 44.832402234636874
+  }
+}
