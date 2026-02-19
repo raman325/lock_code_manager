@@ -323,8 +323,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """
-        Handle updated data from the coordinator.
+        """Handle updated data from the coordinator.
 
         Triggers sync check when coordinator data changes to ensure we sync
         when the lock reports different codes than expected (e.g., someone
@@ -421,8 +420,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return True
 
     def _calculate_expected_sync(self, slot_state: _SlotState) -> bool:
-        """
-        Calculate whether slot should be in sync.
+        """Calculate whether slot should be in sync.
 
         Active: PIN should match code on lock
         Inactive: Code on lock should be empty
@@ -500,8 +498,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
 
     async def _perform_sync_operation(self, slot_state: _SlotState) -> bool:
-        """
-        Perform sync operation (set or clear usercode).
+        """Perform sync operation (set or clear usercode).
 
         Returns True if sync was performed, False if lock disconnected.
         """
@@ -544,8 +541,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
     async def _async_update_state(
         self, event: Event[EventStateChangedData] | None = None
     ) -> None:
-        """
-        Update binary sensor state by checking dependent entity states.
+        """Update binary sensor state by checking dependent entity states.
 
         On initial load (when _attr_is_on is None): Sets sync state without operations.
         On subsequent updates: Performs sync operations when out of sync.
@@ -634,8 +630,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     @callback
     def _setup_state_tracking(self) -> None:
-        """
-        Set up state change tracking for dependent entities.
+        """Set up state change tracking for dependent entities.
 
         If all entity IDs are available, tracks only those specific entities.
         Otherwise, tracks all state changes until entities become available.

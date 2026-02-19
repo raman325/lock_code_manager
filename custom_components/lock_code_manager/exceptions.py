@@ -30,8 +30,7 @@ class LockDisconnected(LockCodeManagerError):
 
 
 class ProviderNotImplementedError(LockCodeManagerError, NotImplementedError):
-    """
-    Raised when a provider method is not implemented.
+    """Raised when a provider method is not implemented.
 
     This exception should be raised by BaseLock methods that must be overridden
     by provider subclasses. It combines LockCodeManagerError (so the coordinator
@@ -39,8 +38,7 @@ class ProviderNotImplementedError(LockCodeManagerError, NotImplementedError):
     """
 
     def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
-        """
-        Initialize the error.
+        """Initialize the error.
 
         Args:
             provider: The provider instance (self).

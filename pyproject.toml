@@ -9,6 +9,7 @@ lint.ignore = [
     "D202",
     "D212",
     "D203",
+    "D213",
     "E501",
     "PLR0911", # Too many return statements ({returns} > {max_returns})
     "PLR0912", # Too many branches ({branches} > {max_branches})

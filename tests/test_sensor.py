@@ -24,8 +24,7 @@ async def test_sensor_entity(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """
-    Test sensor entity shows lock code values.
+    """Test sensor entity shows lock code values.
 
     Uses a config without calendar to test pure sensor functionality.
     All slots are active, so codes remain synced and sensors show expected values.

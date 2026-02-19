@@ -149,8 +149,7 @@ class BaseLockCodeManagerEntity(Entity):
         self.locks.extend(locks)
 
     def _get_removal_uid(self) -> str:
-        """
-        Get unique ID for removal callback registration.
+        """Get unique ID for removal callback registration.
 
         Override in subclasses for different UID formats.
         """
@@ -158,8 +157,7 @@ class BaseLockCodeManagerEntity(Entity):
 
     @callback
     def _register_callbacks(self) -> None:
-        """
-        Register entity with callback registry.
+        """Register entity with callback registry.
 
         Can be overwritten by platforms if necessary.
         """

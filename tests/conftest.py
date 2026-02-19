@@ -59,8 +59,7 @@ def auto_setup_mock_lock():
 
 @pytest.fixture(autouse=True)
 def disable_rate_limiting(request: pytest.FixtureRequest):
-    """
-    Disable BaseLock rate limiting for most tests to speed them up.
+    """Disable BaseLock rate limiting for most tests to speed them up.
 
     We patch __post_init__ to set _min_operation_delay=0.0 on new instances.
     """

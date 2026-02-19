@@ -1,5 +1,4 @@
-"""
-Typed callback registry for entity lifecycle management.
+"""Typed callback registry for entity lifecycle management.
 
 This module replaces the HA dispatcher mechanism with a type-safe callback
 registry pattern. Platforms register callbacks for entity creation, and entities
@@ -65,8 +64,7 @@ UnregisterFunc = Callable[[], None]
 
 @dataclass
 class EntityCallbackRegistry:
-    """
-    Registry of entity lifecycle callbacks.
+    """Registry of entity lifecycle callbacks.
 
     This replaces the HA dispatcher pattern with explicit, typed callbacks.
     Platforms register their entity creation callbacks here, and entities
@@ -106,8 +104,7 @@ class EntityCallbackRegistry:
     def register_standard_adder(
         self, callback: StandardEntityCallback
     ) -> UnregisterFunc:
-        """
-        Register callback for adding standard slot entities.
+        """Register callback for adding standard slot entities.
 
         Used by: switch, text, event, binary_sensor (active sensor)
         """
@@ -121,8 +118,7 @@ class EntityCallbackRegistry:
     def register_lock_slot_adder(
         self, callback: LockSlotEntityCallback
     ) -> UnregisterFunc:
-        """
-        Register callback for adding lock-slot entities.
+        """Register callback for adding lock-slot entities.
 
         Used by: sensor (PIN code), binary_sensor (in-sync)
         """
@@ -136,8 +132,7 @@ class EntityCallbackRegistry:
     def register_keyed_adder(
         self, key: str, callback: StandardEntityCallback
     ) -> UnregisterFunc:
-        """
-        Register callback for adding keyed entities (only when config key is set).
+        """Register callback for adding keyed entities (only when config key is set).
 
         Used by: number (number_of_uses)
         """
@@ -151,8 +146,7 @@ class EntityCallbackRegistry:
     def register_entity_remover(
         self, uid: str, callback: EntityRemoveCallback
     ) -> UnregisterFunc:
-        """
-        Register callback for entity removal by unique ID.
+        """Register callback for entity removal by unique ID.
 
         Entities call this in async_added_to_hass to register themselves
         for removal when their slot/key is removed from config.
