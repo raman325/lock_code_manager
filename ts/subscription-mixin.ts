@@ -10,7 +10,7 @@ import { state } from 'lit/decorators.js';
 import { HomeAssistant } from './ha_type_stubs';
 import { CodeDisplayMode } from './types';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mixin pattern requires generic constructor type
 type Constructor<T = object> = new (...args: any[]) => T;
 
 export interface LcmSubscriptionConfig {

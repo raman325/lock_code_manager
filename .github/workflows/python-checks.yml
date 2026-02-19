@@ -1,6 +1,8 @@
 ---
 name: Python Checks
 
+# GHA requires bare `on:` which yamllint sees as boolean
+# yamllint disable-line rule:truthy
 on:
   workflow_call:
 

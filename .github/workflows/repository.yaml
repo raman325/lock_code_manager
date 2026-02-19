@@ -1,6 +1,7 @@
 ---
 name: Repository
 
+# GHA requires bare `on:` which yamllint sees as boolean
 # yamllint disable-line rule:truthy
 on:
   push:
@@ -98,6 +99,7 @@ jobs:
           MUST_PASS: Check Changes,HACS,Hassfest
           # Checks that must pass IF they run (may be skipped by path filter)
           # Use * suffix for pattern matching (e.g., "Python / Pytest *" matches any version)
+          # Comma-separated check names are clearer on one line
           # yamllint disable-line rule:line-length
           IF_RUN_PASS: Python / Setup,Python / Ruff,Python / Pytest *,Frontend / Vitest,Frontend / Yarn Lint and Build
         run: |

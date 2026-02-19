@@ -828,7 +828,7 @@ async def _get_next_calendar_event(
 
         return next_event_data if next_event_data else None
 
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - Catch-all: calendar fetch is best-effort
         _LOGGER.debug("Failed to fetch next calendar event for %s", calendar_entity_id)
         return None
 
@@ -1142,7 +1142,7 @@ async def set_lock_usercode(
             # Clear the usercode
             await lock.async_internal_clear_usercode(code_slot)
         connection.send_result(msg["id"], {"success": True})
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_UNKNOWN_ERROR,
