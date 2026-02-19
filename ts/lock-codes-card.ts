@@ -532,7 +532,7 @@ class LockCodesCard extends LockCodesCardBase {
             this._editingSlot = null;
             this._editValue = '';
         } catch (err) {
-            // eslint-disable-next-line no-console
+            // eslint-disable-next-line no-console -- User-facing error, no logger available in card
             console.error('Failed to set usercode:', err);
         } finally {
             this._saving = false;

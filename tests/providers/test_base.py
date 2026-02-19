@@ -476,7 +476,7 @@ async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
     # Comparing to non-BaseLock objects should return False
     assert lock != "not a lock"
     assert lock != 123
-    assert (lock == None) is False  # noqa: E711
+    assert (lock == None) is False  # noqa: E711 - Intentionally testing __eq__ with None
     assert lock != {"entity_id": lock_entity.entity_id}
 
 
