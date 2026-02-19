@@ -119,6 +119,25 @@ async def test_usercode_cc_version_v2(zwave_js_lock_v2: ZWaveJSLock) -> None:
     assert zwave_js_lock_v2._usercode_cc_version == 2
 
 
+async def test_usercode_cc_version_missing(
+    zwave_js_lock: ZWaveJSLock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test warning when User Code CC is not found on node."""
+    # Remove User Code CC from the node's command classes
+    node = zwave_js_lock.node
+    endpoint = node.endpoints[0]
+    original_ccs = endpoint.data["commandClasses"]
+    endpoint.data["commandClasses"] = [
+        cc for cc in original_ccs if cc["id"] != CommandClass.USER_CODE.value
+    ]
+    # Clear cached property so it re-evaluates
+    zwave_js_lock.__dict__.pop("_usercode_cc_version", None)
+
+    assert zwave_js_lock._usercode_cc_version == 1
+    assert "User Code CC not found" in caplog.text
+
+
 async def test_node_property(
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,

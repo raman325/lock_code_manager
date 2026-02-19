@@ -104,14 +104,23 @@ class ZWaveJSLock(BaseLock):
     @functools.cached_property
     def _usercode_cc_version(self) -> int:
         """Return the User Code CC version supported by this node."""
-        return next(
+        version = next(
             (
                 cc.version
                 for cc in self.node.command_classes
                 if cc.id == CommandClass.USER_CODE
             ),
-            1,
+            0,
         )
+        if version == 0:
+            _LOGGER.warning(
+                "Lock %s: User Code CC not found on node %s. This may "
+                "indicate an incomplete interview. Defaulting to V1 behavior",
+                self.lock.entity_id,
+                self.node.node_id,
+            )
+            return 1
+        return version
 
     @property
     def supports_push(self) -> bool:
