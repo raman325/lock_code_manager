@@ -514,7 +514,16 @@ class ZWaveJSLock(BaseLock):
         # Poll the slot directly from the device to force-update the cache
         # before the coordinator reads it, preventing sync loops.
         if self._usercode_cc_version < 2:
-            await get_usercode_from_node(self.node, code_slot)
+            try:
+                await get_usercode_from_node(self.node, code_slot)
+            except Exception:
+                _LOGGER.debug(
+                    "Failed to poll slot %s after set on %s, "
+                    "relying on next coordinator refresh",
+                    code_slot,
+                    self.lock.entity_id,
+                    exc_info=True,
+                )
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
@@ -553,7 +562,16 @@ class ZWaveJSLock(BaseLock):
         # Poll the slot directly from the device to force-update the cache
         # before the coordinator reads it, preventing sync loops.
         if self._usercode_cc_version < 2:
-            await get_usercode_from_node(self.node, code_slot)
+            try:
+                await get_usercode_from_node(self.node, code_slot)
+            except Exception:
+                _LOGGER.debug(
+                    "Failed to poll slot %s after clear on %s, "
+                    "relying on next coordinator refresh",
+                    code_slot,
+                    self.lock.entity_id,
+                    exc_info=True,
+                )
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
