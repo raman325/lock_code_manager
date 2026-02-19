@@ -48,6 +48,23 @@ def lock_schlage_be469_state_fixture() -> dict[str, Any]:
     return load_json_fixture("lock_schlage_be469_state.json")
 
 
+@pytest.fixture(name="lock_schlage_be469_v2_state")
+def lock_schlage_be469_v2_state_fixture() -> dict[str, Any]:
+    """Load the Schlage lock node state with User Code CC V2."""
+    return load_json_fixture("lock_schlage_be469_v2_state.json")
+
+
+@pytest.fixture(name="lock_schlage_be469_v2")
+def lock_schlage_be469_v2_fixture(
+    zwave_client: MagicMock,
+    lock_schlage_be469_v2_state: dict[str, Any],
+) -> Node:
+    """Mock a Schlage BE469 lock node with User Code CC V2."""
+    node = Node(zwave_client, copy.deepcopy(lock_schlage_be469_v2_state))
+    zwave_client.driver.controller.nodes[node.node_id] = node
+    return node
+
+
 @pytest.fixture(name="version_state")
 def version_state_fixture() -> dict[str, Any]:
     """Load the version state fixture data."""

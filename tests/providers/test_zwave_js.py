@@ -54,6 +54,41 @@ async def zwave_js_lock_fixture(
     return lock
 
 
+@pytest.fixture(autouse=True)
+def mock_get_usercode_from_node():
+    """
+    Mock get_usercode_from_node for all tests.
+
+    V1 set/clear calls get_usercode_from_node to poll the slot from the device.
+    In tests, the node doesn't have a real Z-Wave JS server connection, so we
+    mock the function. Individual tests can access the mock via parameter name.
+    """
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode_from_node",
+        new_callable=AsyncMock,
+    ) as mock:
+        yield mock
+
+
+@pytest.fixture(name="zwave_js_lock_v2")
+async def zwave_js_lock_v2_fixture(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469_v2: Node,
+) -> ZWaveJSLock:
+    """Create a ZWaveJSLock with User Code CC V2 for testing."""
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+    return ZWaveJSLock(
+        hass=hass,
+        dev_reg=dev_reg,
+        ent_reg=ent_reg,
+        lock_config_entry=zwave_integration,
+        lock=lock_entity,
+    )
+
+
 # Properties tests
 
 
@@ -70,6 +105,38 @@ async def test_supports_push(zwave_js_lock: ZWaveJSLock) -> None:
 async def test_connection_check_interval_is_none(zwave_js_lock: ZWaveJSLock) -> None:
     """Test that connection check interval is None (uses config entry state)."""
     assert zwave_js_lock.connection_check_interval is None
+
+
+# CC version detection tests
+
+
+async def test_usercode_cc_version_v1(zwave_js_lock: ZWaveJSLock) -> None:
+    """Test that V1 lock reports correct CC version."""
+    assert zwave_js_lock._usercode_cc_version == 1
+
+
+async def test_usercode_cc_version_v2(zwave_js_lock_v2: ZWaveJSLock) -> None:
+    """Test that V2 lock reports correct CC version."""
+    assert zwave_js_lock_v2._usercode_cc_version == 2
+
+
+async def test_usercode_cc_version_missing(
+    zwave_js_lock: ZWaveJSLock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test warning when User Code CC is not found on node."""
+    # Remove User Code CC from the node's command classes
+    node = zwave_js_lock.node
+    endpoint = node.endpoints[0]
+    original_ccs = endpoint.data["commandClasses"]
+    endpoint.data["commandClasses"] = [
+        cc for cc in original_ccs if cc["id"] != CommandClass.USER_CODE.value
+    ]
+    # Clear cached property so it re-evaluates
+    zwave_js_lock.__dict__.pop("_usercode_cc_version", None)
+
+    assert zwave_js_lock._usercode_cc_version == 1
+    assert "User Code CC not found" in caplog.text
 
 
 async def test_node_property(
@@ -486,6 +553,86 @@ async def test_clear_usercode_optimistic_update(
         mock_coordinator.push_update.assert_called_once_with({2: ""})
 
     await zwave_js_lock.async_unload(False)
+
+
+# V1 cache poll tests
+
+
+async def test_v1_set_usercode_polls_slot(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+    mock_get_usercode_from_node,
+) -> None:
+    """
+    Test that V1 set_usercode polls the slot from the device after set.
+
+    V1 locks don't reliably update the Z-Wave JS value cache after a set
+    operation. Polling the slot forces the cache to update before the
+    coordinator reads it, preventing sync loops.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {4: ""}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+
+    mock_get_usercode_from_node.assert_called_once_with(lock_schlage_be469, 4)
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_v1_clear_usercode_polls_slot(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+    mock_get_usercode_from_node,
+) -> None:
+    """Test that V1 clear_usercode polls the slot from the device after clear."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
+        await zwave_js_lock.async_clear_usercode(2)
+
+    mock_get_usercode_from_node.assert_called_once_with(lock_schlage_be469, 2)
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_v2_set_usercode_does_not_poll_slot(
+    hass: HomeAssistant,
+    zwave_js_lock_v2: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    mock_get_usercode_from_node,
+) -> None:
+    """Test that V2 set_usercode does NOT poll the slot (cache updates reliably)."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock_v2.async_setup(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {4: ""}
+    zwave_js_lock_v2.coordinator = mock_coordinator
+
+    with patch.object(zwave_js_lock_v2, "async_call_service", new_callable=AsyncMock):
+        await zwave_js_lock_v2.async_set_usercode(4, "5678", "Test User")
+
+    mock_get_usercode_from_node.assert_not_called()
+
+    await zwave_js_lock_v2.async_unload(False)
 
 
 async def test_set_usercode_no_coordinator(

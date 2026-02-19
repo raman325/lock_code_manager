@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+import functools
 import logging
 from typing import Any
 
@@ -23,7 +24,11 @@ from zwave_js_server.const.command_class.notification import (
     NotificationType,
 )
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode, get_usercodes
+from zwave_js_server.util.lock import (
+    get_usercode,
+    get_usercode_from_node,
+    get_usercodes,
+)
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -95,6 +100,27 @@ class ZWaveJSLock(BaseLock):
         return async_get_node_from_entity_id(
             self.hass, self.lock.entity_id, self.ent_reg
         )
+
+    @functools.cached_property
+    def _usercode_cc_version(self) -> int:
+        """Return the User Code CC version supported by this node."""
+        version = next(
+            (
+                cc.version
+                for cc in self.node.command_classes
+                if cc.id == CommandClass.USER_CODE
+            ),
+            0,
+        )
+        if version == 0:
+            _LOGGER.warning(
+                "Lock %s: User Code CC not found on node %s. This may "
+                "indicate an incomplete interview. Defaulting to V1 behavior",
+                self.lock.entity_id,
+                self.node.node_id,
+            )
+            return 1
+        return version
 
     @property
     def supports_push(self) -> bool:
@@ -493,6 +519,15 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
         )
+        # V1 locks don't reliably update the Z-Wave JS value cache after set.
+        # Poll the slot directly from the device to force-update the cache
+        # before the coordinator reads it, preventing sync loops.
+        # No try-except: if the poll fails, we must not proceed with the
+        # optimistic update since async_request_refresh() would overwrite it
+        # with stale cache data, reintroducing the sync loop. Letting the
+        # error propagate allows the sync mechanism to retry the operation.
+        if self._usercode_cc_version < 2:
+            await get_usercode_from_node(self.node, code_slot)
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
@@ -527,6 +562,13 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
         )
+        # V1 locks don't reliably update the Z-Wave JS value cache after clear.
+        # Poll the slot directly from the device to force-update the cache
+        # before the coordinator reads it, preventing sync loops.
+        # See comment in async_set_usercode for why this is not wrapped in
+        # try-except.
+        if self._usercode_cc_version < 2:
+            await get_usercode_from_node(self.node, code_slot)
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
