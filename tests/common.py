@@ -105,7 +105,8 @@ class MockLCMLock(BaseLock):
     def set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> bool:
-        """Set a usercode on a code slot.
+        """
+        Set a usercode on a code slot.
 
         Returns True if the value was changed, False if already set to this value.
         """
@@ -122,7 +123,8 @@ class MockLCMLock(BaseLock):
         return True
 
     def clear_usercode(self, code_slot: int) -> bool:
-        """Clear a usercode on a code slot.
+        """
+        Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
         """

@@ -261,7 +261,8 @@ async def test_set_usercode_skips_when_masked_code_matches(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode returns False when masked code resolves to same PIN.
+    """
+    Test that set_usercode returns False when masked code resolves to same PIN.
 
     Some locks (like Yale) return masked PINs (****) instead of actual codes.
     When the masked code resolves to the same PIN we're trying to set, we should
@@ -308,7 +309,8 @@ async def test_set_usercode_proceeds_when_masked_code_differs(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode proceeds when masked code resolves to different PIN.
+    """
+    Test that set_usercode proceeds when masked code resolves to different PIN.
 
     When the masked code resolves to a different PIN than what we're trying to set,
     the set operation should proceed normally.
@@ -351,7 +353,8 @@ async def test_set_usercode_proceeds_when_masked_code_unresolvable(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode proceeds when masked code cannot be resolved.
+    """
+    Test that set_usercode proceeds when masked code cannot be resolved.
 
     When the masked code cannot be resolved (e.g., slot not managed by LCM),
     the set operation should proceed to ensure the code gets set.
@@ -444,7 +447,8 @@ async def test_set_usercode_optimistic_update(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode performs optimistic coordinator update.
+    """
+    Test that set_usercode performs optimistic coordinator update.
 
     When a set operation succeeds, the coordinator should be updated immediately
     with the new value. This prevents sync loops where the binary sensor reads
@@ -479,7 +483,8 @@ async def test_set_usercode_optimistic_update_prevents_stale_read(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that optimistic update prevents sync loops from stale cache reads.
+    """
+    Test that optimistic update prevents sync loops from stale cache reads.
 
     This test verifies the fix for the reported issue where out-of-sync slots
     cause constant lock activity. The scenario:
@@ -523,7 +528,8 @@ async def test_clear_usercode_optimistic_update(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that clear_usercode performs optimistic coordinator update.
+    """
+    Test that clear_usercode performs optimistic coordinator update.
 
     When a clear operation succeeds, the coordinator should be updated immediately
     with an empty string. This prevents sync loops where the binary sensor reads
@@ -632,7 +638,8 @@ async def test_set_usercode_no_coordinator(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode handles missing coordinator gracefully.
+    """
+    Test that set_usercode handles missing coordinator gracefully.
 
     The coordinator check is defensive - in normal operation it always exists
     after setup. This test verifies the guard clause works.
@@ -941,7 +948,8 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test mixed slots: managed with real code vs unmanaged with masked code.
+    """
+    Test mixed slots: managed with real code vs unmanaged with masked code.
 
     This test verifies behavior when the lock cache contains:
     - Slot 1: Managed by LCM, has real code "9999" -> should be returned
@@ -993,7 +1001,8 @@ async def test_get_usercodes_masked_pin_resolved_when_active(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that masked PINs are resolved to the configured PIN when slot is active.
+    """
+    Test that masked PINs are resolved to the configured PIN when slot is active.
 
     When active=ON and the PIN entity has a valid numeric PIN, the masked code
     should be resolved to that PIN value.
@@ -1032,7 +1041,8 @@ async def test_get_usercodes_masked_pin_skipped_when_inactive(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that masked PINs are skipped when slot is inactive (active=OFF).
+    """
+    Test that masked PINs are skipped when slot is inactive (active=OFF).
 
     When the slot is managed but active=OFF (or entities not ready), the masked
     code cannot be resolved and the slot is skipped entirely.
@@ -1083,7 +1093,8 @@ async def test_push_update_masked_code_resolved(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that push updates with masked codes resolve and update coordinator.
+    """
+    Test that push updates with masked codes resolve and update coordinator.
 
     When a push update arrives with a masked code and it can be resolved,
     the resolved PIN should be pushed to the coordinator.
@@ -1139,7 +1150,8 @@ async def test_push_update_masked_code_skipped_when_unresolvable(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that push updates with unresolvable masked codes are skipped.
+    """
+    Test that push updates with unresolvable masked codes are skipped.
 
     When a push update arrives with a masked code that cannot be resolved,
     the update should be skipped entirely to prevent infinite sync loops.
@@ -1197,7 +1209,8 @@ async def test_resolve_pin_if_masked_returns_pin_when_active(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns PIN when slot is active with valid PIN.
+    """
+    Test _resolve_pin_if_masked returns PIN when slot is active with valid PIN.
 
     This integration test exercises the actual resolution logic without mocking
     to verify entity lookup and state checking works correctly.
@@ -1248,7 +1261,8 @@ async def test_resolve_pin_if_masked_returns_masked_value_when_inactive(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns masked value when slot is inactive.
+    """
+    Test _resolve_pin_if_masked returns masked value when slot is inactive.
 
     When the slot is managed but active=OFF (slot not enabled), the masked
     code is returned as-is. This ensures sync logic knows a PIN is set on
@@ -1301,7 +1315,8 @@ async def test_resolve_pin_if_masked_returns_pin_even_if_not_numeric(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns PIN state even if not strictly numeric.
+    """
+    Test _resolve_pin_if_masked returns PIN state even if not strictly numeric.
 
     The .isnumeric() check was removed to handle edge cases where PINs might
     be stored in non-standard formats. When active=ON, the PIN entity state
@@ -1353,7 +1368,8 @@ async def test_resolve_pin_if_masked_returns_masked_for_unmanaged_slot(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns masked value for slots not managed by LCM.
+    """
+    Test _resolve_pin_if_masked returns masked value for slots not managed by LCM.
 
     When code_slot_in_use returns None (slot not in Z-Wave node data), the
     masked value is returned as-is so sync logic knows a PIN exists.
@@ -1382,7 +1398,8 @@ async def test_resolve_pin_if_masked_returns_masked_when_entities_missing(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns None when entities are not registered.
+    """
+    Test _resolve_pin_if_masked returns None when entities are not registered.
 
     When slot is in use but entities are missing (config entry exists but entities
     not created yet), the method returns None because it cannot look up the
@@ -1416,7 +1433,8 @@ async def test_push_update_user_id_status_available_clears_slot(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that userIdStatus=AVAILABLE push update clears the slot.
+    """
+    Test that userIdStatus=AVAILABLE push update clears the slot.
 
     When the lock sends a userIdStatus update with AVAILABLE status,
     it means the slot has been cleared. This should update the coordinator
@@ -1468,7 +1486,8 @@ async def test_push_update_user_id_status_available_skipped_when_already_empty(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that userIdStatus=AVAILABLE is skipped when slot already empty.
+    """
+    Test that userIdStatus=AVAILABLE is skipped when slot already empty.
 
     If the coordinator already shows the slot as empty, we shouldn't
     push another update.
@@ -1519,7 +1538,8 @@ async def test_push_update_user_id_status_enabled_ignored(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that userIdStatus=ENABLED push updates are ignored.
+    """
+    Test that userIdStatus=ENABLED push updates are ignored.
 
     We only care about AVAILABLE status for clearing slots.
     ENABLED status doesn't tell us the PIN value.
@@ -1621,7 +1641,8 @@ async def test_code_slot_in_use_returns_none_on_value_error(
 async def test_resolve_pin_if_masked_all_zeros_slot_not_in_use(
     zwave_js_lock: ZWaveJSLock,
 ) -> None:
-    """Test _resolve_pin_if_masked treats all-zeros as cleared when slot not in use.
+    """
+    Test _resolve_pin_if_masked treats all-zeros as cleared when slot not in use.
 
     Some locks return all zeros (e.g., "0000") instead of a blank value when
     a slot is cleared. When the slot is confirmed not in use, these should
@@ -1639,7 +1660,8 @@ async def test_resolve_pin_if_masked_all_zeros_slot_in_use(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test _resolve_pin_if_masked returns all-zeros as-is when slot is in use.
+    """
+    Test _resolve_pin_if_masked returns all-zeros as-is when slot is in use.
 
     When a slot is marked as in use, all-zeros should be returned as-is
     since it might be a valid PIN (though unusual).
@@ -1665,7 +1687,8 @@ async def test_resolve_pin_if_masked_all_zeros_slot_in_use(
 async def test_resolve_pin_if_masked_all_zeros_slot_unknown(
     zwave_js_lock: ZWaveJSLock,
 ) -> None:
-    """Test _resolve_pin_if_masked returns all-zeros as-is when slot status unknown.
+    """
+    Test _resolve_pin_if_masked returns all-zeros as-is when slot status unknown.
 
     When code_slot_in_use returns None (unable to determine status),
     all-zeros should be returned as-is to be safe.
@@ -1793,7 +1816,8 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that userIdStatus=AVAILABLE is ignored when slot expects a PIN.
+    """
+    Test that userIdStatus=AVAILABLE is ignored when slot expects a PIN.
 
     This prevents sync loops where the lock sends stale AVAILABLE status
     after a code was successfully set.
@@ -1846,7 +1870,8 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that userIdStatus=AVAILABLE clears slot when LCM doesn't expect a PIN.
+    """
+    Test that userIdStatus=AVAILABLE clears slot when LCM doesn't expect a PIN.
 
     When the slot is inactive (active=OFF), AVAILABLE status should clear
     the coordinator as expected.
