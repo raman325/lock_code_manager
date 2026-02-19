@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "7646558e017e",
+  "session_id": "112658aa-8e2f-43a4-9f8b-a690dfce9b04",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T20:07:48.852056Z",
+  "branch": "fix/usercode-cc-v1-support",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "1e7ad1c3-9711-4816-beb4-90934140c2f1",
+  "checkpoint_transcript_start": 5556,
+  "transcript_lines_at_start": 5556,
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 54691,
+    "cache_read_tokens": 3865298,
+    "output_tokens": 3033,
+    "api_call_count": 40
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T20:07:46.504491Z",
+    "agent_lines": 27,
+    "human_added": 117,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 144,
+    "agent_percentage": 18.75
+  }
+}
