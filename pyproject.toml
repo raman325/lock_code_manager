@@ -6,19 +6,15 @@ requires-python = ">=3.13"
 [tool.ruff]
 lint.select = ["D", "E", "F", "G", "I", "PLC", "PLE", "PLR", "PLW", "UP", "W"]
 lint.ignore = [
-    "D202",
-    "D212",
-    "D203",
-    "E501",
+    "D203",    # 1 blank line required before class docstring (conflicts with D211)
+    "D212",    # Multi-line docstring summary should start at the first line (conflicts with D213)
+    "D213",    # Multi-line docstring summary should start at the second line (conflicts with D212)
+    "E501",    # Line too long
     "PLR0911", # Too many return statements ({returns} > {max_returns})
     "PLR0912", # Too many branches ({branches} > {max_branches})
     "PLR0913", # Too many arguments to function call ({c_args} > {max_args})
     "PLR0915", # Too many statements ({statements} > {max_statements})
     "PLR2004", # Magic value used in comparison, consider replacing {value} with a constant variable
-    "PLW2901", # Outer {outer_kind} variable {name} overwritten by inner {inner_kind} target
-    "UP006",   # keep type annotation style as is
-    "UP007",   # keep type annotation style as is
-    "PLE1205",
 ]
 exclude = [
     ".venv",
@@ -64,40 +60,27 @@ extension-pkg-whitelist = ["ciso8601", "cv2"]
 good-names = ["_", "ev", "ex", "fp", "i", "id", "j", "k", "Run", "T"]
 
 [tool.pylint."MESSAGES CONTROL"]
-# Reasons disabled:
-# format - handled by black
-# locally-disabled - it spams too much
-# duplicate-code - unavoidable
-# cyclic-import - doesn't test if both import on load
-# abstract-class-little-used - prevents from setting right foundation
-# unused-argument - generic callbacks and setup methods create a lot of warnings
-# too-many-* - are not enforced for the sake of readability
-# too-few-* - same as too-many-*
-# abstract-method - with intro of async there are always methods missing
-# inconsistent-return-statements - doesn't handle raise
-# too-many-ancestors - it's too strict.
-# wrong-import-order - isort guards this
 disable = [
-    "format",
-    "abstract-method",
-    "cyclic-import",
-    "duplicate-code",
-    "inconsistent-return-statements",
-    "locally-disabled",
-    "not-context-manager",
-    "too-few-public-methods",
-    "too-many-ancestors",
-    "too-many-arguments",
-    "too-many-branches",
-    "too-many-instance-attributes",
-    "too-many-lines",
-    "too-many-locals",
-    "too-many-public-methods",
-    "too-many-return-statements",
-    "too-many-statements",
-    "too-many-boolean-expressions",
-    "unused-argument",
-    "wrong-import-order",
+    "abstract-method",              # Async interfaces always have methods missing
+    "cyclic-import",                # Doesn't test if both import on load
+    "duplicate-code",               # Unavoidable in similar entity modules
+    "format",                       # Handled by ruff format
+    "inconsistent-return-statements", # Doesn't handle raise
+    "locally-disabled",             # Spams too much noise
+    "not-context-manager",          # False positives with HA patterns
+    "too-few-public-methods",       # Not enforced for readability
+    "too-many-ancestors",           # Too strict for HA entity inheritance chains
+    "too-many-arguments",           # Not enforced for readability
+    "too-many-boolean-expressions", # Not enforced for readability
+    "too-many-branches",            # Not enforced for readability
+    "too-many-instance-attributes", # Not enforced for readability
+    "too-many-lines",               # Not enforced for readability
+    "too-many-locals",              # Not enforced for readability
+    "too-many-public-methods",      # Not enforced for readability
+    "too-many-return-statements",   # Not enforced for readability
+    "too-many-statements",          # Not enforced for readability
+    "unused-argument",              # Generic callbacks and setup methods create false positives
+    "wrong-import-order",           # Handled by ruff isort
 ]
 enable = [
     #"useless-suppression",  # temporarily every now and then to clean them up
@@ -135,5 +118,12 @@ warn_incomplete_stub = true
 warn_redundant_casts = true
 warn_unused_configs = true
 warn_unused_ignores = true
-enable_error_code = ["ignore-without-code", "redundant-self", "truthy-iterable"]
-disable_error_code = ["annotation-unchecked", "call-arg"]
+enable_error_code = [
+    "ignore-without-code", # Require error codes on type: ignore comments
+    "redundant-self",      # Flag redundant Self type annotations
+    "truthy-iterable",     # Flag always-truthy iterable checks
+]
+disable_error_code = [
+    "annotation-unchecked", # Don't flag unchecked type annotations in untyped functions
+    "call-arg",             # Don't flag unexpected/missing keyword arguments (HA API compat)
+]
