@@ -511,9 +511,12 @@ class BaseLock:
         self, code_slot: int, usercode: int | str, name: str | None = None
     ) -> None:
         """Set a usercode on a code slot."""
-        await self._execute_rate_limited(
+        changed = await self._execute_rate_limited(
             "set", self.async_set_usercode, code_slot, usercode, name=name
         )
+        # Refresh coordinator to update entity states from cache (only if changed)
+        if changed and self.coordinator:
+            await self.coordinator.async_request_refresh()
 
     def clear_usercode(self, code_slot: int) -> bool:
         """
@@ -558,7 +561,12 @@ class BaseLock:
     @final
     async def async_internal_clear_usercode(self, code_slot: int) -> None:
         """Clear a usercode on a code slot."""
-        await self._execute_rate_limited("clear", self.async_clear_usercode, code_slot)
+        changed = await self._execute_rate_limited(
+            "clear", self.async_clear_usercode, code_slot
+        )
+        # Refresh coordinator to update entity states from cache (only if changed)
+        if changed and self.coordinator:
+            await self.coordinator.async_request_refresh()
 
     def get_usercodes(self) -> dict[int, int | str]:
         """

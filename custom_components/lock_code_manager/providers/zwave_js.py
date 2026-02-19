@@ -24,7 +24,11 @@ from zwave_js_server.const.command_class.notification import (
     NotificationType,
 )
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode, get_usercodes
+from zwave_js_server.util.lock import (
+    get_usercode,
+    get_usercode_from_node,
+    get_usercodes,
+)
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
@@ -89,7 +93,6 @@ class ZWaveJSLock(BaseLock):
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
     _push_retry_cancel: Callable[[], None] | None = field(init=False, default=None)
-    _hard_refresh_in_progress: bool = field(init=False, default=False)
 
     @property
     def node(self) -> Node:
@@ -101,20 +104,24 @@ class ZWaveJSLock(BaseLock):
     @functools.cached_property
     def _usercode_cc_version(self) -> int:
         """Return the User Code CC version supported by this node."""
-        for cc in self.node.command_classes:
-            if cc.id == CommandClass.USER_CODE:
-                return cc.version
-        return 1
+        return next(
+            (
+                cc.version
+                for cc in self.node.command_classes
+                if cc.id == CommandClass.USER_CODE
+            ),
+            1,
+        )
 
     @property
     def supports_push(self) -> bool:
-        """Return whether this lock supports push-based updates.
-
-        V2 nodes emit reliable value-updated events via Lifeline.
-        V1 nodes don't reliably send unsolicited User Code Reports,
-        so we use polling instead.
         """
-        return self._usercode_cc_version >= 2
+        Return whether this lock supports push-based updates.
+
+        Z-Wave JS emits value update events when the cache changes, so we
+        subscribe to those instead of polling.
+        """
+        return True
 
     @property
     def supports_code_slot_events(self) -> bool:
@@ -122,33 +129,9 @@ class ZWaveJSLock(BaseLock):
         return True
 
     @property
-    def usercode_scan_interval(self) -> timedelta:
-        """Return scan interval for usercodes.
-
-        V1 only - reads from Z-Wave JS cache (cheap, no Z-Wave traffic).
-        """
-        return timedelta(minutes=2)
-
-    @property
-    def hard_refresh_interval(self) -> timedelta:
-        """Return interval between hard refreshes.
-
-        V1: 30 minutes (queries each slot individually, expensive).
-        V2: 1 hour (uses checksum optimization, usually no traffic).
-        """
-        if self._usercode_cc_version >= 2:
-            return timedelta(hours=1)
-        return timedelta(minutes=30)
-
-    @property
     def connection_check_interval(self) -> timedelta | None:
-        """Return interval for connection state checks.
-
-        V2 uses config entry state changes. V1 needs periodic polling.
-        """
-        if self._usercode_cc_version >= 2:
-            return None
-        return timedelta(seconds=30)
+        """Z-Wave JS exposes config entry state changes, so skip polling."""
+        return None
 
     def _get_client_state(self) -> tuple[bool, str]:
         """Return whether the Z-Wave JS client is ready and a retry reason."""
@@ -293,9 +276,6 @@ class ZWaveJSLock(BaseLock):
         @callback
         def on_value_updated(event: dict[str, Any]) -> None:
             """Handle value update events from Z-Wave JS."""
-            if self._hard_refresh_in_progress:
-                return
-
             args: dict[str, Any] = event["args"]
             # Filter for User Code CC - handle both userCode and userIdStatus
             if args.get("commandClass") != CommandClass.USER_CODE:
@@ -479,9 +459,6 @@ class ZWaveJSLock(BaseLock):
         for listener in self._listeners:
             listener()
         self._listeners.clear()
-        # Always clean up push subscriptions regardless of supports_push,
-        # in case subscribe_push_updates() was called explicitly.
-        self.unsubscribe_push_updates()
         await super().async_unload(remove_permanently)
 
     async def async_is_connection_up(self) -> bool:
@@ -496,17 +473,9 @@ class ZWaveJSLock(BaseLock):
         Uses Z-Wave JS's refresh_cc_values which handles checksum optimization
         internally - it will skip re-fetching codes if the checksum hasn't changed.
         Returns codes in the same format as async_get_usercodes().
-
-        Sets _hard_refresh_in_progress flag to suppress push handler events
-        during the refresh. The driver emits value-updated events as it
-        re-queries each slot, which carry intermediate cache state.
         """
-        self._hard_refresh_in_progress = True
-        try:
-            await self._async_refresh_usercode_cache()
-            return await self.async_get_usercodes()
-        finally:
-            self._hard_refresh_in_progress = False
+        await self._async_refresh_usercode_cache()
+        return await self.async_get_usercodes()
 
     async def async_set_usercode(
         self, code_slot: int, usercode: int | str, name: str | None = None
@@ -541,6 +510,11 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
         )
+        # V1 locks don't reliably update the Z-Wave JS value cache after set.
+        # Poll the slot directly from the device to force-update the cache
+        # before the coordinator reads it, preventing sync loops.
+        if self._usercode_cc_version < 2:
+            await get_usercode_from_node(self.node, code_slot)
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
@@ -575,6 +549,11 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
         )
+        # V1 locks don't reliably update the Z-Wave JS value cache after clear.
+        # Poll the slot directly from the device to force-update the cache
+        # before the coordinator reads it, preventing sync loops.
+        if self._usercode_cc_version < 2:
+            await get_usercode_from_node(self.node, code_slot)
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.

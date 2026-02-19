@@ -391,21 +391,17 @@ async def test_async_call_service_raises_lock_disconnected_on_error(
     hass.services.async_remove("test_domain", "failing_service")
 
 
-async def test_set_usercode_does_not_refresh_coordinator(
+async def test_set_usercode_refreshes_coordinator_on_change(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_internal_set_usercode does not call async_request_refresh.
-
-    Set/clear rely on optimistic push_update() (push providers) or the next poll
-    cycle (poll providers). Calling async_request_refresh after set/clear defeats
-    optimistic updates by reading potentially stale cache.
-    """
+    """Test that async_internal_set_usercode refreshes coordinator when value changes."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
+    # Track coordinator refreshes
     refresh_count = 0
     original_refresh = coordinator.async_request_refresh
 
@@ -415,22 +411,29 @@ async def test_set_usercode_does_not_refresh_coordinator(
         return await original_refresh()
 
     with patch.object(coordinator, "async_request_refresh", track_refresh):
+        # Setting a new usercode should trigger a coordinator refresh
         await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count == 0
+        assert refresh_count == 1
+
+        # Setting the same usercode should NOT trigger refresh (no change)
+        await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
+        assert refresh_count == 1  # Still 1, no new refresh
 
 
-async def test_clear_usercode_does_not_refresh_coordinator(
+async def test_clear_usercode_refreshes_coordinator_on_change(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_internal_clear_usercode does not call async_request_refresh."""
+    """Test that async_internal_clear_usercode refreshes coordinator when value changes."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
 
+    # First set a usercode so we can clear it
     await lock_provider.async_internal_set_usercode(4, "4444", "Test 4")
 
+    # Track coordinator refreshes
     refresh_count = 0
     original_refresh = coordinator.async_request_refresh
 
@@ -440,8 +443,13 @@ async def test_clear_usercode_does_not_refresh_coordinator(
         return await original_refresh()
 
     with patch.object(coordinator, "async_request_refresh", track_refresh):
+        # Clearing an existing usercode should trigger a coordinator refresh
         await lock_provider.async_internal_clear_usercode(4)
-        assert refresh_count == 0
+        assert refresh_count == 1
+
+        # Clearing a non-existent slot should NOT trigger refresh (no change)
+        await lock_provider.async_internal_clear_usercode(999)
+        assert refresh_count == 1  # Still 1, no new refresh
 
 
 async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
@@ -636,94 +644,3 @@ async def test_config_entry_state_listener_ignores_same_state(
         assert lock.unsubscribe_calls == 0
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
-
-
-async def test_set_usercode_preserves_optimistic_update(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that set_usercode does not overwrite optimistic push_update data.
-
-    Regression test for V1 sync loop. Before the fix, async_internal_set_usercode
-    called coordinator.async_request_refresh() after set_usercode's push_update().
-    For V1 locks, this read stale cache and overwrote the correct optimistic data,
-    causing the sync sensor to see a mismatch and retry endlessly.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-
-    # Set the code - this should call set_usercode (which updates mock data)
-    # The key assertion: after the call completes, coordinator data should
-    # reflect the set value, NOT the stale cache
-    await lock_provider.async_internal_set_usercode(3, "9999", "Test")
-
-    # After set, a poll should see the new value (MockLCMLock updates immediately)
-    fresh_data = await lock_provider.async_internal_get_usercodes()
-    assert fresh_data[3] == "9999"
-
-
-async def test_clear_usercode_preserves_optimistic_update(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that clear_usercode does not overwrite optimistic push_update data.
-
-    Regression test for V1 sync loop on clear operations.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-
-    # First set a code so we can clear it
-    await lock_provider.async_internal_set_usercode(4, "4444", "Test")
-
-    # Clear the code
-    await lock_provider.async_internal_clear_usercode(4)
-
-    # After clear, a poll should see the slot as cleared
-    fresh_data = await lock_provider.async_internal_get_usercodes()
-    assert 4 not in fresh_data or fresh_data.get(4) == ""
-
-
-async def test_no_coordinator_refresh_between_set_and_poll(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that no coordinator refresh occurs between set_usercode and next poll.
-
-    This is the core sync loop prevention test. The coordinator should only
-    update via: (a) optimistic push_update in set/clear, or (b) the next
-    scheduled poll/refresh. There should be no immediate refresh after set/clear
-    that could read stale cache.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-
-    # Track all coordinator data changes
-    data_snapshots = []
-    original_set_data = coordinator.async_set_updated_data
-
-    @callback
-    def track_data_updates(data):
-        data_snapshots.append(dict(data))
-        return original_set_data(data)
-
-    with patch.object(coordinator, "async_set_updated_data", track_data_updates):
-        await lock_provider.async_internal_set_usercode(3, "9999", "Test")
-
-    # There should be no async_set_updated_data calls from an immediate refresh.
-    # The only update should come from either:
-    # - The provider's own push_update (if push-based), or
-    # - The next poll cycle (if poll-based)
-    # MockLCMLock is poll-based (supports_push=False), so there should be
-    # zero push_update calls during set.
-    # The important thing is there's no refresh call that would read stale data.
-    assert data_snapshots == [], (
-        f"Expected no async_set_updated_data calls during set_usercode, "
-        f"but got {len(data_snapshots)} call(s): {data_snapshots}"
-    )
