@@ -741,7 +741,8 @@ async def test_subscribe_code_slot_with_event_type(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test event_type attribute is set correctly after firing code slot event.
+    """
+    Test event_type attribute is set correctly after firing code slot event.
 
     This verifies the event entity state has the event_type attribute set to
     the lock entity ID, which the websocket uses to look up last_used_lock_name.
@@ -1288,7 +1289,8 @@ class TestGetConditionEntityData:
 
 
 class TestGetNextCalendarEvent:
-    """Tests for _get_next_calendar_event helper.
+    """
+    Tests for _get_next_calendar_event helper.
 
     These tests register a mock calendar.get_events service to test the
     _get_next_calendar_event function through HA's service system.
