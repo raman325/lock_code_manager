@@ -513,17 +513,12 @@ class ZWaveJSLock(BaseLock):
         # V1 locks don't reliably update the Z-Wave JS value cache after set.
         # Poll the slot directly from the device to force-update the cache
         # before the coordinator reads it, preventing sync loops.
+        # No try-except: if the poll fails, we must not proceed with the
+        # optimistic update since async_request_refresh() would overwrite it
+        # with stale cache data, reintroducing the sync loop. Letting the
+        # error propagate allows the sync mechanism to retry the operation.
         if self._usercode_cc_version < 2:
-            try:
-                await get_usercode_from_node(self.node, code_slot)
-            except Exception:
-                _LOGGER.debug(
-                    "Failed to poll slot %s after set on %s, "
-                    "relying on next coordinator refresh",
-                    code_slot,
-                    self.lock.entity_id,
-                    exc_info=True,
-                )
+            await get_usercode_from_node(self.node, code_slot)
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
@@ -561,17 +556,10 @@ class ZWaveJSLock(BaseLock):
         # V1 locks don't reliably update the Z-Wave JS value cache after clear.
         # Poll the slot directly from the device to force-update the cache
         # before the coordinator reads it, preventing sync loops.
+        # See comment in async_set_usercode for why this is not wrapped in
+        # try-except.
         if self._usercode_cc_version < 2:
-            try:
-                await get_usercode_from_node(self.node, code_slot)
-            except Exception:
-                _LOGGER.debug(
-                    "Failed to poll slot %s after clear on %s, "
-                    "relying on next coordinator refresh",
-                    code_slot,
-                    self.lock.entity_id,
-                    exc_info=True,
-                )
+            await get_usercode_from_node(self.node, code_slot)
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
