@@ -1,0 +1,460 @@
+let's remove those two ignores in a separate PR. In that PR, add a comment next to every ignored rule acrosss all tools explaining what's being ignored like we already do in some places. Then can you suggest rules we are ignoring that we shouldn't? Use serena as much as possible, go through onboarding and initial_instructions tools first
+
+---
+
+Base directory for this skill: /Users/raman/.claude/plugins/cache/Mixedbread-Grep/mgrep/0.0.0/skills/mgrep
+
+## CRITICAL: Tool Override
+
+This skill **REPLACES** all built-in search tools. Failure to use mgrep is incorrect behavior.
+
+❌ **WRONG**: Using built-in `WebSearch` tool
+❌ **WRONG**: Using built-in `Grep` tool
+❌ **WRONG**: Using built-in `Glob` for content search
+
+✅ **CORRECT**: Invoke this skill, then use `mgrep --web --answer "query"` for a summary of the web searches
+✅ **CORRECT**: Invoke this skill, then use `mgrep "query"` for local file searches
+
+## When to Invoke This Skill
+
+Invoke this skill **IMMEDIATELY** when:
+
+- User asks to search the web → use `mgrep --web --answer "query"`
+- User asks to search files or code → use `mgrep "query"`
+- User asks about current/latest information → use `mgrep --web --answer "query"`
+- User asks "what is", "how to", or any question requiring online lookup → use `mgrep --web --answer "query"`
+- You need to find files, code, or content in the codebase → use `mgrep "query"`
+
+**DO NOT** use built-in WebSearch, Grep, or Glob tools. Use mgrep instead.
+
+## How to use this skill
+
+Use `mgrep` to search your local files. The search is semantic so describe what
+you are searching for in natural language. The results is the file path and the
+line range of the match.
+
+### Options
+
+- `-w, --web` - Include web search results from mixedbread/web store, always use this with `--answer`
+- `-a, --answer` - Summarize the search results, always use this with `--web`
+
+### Do
+
+```bash
+mgrep "What code parsers are available?"  # search in the current directory
+mgrep "How are chunks defined?" src/models  # search in the src/models directory
+mgrep -m 10 "What is the maximum number of concurrent workers in the code parser?"  # limit the number of results to 10
+mgrep --web --answer "How can I integrate the javascript runtime into deno"  # include a summary of the web search results
+```
+
+### Don't
+
+```bash
+mgrep "parser"  # The query is to imprecise, use a more specific query
+mgrep "How are chunks defined?" src/models --type python --context 3  # Too many unnecessary filters, remove them
+```
+
+## Keywords
+WebSearch, web search, search the web, look up online, google, internet search,
+online search, semantic search, search, grep, files, local files, local search
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+continue
+
+---
+
+reneable the three ruff rules, remove the deprecated rule and replace it with the replacement
+
+---
+
+commit push and create pr
+
+---
+
+## Context
+
+- Current git status: (B[mOn branch chore/annotate-lint-ignores-and-remove-up006-up007
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   .eslintrc.cjs
+	modified:   .github/workflows/frontend-checks.yml
+	modified:   .github/workflows/integration.yaml
+	modified:   .github/workflows/labeler.yaml
+	modified:   .github/workflows/python-checks.yml
+	modified:   .github/workflows/release.yaml
+	modified:   .github/workflows/repository.yaml
+	deleted:    .markdownlint.json
+	modified:   custom_components/lock_code_manager/websocket.py
+	modified:   pyproject.toml
+	modified:   tests/providers/test_base.py
+	modified:   ts/ha_type_stubs.ts
+	modified:   ts/lock-codes-card.ts
+	modified:   ts/subscription-mixin.ts
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.entire/
+	.markdownlint.yaml
+	.serena/
+	open_prs.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+/Users/raman/.claude/shell-snapshots/snapshot-bash-1771171448608-qx2zaj.sh: line 192: alias: --: not found
+- Current git diff (staged and unstaged changes): (B[mdiff --git a/.eslintrc.cjs b/.eslintrc.cjs
+index 6d52247..3e36f48 100644
+--- a/.eslintrc.cjs
++++ b/.eslintrc.cjs
+@@ -22,8 +22,8 @@ module.exports = {
+         {
+             files: ['**/*.test.ts', '**/test/**/*.ts', 'vitest.config.ts'],
+             rules: {
+-                'import/no-extraneous-dependencies': 'off',
+-                'sort-keys': 'off'
++                'import/no-extraneous-dependencies': 'off', // Test deps (vitest, etc.) are devDependencies
++                'sort-keys': 'off'                          // Test objects are ordered for readability, not alphabetically
+             }
+         }
+     ],
+@@ -41,10 +41,25 @@ module.exports = {
+         'unused-imports'
+     ],
+     rules: {
+-        '@typescript-eslint/camelcase': 'off',
+-        '@typescript-eslint/no-unused-vars': 'off',
+-        camelcase: 'off',
+-        'class-methods-use-this': 'off',
++        '@typescript-eslint/naming-convention': [
++            'error',
++            { selector: 'default', format: ['camelCase'] },
++            // Variables: allow snake_case for HA API destructuring, UPPER_CASE/PascalCase for constants
++            { selector: 'variable', format: ['camelCase', 'snake_case', 'UPPER_CASE', 'PascalCase'], leadingUnderscore: 'allow' },
++            // Parameters: allow snake_case (HA API), PascalCase (mixin Base param)
++            { selector: 'parameter', format: ['camelCase', 'snake_case', 'PascalCase'], leadingUnderscore: 'allow' },
++            // Functions: allow PascalCase for mixin factory functions
++            { selector: 'function', format: ['camelCase', 'PascalCase'] },
++            // Methods: allow leading underscore (Lit private method convention)
++            { selector: 'method', format: ['camelCase'], leadingUnderscore: 'allow' },
++            { selector: 'property', format: null },       // HA API uses snake_case properties
++            { selector: 'typeLike', format: ['PascalCase'] },
++            { selector: 'enumMember', format: ['PascalCase', 'UPPER_CASE'] },
++            { selector: 'import', format: null }           // Allow any import naming
++        ],
++        '@typescript-eslint/no-unused-vars': 'off',     // Handled by unused-imports plugin
++        camelcase: 'off',                               // Disabled in favor of @typescript-eslint/naming-convention
++        'class-methods-use-this': 'off',                // Lit lifecycle methods don't use this
+         'import/no-unresolved': 'error',
+         'import/order': [
+             'error',
+@@ -64,7 +79,7 @@ module.exports = {
+                 'newlines-between': 'always'
+             }
+         ],
+-        'no-undefined': 'off',
++        'no-undefined': 'off',                          // Allow undefined (used in HA property patterns)
+         'sort-imports': [
+             'error',
+             {
+diff --git a/.github/workflows/frontend-checks.yml b/.github/workflows/frontend-checks.yml
+index ff20c38..2f6627e 100644
+--- a/.github/workflows/frontend-checks.yml
++++ b/.github/workflows/frontend-checks.yml
+@@ -1,6 +1,8 @@
+ ---
+ name: Frontend Checks
+ 
++# GHA requires bare `on:` which yamllint sees as boolean
++# yamllint disable-line rule:truthy
+ on:
+   workflow_call:
+ 
+diff --git a/.github/workflows/integration.yaml b/.github/workflows/integration.yaml
+index da9145d..6e4a700 100644
+--- a/.github/workflows/integration.yaml
++++ b/.github/workflows/integration.yaml
+@@ -1,6 +1,7 @@
+ ---
+ name: Integration
+ 
++# GHA requires bare `on:` which yamllint sees as boolean
+ # yamllint disable-line rule:truthy
+ on:
+   push:
+diff --git a/.github/workflows/labeler.yaml b/.github/workflows/labeler.yaml
+index 04cbf1b..8d1cbef 100644
+--- a/.github/workflows/labeler.yaml
++++ b/.github/workflows/labeler.yaml
+@@ -1,6 +1,7 @@
+ ---
+ name: Labeler
+ 
++# GHA requires bare `on:` which yamllint sees as boolean
+ # yamllint disable-line rule:truthy
+ on:
+   pull_request_target:
+diff --git a/.github/workflows/python-checks.yml b/.github/workflows/python-checks.yml
+index 66479cf..f371e39 100644
+--- a/.github/workflows/python-checks.yml
++++ b/.github/workflows/python-checks.yml
+@@ -1,6 +1,8 @@
+ ---
+ name: Python Checks
+ 
++# GHA requires bare `on:` which yamllint sees as boolean
++# yamllint disable-line rule:truthy
+ on:
+   workflow_call:
+ 
+diff --git a/.github/workflows/release.yaml b/.github/workflows/release.yaml
+index 39595ae..a8b3376 100644
+--- a/.github/workflows/release.yaml
++++ b/.github/workflows/release.yaml
+@@ -1,6 +1,7 @@
+ ---
+ name: Release
+ 
++# GHA requires bare `on:` which yamllint sees as boolean
+ # yamllint disable-line rule:truthy
+ on:
+   release:
+@@ -20,6 +21,7 @@ jobs:
+         env:
+           VERSION: ${{ steps.get_version.outputs.VERSION }}
+           WORKSPACE: ${{ github.workspace }}
++        # sed commands with long paths are clearer on one line
+         # yamllint disable rule:line-length
+         run: |
+           sed -i "/VERSION = /c\VERSION = \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/const.py"
+diff --git a/.github/workflows/repository.yaml b/.github/workflows/repository.yaml
+index 78f1bdd..d029400 100644
+--- a/.github/workflows/repository.yaml
++++ b/.github/workflows/repository.yaml
+@@ -1,6 +1,7 @@
+ ---
+ name: Repository
+ 
++# GHA requires bare `on:` which yamllint sees as boolean
+ # yamllint disable-line rule:truthy
+ on:
+   push:
+@@ -98,6 +99,7 @@ jobs:
+           MUST_PASS: Check Changes,HACS,Hassfest
+           # Checks that must pass IF they run (may be skipped by path filter)
+           # Use * suffix for pattern matching (e.g., "Python / Pytest *" matches any version)
++          # Comma-separated check names are clearer on one line
+           # yamllint disable-line rule:line-length
+           IF_RUN_PASS: Python / Setup,Python / Ruff,Python / Pytest *,Frontend / Vitest,Frontend / Yarn Lint and Build
+         run: |
+diff --git a/.markdownlint.json b/.markdownlint.json
+deleted file mode 100644
+index e710966..0000000
+--- a/.markdownlint.json
++++ /dev/null
+@@ -1,8 +0,0 @@
+-{
+-  "MD013": {
+-    "line_length": 120,
+-    "code_blocks": false,
+-    "tables": false,
+-    "headings": false
+-  }
+-}
+diff --git a/custom_components/lock_code_manager/websocket.py b/custom_components/lock_code_manager/websocket.py
+index 421e34d..b62d734 100644
+--- a/custom_components/lock_code_manager/websocket.py
++++ b/custom_components/lock_code_manager/websocket.py
+@@ -818,7 +818,7 @@ async def _get_next_calendar_event(
+ 
+         return next_event_data if next_event_data else None
+ 
+-    except Exception:  # noqa: BLE001
++    except Exception:  # noqa: BLE001 - Catch-all: calendar fetch is best-effort
+         _LOGGER.debug("Failed to fetch next calendar event for %s", calendar_entity_id)
+         return None
+ 
+@@ -1130,7 +1130,7 @@ async def set_lock_usercode(
+             # Clear the usercode
+             await lock.async_internal_clear_usercode(code_slot)
+         connection.send_result(msg["id"], {"success": True})
+-    except Exception as err:  # noqa: BLE001
++    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
+         connection.send_error(
+             msg["id"],
+             websocket_api.const.ERR_UNKNOWN_ERROR,
+diff --git a/pyproject.toml b/pyproject.toml
+index 785ee3b..e92cf4c 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -6,20 +6,15 @@ requires-python = ">=3.13"
+ [tool.ruff]
+ lint.select = ["D", "E", "F", "G", "I", "PLC", "PLE", "PLR", "PLW", "UP", "W"]
+ lint.ignore = [
+-    "D202",
+-    "D212",
+-    "D203",
+-    "D213",
+-    "E501",
++    "D203",    # 1 blank line required before class docstring (conflicts with D211)
++    "D212",    # Multi-line docstring summary should start at the first line (conflicts with D213)
++    "D213",    # Multi-line docstring summary should start at the second line (conflicts with D212)
++    "E501",    # Line too long
+     "PLR0911", # Too many return statements ({returns} > {max_returns})
+     "PLR0912", # Too many branches ({branches} > {max_branches})
+     "PLR0913", # Too many arguments to function call ({c_args} > {max_args})
+     "PLR0915", # Too many statements ({statements} > {max_statements})
+     "PLR2004", # Magic value used in comparison, consider replacing {value} with a constant variable
+-    "PLW2901", # Outer {outer_kind} variable {name} overwritten by inner {inner_kind} target
+-    "UP006",   # keep type annotation style as is
+-    "UP007",   # keep type annotation style as is
+-    "PLE1205",
+ ]
+ exclude = [
+     ".venv",
+@@ -65,40 +60,27 @@ extension-pkg-whitelist = ["ciso8601", "cv2"]
+ good-names = ["_", "ev", "ex", "fp", "i", "id", "j", "k", "Run", "T"]
+ 
+ [tool.pylint."MESSAGES CONTROL"]
+-# Reasons disabled:
+-# format - handled by black
+-# locally-disabled - it spams too much
+-# duplicate-code - unavoidable
+-# cyclic-import - doesn't test if both import on load
+-# abstract-class-little-used - prevents from setting right foundation
+-# unused-argument - generic callbacks and setup methods create a lot of warnings
+-# too-many-* - are not enforced for the sake of readability
+-# too-few-* - same as too-many-*
+-# abstract-method - with intro of async there are always methods missing
+-# inconsistent-return-statements - doesn't handle raise
+-# too-many-ancestors - it's too strict.
+-# wrong-import-order - isort guards this
+ disable = [
+-    "format",
+-    "abstract-method",
+-    "cyclic-import",
+-    "duplicate-code",
+-    "inconsistent-return-statements",
+-    "locally-disabled",
+-    "not-context-manager",
+-    "too-few-public-methods",
+-    "too-many-ancestors",
+-    "too-many-arguments",
+-    "too-many-branches",
+-    "too-many-instance-attributes",
+-    "too-many-lines",
+-    "too-many-locals",
+-    "too-many-public-methods",
+-    "too-many-return-statements",
+-    "too-many-statements",
+-    "too-many-boolean-expressions",
+-    "unused-argument",
+-    "wrong-import-order",
++    "abstract-method",              # Async interfaces always have methods missing
++    "cyclic-import",                # Doesn't test if both import on load
++    "duplicate-code",               # Unavoidable in similar entity modules
++    "format",                       # Handled by ruff format
++    "inconsistent-return-statements", # Doesn't handle raise
++    "locally-disabled",             # Spams too much noise
++    "not-context-manager",          # False positives with HA patterns
++    "too-few-public-methods",       # Not enforced for readability
++    "too-many-ancestors",           # Too strict for HA entity inheritance chains
++    "too-many-arguments",           # Not enforced for readability
++    "too-many-boolean-expressions", # Not enforced for readability
++    "too-many-branches",            # Not enforced for readability
++    "too-many-instance-attributes", # Not enforced for readability
++    "too-many-lines",               # Not enforced for readability
++    "too-many-locals",              # Not enforced for readability
++    "too-many-public-methods",      # Not enforced for readability
++    "too-many-return-statements",   # Not enforced for readability
++    "too-many-statements",          # Not enforced for readability
++    "unused-argument",              # Generic callbacks and setup methods create false positives
++    "wrong-import-order",           # Handled by ruff isort
+ ]
+ enable = [
+     #"useless-suppression",  # temporarily every now and then to clean them up
+@@ -136,5 +118,12 @@ warn_incomplete_stub = true
+ warn_redundant_casts = true
+ warn_unused_configs = true
+ warn_unused_ignores = true
+-enable_error_code = ["ignore-without-code", "redundant-self", "truthy-iterable"]
+-disable_error_code = ["annotation-unchecked", "call-arg"]
++enable_error_code = [
++    "ignore-without-code", # Require error codes on type: ignore comments
++    "redundant-self",      # Flag redundant Self type annotations
++    "truthy-iterable",     # Flag always-truthy iterable checks
++]
++disable_error_code = [
++    "annotation-unchecked", # Don't flag unchecked type annotations in untyped functions
++    "call-arg",             # Don't flag unexpected/missing keyword arguments (HA API compat)
++]
+diff --git a/tests/providers/test_base.py b/tests/providers/test_base.py
+index fe9741e..a8a31a3 100644
+--- a/tests/providers/test_base.py
++++ b/tests/providers/test_base.py
+@@ -476,7 +476,7 @@ async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
+     # Comparing to non-BaseLock objects should return False
+     assert lock != "not a lock"
+     assert lock != 123
+-    assert (lock == None) is False  # noqa: E711
++    assert (lock == None) is False  # noqa: E711 - Intentionally testing __eq__ with None
+     assert lock != {"entity_id": lock_entity.entity_id}
+ 
+ 
+diff --git a/ts/ha_type_stubs.ts b/ts/ha_type_stubs.ts
+index 58d6d32..cdaf05e 100644
+--- a/ts/ha_type_stubs.ts
++++ b/ts/ha_type_stubs.ts
+@@ -18,8 +18,8 @@ export interface HomeAssistant {
+     connection: Connection;
+     resources: object;
+     states: HassEntities;
+-    callService(domain: string, service: string, data?: object): Promise<void>; // eslint-disable-line typescript-sort-keys/interface
+-    callWS<T>(msg: MessageBase): Promise<T>; // eslint-disable-line typescript-sort-keys/interface
++    callService(domain: string, service: string, data?: object): Promise<void>; // eslint-disable-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
++    callWS<T>(msg: MessageBase): Promise<T>; // eslint-disable-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
+ }
+ 
+ export interface LovelaceBaseViewConfig {
+diff --git a/ts/lock-codes-card.ts b/ts/lock-codes-card.ts
+index 2f2aa8f..17fe306 100644
+--- a/ts/lock-codes-card.ts
++++ b/ts/lock-codes-card.ts
+@@ -532,7 +532,7 @@ class LockCodesCard extends LockCodesCardBase {
+             this._editingSlot = null;
+             this._editValue = '';
+         } catch (err) {
+-            // eslint-disable-next-line no-console
++            // eslint-disable-next-line no-console -- User-facing error, no logger available in card
+             console.error('Failed to set usercode:', err);
+         } finally {
+             this._saving = false;
+diff --git a/ts/subscription-mixin.ts b/ts/subscription-mixin.ts
+index 5a29fcc..98b3eb1 100644
+--- a/ts/subscription-mixin.ts
++++ b/ts/subscription-mixin.ts
+@@ -10,7 +10,7 @@ import { state } from 'lit/decorators.js';
+ import { HomeAssistant } from './ha_type_stubs';
+ import { CodeDisplayMode } from './types';
+ 
+-// eslint-disable-next-line @typescript-eslint/no-explicit-any
++// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mixin pattern requires generic constructor type
+ type Constructor<T = object> = new (...args: any[]) => T;
+ 
+ export interface LcmSubscriptionConfig {
+/Users/raman/.claude/shell-snapshots/snapshot-bash-1771171448608-qx2zaj.sh: line 192: alias: --: not found
+- Current branch: (B[mchore/annotate-lint-ignores-and-remove-up006-up007
+/Users/raman/.claude/shell-snapshots/snapshot-bash-1771171448608-qx2zaj.sh: line 192: alias: --: not found
+
+## Your task
+
+Based on the above changes:
+
+1. Create a new branch if on main
+2. Create a single commit with an appropriate message
+3. Push the branch to origin
+4. Create a pull request using `gh pr create`
+5. You have the capability to call multiple tools in a single response. You MUST do all of the above in a single message. Do not use any other tools or do anything else. Do not send any other text or messages besides these tool calls.
