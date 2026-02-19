@@ -56,7 +56,8 @@ async def zwave_js_lock_fixture(
 
 @pytest.fixture(autouse=True)
 def mock_get_usercode_from_node():
-    """Mock get_usercode_from_node for all tests.
+    """
+    Mock get_usercode_from_node for all tests.
 
     V1 set/clear calls get_usercode_from_node to poll the slot from the device.
     In tests, the node doesn't have a real Z-Wave JS server connection, so we
@@ -564,7 +565,8 @@ async def test_v1_set_usercode_polls_slot(
     lock_schlage_be469: Node,
     mock_get_usercode_from_node,
 ) -> None:
-    """Test that V1 set_usercode polls the slot from the device after set.
+    """
+    Test that V1 set_usercode polls the slot from the device after set.
 
     V1 locks don't reliably update the Z-Wave JS value cache after a set
     operation. Polling the slot forces the cache to update before the
