@@ -153,7 +153,8 @@ def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
 def _get_last_changed(
     hass: HomeAssistant, entity_id: str | None, require_valid_state: bool = False
 ) -> str | None:
-    """Get last_changed timestamp as ISO string.
+    """
+    Get last_changed timestamp as ISO string.
 
     Args:
         hass: Home Assistant instance.
@@ -288,7 +289,8 @@ async def get_config_entry_data(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Return complete config entry data for Lock Code Manager.
+    """
+    Return complete config entry data for Lock Code Manager.
 
     This is the primary data-fetching command for the frontend. It returns all
     static configuration and entity registry data needed to render the dashboard.
@@ -356,7 +358,8 @@ def _serialize_slot(
     enabled: bool | None = None,
     config_entry_id: str | None = None,
 ) -> dict[str, Any]:
-    """Serialize a single slot, optionally masking the code.
+    """
+    Serialize a single slot, optionally masking the code.
 
     - code/code_length: What's actually on the lock (actual state)
     - configured_code/configured_code_length: What LCM has configured (desired state)
@@ -448,7 +451,8 @@ class SlotMetadata:
 def _get_slot_entity_ids(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotEntityIds]:
-    """Get entity IDs for all slots managed by LCM for a lock.
+    """
+    Get entity IDs for all slots managed by LCM for a lock.
 
     Returns a dict mapping slot number to SlotEntityIds containing the entity IDs
     for name, PIN, active, and enabled entities.
@@ -490,7 +494,8 @@ def _get_slot_entity_ids(
 def _get_slot_metadata(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotMetadata]:
-    """Get all slot metadata from LCM entities for a lock in one pass.
+    """
+    Get all slot metadata from LCM entities for a lock in one pass.
 
     Returns a dict mapping slot number to SlotMetadata containing:
     - name: From text entity
@@ -511,7 +516,8 @@ def _get_slot_metadata(
 
 
 def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list[str]:
-    """Get entity IDs for slot state tracking (enabled, active, name, PIN).
+    """
+    Get entity IDs for slot state tracking (enabled, active, name, PIN).
 
     Returns the specific LCM entity IDs whose state changes should trigger
     websocket subscription updates for this lock's slots.
@@ -591,7 +597,8 @@ async def subscribe_lock_codes(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Subscribe to coordinator data and LCM entity state updates for a lock.
+    """
+    Subscribe to coordinator data and LCM entity state updates for a lock.
 
     Triggers updates when:
     - Lock coordinator data changes (codes on lock)
@@ -701,7 +708,8 @@ def _get_slot_entity_data(
 def _get_slot_in_sync_entity_ids(
     hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int
 ) -> dict[str, str]:
-    """Get in_sync entity IDs for each lock for a specific slot.
+    """
+    Get in_sync entity IDs for each lock for a specific slot.
 
     Returns dict mapping lock_entity_id to in_sync_entity_id.
     """
@@ -723,7 +731,8 @@ def _get_slot_in_sync_entity_ids(
 def _get_condition_entity_data(
     hass: HomeAssistant, condition_entity_id: str | None
 ) -> dict[str, Any] | None:
-    """Get condition entity data from entity state.
+    """
+    Get condition entity data from entity state.
 
     Returns dict with entity info and domain-specific data.
     For calendar entities, includes event details (summary, end_time).
@@ -779,7 +788,8 @@ def _get_condition_entity_data(
 async def _get_next_calendar_event(
     hass: HomeAssistant, calendar_entity_id: str
 ) -> dict[str, Any] | None:
-    """Fetch the next upcoming event from a calendar entity.
+    """
+    Fetch the next upcoming event from a calendar entity.
 
     Returns dict with start_time and summary, or None if no upcoming events.
     """
@@ -981,7 +991,8 @@ async def subscribe_code_slot(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Subscribe to slot data for a specific slot in a config entry.
+    """
+    Subscribe to slot data for a specific slot in a config entry.
 
     Provides real-time updates when:
     - Slot entities change (name, PIN, enabled, active, number_of_uses)
@@ -1101,7 +1112,8 @@ async def set_lock_usercode(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Set or clear a usercode on a lock slot.
+    """
+    Set or clear a usercode on a lock slot.
 
     If usercode is provided, sets the code. If usercode is empty or not provided,
     clears the code slot.
@@ -1172,7 +1184,8 @@ async def update_slot_condition(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Update condition settings for a slot.
+    """
+    Update condition settings for a slot.
 
     Allows adding, changing, or removing:
     - entity_id: Condition entity (calendar, schedule, binary_sensor, switch, input_boolean)

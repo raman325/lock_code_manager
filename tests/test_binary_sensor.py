@@ -318,7 +318,8 @@ async def test_startup_out_of_sync_slots_sync_once(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Ensure out-of-sync slots sync once each without extra operations.
+    """
+    Ensure out-of-sync slots sync once each without extra operations.
 
     With coordinator-triggered syncs, out-of-sync slots are detected and synced
     automatically during startup via coordinator update callbacks.
@@ -655,7 +656,8 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Test that coordinator updates trigger sync when lock code changes externally.
+    """
+    Test that coordinator updates trigger sync when lock code changes externally.
 
     This test replicates the issue where someone manually changes a code on the
     lock (or the lock reports a different code), and the integration should
