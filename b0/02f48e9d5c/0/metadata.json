@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "b002f48e9d5c",
+  "session_id": "112658aa-8e2f-43a4-9f8b-a690dfce9b04",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T21:00:09.752907Z",
+  "branch": "fix/usercode-cc-v1-support",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".serena/memories/project_overview.md",
+    ".serena/memories/style_and_conventions.md",
+    ".serena/memories/suggested_commands.md",
+    ".serena/memories/task_completion_checklist.md",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "96401ecf-b40b-4f96-a981-17a1ca0ee792",
+  "checkpoint_transcript_start": 6099,
+  "transcript_lines_at_start": 6099,
+  "token_usage": {
+    "input_tokens": 698,
+    "cache_creation_tokens": 98491,
+    "cache_read_tokens": 4769311,
+    "output_tokens": 3411,
+    "api_call_count": 53
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T21:00:07.325039Z",
+    "agent_lines": 30,
+    "human_added": 30,
+    "human_modified": 87,
+    "human_removed": 0,
+    "total_committed": 147,
+    "agent_percentage": 20.408163265306122
+  }
+}
