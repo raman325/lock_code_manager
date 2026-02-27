@@ -4,5 +4,6 @@
     },
     "eslint.workingDirectories": [
         "."
-    ]
+    ],
+    "python.defaultInterpreterPath": "${workspaceFolder}/.ha/venv/bin/python"
 }
