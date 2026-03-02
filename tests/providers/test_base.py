@@ -611,6 +611,82 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
     await lock.async_unload(False)
 
 
+async def test_set_usercode_skips_refresh_for_push_provider(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test that async_internal_set_usercode does NOT refresh coordinator for push providers."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Push Set"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock_provider = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock_provider, MockLCMLockWithPush)
+        coordinator = lock_provider.coordinator
+        assert coordinator is not None
+
+        # Track coordinator refreshes
+        refresh_count = 0
+        original_refresh = coordinator.async_request_refresh
+
+        async def track_refresh():
+            nonlocal refresh_count
+            refresh_count += 1
+            return await original_refresh()
+
+        with patch.object(coordinator, "async_request_refresh", track_refresh):
+            # Setting a new usercode should NOT trigger refresh for push providers
+            await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
+            assert refresh_count == 0
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_clear_usercode_skips_refresh_for_push_provider(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test that async_internal_clear_usercode does NOT refresh coordinator for push providers."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Push Clear"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock_provider = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock_provider, MockLCMLockWithPush)
+        coordinator = lock_provider.coordinator
+        assert coordinator is not None
+
+        # Track coordinator refreshes
+        refresh_count = 0
+        original_refresh = coordinator.async_request_refresh
+
+        async def track_refresh():
+            nonlocal refresh_count
+            refresh_count += 1
+            return await original_refresh()
+
+        with patch.object(coordinator, "async_request_refresh", track_refresh):
+            # Clearing an existing usercode should NOT trigger refresh for push providers
+            await lock_provider.async_internal_clear_usercode(1)
+            assert refresh_count == 0
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
 async def test_config_entry_state_listener_ignores_same_state(
     hass: HomeAssistant,
     mock_lock_config_entry,
