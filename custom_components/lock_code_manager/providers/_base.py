@@ -514,8 +514,12 @@ class BaseLock:
         changed = await self._execute_rate_limited(
             "set", self.async_set_usercode, code_slot, usercode, name=name
         )
-        # Refresh coordinator to update entity states from cache (only if changed)
-        if changed and self.coordinator:
+        # Refresh coordinator to update entity states from cache (only if changed).
+        # Skip for push-based providers — they update the coordinator optimistically
+        # via push_update() in their set/clear methods, and refreshing from cache
+        # could overwrite the optimistic update with stale data when the underlying
+        # driver defers cache updates until device confirmation.
+        if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
     def clear_usercode(self, code_slot: int) -> bool:
@@ -564,8 +568,12 @@ class BaseLock:
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )
-        # Refresh coordinator to update entity states from cache (only if changed)
-        if changed and self.coordinator:
+        # Refresh coordinator to update entity states from cache (only if changed).
+        # Skip for push-based providers — they update the coordinator optimistically
+        # via push_update() in their set/clear methods, and refreshing from cache
+        # could overwrite the optimistic update with stale data when the underlying
+        # driver defers cache updates until device confirmation.
+        if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
     def get_usercodes(self) -> dict[int, int | str]:
