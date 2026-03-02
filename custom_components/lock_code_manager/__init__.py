@@ -516,7 +516,7 @@ async def async_update_listener(
             added_locks.append(lock)
 
             # Check if lock is connected (but don't wait - entity creation doesn't require it)
-            if not await lock.async_internal_is_connection_up():
+            if not await lock.async_internal_is_integration_connected():
                 _LOGGER.debug(
                     "%s (%s): Lock %s is not connected yet. Entities will be created "
                     "but will be unavailable until the lock comes online. This is normal "

@@ -10,7 +10,7 @@ import logging
 from typing import Any
 
 from zwave_js_server.client import Client
-from zwave_js_server.const import CommandClass
+from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.lock import (
     ATTR_CODE_SLOT,
     ATTR_IN_USE,
@@ -470,10 +470,17 @@ class ZWaveJSLock(BaseLock):
         self._listeners.clear()
         await super().async_unload(remove_permanently)
 
-    async def async_is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    async def async_is_integration_connected(self) -> bool:
+        """Return whether the Z-Wave JS client is connected."""
         ready, _reason = self._get_client_state()
         return ready
+
+    async def async_is_device_available(self) -> bool:
+        """Return whether the Z-Wave node is available for commands."""
+        try:
+            return self.node.status != NodeStatus.DEAD
+        except Exception:  # noqa: BLE001
+            return False
 
     async def async_hard_refresh_codes(self) -> dict[int, int | str]:
         """
@@ -600,7 +607,7 @@ class ZWaveJSLock(BaseLock):
         }
         data: dict[int, int | str] = {}
 
-        if not await self.async_is_connection_up():
+        if not await self.async_is_integration_connected():
             raise LockDisconnected
 
         slots = self._get_usercodes_from_cache()

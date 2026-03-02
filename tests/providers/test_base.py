@@ -87,9 +87,9 @@ async def test_base(hass: HomeAssistant):
     with pytest.raises(NotImplementedError):
         assert lock.domain
     with pytest.raises(NotImplementedError):
-        await lock.async_internal_is_connection_up()
+        await lock.async_internal_is_integration_connected()
     # Note: hard_refresh, set, and clear operations now check connection first,
-    # so they raise NotImplementedError from is_connection_up() instead of
+    # so they raise NotImplementedError from is_integration_connected() instead of
     # the expected error from the unimplemented method
     with pytest.raises(NotImplementedError):
         await lock.async_internal_hard_refresh_codes()
@@ -644,3 +644,43 @@ async def test_config_entry_state_listener_ignores_same_state(
         assert lock.unsubscribe_calls == 0
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_is_device_available_default_returns_true(hass: HomeAssistant):
+    """Test that base class is_device_available() returns True by default."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_device_available",
+        config_entry=config_entry,
+    )
+
+    lock = BaseLock(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+
+    # Default implementation returns True
+    assert lock.is_device_available() is True
+    assert await lock.async_is_device_available() is True
+
+
+async def test_execute_rate_limited_raises_when_device_not_available(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that _execute_rate_limited raises LockDisconnected when device not available."""
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # Device is not available but integration is connected
+    with patch.object(lock_provider, "async_is_device_available", return_value=False):
+        with pytest.raises(LockDisconnected, match="device not available"):
+            await lock_provider.async_internal_set_usercode(2, "9999", "test")

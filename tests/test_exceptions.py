@@ -27,8 +27,8 @@ class MinimalMockLock(BaseLock):
         """Return integration domain."""
         return "test"
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return True
 
 
