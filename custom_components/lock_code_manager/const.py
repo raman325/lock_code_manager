@@ -101,6 +101,11 @@ CONDITION_ENTITY_DOMAINS = [
 # These create switch/binary_sensor entities but their states don't map to access control
 EXCLUDED_CONDITION_PLATFORMS = frozenset({"scheduler"})
 
+# Coordinator backoff
+BACKOFF_FAILURE_THRESHOLD: int = 3
+BACKOFF_INITIAL_SECONDS: int = 60
+BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
+
 # Defaults
 DEFAULT_NUM_SLOTS = 3
 DEFAULT_START = 1
