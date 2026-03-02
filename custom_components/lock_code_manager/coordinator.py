@@ -81,6 +81,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         if new_data == self.data:
             return
 
+        # A successful push update proves the lock is reachable, so reset
+        # backoff to re-enable drift checks and normal polling.
+        self._reset_backoff()
+
         self.async_set_updated_data(new_data)
 
     def _apply_backoff(self) -> None:
@@ -94,24 +98,32 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             )
             if self._original_update_interval is not None:
                 self.update_interval = timedelta(seconds=backoff_secs)
-            _LOGGER.warning(
-                "Update failed %d consecutive times for %s, backing off %ds",
-                self._consecutive_failures,
-                self._lock.lock.entity_id,
-                backoff_secs,
-            )
+                _LOGGER.warning(
+                    "Update failed %d consecutive times for %s, "
+                    "backing off polling interval to %ds",
+                    self._consecutive_failures,
+                    self._lock.lock.entity_id,
+                    backoff_secs,
+                )
+            else:
+                _LOGGER.warning(
+                    "Update failed %d consecutive times for %s, "
+                    "suppressing drift checks until recovery",
+                    self._consecutive_failures,
+                    self._lock.lock.entity_id,
+                )
 
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""
         if self._consecutive_failures > 0:
             _LOGGER.info(
-                "Update succeeded for %s after %d consecutive failures, "
-                "restoring normal update interval",
+                "Lock %s recovered after %d consecutive failures",
                 self._lock.lock.entity_id,
                 self._consecutive_failures,
             )
             self._consecutive_failures = 0
-            self.update_interval = self._original_update_interval  # type: ignore[assignment]  # setter accepts None
+            if self._original_update_interval is not None:
+                self.update_interval = self._original_update_interval
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Update usercodes."""
