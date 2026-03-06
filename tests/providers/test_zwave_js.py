@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import CommandClass
+from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.lock import (
     LOCK_USERCODE_STATUS_PROPERTY,
     CodeSlotStatus,
@@ -151,17 +151,17 @@ async def test_node_property(
 # Connection tests
 
 
-async def test_is_connection_up_when_loaded(
+async def test_is_integration_connected_when_loaded(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
     """Test connection is up when config entry is loaded and client connected."""
     assert zwave_integration.state == ConfigEntryState.LOADED
-    assert await zwave_js_lock.async_is_connection_up() is True
+    assert await zwave_js_lock.async_is_integration_connected() is True
 
 
-async def test_is_connection_down_when_not_loaded(
+async def test_is_integration_not_connected_when_not_loaded(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
@@ -171,7 +171,7 @@ async def test_is_connection_down_when_not_loaded(
     await hass.async_block_till_done()
 
     assert zwave_integration.state != ConfigEntryState.LOADED
-    assert await zwave_js_lock.async_is_connection_up() is False
+    assert await zwave_js_lock.async_is_integration_connected() is False
 
 
 # Usercode tests
@@ -1918,3 +1918,63 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
+
+
+# Device availability tests
+
+
+async def test_is_device_available_returns_true_when_alive(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that async_is_device_available returns True when node is ALIVE."""
+    with patch.object(
+        type(lock_schlage_be469),
+        "status",
+        new_callable=lambda: property(lambda self: NodeStatus.ALIVE),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is True
+
+
+async def test_is_device_available_returns_true_when_asleep(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that async_is_device_available returns True when node is ASLEEP."""
+    with patch.object(
+        type(lock_schlage_be469),
+        "status",
+        new_callable=lambda: property(lambda self: NodeStatus.ASLEEP),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is True
+
+
+async def test_is_device_available_returns_false_when_dead(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that async_is_device_available returns False when node is DEAD."""
+    with patch.object(
+        type(lock_schlage_be469),
+        "status",
+        new_callable=lambda: property(lambda self: NodeStatus.DEAD),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is False
+
+
+async def test_is_device_available_returns_false_on_exception(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that async_is_device_available returns False when node access raises."""
+
+    def raise_error(self):
+        raise RuntimeError("node gone")
+
+    with patch.object(
+        type(zwave_js_lock),
+        "node",
+        new_callable=lambda: property(raise_error),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is False

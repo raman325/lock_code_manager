@@ -54,7 +54,7 @@ class VirtualLock(BaseLock):
         else:
             await self._store.async_save(self._data)
 
-    async def async_is_connection_up(self) -> bool:
+    async def async_is_integration_connected(self) -> bool:
         """Return whether connection to lock is up."""
         return True
 

@@ -75,7 +75,7 @@ class BaseLock:
        - Set hard_refresh_interval = None to disable
 
     4. Poll connection state:
-       - Periodic async_internal_is_connection_up() at connection_check_interval
+       - Periodic async_internal_is_integration_connected() at connection_check_interval
        - Helps detect reconnects for integrations without config entry state signals
        - Set connection_check_interval = None to disable
 
@@ -144,9 +144,14 @@ class BaseLock:
         **kwargs: Any,
     ) -> Any:
         """Execute operation with connection check, serialization, and delay."""
-        if not await self.async_internal_is_connection_up():
+        if not await self.async_internal_is_integration_connected():
             raise LockDisconnected(
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - lock not connected"
+            )
+
+        if not await self.async_is_device_available():
+            raise LockDisconnected(
+                f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - device not available"
             )
 
         async with self._aio_lock:
@@ -362,9 +367,17 @@ class BaseLock:
 
         await self.hass.async_add_executor_job(self.unload, remove_permanently)
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         raise NotImplementedError()
+
+    def is_device_available(self) -> bool:
+        """Return whether the physical device is available for commands."""
+        return True
+
+    async def async_is_device_available(self) -> bool:
+        """Return whether the physical device is available for commands."""
+        return await self._async_executor_call(self.is_device_available)
 
     def _setup_config_entry_state_listener(self) -> None:
         """Listen for provider config entry state changes to resubscribe."""
@@ -399,14 +412,14 @@ class BaseLock:
             _handle_state_change
         )
 
-    async def async_is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
-        return await self._async_executor_call(self.is_connection_up)
+    async def async_is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
+        return await self._async_executor_call(self.is_integration_connected)
 
     @final
-    async def async_internal_is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
-        is_up = await self.async_is_connection_up()
+    async def async_internal_is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
+        is_up = await self.async_is_integration_connected()
         lock_entry = self.lock_config_entry
         if self.supports_push and lock_entry:
             # Only react to connection transitions when the config entry is loaded.
