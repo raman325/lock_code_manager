@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -11,7 +11,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN
+from .const import (
+    BACKOFF_FAILURE_THRESHOLD,
+    BACKOFF_INITIAL_SECONDS,
+    BACKOFF_MAX_SECONDS,
+    DOMAIN,
+)
 from .exceptions import LockCodeManagerError
 
 if TYPE_CHECKING:
@@ -40,6 +45,8 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             config_entry=config_entry,
         )
         self.data: dict[int, int | str] = {}
+        self._consecutive_failures: int = 0
+        self._original_update_interval: timedelta | None = update_interval
 
         # Set up drift detection timer for locks with hard_refresh_interval
         if lock.hard_refresh_interval:
@@ -74,17 +81,63 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         if new_data == self.data:
             return
 
+        # A successful push update proves the lock is reachable, so reset
+        # backoff to re-enable drift checks and normal polling.
+        self._reset_backoff()
+
         self.async_set_updated_data(new_data)
+
+    def _apply_backoff(self) -> None:
+        """Increment failure counter and apply exponential backoff if threshold met."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= BACKOFF_FAILURE_THRESHOLD:
+            backoff_secs = min(
+                BACKOFF_INITIAL_SECONDS
+                * 2 ** (self._consecutive_failures - BACKOFF_FAILURE_THRESHOLD),
+                BACKOFF_MAX_SECONDS,
+            )
+            if self._original_update_interval is not None:
+                self.update_interval = timedelta(seconds=backoff_secs)
+                _LOGGER.warning(
+                    "Update failed %d consecutive times for %s, "
+                    "backing off polling interval to %ds",
+                    self._consecutive_failures,
+                    self._lock.lock.entity_id,
+                    backoff_secs,
+                )
+            else:
+                _LOGGER.warning(
+                    "Update failed %d consecutive times for %s, "
+                    "suppressing drift checks until recovery",
+                    self._consecutive_failures,
+                    self._lock.lock.entity_id,
+                )
+
+    def _reset_backoff(self) -> None:
+        """Reset failure counter and restore original update interval."""
+        if self._consecutive_failures > 0:
+            _LOGGER.info(
+                "Lock %s recovered after %d consecutive failures",
+                self._lock.lock.entity_id,
+                self._consecutive_failures,
+            )
+            self._consecutive_failures = 0
+            if self._original_update_interval is not None:
+                self.update_interval = self._original_update_interval
 
     async def async_get_usercodes(self) -> dict[int, int | str]:
         """Update usercodes."""
         try:
-            return await self._lock.async_internal_get_usercodes()
+            data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
+            self._apply_backoff()
             # We can silently fail if we've never been able to retrieve data
             if not self.last_update_success:
                 return {}
             raise UpdateFailed from err
+
+        self._reset_backoff()
+        return data
 
     async def _async_drift_check(self, now: datetime) -> None:
         """
@@ -96,6 +149,14 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         """
         # Skip if we haven't successfully loaded initial data yet
         if not self.last_update_success:
+            return
+
+        if self._consecutive_failures >= BACKOFF_FAILURE_THRESHOLD:
+            _LOGGER.debug(
+                "Skipping drift check for %s (in backoff after %d failures)",
+                self._lock.lock.entity_id,
+                self._consecutive_failures,
+            )
             return
 
         _LOGGER.debug(
