@@ -563,9 +563,9 @@ async def test_overlapping_locks_both_entries_get_entities(
     assert len(entry_1_entities) > 0
     assert len(entry_2_entities) > 0
 
-    # Verify _setup_complete is set on reused locks
+    # Reused locks should have a coordinator (setup completed before entity creation)
     for lock in entry_2.runtime_data.locks.values():
-        assert lock._setup_complete.is_set()  # noqa: SLF001
+        assert lock.coordinator is not None
 
     await hass.config_entries.async_unload(entry_2.entry_id)
 
@@ -604,12 +604,12 @@ async def test_reload_after_started_no_listener_error(
     await hass.config_entries.async_remove(config_entry.entry_id)
 
 
-async def test_setup_complete_event_set_after_setup(
+async def test_coordinator_exists_after_setup(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that _setup_complete is set after async_setup completes."""
+    """Test that coordinator is created after async_setup completes."""
     runtime_data = lock_code_manager_config_entry.runtime_data
     for lock in runtime_data.locks.values():
-        assert lock._setup_complete.is_set()  # noqa: SLF001
+        assert lock.coordinator is not None
