@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d96f6f179ef5",
+  "session_id": "b1386405-5f79-42e9-a9bf-25375841c5d0",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-11T15:52:41.797782Z",
+  "branch": "fix/handle-duplicate-code-notification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c94ebc1a26b9",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 96743,
+    "cache_read_tokens": 4166096,
+    "output_tokens": 2080,
+    "api_call_count": 52
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-11T15:52:41.419535Z",
+    "agent_lines": 331,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 331,
+    "agent_percentage": 100
+  }
+}
