@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
-import copy
 from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
@@ -33,6 +33,7 @@ from zwave_js_server.util.lock import (
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.persistent_notification import async_create
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
@@ -54,6 +55,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_ENABLED,
     CONF_PIN,
+    SERVICE_TURN_OFF,
     STATE_ON,
 )
 from homeassistant.core import Event, callback
@@ -450,7 +452,10 @@ class ZWaveJSLock(BaseLock):
             and self._set_in_progress_code_slot is not None
             and code_slot in (0, self._set_in_progress_code_slot)
         ):
-            self._handle_duplicate_code()
+            self.hass.async_create_task(
+                self._async_handle_duplicate_code(),
+                f"Handle duplicate code for {self.lock.entity_id} slot {code_slot}",
+            )
             return
 
         self.async_fire_code_slot_event(
@@ -467,51 +472,62 @@ class ZWaveJSLock(BaseLock):
             source_data=evt,
         )
 
-    @callback
-    def _handle_duplicate_code(self) -> None:
+    async def _async_handle_duplicate_code(self) -> None:
         """Handle duplicate code rejection from the lock."""
         code_slot = self._set_in_progress_code_slot
         self._set_in_progress_code_slot = None
 
+        # Find all enabled switch entities for this slot across config entries
+        switch_entity_ids: list[str] = []
         affected_entries: list[str] = []
         slot_key = str(code_slot)
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if self.lock.entity_id not in get_entry_data(entry, CONF_LOCKS, []):
                 continue
-            slots = get_entry_data(entry, CONF_SLOTS, {})
-            if slot_key not in slots:
+            if slot_key not in get_entry_data(entry, CONF_SLOTS, {}):
                 continue
+            enabled_uid = f"{entry.entry_id}|{code_slot}|{CONF_ENABLED}"
+            entity_id = self.ent_reg.async_get_entity_id(
+                SWITCH_DOMAIN, DOMAIN, enabled_uid
+            )
+            if entity_id:
+                switch_entity_ids.append(entity_id)
+                affected_entries.append(entry.title or entry.entry_id)
 
-            # Disable the slot in the config entry
-            new_data = copy.deepcopy(dict(entry.data))
-            new_data[CONF_SLOTS][slot_key][CONF_ENABLED] = False
-            self.hass.config_entries.async_update_entry(entry, data=new_data)
-            affected_entries.append(entry.title or entry.entry_id)
+        if switch_entity_ids:
+            await asyncio.gather(
+                *(
+                    self.hass.services.async_call(
+                        SWITCH_DOMAIN,
+                        SERVICE_TURN_OFF,
+                        {ATTR_ENTITY_ID: entity_id},
+                        blocking=True,
+                    )
+                    for entity_id in switch_entity_ids
+                )
+            )
 
         _LOGGER.error(
             "Lock %s rejected code for slot %s because it duplicates a code "
-            "in another slot. The slot has been disabled in %s. Please set a "
-            "unique code and re-enable the slot",
+            "in another slot. The slot has been disabled. Please set a unique "
+            "code and re-enable the slot",
             self.lock.entity_id,
             code_slot,
-            ", ".join(affected_entries) if affected_entries else "no config entries",
         )
 
-        if affected_entries:
-            entries_text = ", ".join(f"**{e}**" for e in affected_entries)
-            async_create(
-                self.hass,
-                (
-                    f"Lock **{self.lock.entity_id}** rejected the code for "
-                    f"slot **{code_slot}** because it duplicates a code in "
-                    f"another slot. The slot has been disabled in {entries_text}. "
-                    f"Please set a unique code and re-enable the slot."
-                ),
-                title="Duplicate Lock Code Rejected",
-                notification_id=(
-                    f"{DOMAIN}_{self.lock.entity_id}_{code_slot}_duplicate_code"
-                ),
-            )
+        async_create(
+            self.hass,
+            (
+                f"Lock **{self.lock.entity_id}** rejected the code for "
+                f"slot **{code_slot}** because it duplicates a code in "
+                f"another slot. The slot has been disabled. "
+                f"Please set a unique code and re-enable the slot."
+            ),
+            title="Duplicate Lock Code Rejected",
+            notification_id=(
+                f"{DOMAIN}_{self.lock.entity_id}_{code_slot}_duplicate_code"
+            ),
+        )
 
     @property
     def domain(self) -> str:

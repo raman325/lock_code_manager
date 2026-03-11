@@ -21,7 +21,7 @@ from homeassistant.components.persistent_notification import (
 )
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import CONF_ENABLED
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_OFF, STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -35,6 +35,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.data import LockCodeManagerConfigEntryData
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 
@@ -1928,34 +1929,17 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
 # Duplicate code notification tests
 
 
-async def test_duplicate_code_notification_disables_slot(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-    lock_schlage_be469: Node,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Test that event 15 with _set_in_progress_code_slot set disables the slot."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {CONF_ENABLED: True}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
-
-    # Simulate LCM setting a code on slot 2
-    zwave_js_lock._set_in_progress_code_slot = 2
-
-    # Fire duplicate code notification (event 15) with matching userId
-    event = ZwaveEvent(
+def _make_duplicate_code_event(node_id: int, user_id: int | None = None) -> ZwaveEvent:
+    """Create a duplicate code notification ZwaveEvent."""
+    params: dict[str, Any] = {}
+    if user_id is not None:
+        params["userId"] = user_id
+    return ZwaveEvent(
         type="notification",
         data={
             "source": "node",
             "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
+            "nodeId": node_id,
             "endpointIndex": 0,
             "ccId": 113,
             "args": {
@@ -1963,177 +1947,258 @@ async def test_duplicate_code_notification_disables_slot(
                 "event": 15,  # NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
                 "label": "Access Control",
                 "eventLabel": "New user code not added due to duplicate code",
-                "parameters": {"userId": 2},
+                "parameters": params,
             },
         },
     )
-    lock_schlage_be469.receive_event(event)
+
+
+@pytest.fixture
+def mock_zwave_usercodes(zwave_client: MagicMock):
+    """Mock Z-Wave JS usercode functions with mutable state.
+
+    Both ``get_usercodes`` and ``get_usercode`` read from a shared mutable
+    ``codes`` dict.  The client's ``async_send_command`` is wrapped so that
+    set / clear Z-Wave commands automatically update ``codes``, preventing
+    the coordinator refresh from overwriting optimistic push updates with
+    stale data.
+
+    Yields ``(mock_get_usercodes, mock_get_usercode, codes)`` where *codes*
+    is ``dict[int, dict]`` keyed by slot number.
+    """
+    codes: dict[int, dict] = {}
+
+    original_side_effect = zwave_client.async_send_command.side_effect
+
+    async def _send_command_with_codes(message, require_schema=None):
+        if message.get("command") == "node.set_value":
+            vid = message.get("valueId", {})
+            if vid.get("commandClass") == CommandClass.USER_CODE:
+                slot = vid.get("propertyKey")
+                if slot is not None:
+                    prop = vid.get("property")
+                    if prop == "userIdStatus":
+                        # Clear operation
+                        codes[slot] = {
+                            "code_slot": slot,
+                            "in_use": False,
+                            "usercode": "",
+                        }
+                    elif prop == "userCode":
+                        # Set operation
+                        codes[slot] = {
+                            "code_slot": slot,
+                            "in_use": True,
+                            "usercode": str(message["value"]),
+                        }
+        return await original_side_effect(message, require_schema)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercodes",
+        ) as mock_all,
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        ) as mock_one,
+    ):
+        mock_all.side_effect = lambda node: list(codes.values())
+        mock_one.side_effect = lambda node, slot: codes.get(
+            slot, {"code_slot": slot, "in_use": False, "usercode": ""}
+        )
+        zwave_client.async_send_command.side_effect = _send_command_with_codes
+        yield mock_all, mock_one, codes
+        zwave_client.async_send_command.side_effect = original_side_effect
+
+
+async def _setup_lcm_entry(
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    slots: dict[str, dict],
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
+) -> MockConfigEntry:
+    """Set up a full LCM config entry with real platform entities."""
+    _mock_all, _mock_one, codes = mock_zwave_usercodes
+
+    for k, v in slots.items():
+        pin = v.get(CONF_PIN, "")
+        in_use = bool(pin)
+        codes[int(k)] = {"code_slot": int(k), "usercode": pin, "in_use": in_use}
+
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [lock_entity_id],
+            CONF_SLOTS: slots,
+        },
+        unique_id=f"duplicate_code_test_{lock_entity_id}",
+    )
+    lcm_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(lcm_entry.entry_id)
+    await hass.async_block_till_done()
+    return lcm_entry
+
+
+def _get_enabled_switch_entity_id(hass: HomeAssistant, entry_id: str, slot: int) -> str:
+    """Get the enabled switch entity ID for a slot."""
+    ent_reg = er.async_get(hass)
+    uid = f"{entry_id}|{slot}|{CONF_ENABLED}"
+    entity_id = ent_reg.async_get_entity_id("switch", DOMAIN, uid)
+    assert entity_id, f"Switch entity not found for slot {slot}"
+    return entity_id
+
+
+async def test_duplicate_code_notification_disables_slot(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that event 15 with _set_in_progress_code_slot set disables the slot."""
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
+        mock_zwave_usercodes,
+    )
+    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+
+    # Find the ZWaveJSLock instance created by LCM setup
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
+    lock_instance._set_in_progress_code_slot = 2
+
+    lock_schlage_be469.receive_event(
+        _make_duplicate_code_event(lock_schlage_be469.node_id, user_id=2)
+    )
     await hass.async_block_till_done()
 
-    # Slot should be disabled in config entry
-    assert lcm_entry.data[CONF_SLOTS]["2"][CONF_ENABLED] is False
+    # Switch should be turned off
+    assert hass.states.get(switch_entity_id).state == STATE_OFF
 
-    # Persistent notification should be created (keyed by lock entity + slot)
+    # Persistent notification should be created
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{zwave_js_lock.lock.entity_id}_2_duplicate_code"
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_duplicate_code"
     assert notification_id in notifications
 
     # In-progress field should be cleared
-    assert zwave_js_lock._set_in_progress_code_slot is None
+    assert lock_instance._set_in_progress_code_slot is None
 
     # Error should be logged
     assert "rejected code for slot 2 because it duplicates" in caplog.text
 
-    await zwave_js_lock.async_unload(False)
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
 async def test_duplicate_code_notification_no_user_id_disables_slot(
     hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
     lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
 ) -> None:
     """Test event 15 with no userId in params still handles it using in-progress slot."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {CONF_ENABLED: True}},
-        },
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {"3": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
+        mock_zwave_usercodes,
     )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 3)
+    assert hass.states.get(switch_entity_id).state == STATE_ON
 
-    zwave_js_lock._set_in_progress_code_slot = 3
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
+    lock_instance._set_in_progress_code_slot = 3
 
-    # Fire event 15 without userId in parameters
-    event = ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
-            "endpointIndex": 0,
-            "ccId": 113,
-            "args": {
-                "type": 6,
-                "event": 15,
-                "label": "Access Control",
-                "eventLabel": "New user code not added due to duplicate code",
-                "parameters": {},
-            },
-        },
+    lock_schlage_be469.receive_event(
+        _make_duplicate_code_event(lock_schlage_be469.node_id)
     )
-    lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    # Slot should be disabled
-    assert lcm_entry.data[CONF_SLOTS]["3"][CONF_ENABLED] is False
-    assert zwave_js_lock._set_in_progress_code_slot is None
+    assert hass.states.get(switch_entity_id).state == STATE_OFF
+    assert lock_instance._set_in_progress_code_slot is None
 
-    await zwave_js_lock.async_unload(False)
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
 async def test_duplicate_code_notification_ignored_when_not_in_progress(
     hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
     lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
 ) -> None:
     """Test event 15 is ignored when _set_in_progress_code_slot is None."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {CONF_ENABLED: True}},
-        },
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
+        mock_zwave_usercodes,
     )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    assert hass.states.get(switch_entity_id).state == STATE_ON
 
     # Do NOT set _set_in_progress_code_slot (external trigger)
-    assert zwave_js_lock._set_in_progress_code_slot is None
-
-    # Fire event 15
-    event = ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
-            "endpointIndex": 0,
-            "ccId": 113,
-            "args": {
-                "type": 6,
-                "event": 15,
-                "label": "Access Control",
-                "eventLabel": "New user code not added due to duplicate code",
-                "parameters": {"userId": 2},
-            },
-        },
+    lock_schlage_be469.receive_event(
+        _make_duplicate_code_event(lock_schlage_be469.node_id, user_id=2)
     )
-    lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    # Slot should NOT be disabled (still True)
-    assert lcm_entry.data[CONF_SLOTS]["2"][CONF_ENABLED] is True
+    # Switch should still be on
+    assert hass.states.get(switch_entity_id).state == STATE_ON
 
     # No persistent notification
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{zwave_js_lock.lock.entity_id}_2_duplicate_code"
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_duplicate_code"
     assert notification_id not in notifications
 
-    await zwave_js_lock.async_unload(False)
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
 async def test_duplicate_code_notification_ignored_when_user_id_mismatches(
     hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
     lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
 ) -> None:
     """Test event 15 is ignored when userId doesn't match in-progress slot."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {CONF_ENABLED: True}, "3": {CONF_ENABLED: True}},
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {
+            "2": {CONF_NAME: "test2", CONF_PIN: "1234", CONF_ENABLED: True},
+            "3": {CONF_NAME: "test3", CONF_PIN: "5678", CONF_ENABLED: True},
         },
+        mock_zwave_usercodes,
     )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    switch_2 = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    switch_3 = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 3)
+
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
 
     # LCM is setting slot 2, but notification says slot 3
-    zwave_js_lock._set_in_progress_code_slot = 2
+    lock_instance._set_in_progress_code_slot = 2
 
-    event = ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
-            "endpointIndex": 0,
-            "ccId": 113,
-            "args": {
-                "type": 6,
-                "event": 15,
-                "label": "Access Control",
-                "eventLabel": "New user code not added due to duplicate code",
-                "parameters": {"userId": 3},
-            },
-        },
+    lock_schlage_be469.receive_event(
+        _make_duplicate_code_event(lock_schlage_be469.node_id, user_id=3)
     )
-    lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    # Neither slot should be disabled
-    assert lcm_entry.data[CONF_SLOTS]["2"][CONF_ENABLED] is True
-    assert lcm_entry.data[CONF_SLOTS]["3"][CONF_ENABLED] is True
+    # Neither switch should be turned off
+    assert hass.states.get(switch_2).state == STATE_ON
+    assert hass.states.get(switch_3).state == STATE_ON
 
     # In-progress should NOT be cleared (it wasn't our event)
-    assert zwave_js_lock._set_in_progress_code_slot == 2
+    assert lock_instance._set_in_progress_code_slot == 2
 
-    await zwave_js_lock.async_unload(False)
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
 async def test_set_in_progress_cleared_on_value_update(
