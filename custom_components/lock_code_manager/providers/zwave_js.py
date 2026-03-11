@@ -308,9 +308,13 @@ class ZWaveJSLock(BaseLock):
             if code_slot == 0:
                 return
 
-            # Clear in-progress tracking when we get a real push update for the
-            # slot we were setting — this confirms the lock accepted the code
-            if code_slot == self._set_in_progress_code_slot:
+            # Clear in-progress tracking only on userCode updates for the slot
+            # we were setting. userIdStatus updates don't confirm acceptance and
+            # could race with duplicate-code notifications.
+            if (
+                property_name == LOCK_USERCODE_PROPERTY
+                and code_slot == self._set_in_progress_code_slot
+            ):
                 self._set_in_progress_code_slot = None
 
             # Handle userIdStatus updates - slot cleared is a fast path
@@ -451,9 +455,10 @@ class ZWaveJSLock(BaseLock):
             and self._set_in_progress_code_slot is not None
             and code_slot in (0, self._set_in_progress_code_slot)
         ):
+            slot = self._set_in_progress_code_slot or code_slot
             self.hass.async_create_task(
                 self._async_handle_duplicate_code(),
-                f"Handle duplicate code for {self.lock.entity_id} slot {code_slot}",
+                f"Handle duplicate code for {self.lock.entity_id} slot {slot}",
             )
             return
 
@@ -505,21 +510,31 @@ class ZWaveJSLock(BaseLock):
             blocking=True,
         )
 
-        def _dupe_msg(lock_entity_id: str, code_slot: str) -> str:
+        entry_title = entry.title or entry.entry_id
+
+        def _dupe_msg(
+            lock_entity_id: str, code_slot: str, config_entry_title: str
+        ) -> str:
             """Return message for duplicate code rejection."""
             return (
-                f"Lock {lock_entity_id} rejected the code for slot {code_slot} because "
-                f"it duplicates a code in another slot. Slot {code_slot} has been "
-                f"disabled. Please set a unique code and re-enable slot {code_slot}"
+                f"Lock {lock_entity_id} rejected the code for slot {code_slot} "
+                f"(config entry {config_entry_title}) because it duplicates a code "
+                f"in another slot. Slot {code_slot} has been disabled. Please set a "
+                f"unique code and re-enable slot {code_slot}"
             )
 
         _LOGGER.error(
-            _dupe_msg("%s", "%s"), lock_ent_id, code_slot, code_slot, code_slot
+            _dupe_msg("%s", "%s", "%s"),
+            lock_ent_id,
+            code_slot,
+            entry_title,
+            code_slot,
+            code_slot,
         )
 
         async_create(
             self.hass,
-            _dupe_msg(f"**{lock_ent_id}**", f"**{code_slot}**"),
+            _dupe_msg(f"**{lock_ent_id}**", f"**{code_slot}**", f"**{entry_title}**"),
             title="Duplicate Lock Code Rejected",
             notification_id=(f"{DOMAIN}_{lock_ent_id}_{code_slot}_dupe"),
         )

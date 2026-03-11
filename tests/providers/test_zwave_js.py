@@ -2087,7 +2087,8 @@ async def test_duplicate_code_notification_disables_slot(
     assert lock_instance._set_in_progress_code_slot is None
 
     # Error should be logged
-    assert "rejected the code for slot 2 because it duplicates" in caplog.text
+    assert "rejected the code for slot 2" in caplog.text
+    assert "because it duplicates" in caplog.text
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 
