@@ -1,0 +1,372 @@
+Implement the following plan:
+
+# Handle duplicate code Z-Wave notification (Issue #848)
+
+## Context
+
+When a lock rejects a code because it duplicates a code in another slot, Z-Wave sends an Access Control notification (type 6, event 15: `NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE`). LCM currently ignores this notification, so the in-sync sensor sees the code isn't set, retries, gets rejected again, and loops indefinitely.
+
+**Goal**: When this notification is received, disable the affected slot, log an error, and create a persistent notification so the user knows to set a unique code.
+
+## Changes
+
+### 1. `providers/zwave_js.py` — Handle duplicate code notification
+
+**Add `_set_in_progress_code_slot: int | None` field** to `ZWaveJSLock` (default `None`). Lifecycle:
+- **Set** in `async_set_usercode` before the service call
+- **Cleared on success** in `on_value_updated` (inside `subscribe_push_updates`) when a real value update arrives for the in-progress slot — this confirms the lock accepted the code
+- **Cleared on failure** in `_handle_duplicate_code` when the notification is handled
+
+**In `_handle_zwave_js_event`**, before the normal event flow, check for event 15 — but **only when `_set_in_progress_code_slot` is set**. This guards against reacting to duplicate code notifications triggered externally (e.g., someone manually adding a duplicate code at the lock's keypad). We only want to react when LCM initiated the set operation:
+
+```python
+if (
+    evt.data[ATTR_EVENT] == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+    and self._set_in_progress_code_slot is not None
+    # If userId is in params, verify it matches our in-progress slot
+    # (otherwise the notification is about a different slot, not ours)
+    and (code_slot == 0 or code_slot == self._set_in_progress_code_slot)
+):
+    self._handle_duplicate_code()
+    return
+```
+
+**In `on_value_updated`** (inside `subscribe_push_updates`), clear the field when a real push update arrives for the in-progress slot (confirms lock accepted the code):
+
+```python
+if code_slot == self._set_in_progress_code_slot:
+    self._set_in_progress_code_slot = None
+```
+
+(Add this early in the handler, before the dedup/skip checks)
+
+**Add `_handle_duplicate_code()` callback method** to `ZWaveJSLock` (no params — uses `_set_in_progress_code_slot` directly since we only enter this when it's set):
+- Read `code_slot = self._set_in_progress_code_slot`
+- Clear `_set_in_progress_code_slot`
+- Find all LCM config entries managing this lock + slot (same pattern as `async_fire_code_slot_event`)
+- For each matching config entry:
+  - Disable the slot: `data[CONF_SLOTS][slot_num][CONF_ENABLED] = False` via `hass.config_entries.async_update_entry()`
+  - Create persistent notification with ID `{DOMAIN}_{entry_id}_{slot}_duplicate_code`
+- Log an error once (not per config entry)
+
+**New imports**: `copy`, `from homeassistant.components.persistent_notification import async_create`, `from homeassistant.const import CONF_ENABLED`
+
+### 2. `tests/providers/test_zwave_js.py` — Add tests
+
+Tests following existing notification event test patterns:
+
+1. **`test_duplicate_code_notification_disables_slot`** — Event 15 with `_set_in_progress_code_slot` set, matching userId → slot disabled in config entry, persistent notification created, error logged, field cleared
+2. **`test_duplicate_code_notification_no_user_id_disables_slot`** — Event 15 with `_set_in_progress_code_slot` set, no userId in params → still handles it (uses in-progress slot)
+3. **`test_duplicate_code_notification_ignored_when_not_in_progress`** — Event 15 arrives but `_set_in_progress_code_slot` is None (external trigger) → notification ignored, no slot disabled
+4. **`test_duplicate_code_notification_ignored_when_user_id_mismatches`** — Event 15 with `_set_in_progress_code_slot` set to slot 2, but userId says slot 3 → ignored (not our operation)
+5. **`test_set_in_progress_cleared_on_value_update`** — After `async_set_usercode`, a real push value update for that slot clears `_set_in_progress_code_slot`
+
+## Files Modified
+
+- `custom_components/lock_code_manager/providers/zwave_js.py` — notification handling + slot tracking
+- `tests/providers/test_zwave_js.py` — new tests
+
+## Verification
+
+1. `uv run pytest tests/providers/test_zwave_js.py -x` — new + existing tests pass
+2. `uv run pytest -x` — full suite passes
+3. `uv run pre-commit run --all-files` — linting passes
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/63a3c6a3-2dfd-4ff7-a7d0-d39f03b8014c.jsonl
+
+---
+
+commit and create branch, using PR template in .github/
+
+---
+
+what's simpler/more pythonic to disable the slot, updating the entry data, or calling the service on the switch?
+
+---
+
+yes
+
+---
+
+[Request interrupted by user]
+
+---
+
+the diff includes changes to const.py in this branch that should be in a diff one
+
+---
+
+[Request interrupted by user]
+
+---
+
+we shouldn't have to mock out setup. We just need to mock things on the lock provider side, everything should still setup as it costs little and avoids random bugs
+
+---
+
+[Request interrupted by user]
+
+---
+
+lets fix the patch to add instead of replacing the map dict
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. The user asked to implement a plan for handling duplicate code Z-Wave notifications (Issue #848). The plan was detailed with specific changes to `providers/zwave_js.py` and `tests/providers/test_zwave_js.py`.
+
+2. I explored the codebase, read key files, and implemented the initial version:
+   - Added `_set_in_progress_code_slot` field to `ZWaveJSLock`
+   - Added imports: `copy`, `persistent_notification.async_create`, `CONF_ENABLED`
+   - Set field in `async_set_usercode` before service call
+   - Cleared field in `on_value_updated` for push updates
+   - Added duplicate code check in `_handle_zwave_js_event`
+   - Added `_handle_duplicate_code()` callback method
+   - Added 5 tests
+
+3. User feedback: "the persistent notification is lock specific not config entry specific. Maybe we should have one message that lists all affected config entries if there are more than one?"
+   - I refactored `_handle_duplicate_code` to use one notification per lock+slot (keyed by `{DOMAIN}_{self.lock.entity_id}_{code_slot}_duplicate_code`) that lists all affected config entries.
+
+4. All tests passed (64), full suite passed (274), pre-commit passed after fixing ruff PLR1714 (merge comparisons).
+
+5. User asked to commit and create branch using PR template. I:
+   - Created branch `fix/handle-duplicate-code-notification`
+   - Committed and pushed
+   - Created PR #899
+
+6. User asked: "what's simpler/more pythonic to disable the slot, updating the entry data, or calling the service on the switch?"
+   - I recommended the switch service call approach
+   - User said "yes" to refactor
+
+7. I started refactoring to use switch service calls:
+   - Added `SWITCH_DOMAIN`, `SERVICE_TURN_OFF` imports
+   - Removed `copy` import
+   - User asked "use asyncio gather to call all at once?" - I incorporated `asyncio.gather`
+   - Changed method to `async _async_handle_duplicate_code`
+   - Updated caller to use `hass.async_create_task`
+
+8. User said "remove changes from const, looks like they leaked in" - I checked and `const.py` had no direct changes, but the branch was based on `fix/coordinator-backoff` which had backoff constants added to const.py. User clarified "the diff includes changes to const.py in this branch that should be in a diff one".
+
+9. I rebased the branch onto `main` to drop the backoff commits: `git rebase --onto main fix/coordinator-backoff fix/handle-duplicate-code-notification`
+
+10. User said "lets fix the patch to add instead of replacing the map dict" referring to `auto_setup_mock_lock` in `tests/conftest.py`. I changed from `patch()` replacing the whole dict to `patch.dict()` that adds `MockLCMLock` alongside the real `INTEGRATIONS_CLASS_MAP`.
+
+11. User said "imports must be at the top of files. Make sure that ruff/pylint/uv rule is enabled" - I moved the inline `from custom_components.lock_code_manager.data import LockCodeManagerConfigEntryData` import to the top of the test file and the `INTEGRATIONS_CLASS_MAP` import to the top of conftest. PLC0415 is enabled via `PLC` in ruff config.
+
+12. I rewrote the 5 duplicate code tests to use full LCM setup (`hass.config_entries.async_setup`) instead of lightweight `zwave_js_lock.async_setup(lcm_entry)`, so real switch entities are created. This required mocking `get_usercodes` and `get_usercode` so the coordinator doesn't need a real Z-Wave connection.
+
+13. The tests are currently hanging during setup. I've tried several approaches:
+    - Patching `get_usercodes` in a context manager (exited too early)
+    - Patching as a fixture (still hanging - sync loop tries to set/clear codes via Z-Wave service calls)
+    - Adding `get_usercode` mock too (still hanging)
+    
+The core issue is the sync loop: the coordinator sees the switch is ON with a PIN configured, compares against the lock's usercodes, and tries to call `async_set_usercode`/`async_clear_usercode` which make real Z-Wave JS service calls that block forever.
+
+Key files modified:
+- `custom_components/lock_code_manager/providers/zwave_js.py` - main implementation
+- `tests/providers/test_zwave_js.py` - tests
+- `tests/conftest.py` - `auto_setup_mock_lock` fixture change
+
+Current state of zwave_js.py has the async version with switch service calls and asyncio.gather.
+Current state of tests has mock_zwave_usercodes fixture and _setup_lcm_entry helper, but tests hang.
+
+Summary:
+1. Primary Request and Intent:
+   - Implement handling for duplicate code Z-Wave notification (Issue #848) - when a lock rejects a code because it duplicates a code in another slot (Access Control notification event 15), LCM should disable the affected slot, log an error, and create a persistent notification.
+   - The implementation evolved through several user feedback rounds:
+     - Make persistent notification lock-specific (not per config entry), listing all affected config entries
+     - Use switch service call (`switch.turn_off`) instead of directly modifying config entry data
+     - Use `asyncio.gather` to call all switch turn_off calls concurrently
+     - Rebase branch onto `main` to remove unrelated backoff commits from `fix/coordinator-backoff`
+     - Fix `auto_setup_mock_lock` to use `patch.dict` instead of replacing the map
+     - Keep all imports at the top of files (PLC0415 rule)
+     - Use full LCM setup in tests (real switch entities) rather than mocking
+
+2. Key Technical Concepts:
+   - Z-Wave JS Access Control Notification CC event 15: `NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE`
+   - `_set_in_progress_code_slot` field lifecycle: set before service call, cleared on push update success or duplicate notification failure
+   - Guard against external triggers: only react when LCM initiated the set operation
+   - `asyncio.gather` for concurrent switch service calls
+   - `hass.async_create_task` to call async method from sync `@callback`
+   - `patch.dict` vs `patch` for dictionary mocking - preserving existing entries
+   - Full LCM platform setup creates real switch/binary_sensor/text entities via `hass.config_entries.async_setup`
+   - LCM coordinator sync loop: compares switch state + PIN against lock usercodes and tries to sync
+
+3. Files and Code Sections:
+   - `custom_components/lock_code_manager/providers/zwave_js.py` — Main implementation file
+     - Added `_set_in_progress_code_slot: int | None` field to `ZWaveJSLock` dataclass
+     - Added imports: `asyncio`, `persistent_notification.async_create`, `SWITCH_DOMAIN`, `CONF_ENABLED`, `SERVICE_TURN_OFF`
+     - Set field in `async_set_usercode` before service call:
+       ```python
+       self._set_in_progress_code_slot = code_slot
+       ```
+     - Clear field in `on_value_updated` (inside `subscribe_push_updates`):
+       ```python
+       if code_slot == self._set_in_progress_code_slot:
+           self._set_in_progress_code_slot = None
+       ```
+     - Added check in `_handle_zwave_js_event`:
+       ```python
+       if (
+           evt.data[ATTR_EVENT]
+           == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+           and self._set_in_progress_code_slot is not None
+           and code_slot in (0, self._set_in_progress_code_slot)
+       ):
+           self.hass.async_create_task(
+               self._async_handle_duplicate_code(),
+               f"Handle duplicate code for {self.lock.entity_id} slot {code_slot}",
+           )
+           return
+       ```
+     - Added `_async_handle_duplicate_code` method (current version using switch service):
+       ```python
+       async def _async_handle_duplicate_code(self) -> None:
+           """Handle duplicate code rejection from the lock."""
+           code_slot = self._set_in_progress_code_slot
+           self._set_in_progress_code_slot = None
+
+           switch_entity_ids: list[str] = []
+           affected_entries: list[str] = []
+           slot_key = str(code_slot)
+           for entry in self.hass.config_entries.async_entries(DOMAIN):
+               if self.lock.entity_id not in get_entry_data(entry, CONF_LOCKS, []):
+                   continue
+               if slot_key not in get_entry_data(entry, CONF_SLOTS, {}):
+                   continue
+               enabled_uid = f"{entry.entry_id}|{code_slot}|{CONF_ENABLED}"
+               entity_id = self.ent_reg.async_get_entity_id(
+                   SWITCH_DOMAIN, DOMAIN, enabled_uid
+               )
+               if entity_id:
+                   switch_entity_ids.append(entity_id)
+                   affected_entries.append(entry.title or entry.entry_id)
+
+           if switch_entity_ids:
+               await asyncio.gather(
+                   *(
+                       self.hass.services.async_call(
+                           SWITCH_DOMAIN,
+                           SERVICE_TURN_OFF,
+                           {ATTR_ENTITY_ID: entity_id},
+                           blocking=True,
+                       )
+                       for entity_id in switch_entity_ids
+                   )
+               )
+
+           _LOGGER.error(
+               "Lock %s rejected code for slot %s because it duplicates a code "
+               "in another slot. The slot has been disabled. Please set a unique "
+               "code and re-enable the slot",
+               self.lock.entity_id,
+               code_slot,
+           )
+
+           async_create(
+               self.hass,
+               (
+                   f"Lock **{self.lock.entity_id}** rejected the code for "
+                   f"slot **{code_slot}** because it duplicates a code in "
+                   f"another slot. The slot has been disabled. "
+                   f"Please set a unique code and re-enable the slot."
+               ),
+               title="Duplicate Lock Code Rejected",
+               notification_id=(
+                   f"{DOMAIN}_{self.lock.entity_id}_{code_slot}_duplicate_code"
+               ),
+           )
+       ```
+
+   - `tests/providers/test_zwave_js.py` — Test file
+     - Added imports: `LOCK_USERCODE_PROPERTY`, `_async_get_or_create_notifications`, `CONF_ENABLED`, `CONF_NAME`, `CONF_PIN`, `STATE_OFF`, `STATE_ON`, `LockCodeManagerConfigEntryData`
+     - Added helper `_make_duplicate_code_event` and `_get_enabled_switch_entity_id`
+     - Added fixture `mock_zwave_usercodes` that patches both `get_usercodes` and `get_usercode`
+     - Added `_setup_lcm_entry` helper that creates a full LCM config entry with real platform entities
+     - 5 test functions: `test_duplicate_code_notification_disables_slot`, `test_duplicate_code_notification_no_user_id_disables_slot`, `test_duplicate_code_notification_ignored_when_not_in_progress`, `test_duplicate_code_notification_ignored_when_user_id_mismatches`, `test_set_in_progress_cleared_on_value_update`
+
+   - `tests/conftest.py` — Changed `auto_setup_mock_lock` fixture
+     - Added import: `from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP`
+     - Changed from `patch()` to `patch.dict()`:
+       ```python
+       @pytest.fixture(autouse=True)
+       def auto_setup_mock_lock():
+           """Automatically set up MockLCMLock for all tests."""
+           with patch.dict(
+               "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+               {"test": MockLCMLock, **INTEGRATIONS_CLASS_MAP},
+           ):
+               yield
+       ```
+
+   - `custom_components/lock_code_manager/const.py` — NOT modified (verified clean vs main after rebase)
+
+4. Errors and fixes:
+   - **Ruff PLR1714**: `code_slot == 0 or code_slot == self._set_in_progress_code_slot` → fixed to `code_slot in (0, self._set_in_progress_code_slot)`
+   - **Ruff import sorting**: `import copy` was auto-sorted by ruff format
+   - **Ruff PLC0415**: Inline imports in test functions → moved to top of file. User explicitly asked to ensure the lint rule is enabled (it is via `PLC` in ruff config).
+   - **Branch based on wrong parent**: `fix/coordinator-backoff` instead of `main`, causing backoff const changes to leak into the PR diff. Fixed with `git rebase --onto main fix/coordinator-backoff fix/handle-duplicate-code-notification`.
+   - **`auto_setup_mock_lock` replacing dict**: User said to fix the patch to add instead of replace. Changed from `patch()` with `{"test": MockLCMLock}` to `patch.dict()` with `{"test": MockLCMLock, **INTEGRATIONS_CLASS_MAP}`.
+   - **Tests hanging during full LCM setup**: The coordinator's sync loop tries to call real Z-Wave JS service calls. Multiple attempts to mock:
+     1. `patch.object(ZWaveJSLock, "async_get_usercodes")` in context manager — exited before coordinator refresh
+     2. Fixture mocking `get_usercodes` only — sync loop still called `get_usercode` and Z-Wave service calls
+     3. Fixture mocking both `get_usercodes` and `get_usercode` — STILL HANGING because the sync loop sees codes that need syncing and calls `async_set_usercode`/`async_clear_usercode` which make blocking Z-Wave service calls
+
+5. Problem Solving:
+   - Successfully implemented the core feature in `zwave_js.py`
+   - Successfully rebased branch onto `main`
+   - Successfully fixed `conftest.py` `patch.dict` approach
+   - **Ongoing**: Tests with full LCM setup are hanging because the coordinator's sync loop tries to make real Z-Wave service calls. Need to either mock the Z-Wave service calls too, or find another way to prevent the sync loop from triggering during tests.
+
+6. All user messages:
+   - "Implement the following plan: [detailed plan for Issue #848]"
+   - "the persistent notification is lock specific not config entry specific. Maybe we should have one message that lists all affected config entries if there are more than one?"
+   - "commit and create branch, using PR template in .github/"
+   - "what's simpler/more pythonic to disable the slot, updating the entry data, or calling the service on the switch?"
+   - "yes" (to refactoring to use switch service call)
+   - "use asyncio gather to call all at once?"
+   - "remove changes from const, looks like they leaked in"
+   - "the diff includes changes to const.py in this branch that should be in a diff one"
+   - "lets fix the patch to add instead of replacing the map dict"
+   - "imports must be at the top of files. Make sure that ruff/pylint/uv rule is enabled"
+   - "is the import rule enabled? there should be a lint check for it"
+   - "we shouldn't have to mock out setup. We just need to mock things on the lock provider side, everything should still setup as it costs little and avoids random bugs"
+
+7. Pending Tasks:
+   - Fix the hanging tests for duplicate code notification with full LCM setup
+   - Run full test suite and pre-commit after tests are fixed
+   - Amend commit and force-push the updated branch (or create new commit)
+   - PR #899 needs updating
+
+8. Current Work:
+   The tests with full LCM setup are hanging because the coordinator's sync loop makes blocking Z-Wave service calls. The `mock_zwave_usercodes` fixture mocks `get_usercodes` and `get_usercode` but the sync logic still tries to call `async_set_usercode`/`async_clear_usercode` via Z-Wave JS service calls.
+
+   Current fixture and helper code:
+   ```python
+   @pytest.fixture
+   def mock_zwave_usercodes():
+       with (
+           patch("custom_components.lock_code_manager.providers.zwave_js.get_usercodes") as mock_all,
+           patch("custom_components.lock_code_manager.providers.zwave_js.get_usercode") as mock_one,
+       ):
+           mock_all.return_value = []
+           mock_one.return_value = {"in_use": False, "usercode": ""}
+           yield mock_all, mock_one
+   ```
+
+   The user's directive was: "we shouldn't have to mock out setup. We just need to mock things on the lock provider side, everything should still setup as it costs little and avoids random bugs"
+
+9. Optional Next Step:
+   The root cause of the hanging is that the coordinator sync loop (in `binary_sensor.py`) sees a mismatch between the switch state (ON with PIN) and the lock's usercodes, then calls `async_set_usercode`/`async_clear_usercode` which make real Z-Wave JS service calls (`zwave_js.set_lock_usercode`/`zwave_js.clear_lock_usercode`). These calls block because the mock Z-Wave client's `async_send_command` succeeds but then `get_usercode_from_node` (polled for V1 locks) blocks.
+
+   The `mock_get_usercode_from_node` autouse fixture already mocks `get_usercode_from_node`, so that's not the issue. The Z-Wave JS service calls themselves may be blocking because `hass.services.async_call` for `zwave_js.set_lock_usercode` goes through the real HA integration service handler which sends Z-Wave commands via the mock client.
+
+   The next step should be to ensure the mock usercodes data matches what the sync loop expects (codes already in sync), so no set/clear calls are triggered. This means `get_usercodes` should return data that matches the configured PINs for enabled slots.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/b1386405-5f79-42e9-a9bf-25375841c5d0.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
