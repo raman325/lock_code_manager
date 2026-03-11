@@ -2248,3 +2248,111 @@ async def test_set_in_progress_cleared_on_value_update(
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
+
+
+async def test_handle_duplicate_code_early_return_code_slot_cleared(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
+) -> None:
+    """Test _async_handle_duplicate_code returns early when code_slot is None.
+
+    This covers the race where _set_in_progress_code_slot is cleared between the
+    event handler scheduling the task and the task actually running.
+    """
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
+        mock_zwave_usercodes,
+    )
+    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
+
+    # code_slot is None — simulates race where slot was cleared before task ran
+    lock_instance._set_in_progress_code_slot = None
+    await lock_instance._async_handle_duplicate_code()
+
+    # Switch should still be on, no notification created
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+    notifications = _async_get_or_create_notifications(hass)
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
+    assert notification_id not in notifications
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+async def test_handle_duplicate_code_early_return_no_matching_entry(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
+) -> None:
+    """Test _async_handle_duplicate_code returns early when no config entry manages the slot."""
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
+        mock_zwave_usercodes,
+    )
+    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
+
+    # Set in-progress to a slot not managed by any config entry
+    lock_instance._set_in_progress_code_slot = 99
+    await lock_instance._async_handle_duplicate_code()
+
+    # Switch should still be on, no notification created
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+    notifications = _async_get_or_create_notifications(hass)
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_99_dupe"
+    assert notification_id not in notifications
+    # In-progress should be cleared even on early return
+    assert lock_instance._set_in_progress_code_slot is None
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+async def test_handle_duplicate_code_early_return_entity_not_found(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469: Node,
+    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
+) -> None:
+    """Test _async_handle_duplicate_code returns early when enabled entity is not found."""
+    lcm_entry = await _setup_lcm_entry(
+        hass,
+        lock_entity.entity_id,
+        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
+        mock_zwave_usercodes,
+    )
+    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+
+    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    lock_instance = runtime_data.locks[lock_entity.entity_id]
+
+    # Set in-progress to a valid slot but mock entity registry to return None
+    lock_instance._set_in_progress_code_slot = 2
+    with patch.object(lock_instance.ent_reg, "async_get_entity_id", return_value=None):
+        await lock_instance._async_handle_duplicate_code()
+
+    # Switch should still be on, no notification created
+    assert hass.states.get(switch_entity_id).state == STATE_ON
+    notifications = _async_get_or_create_notifications(hass)
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
+    assert notification_id not in notifications
+    # In-progress should be cleared
+    assert lock_instance._set_in_progress_code_slot is None
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
