@@ -512,7 +512,7 @@ async def async_update_listener(
                     entry_title,
                     lock,
                 )
-                await lock.async_setup(config_entry)
+                await lock.async_setup_internal(config_entry)
 
             added_locks.append(lock)
 

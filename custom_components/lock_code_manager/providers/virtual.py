@@ -39,7 +39,7 @@ class VirtualLock(BaseLock):
         """Return whether this lock supports code slot events."""
         return False
 
-    async def async_setup_provider(self, config_entry: ConfigEntry) -> None:
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by provider."""
         self._store = Store(
             self.hass, 1, f"{self.domain}_{DOMAIN}_{self.lock.entity_id}"

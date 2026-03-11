@@ -69,7 +69,7 @@ class MockLCMLock(BaseLock):
         return "test"
 
     @callback
-    def setup_provider(self) -> None:
+    def setup(self) -> None:
         """Set up lock."""
         self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
             self.lock.entity_id,

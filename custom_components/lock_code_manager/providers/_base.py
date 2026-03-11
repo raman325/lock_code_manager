@@ -292,7 +292,7 @@ class BaseLock:
         )
 
     @final
-    async def async_setup(self, config_entry: ConfigEntry) -> None:
+    async def async_setup_internal(self, config_entry: ConfigEntry) -> None:
         """
         Set up lock and coordinator, signaling completion to waiters.
 
@@ -301,12 +301,12 @@ class BaseLock:
         and can handle any exceptions raised during provider setup.
         """
         try:
-            await self._async_setup(config_entry)
-            await self.async_setup_provider(config_entry)
+            await self._async_setup_internal(config_entry)
+            await self.async_setup(config_entry)
         finally:
             self._setup_complete.set()
 
-    async def _async_setup(self, config_entry: ConfigEntry) -> None:
+    async def _async_setup_internal(self, config_entry: ConfigEntry) -> None:
         """Set up lock and coordinator."""
         lock_entity_id = self.lock.entity_id
         # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
@@ -356,17 +356,17 @@ class BaseLock:
             else:
                 self.subscribe_push_updates()
 
-    def setup_provider(self) -> None:
+    def setup(self) -> None:
         """Set up lock by provider."""
         pass
 
-    async def async_setup_provider(self, config_entry: ConfigEntry) -> None:
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Set up lock by provider.
 
         Overridden by providers that need custom one time async setup logic.
         """
-        await self.hass.async_add_executor_job(self.setup_provider)
+        await self.hass.async_add_executor_job(self.setup)
 
     async def async_wait_for_setup(self) -> None:
         """Wait until async_setup has completed."""
