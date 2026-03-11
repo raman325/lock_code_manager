@@ -495,7 +495,7 @@ async def async_update_listener(
                 lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
                     lock_entity_id
                 ]
-                await lock._setup_complete.wait()
+                await lock.async_wait_for_setup()
             else:
                 lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
                     lock_entity_id

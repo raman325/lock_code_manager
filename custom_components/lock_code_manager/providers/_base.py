@@ -350,6 +350,10 @@ class BaseLock:
 
         self._setup_complete.set()
 
+    async def async_wait_for_setup(self) -> None:
+        """Wait until async_setup has completed."""
+        await self._setup_complete.wait()
+
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         pass
