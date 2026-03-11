@@ -36,8 +36,8 @@ class MockLockWithHardRefresh(BaseLock):
         """Return configurable hard refresh interval."""
         return self._hard_refresh_interval
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return self._is_connected
 
     def hard_refresh_codes(self) -> dict[int, int | str]:

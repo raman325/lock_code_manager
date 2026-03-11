@@ -49,7 +49,7 @@ entities.
 - `zwave_js.py`: Z-Wave JS lock implementation
 - `virtual.py`: Virtual lock implementation for testing
 - Each provider implements: `async_get_usercodes()`, `async_set_usercode()`, `async_clear_usercode()`,
-  `async_is_connection_up()`, `async_hard_refresh_codes()`
+  `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
 
 **Coordinator** (`coordinator.py`)
@@ -237,7 +237,7 @@ yarn watch                     # Watch mode for development
 2. Subclass `BaseLock` from `providers/_base.py`
 3. Implement required abstract methods:
    - `domain` property: return integration domain string
-   - `async_is_connection_up()`: check if lock is reachable
+   - `async_is_integration_connected()`: check if integration is connected
    - `async_get_usercodes()`: return dict of slot→code mappings
    - `async_set_usercode()`: program a code to a slot
    - `async_clear_usercode()`: remove code from slot
