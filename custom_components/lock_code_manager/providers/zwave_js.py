@@ -479,7 +479,8 @@ class ZWaveJSLock(BaseLock):
         if code_slot is None:
             return
         try:
-            # Only move forward if a config entry manages this lock and code slot
+            # Only move forward if a config entry manages this lock and code slot - there
+            # can only be one due to our config entry uniqueness requirement.
             entry = next(
                 entry
                 for entry in self.hass.config_entries.async_entries(DOMAIN)
