@@ -125,6 +125,7 @@ class BaseLock:
         default=None, init=False
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
+    _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -309,6 +310,7 @@ class BaseLock:
                 self.coordinator.async_request_refresh(),
                 f"Refresh coordinator for {lock_entity_id}",
             )
+            self._setup_complete.set()
             return
 
         self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
@@ -345,6 +347,8 @@ class BaseLock:
                 )
             else:
                 self.subscribe_push_updates()
+
+        self._setup_complete.set()
 
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""

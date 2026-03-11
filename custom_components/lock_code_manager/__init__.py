@@ -327,20 +327,20 @@ async def async_setup_entry(
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
     else:
-        # One-time listeners auto-remove when they fire, so unsubscribing
-        # during unload may fail if the event already fired. Ignore that error.
+        started = False
+
         @callback
         def _on_started(event: Event) -> None:
+            nonlocal started
+            started = True
             _setup_entry_after_start(hass, config_entry, event)
 
         unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
 
         @callback
         def _safe_unsub() -> None:
-            try:
+            if not started:
                 unsub()
-            except ValueError:
-                pass  # Listener already removed when event fired
 
         config_entry.async_on_unload(_safe_unsub)
 
@@ -495,6 +495,7 @@ async def async_update_listener(
                 lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
                     lock_entity_id
                 ]
+                await lock._setup_complete.wait()
             else:
                 lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
                     lock_entity_id
