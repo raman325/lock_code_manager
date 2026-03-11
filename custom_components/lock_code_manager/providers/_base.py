@@ -296,6 +296,13 @@ class BaseLock:
         pass
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Set up lock and coordinator, signaling completion to waiters."""
+        try:
+            await self._async_setup(config_entry)
+        finally:
+            self._setup_complete.set()
+
+    async def _async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock and coordinator."""
         await self.hass.async_add_executor_job(self.setup)
 
@@ -310,49 +317,42 @@ class BaseLock:
                 self.coordinator.async_request_refresh(),
                 f"Refresh coordinator for {lock_entity_id}",
             )
-            self._setup_complete.set()
             return
 
-        try:
-            self.coordinator = LockUsercodeUpdateCoordinator(
-                self.hass, self, config_entry
-            )
-            if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
-                try:
-                    await self.coordinator.async_config_entry_first_refresh()
-                except (ConfigEntryNotReady, UpdateFailed) as err:
-                    LOGGER.warning(
-                        "Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
-                        lock_entity_id,
-                        err,
-                    )
-            else:
-                await self.coordinator.async_refresh()
-                if not self.coordinator.last_update_success:
-                    LOGGER.warning(
-                        "Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
-                        lock_entity_id,
-                        self.coordinator.last_exception,
-                    )
+        self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
+        if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
+            try:
+                await self.coordinator.async_config_entry_first_refresh()
+            except (ConfigEntryNotReady, UpdateFailed) as err:
+                LOGGER.warning(
+                    "Failed to fetch initial data for lock %s: %s. "
+                    "Entities will be created but unavailable until lock is ready.",
+                    lock_entity_id,
+                    err,
+                )
+        else:
+            await self.coordinator.async_refresh()
+            if not self.coordinator.last_update_success:
+                LOGGER.warning(
+                    "Failed to fetch initial data for lock %s: %s. "
+                    "Entities will be created but unavailable until lock is ready.",
+                    lock_entity_id,
+                    self.coordinator.last_exception,
+                )
 
-            # Subscribe to push updates after coordinator is ready. If the provider's
-            # config entry isn't loaded yet, defer and let the state listener
-            # resubscribe.
-            if self.supports_push:
-                if (
-                    self.lock_config_entry
-                    and self.lock_config_entry.state != ConfigEntryState.LOADED
-                ):
-                    LOGGER.debug(
-                        "Lock %s: deferring push subscription until config entry is loaded",
-                        lock_entity_id,
-                    )
-                else:
-                    self.subscribe_push_updates()
-        finally:
-            self._setup_complete.set()
+        # Subscribe to push updates after coordinator is ready. If the provider's
+        # config entry isn't loaded yet, defer and let the state listener resubscribe.
+        if self.supports_push:
+            if (
+                self.lock_config_entry
+                and self.lock_config_entry.state != ConfigEntryState.LOADED
+            ):
+                LOGGER.debug(
+                    "Lock %s: deferring push subscription until config entry is loaded",
+                    lock_entity_id,
+                )
+            else:
+                self.subscribe_push_updates()
 
     async def async_wait_for_setup(self) -> None:
         """Wait until async_setup has completed."""
