@@ -495,8 +495,7 @@ class ZWaveJSLock(BaseLock):
             enabled_ent_id := self.ent_reg.async_get_entity_id(
                 SWITCH_DOMAIN, DOMAIN, f"{entry.entry_id}|{code_slot}|{CONF_ENABLED}"
             )
-            is None
-        ):
+        ) is None:
             return
 
         await self.hass.services.async_call(
@@ -514,7 +513,9 @@ class ZWaveJSLock(BaseLock):
                 f"disabled. Please set a unique code and re-enable slot {code_slot}"
             )
 
-        _LOGGER.error(_dupe_msg("%s", "%s"), lock_ent_id, code_slot)
+        _LOGGER.error(
+            _dupe_msg("%s", "%s"), lock_ent_id, code_slot, code_slot, code_slot
+        )
 
         async_create(
             self.hass,

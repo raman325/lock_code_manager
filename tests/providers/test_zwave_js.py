@@ -2080,14 +2080,14 @@ async def test_duplicate_code_notification_disables_slot(
 
     # Persistent notification should be created
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_duplicate_code"
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
     assert notification_id in notifications
 
     # In-progress field should be cleared
     assert lock_instance._set_in_progress_code_slot is None
 
     # Error should be logged
-    assert "rejected code for slot 2 because it duplicates" in caplog.text
+    assert "rejected the code for slot 2 because it duplicates" in caplog.text
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 
@@ -2154,7 +2154,7 @@ async def test_duplicate_code_notification_ignored_when_not_in_progress(
     notifications = _async_get_or_create_notifications(hass)
     runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_duplicate_code"
+    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
     assert notification_id not in notifications
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
