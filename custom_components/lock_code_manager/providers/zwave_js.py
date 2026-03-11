@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -474,59 +473,53 @@ class ZWaveJSLock(BaseLock):
 
     async def _async_handle_duplicate_code(self) -> None:
         """Handle duplicate code rejection from the lock."""
+        lock_ent_id = self.lock.entity_id
         code_slot = self._set_in_progress_code_slot
         self._set_in_progress_code_slot = None
-
-        # Find all enabled switch entities for this slot across config entries
-        switch_entity_ids: list[str] = []
-        affected_entries: list[str] = []
-        slot_key = str(code_slot)
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            if self.lock.entity_id not in get_entry_data(entry, CONF_LOCKS, []):
-                continue
-            if slot_key not in get_entry_data(entry, CONF_SLOTS, {}):
-                continue
-            enabled_uid = f"{entry.entry_id}|{code_slot}|{CONF_ENABLED}"
-            entity_id = self.ent_reg.async_get_entity_id(
-                SWITCH_DOMAIN, DOMAIN, enabled_uid
+        if code_slot is None:
+            return
+        try:
+            # Only move forward if a config entry manages this lock and code slot
+            entry = next(
+                entry
+                for entry in self.hass.config_entries.async_entries(DOMAIN)
+                if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
+                and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
             )
-            if entity_id:
-                switch_entity_ids.append(entity_id)
-                affected_entries.append(entry.title or entry.entry_id)
+        except StopIteration:
+            return
 
-        if switch_entity_ids:
-            await asyncio.gather(
-                *(
-                    self.hass.services.async_call(
-                        SWITCH_DOMAIN,
-                        SERVICE_TURN_OFF,
-                        {ATTR_ENTITY_ID: entity_id},
-                        blocking=True,
-                    )
-                    for entity_id in switch_entity_ids
-                )
+        # Guard that will never trigger but satisfies type checkers that an entity exists
+        if (
+            enabled_ent_id := self.ent_reg.async_get_entity_id(
+                SWITCH_DOMAIN, DOMAIN, f"{entry.entry_id}|{code_slot}|{CONF_ENABLED}"
             )
+            is None
+        ):
+            return
 
-        _LOGGER.error(
-            "Lock %s rejected code for slot %s because it duplicates a code "
-            "in another slot. The slot has been disabled. Please set a unique "
-            "code and re-enable the slot",
-            self.lock.entity_id,
-            code_slot,
+        await self.hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {ATTR_ENTITY_ID: enabled_ent_id},
+            blocking=True,
         )
+
+        def _dupe_msg(lock_entity_id: str, code_slot: str) -> str:
+            """Return message for duplicate code rejection."""
+            return (
+                f"Lock {lock_entity_id} rejected the code for slot {code_slot} because "
+                f"it duplicates a code in another slot. Slot {code_slot} has been "
+                f"disabled. Please set a unique code and re-enable slot {code_slot}"
+            )
+
+        _LOGGER.error(_dupe_msg("%s", "%s"), lock_ent_id, code_slot)
 
         async_create(
             self.hass,
-            (
-                f"Lock **{self.lock.entity_id}** rejected the code for "
-                f"slot **{code_slot}** because it duplicates a code in "
-                f"another slot. The slot has been disabled. "
-                f"Please set a unique code and re-enable the slot."
-            ),
+            _dupe_msg(f"**{lock_ent_id}**", f"**{code_slot}**"),
             title="Duplicate Lock Code Rejected",
-            notification_id=(
-                f"{DOMAIN}_{self.lock.entity_id}_{code_slot}_duplicate_code"
-            ),
+            notification_id=(f"{DOMAIN}_{lock_ent_id}_{code_slot}_dupe"),
         )
 
     @property
