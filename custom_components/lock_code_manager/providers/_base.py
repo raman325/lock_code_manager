@@ -125,6 +125,7 @@ class BaseLock:
         default=None, init=False
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
+    _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
@@ -290,14 +291,23 @@ class BaseLock:
             "created in subscribe_push_updates().",
         )
 
-    def setup(self) -> None:
-        """Set up lock."""
-        pass
+    @final
+    async def async_setup_internal(self, config_entry: ConfigEntry) -> None:
+        """
+        Set up lock and coordinator, signaling completion to waiters.
 
-    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        Provider-specific async_setup() runs first so providers can initialize
+        any state the coordinator needs during its first refresh. Then the base
+        setup creates the coordinator and subscribes to push updates.
+        """
+        try:
+            await self.async_setup(config_entry)
+            await self._async_setup_internal(config_entry)
+        finally:
+            self._setup_complete.set()
+
+    async def _async_setup_internal(self, config_entry: ConfigEntry) -> None:
         """Set up lock and coordinator."""
-        await self.hass.async_add_executor_job(self.setup)
-
         lock_entity_id = self.lock.entity_id
         # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
         # when that integration reloads or reconnects.
@@ -345,6 +355,22 @@ class BaseLock:
                 )
             else:
                 self.subscribe_push_updates()
+
+    def setup(self) -> None:
+        """Set up lock by provider."""
+        pass
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """
+        Set up lock by provider.
+
+        Overridden by providers that need custom one time async setup logic.
+        """
+        await self.hass.async_add_executor_job(self.setup)
+
+    async def async_wait_for_setup(self) -> None:
+        """Wait until async_setup has completed."""
+        await self._setup_complete.wait()
 
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""

@@ -80,7 +80,7 @@ async def test_base(hass: HomeAssistant):
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        assert await lock.async_setup(config_entry) is None
+        assert await lock.async_setup_internal(config_entry) is None
     assert lock.coordinator is not None
     assert await lock.async_unload(False) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
@@ -603,7 +603,7 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
     ):
-        await lock.async_setup(lcm_config_entry)
+        await lock.async_setup_internal(lcm_config_entry)
 
         # Push subscription should be deferred (not called) since entry not loaded
         assert lock.subscribe_calls == 0
