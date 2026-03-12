@@ -296,13 +296,13 @@ class BaseLock:
         """
         Set up lock and coordinator, signaling completion to waiters.
 
-        First run base setup logic, then call provider-specific async_setup_provider()
-        for any additional setup steps. This ensures the coordinator is always set up
-        and can handle any exceptions raised during provider setup.
+        Provider-specific async_setup() runs first so providers can initialize
+        any state the coordinator needs during its first refresh. Then the base
+        setup creates the coordinator and subscribes to push updates.
         """
         try:
-            await self._async_setup_internal(config_entry)
             await self.async_setup(config_entry)
+            await self._async_setup_internal(config_entry)
         finally:
             self._setup_complete.set()
 
