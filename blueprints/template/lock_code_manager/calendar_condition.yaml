@@ -29,7 +29,7 @@ blueprint:
 
     - `name_state` — the current name of the code slot
 
-    - `lock_entity_ids` — list of lock entity IDs managed by this slot
+    - `lock_entity_ids` — list of lock entity IDs that support code slot events for this slot
 
 
     **Example condition templates**

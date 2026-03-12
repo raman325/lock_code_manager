@@ -7,6 +7,13 @@ blueprint:
     Optionally resets the counter when the slot is re-enabled.
 
 
+    **Requirements**
+
+    This blueprint requires at least one lock that supports code slot events
+    (i.e. produces `*_code_slot_*_pin_used` events). If none of your locks
+    support this, the counter will never decrement.
+
+
     **Setup**
 
     1. Create an `input_number` helper (Settings → Devices & Services → Helpers)
