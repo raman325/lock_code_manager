@@ -3,11 +3,10 @@
 ## New Items
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
-- Add type checking to CI and pre-commit:
-  - Add mypy (or alternative) to pre-commit hooks
-  - Add type checking CI job to python-checks.yml
+- Add type checking to CI:
+  - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
   - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
-  - Fix existing type errors (~30 errors as of Jan 2026)
+  - Fix existing type errors (~49 errors as of Mar 2026)
 - Test visual editor for both cards.
 
 ## Testing
@@ -16,7 +15,6 @@
   resource registration/unload in `tests/test_init.py`; still need end-to-end
   UI coverage (Lovelace resource registration + reload in a real frontend).
 - Add provider tests when new integrations beyond Z-Wave JS and virtual are added.
-- Add Z-Wave JS provider tests (requires Z-Wave JS door lock mocks/fixtures).
 - Test rate limiting and connection failure timing in live environment.
 
 ## Refactors and Maintenance
@@ -427,7 +425,7 @@ calendar event metadata, eliminating need for separate slot configuration.
 
 ### Add Relevant New Home Assistant Core Features
 
-**Analysis:** Review Home Assistant release notes from 2024.1 through 2025.10
+**Analysis:** Review Home Assistant release notes from 2024.1 through current
 and integrate relevant new features.
 
 **Key Features to Evaluate (2024-2025):**
