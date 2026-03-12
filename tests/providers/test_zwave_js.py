@@ -198,7 +198,7 @@ async def test_get_usercodes_from_cache(
     )
     lcm_entry.add_to_hass(hass)
 
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Slot 1: "9999" (in_use=True)
     # Slot 2: "1234" (in_use=True)
@@ -220,7 +220,7 @@ async def test_set_usercode_calls_service(
     """Test that set_usercode calls the Z-Wave JS service."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     with patch.object(
         zwave_js_lock, "async_call_service", new_callable=AsyncMock
@@ -249,7 +249,7 @@ async def test_set_usercode_skips_when_unchanged(
     """Test that set_usercode returns False when code is already set."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     with patch.object(
         zwave_js_lock, "async_call_service", new_callable=AsyncMock
@@ -283,7 +283,7 @@ async def test_set_usercode_skips_when_masked_code_matches(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock the cache to return a masked code
     masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
@@ -330,7 +330,7 @@ async def test_set_usercode_proceeds_when_masked_code_differs(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock the cache to return a masked code
     masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
@@ -374,7 +374,7 @@ async def test_set_usercode_proceeds_when_masked_code_unresolvable(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock the cache to return a masked code
     masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
@@ -407,7 +407,7 @@ async def test_clear_usercode_calls_service(
     """Test that clear_usercode calls the Z-Wave JS service."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     with patch.object(
         zwave_js_lock, "async_call_service", new_callable=AsyncMock
@@ -435,7 +435,7 @@ async def test_clear_usercode_skips_when_already_cleared(
     """Test that clear_usercode returns False when slot is already empty."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     with patch.object(
         zwave_js_lock, "async_call_service", new_callable=AsyncMock
@@ -468,7 +468,7 @@ async def test_set_usercode_optimistic_update(
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator with stale data (simulating the race condition)
     mock_coordinator = MagicMock()
@@ -505,7 +505,7 @@ async def test_set_usercode_optimistic_update_prevents_stale_read(
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Simulate stale cache: coordinator thinks slot is empty
     mock_coordinator = MagicMock()
@@ -544,7 +544,7 @@ async def test_clear_usercode_optimistic_update(
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator with stale data (still shows old PIN)
     mock_coordinator = MagicMock()
@@ -580,7 +580,7 @@ async def test_v1_set_usercode_polls_slot(
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
     mock_coordinator.data = {4: ""}
@@ -604,7 +604,7 @@ async def test_v1_clear_usercode_polls_slot(
     """Test that V1 clear_usercode polls the slot from the device after clear."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: "1234"}
@@ -627,7 +627,7 @@ async def test_v2_set_usercode_does_not_poll_slot(
     """Test that V2 set_usercode does NOT poll the slot (cache updates reliably)."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock_v2.async_setup(lcm_entry)
+    await zwave_js_lock_v2.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
     mock_coordinator.data = {4: ""}
@@ -654,7 +654,7 @@ async def test_set_usercode_no_coordinator(
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Remove coordinator to test defensive check
     zwave_js_lock.coordinator = None
@@ -675,7 +675,7 @@ async def test_clear_usercode_no_coordinator(
     """Test that clear_usercode handles missing coordinator gracefully."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Remove coordinator to test defensive check
     zwave_js_lock.coordinator = None
@@ -700,7 +700,7 @@ async def test_subscribe_push_updates(
     """Test subscribing to push updates."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Subscribe to push updates (idempotent - may already be subscribed)
     zwave_js_lock.subscribe_push_updates()
@@ -721,7 +721,7 @@ async def test_subscribe_is_idempotent(
     """Test that calling subscribe multiple times is safe."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     zwave_js_lock.subscribe_push_updates()
     first_unsub = zwave_js_lock._value_update_unsub
@@ -745,7 +745,7 @@ async def test_event_filter_matches_correct_node(
     """Test that event filter matches events for the correct node."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     dev_reg = dr.async_get(hass)
     device = dev_reg.async_get(zwave_js_lock.lock.device_id)
@@ -783,7 +783,7 @@ async def test_setup_registers_event_listener(
 
     assert len(zwave_js_lock._listeners) == 0
 
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     assert len(zwave_js_lock._listeners) == 1
 
@@ -800,7 +800,7 @@ async def test_unload_cleans_up_push_subscription(
     """Test that unload cleans up push subscriptions."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     zwave_js_lock.subscribe_push_updates()
     assert zwave_js_lock._value_update_unsub is not None
@@ -827,7 +827,7 @@ async def test_hard_refresh_calls_refresh_cc_values(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     with patch.object(
         lock_schlage_be469,
@@ -868,7 +868,7 @@ async def test_notification_event_keypad_lock_fires_lock_state_changed(
     """Test that a keypad lock notification event fires EVENT_LOCK_STATE_CHANGED."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Capture LCM lock state changed events
     events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
@@ -914,7 +914,7 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
     """Test that a keypad unlock notification event fires EVENT_LOCK_STATE_CHANGED."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
 
@@ -975,7 +975,7 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock the cache to include a slot with a masked PIN that isn't managed by LCM
     masked_slots = [
@@ -1023,7 +1023,7 @@ async def test_get_usercodes_masked_pin_resolved_when_active(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock the cache to have a masked PIN on a managed slot
     masked_slots = [
@@ -1063,7 +1063,7 @@ async def test_get_usercodes_masked_pin_skipped_when_inactive(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock the cache to have a masked PIN on a managed slot
     masked_slots = [
@@ -1115,7 +1115,7 @@ async def test_push_update_masked_code_resolved(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator (push_update is synchronous)
     mock_coordinator = MagicMock()
@@ -1172,7 +1172,7 @@ async def test_push_update_masked_code_skipped_when_unresolvable(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator (push_update is synchronous)
     mock_coordinator = MagicMock()
@@ -1231,7 +1231,7 @@ async def test_resolve_pin_if_masked_returns_pin_when_active(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Create the active (binary_sensor) and PIN (text) entities with proper unique IDs
     ent_reg = er.async_get(hass)
@@ -1284,7 +1284,7 @@ async def test_resolve_pin_if_masked_returns_masked_value_when_inactive(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Create the active (binary_sensor) and PIN (text) entities
     ent_reg = er.async_get(hass)
@@ -1338,7 +1338,7 @@ async def test_resolve_pin_if_masked_returns_pin_even_if_not_numeric(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Create the active (binary_sensor) and PIN (text) entities
     ent_reg = er.async_get(hass)
@@ -1390,7 +1390,7 @@ async def test_resolve_pin_if_masked_returns_masked_for_unmanaged_slot(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Mock code_slot_in_use to return None (slot not in node data)
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=None):
@@ -1421,7 +1421,7 @@ async def test_resolve_pin_if_masked_returns_masked_when_entities_missing(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Don't create any entities - they're "missing"
 
@@ -1456,7 +1456,7 @@ async def test_push_update_user_id_status_available_clears_slot(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator with existing data
     mock_coordinator = MagicMock()
@@ -1508,7 +1508,7 @@ async def test_push_update_user_id_status_available_skipped_when_already_empty(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator - slot already empty
     mock_coordinator = MagicMock()
@@ -1560,7 +1560,7 @@ async def test_push_update_user_id_status_enabled_ignored(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator
     mock_coordinator = MagicMock()
@@ -1682,7 +1682,7 @@ async def test_resolve_pin_if_masked_all_zeros_slot_in_use(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
         # All zeros with slot in use → returned as-is (not masked asterisks)
@@ -1724,7 +1724,7 @@ async def test_slot_expects_pin_returns_true_when_active_with_pin(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Create the active and PIN entities
     ent_reg = er.async_get(hass)
@@ -1767,7 +1767,7 @@ async def test_slot_expects_pin_returns_false_when_inactive(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Create the active and PIN entities
     ent_reg = er.async_get(hass)
@@ -1810,7 +1810,7 @@ async def test_slot_expects_pin_returns_false_for_unmanaged_slot(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Slot 99 is not managed
     assert zwave_js_lock._slot_expects_pin(99) is False
@@ -1838,7 +1838,7 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator with existing PIN
     mock_coordinator = MagicMock()
@@ -1892,7 +1892,7 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
         },
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
 
     # Set up a mock coordinator with existing PIN
     mock_coordinator = MagicMock()
