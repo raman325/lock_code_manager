@@ -1,0 +1,21 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run Home Assistant (venv)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.ha/venv/bin/python",
+            "args": [
+                "-m",
+                "homeassistant",
+                "--debug",
+                "--config",
+                "${workspaceFolder}/.ha"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}/.ha"
+            },
+            "problemMatcher": []
+        }
+    ]
+}
