@@ -33,7 +33,7 @@ jobs:
       - name: Wait for PR indexing
         if: github.event_name == 'push'
         run: sleep 10
-      - uses: release-drafter/release-drafter@v6
+      - uses: release-drafter/release-drafter@v7
         with:
           commitish: main
         env:
