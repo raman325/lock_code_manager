@@ -1,0 +1,147 @@
+---
+blueprint:
+  name: "Lock Code Manager: Calendar PIN Setter"
+  description: >
+    Extracts a PIN from calendar event attributes using a user-provided template
+    and sets it on a Lock Code Manager code slot. Optionally clears the PIN when
+    the calendar event ends.
+
+
+    **Available template variables**
+
+    Your PIN and slot number templates can use these variables:
+
+    - `message` — calendar event summary/title
+
+    - `description` — calendar event description
+
+    - `location` — calendar event location
+
+    - `start_time` — event start time
+
+    - `end_time` — event end time
+
+    - `all_day` — whether the event is an all-day event
+
+
+    **Example PIN templates**
+
+    - Extract a 4-digit PIN from description:
+      `{{ description | regex_findall('\\b\\d{4}\\b') | first | default('') }}`
+
+    - Use the first 4 characters of the event title:
+      `{{ message[:4] if message | length >= 4 else '' }}`
+
+
+    **Template debugging**
+
+    To test your PIN template, go to Developer Tools → Template and paste:
+
+    ```
+
+    {% set description = state_attr('calendar.YOUR_CALENDAR', 'description') | default('') %}
+
+    {{ description | regex_findall('\\b\\d{4}\\b') | first | default('') }}
+
+    ```
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/calendar_pin_setter.yaml
+  input:
+    config_entry:
+      name: Lock Code Manager config entry
+      description: The Lock Code Manager config entry that manages your lock(s).
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    slot_number:
+      name: Slot number
+      description: >
+        The code slot number. Can be a static number (e.g. `3`) or a Jinja2
+        template that resolves to a number using calendar event attributes
+        (e.g. `{{ description | regex_findall('slot (\d+)') | first }}`).
+      selector:
+        template:
+    calendar_entity:
+      name: Calendar entity
+      description: The calendar entity whose events provide PIN codes.
+      selector:
+        entity:
+          domain: calendar
+    pin_template:
+      name: PIN template
+      description: >
+        A Jinja2 template that extracts a PIN from calendar event attributes.
+        Must evaluate to a non-empty string to set the PIN, or empty string to
+        skip setting.
+      selector:
+        template:
+    clear_on_end:
+      name: Clear PIN when event ends
+      description: >
+        When enabled, the PIN is cleared (set to empty) when the calendar
+        event ends.
+      default: true
+      selector:
+        boolean:
+
+mode: single
+
+variables:
+  config_entry: !input config_entry
+  calendar_entity: !input calendar_entity
+  clear_on_end: !input clear_on_end
+  config_entry_title: >
+    {{ config_entry_attr(config_entry, 'title') }}
+  _all_entities: >
+    {{ integration_entities(config_entry_title) }}
+
+triggers:
+  - trigger: state
+    entity_id: !input calendar_entity
+
+actions:
+  - variables:
+      message: >
+        {{ state_attr(calendar_entity, 'message') | default('', true) }}
+      description: >
+        {{ state_attr(calendar_entity, 'description') | default('', true) }}
+      location: >
+        {{ state_attr(calendar_entity, 'location') | default('', true) }}
+      start_time: >
+        {{ state_attr(calendar_entity, 'start_time') | default('', true) }}
+      end_time: >
+        {{ state_attr(calendar_entity, 'end_time') | default('', true) }}
+      all_day: >
+        {{ state_attr(calendar_entity, 'all_day') | default(false, true) }}
+      slot_number: !input slot_number
+      pin_entity: >
+        {{ _all_entities
+           | select('match', 'text\\..*_code_slot_' ~ slot_number ~ '_pin')
+           | first | default('') }}
+      pin_value: !input pin_template
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ trigger.to_state.state == 'on'
+                 and pin_entity != ''
+                 and pin_value != '' }}
+        sequence:
+          - action: text.set_value
+            target:
+              entity_id: "{{ pin_entity }}"
+            data:
+              value: "{{ pin_value }}"
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ trigger.to_state.state == 'off'
+                 and clear_on_end
+                 and pin_entity != '' }}
+        sequence:
+          - action: text.set_value
+            target:
+              entity_id: "{{ pin_entity }}"
+            data:
+              value: ""
