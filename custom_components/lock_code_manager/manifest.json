@@ -6,6 +6,7 @@
     "frontend",
     "input_boolean",
     "lovelace",
+    "matter",
     "schedule",
     "template",
     "virtual",
