@@ -71,26 +71,43 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Debug logs
+      label: Debug logs (paste)
       description: >
         Enable debug logging by adding
-        `custom_components.lock_code_manager: debug` under `logger > logs` in
-        your `configuration.yaml`, restart, reproduce the issue, then paste the
+        `custom_components.lock_code_manager: debug` and
+        `homeassistant.components.zwave_js: debug` (replace with your lock's
+        integration if not Z-Wave) under `logger > logs` in your
+        `configuration.yaml`, restart, reproduce the issue, then paste the
         relevant log lines here. See the
         [Debug Logs](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Debug-Logs)
         wiki page for detailed instructions. This field is automatically
         formatted as code.
       render: shell
   - type: upload
+    id: logs-upload
+    attributes:
+      label: Debug logs (upload)
+      description: >
+        Alternatively, upload a log file here. You can download the full log
+        from Settings → System → Logs → Download full log.
+  - type: upload
     id: diagnostics
     attributes:
-      label: Device diagnostics
+      label: Device diagnostics (upload)
       description: >
         Download diagnostics for your lock device from
         Settings → Devices & Services → [your lock integration] → [lock device]
         → ⋮ → Download diagnostics, then upload the JSON file here. See the
         [Device Diagnostics](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Device-Diagnostics)
         wiki page for detailed instructions.
+  - type: textarea
+    id: diagnostics-paste
+    attributes:
+      label: Device diagnostics (paste)
+      description: >
+        Alternatively, paste the diagnostics JSON here. This field is
+        automatically formatted as JSON.
+      render: json
   - type: textarea
     id: screenshots
     attributes:
