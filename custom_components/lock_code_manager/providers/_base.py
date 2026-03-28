@@ -135,6 +135,7 @@ class BaseLock:
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
 
+    @final
     async def _async_executor_call(
         self, func: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> Any:
@@ -145,6 +146,7 @@ class BaseLock:
             )
         return await self.hass.async_add_executor_job(func, *args)
 
+    @final
     async def _execute_rate_limited(
         self,
         operation_type: Literal["get", "set", "clear", "refresh"],
@@ -347,6 +349,7 @@ class BaseLock:
         finally:
             self._setup_complete.set()
 
+    @final
     async def _async_setup_internal(self, config_entry: ConfigEntry) -> None:
         """Set up lock and coordinator."""
         lock_entity_id = self.lock.entity_id
@@ -409,6 +412,7 @@ class BaseLock:
         """
         await self.hass.async_add_executor_job(self.setup)
 
+    @final
     async def async_wait_for_setup(self) -> None:
         """Wait until async_setup has completed."""
         await self._setup_complete.wait()
@@ -433,6 +437,7 @@ class BaseLock:
         """Return whether connection to lock is up."""
         raise NotImplementedError()
 
+    @final
     def _setup_config_entry_state_listener(self) -> None:
         """Listen for provider config entry state changes to resubscribe."""
         lock_entry = self.lock_config_entry
