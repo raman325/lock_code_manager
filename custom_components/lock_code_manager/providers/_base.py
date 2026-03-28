@@ -213,7 +213,7 @@ class BaseLock:
     @staticmethod
     def is_masked(code: int | str | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
-        if not code:
+        if code is None or code == "":
             return True
         code_str = str(code)
         return code_str == "*" * len(code_str)
@@ -229,7 +229,7 @@ class BaseLock:
     @final
     def _check_duplicate_code(self, code_slot: int, usercode: str) -> None:
         """Raise DuplicateCodeError if the PIN duplicates another slot on this lock."""
-        if not self.coordinator or not self.coordinator.data:
+        if not usercode or not self.coordinator or not self.coordinator.data:
             return
         for other_slot, other_code in self.coordinator.data.items():
             if other_slot == code_slot or self.is_masked(other_code):

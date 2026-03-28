@@ -46,6 +46,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_filtered,
 )
 from homeassistant.helpers.update_coordinator import CoordinatorEntity, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_ACTIVE,
@@ -398,7 +399,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     def _record_sync_attempt(self) -> None:
         """Record a successful sync attempt (provider call did not raise)."""
-        now = datetime.now()
+        now = dt_util.utcnow()
         if (
             self._sync_attempt_first is not None
             and now - self._sync_attempt_first > SYNC_ATTEMPT_WINDOW
@@ -417,7 +418,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return False
         if self._sync_attempt_first is None:
             return False
-        return datetime.now() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
+        return dt_util.utcnow() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
 
     async def _disable_slot_and_notify(self, title: str, message: str) -> None:
         """Disable the slot via switch service and create a persistent notification."""
@@ -426,13 +427,21 @@ class LockCodeManagerCodeSlotInSyncEntity(
             DOMAIN,
             f"{self.config_entry.entry_id}|{self.slot_num}|{CONF_ENABLED}",
         )
-        if enabled_ent_id:
-            await self.hass.services.async_call(
-                SWITCH_DOMAIN,
-                SERVICE_TURN_OFF,
-                {ATTR_ENTITY_ID: enabled_ent_id},
-                blocking=True,
+        if not enabled_ent_id:
+            _LOGGER.warning(
+                "%s (%s): Cannot disable slot %s on %s — switch entity not found",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.slot_num,
+                self.lock.lock.entity_id,
             )
+            return
+        await self.hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {ATTR_ENTITY_ID: enabled_ent_id},
+            blocking=True,
+        )
         self._cancel_retry()
         self._reset_sync_tracker()
         async_create(

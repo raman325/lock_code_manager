@@ -1,7 +1,7 @@
 """Test binary sensor platform."""
 
 import copy
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 from unittest.mock import AsyncMock, patch
 
@@ -893,7 +893,7 @@ async def test_sync_attempts_exceeded_disables_slot(
     assert in_sync_entity_obj is not None
 
     # Pre-load the tracker with MAX_SYNC_ATTEMPTS successful attempts within the window
-    now = datetime.now()
+    now = dt_util.utcnow()
     in_sync_entity_obj._sync_attempt_count = MAX_SYNC_ATTEMPTS
     in_sync_entity_obj._sync_attempt_first = now
 
@@ -934,7 +934,7 @@ async def test_sync_tracker_resets_when_back_in_sync(
 
     # Simulate some previous sync attempts (but below threshold)
     in_sync_entity_obj._sync_attempt_count = 2
-    in_sync_entity_obj._sync_attempt_first = datetime.now()
+    in_sync_entity_obj._sync_attempt_first = dt_util.utcnow()
 
     # Verify currently in sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
@@ -975,7 +975,7 @@ async def test_sync_tracker_expired_window_resets(
 
     # Set up tracker with max attempts but with an expired window
     in_sync_entity_obj._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_attempt_first = datetime.now() - SYNC_ATTEMPT_WINDOW * 2
+    in_sync_entity_obj._sync_attempt_first = dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
 
     # The _sync_attempts_exceeded check should return False (window expired)
     assert not in_sync_entity_obj._sync_attempts_exceeded()
