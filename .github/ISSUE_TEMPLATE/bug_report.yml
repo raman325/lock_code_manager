@@ -75,8 +75,9 @@ body:
       description: >
         Enable debug logging by adding
         `custom_components.lock_code_manager: debug` and
-        `homeassistant.components.zwave_js: debug` (replace with your lock's
-        integration if not Z-Wave) under `logger > logs` in your
+        `homeassistant.components.zwave_js: debug` (replace `zwave_js` with
+        your lock integration's domain if not Z-Wave) under `logger > logs` in
+        your
         `configuration.yaml`, restart, reproduce the issue, then paste the
         relevant log lines here. See the
         [Debug Logs](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Debug-Logs)
