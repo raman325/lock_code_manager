@@ -592,7 +592,8 @@ class BaseLock:
                 f"Cannot set on {self.lock.entity_id} - lock not connected"
             )
         async with self._aio_lock:
-            # Duplicate check inside the lock to prevent time-of-check-to-time-of-use races
+            # Check for duplicate PINs under the lock so coordinator data
+            # can't change between the check and the set operation
             self._check_duplicate_code(code_slot, str(usercode))
 
             elapsed = time.monotonic() - self._last_operation_time
