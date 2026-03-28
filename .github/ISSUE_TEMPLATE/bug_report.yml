@@ -109,6 +109,31 @@ body:
         Alternatively, paste the diagnostics JSON here. This field is
         automatically formatted as JSON.
       render: json
+  - type: markdown
+    attributes:
+      value: |
+        ## Frontend Issues
+
+        If your issue involves the dashboard, cards, or UI, include browser
+        console logs. See the
+        [Browser Console Logs](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Browser-Console-Logs)
+        wiki page for instructions on opening the console in your browser.
+  - type: textarea
+    id: console-logs
+    attributes:
+      label: Browser console logs (paste)
+      description: >
+        Open the browser console (F12 → Console tab) before reproducing the
+        issue, then paste the output here. This field is automatically formatted
+        as code.
+      render: shell
+  - type: upload
+    id: console-logs-upload
+    attributes:
+      label: Browser console logs (upload)
+      description: >
+        Alternatively, right-click in the console and select "Save as..." to
+        download the log, then upload it here.
   - type: textarea
     id: screenshots
     attributes:
