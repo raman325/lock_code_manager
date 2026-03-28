@@ -81,17 +81,16 @@ body:
         wiki page for detailed instructions. This field is automatically
         formatted as code.
       render: shell
-  - type: textarea
+  - type: upload
     id: diagnostics
     attributes:
       label: Device diagnostics
       description: >
         Download diagnostics for your lock device from
         Settings → Devices & Services → [your lock integration] → [lock device]
-        → ⋮ → Download diagnostics. Paste the JSON here or attach the file. See the
+        → ⋮ → Download diagnostics, then upload the JSON file here. See the
         [Device Diagnostics](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Device-Diagnostics)
         wiki page for detailed instructions.
-      render: json
   - type: textarea
     id: screenshots
     attributes:
