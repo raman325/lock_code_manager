@@ -592,7 +592,7 @@ class BaseLock:
                 f"Cannot set on {self.lock.entity_id} - lock not connected"
             )
         async with self._aio_lock:
-            # Duplicate check inside the lock to prevent TOCTOU races
+            # Duplicate check inside the lock to prevent time-of-check-to-time-of-use races
             self._check_duplicate_code(code_slot, str(usercode))
 
             elapsed = time.monotonic() - self._last_operation_time
