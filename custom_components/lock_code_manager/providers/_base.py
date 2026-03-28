@@ -218,6 +218,7 @@ class BaseLock:
         code_str = str(code)
         return code_str == "*" * len(code_str)
 
+    @final
     def is_slot_managed(self, code_slot: int) -> bool:
         """Return whether a code slot is managed by any LCM config entry for this lock."""
         return any(
