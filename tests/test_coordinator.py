@@ -40,11 +40,11 @@ class MockLockWithHardRefresh(BaseLock):
         """Return whether connection to lock is up."""
         return self._is_connected
 
-    def hard_refresh_codes(self) -> dict[int, str]:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """Perform hard refresh and return all codes."""
         return self.get_usercodes()
 
-    def get_usercodes(self) -> dict[int, str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {}
 

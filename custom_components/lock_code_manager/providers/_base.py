@@ -449,7 +449,7 @@ class BaseLock:
         self._last_connection_up = is_up
         return is_up
 
-    def hard_refresh_codes(self) -> dict[int, str]:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -465,7 +465,7 @@ class BaseLock:
             "Override this method to re-fetch codes from the lock device.",
         )
 
-    async def async_hard_refresh_codes(self) -> dict[int, str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -475,7 +475,7 @@ class BaseLock:
         return await self._async_executor_call(self.hard_refresh_codes)
 
     @final
-    async def async_internal_hard_refresh_codes(self) -> dict[int, str]:
+    async def async_internal_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -602,7 +602,7 @@ class BaseLock:
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    def get_usercodes(self) -> dict[int, str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -623,7 +623,7 @@ class BaseLock:
             "Override this method to retrieve usercodes from the lock.",
         )
 
-    async def async_get_usercodes(self) -> dict[int, str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -642,7 +642,7 @@ class BaseLock:
         return await self._async_executor_call(self.get_usercodes)
 
     @final
-    async def async_internal_get_usercodes(self) -> dict[int, str]:
+    async def async_internal_get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 

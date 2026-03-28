@@ -566,7 +566,7 @@ class ZWaveJSLock(BaseLock):
         ready, _reason = self._get_client_state()
         return ready
 
-    async def async_hard_refresh_codes(self) -> dict[int, str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -681,7 +681,7 @@ class ZWaveJSLock(BaseLock):
         except Exception as err:
             raise LockDisconnected from err
 
-    async def async_get_usercodes(self) -> dict[int, str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         code_slots = {
             int(code_slot)
@@ -689,7 +689,7 @@ class ZWaveJSLock(BaseLock):
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
-        data: dict[int, str] = {}
+        data: dict[int, str | None] = {}
 
         if not await self.async_is_connection_up():
             raise LockDisconnected

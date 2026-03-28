@@ -57,7 +57,7 @@ class VirtualLock(BaseLock):
         """Return whether connection to lock is up."""
         return True
 
-    async def async_hard_refresh_codes(self) -> dict[int, str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -94,7 +94,7 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
-    async def async_get_usercodes(self) -> dict[int, str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {
             int(slot_num): code_slot["code"]

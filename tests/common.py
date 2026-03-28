@@ -137,7 +137,7 @@ class MockLCMLock(BaseLock):
             return True
         return True
 
-    def get_usercodes(self) -> dict[int, str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 
