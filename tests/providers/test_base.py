@@ -96,7 +96,7 @@ async def test_base(hass: HomeAssistant):
     with pytest.raises(NotImplementedError):
         await lock.async_internal_clear_usercode(1)
     with pytest.raises(NotImplementedError):
-        await lock.async_internal_set_usercode(1, 1)
+        await lock.async_internal_set_usercode(1, "1234")
     with pytest.raises(NotImplementedError):
         await lock.async_internal_get_usercodes()
 

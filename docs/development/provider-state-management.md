@@ -24,7 +24,7 @@ All modes include an initial poll to populate coordinator data.
 ┌─────────────────────────────────────────────────────────────────┐
 │                    LockUsercodeUpdateCoordinator                │
 ├─────────────────────────────────────────────────────────────────┤
-│  data: dict[int, int | str]          # slot -> usercode        │
+│  data: dict[int, str | None]         # slot -> usercode        │
 ├─────────────────────────────────────────────────────────────────┤
 │  async_get_usercodes()               # poll method             │
 │  push_update(updates)                # push entry point        │
@@ -202,7 +202,7 @@ class MyLock(BaseLock):
 Return current usercode state. This may read from a cache or query the device.
 
 ```python
-def get_usercodes(self) -> dict[int, int | str]:
+def get_usercodes(self) -> dict[int, str | None]:
     """
     Return dictionary mapping slot numbers to usercodes.
 
@@ -217,7 +217,7 @@ def get_usercodes(self) -> dict[int, int | str]:
     }
 ```
 
-**Important:** The return value format is `dict[int, int | str]`:
+**Important:** The return value format is `dict[int, str | None]`:
 
 - **Keys** are slot numbers (integers)
 - **Values** are usercodes (strings or integers), or empty string `""` for cleared slots
@@ -228,7 +228,7 @@ Set a usercode on a specific slot.
 
 ```python
 def set_usercode(
-    self, code_slot: int, usercode: int | str, name: str | None = None
+    self, code_slot: int, usercode: str, name: str | None = None
 ) -> bool:
     """Set a usercode on a code slot.
 
@@ -284,7 +284,7 @@ def is_connection_up(self) -> bool:
 Re-fetch codes directly from the device, bypassing any cache. Required if `hard_refresh_interval` is set.
 
 ```python
-def hard_refresh_codes(self) -> dict[int, int | str]:
+def hard_refresh_codes(self) -> dict[int, str | None]:
     """
     Force refresh from device and return all codes.
 
@@ -356,7 +356,7 @@ Providers must raise `LockCodeManagerError` subclasses for lock communication fa
 ```python
 from ..exceptions import LockDisconnected
 
-def get_usercodes(self) -> dict[int, int | str]:
+def get_usercodes(self) -> dict[int, str | None]:
     try:
         return self._fetch_codes()
     except SomeDeviceError as err:

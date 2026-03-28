@@ -108,7 +108,7 @@ def is_connection_up(self) -> bool:
 Return current usercodes from the lock:
 
 ```python
-def get_usercodes(self) -> dict[int, int | str]:
+def get_usercodes(self) -> dict[int, str | None]:
     """
     Get dictionary of code slots and usercodes.
 
@@ -136,7 +136,7 @@ Set a usercode on a slot:
 
 ```python
 def set_usercode(
-    self, code_slot: int, usercode: int | str, name: str | None = None
+    self, code_slot: int, usercode: str, name: str | None = None
 ) -> bool:
     """
     Set a usercode on a code slot.
@@ -196,7 +196,7 @@ def clear_usercode(self, code_slot: int) -> bool:
 If your integration caches data, implement hard refresh:
 
 ```python
-def hard_refresh_codes(self) -> dict[int, int | str]:
+def hard_refresh_codes(self) -> dict[int, str | None]:
     """Force refresh from device and return all codes."""
     try:
         device = self._get_device()
@@ -389,7 +389,7 @@ class SmartLockLock(BaseLock):
             return self.lock_config_entry.state == ConfigEntryState.LOADED
         return True
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         try:
             # Replace with your integration's API
@@ -399,7 +399,7 @@ class SmartLockLock(BaseLock):
             raise LockDisconnected(str(err)) from err
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
         try:
@@ -519,7 +519,7 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-def get_usercodes(self) -> dict[int, int | str]:
+def get_usercodes(self) -> dict[int, str | None]:
     _LOGGER.debug("Getting usercodes for %s", self.lock.entity_id)
     codes = self._fetch_codes()
     _LOGGER.debug("Got codes: %s", {k: "****" for k in codes})
