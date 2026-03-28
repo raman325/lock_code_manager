@@ -103,7 +103,7 @@ class MockLCMLock(BaseLock):
         ].append(())
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -137,7 +137,7 @@ class MockLCMLock(BaseLock):
             return True
         return True
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str]:
         """
         Get dictionary of code slots and usercodes.
 

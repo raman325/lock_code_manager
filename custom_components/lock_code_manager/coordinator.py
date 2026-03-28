@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]]):
+class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str]]):
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
@@ -39,7 +39,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             update_interval=update_interval,
             config_entry=config_entry,
         )
-        self.data: dict[int, int | str] = {}
+        self.data: dict[int, str] = {}
 
         # Set up drift detection timer for locks with hard_refresh_interval
         if lock.hard_refresh_interval:
@@ -63,7 +63,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         return self._lock
 
     @callback
-    def push_update(self, updates: dict[int, int | str]) -> None:
+    def push_update(self, updates: dict[int, str]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
@@ -76,7 +76,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
 
         self.async_set_updated_data(new_data)
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str]:
         """Update usercodes."""
         try:
             return await self._lock.async_internal_get_usercodes()
