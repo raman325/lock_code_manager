@@ -17,7 +17,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    DuplicateCodeError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
 
@@ -720,3 +723,129 @@ async def test_config_entry_state_listener_ignores_same_state(
         assert lock.unsubscribe_calls == 0
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+# =============================================================================
+# is_masked tests
+# =============================================================================
+
+
+class TestIsMasked:
+    """Tests for BaseLock.is_masked static method."""
+
+    def test_none(self):
+        """Test None is treated as masked (not comparable)."""
+        assert BaseLock.is_masked(None) is True
+
+    def test_empty_string(self):
+        """Test empty string is treated as masked (not comparable)."""
+        assert BaseLock.is_masked("") is True
+
+    def test_all_stars(self):
+        """Test all-stars code is masked."""
+        assert BaseLock.is_masked("****") is True
+
+    def test_single_star(self):
+        """Test single star is masked."""
+        assert BaseLock.is_masked("*") is True
+
+    def test_real_code(self):
+        """Test real PIN code is not masked."""
+        assert BaseLock.is_masked("1234") is False
+
+    def test_partial_mask(self):
+        """Test partially masked code is not masked."""
+        assert BaseLock.is_masked("12*4") is False
+
+    def test_integer_zero(self):
+        """Test integer 0 is not masked (valid code)."""
+        assert BaseLock.is_masked(0) is False
+
+    def test_integer_code(self):
+        """Test integer code is not masked."""
+        assert BaseLock.is_masked(1234) is False
+
+    def test_string_zero(self):
+        """Test string '0' is not masked."""
+        assert BaseLock.is_masked("0") is False
+
+
+# =============================================================================
+# _check_duplicate_code tests
+# =============================================================================
+
+
+async def test_check_duplicate_code_raises_on_match(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code raises when a duplicate PIN is found."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "1234", 2: "5678", 3: ""})
+
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        lock._check_duplicate_code(3, "1234")
+
+    assert exc_info.value.code_slot == 3
+    assert exc_info.value.conflicting_slot == 1
+
+
+async def test_check_duplicate_code_skips_masked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code skips masked codes."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "****", 3: ""})
+
+    lock._check_duplicate_code(3, "1234")
+
+
+async def test_check_duplicate_code_skips_same_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code skips the target slot itself."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "1234"})
+
+    lock._check_duplicate_code(1, "1234")
+
+
+async def test_check_duplicate_code_no_op_on_empty_usercode(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code is a no-op when usercode is empty."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "", 2: ""})
+
+    lock._check_duplicate_code(3, "")
+
+
+async def test_check_duplicate_code_no_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code is a no-op when coordinator has no data."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.coordinator = None
+
+    lock._check_duplicate_code(1, "1234")

@@ -581,10 +581,20 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> None:
         """Set a usercode on a code slot."""
-        self._check_duplicate_code(code_slot, str(usercode))
-        changed = await self._execute_rate_limited(
-            "set", self.async_set_usercode, code_slot, usercode, name=name
-        )
+        if not await self.async_internal_is_connection_up():
+            raise LockDisconnected(
+                f"Cannot set on {self.lock.entity_id} - lock not connected"
+            )
+        async with self._aio_lock:
+            # Duplicate check inside the lock to prevent TOCTOU races
+            self._check_duplicate_code(code_slot, str(usercode))
+
+            elapsed = time.monotonic() - self._last_operation_time
+            if elapsed < self._min_operation_delay:
+                await asyncio.sleep(self._min_operation_delay - elapsed)
+
+            changed = await self.async_set_usercode(code_slot, usercode, name=name)
+            self._last_operation_time = time.monotonic()
         # Refresh coordinator to update entity states from cache (only if changed).
         # Skip for push-based providers — they update the coordinator optimistically
         # via push_update() in their set/clear methods, and refreshing from cache
