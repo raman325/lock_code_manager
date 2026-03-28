@@ -3,6 +3,19 @@
 ## New Items
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
+- **Config flow: lock reset step** — Add a config flow step that checks for existing
+  unmanaged codes on the lock. Inform the user the lock will be reset before configuring.
+  Either they cancel or proceed and all slots are cleared. LCM will re-set its managed
+  codes immediately after.
+- **Config flow: conflicting integration detection** — Check for Keymaster or other
+  code management integrations at setup and warn the user.
+- **Update migration docs** — Revise any wiki content that talks about "slowly migrating"
+  locks between tools. The guidance is now to commit fully to one tool.
+- **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
+  code slots on a lock, so users can clean up stale codes without manual intervention.
+- **Investigate lock-specific duplicate detection carve-outs** — Some locks don't mask
+  PINs or don't reject duplicates. Explore whether duplicate detection behavior can be
+  adapted per lock capability rather than one-size-fits-all.
 - Add type checking to CI:
   - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
   - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
@@ -118,6 +131,13 @@ return {"in_sync": actual_code == desired_code, "actual_code": actual_code}
 - Would need to update binary sensor to be read-only
 - Config updates still flow through text/switch entities
 - Need to ensure coordinator runs sync on config changes
+
+**Related: Move sync attempt tracker to base provider.** The sync attempt
+tracker (count + time window that detects persistently failing slots) currently
+lives in `binary_sensor.py`. When sync logic moves to the coordinator, the
+tracker should move to `BaseLock` — the base provider owns the tracking state
+(per-slot attempt counts/times), and callers (coordinator, websocket) decide
+the policy (disable + notify, propagate error, etc.).
 
 **Estimated Effort:** High (16-24 hours)
 **Priority:** Medium

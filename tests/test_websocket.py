@@ -51,6 +51,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     _find_config_entry_by_title,
@@ -889,6 +890,44 @@ async def test_set_lock_usercode_clear_operation_failure(
         assert not msg["success"]
         assert msg["error"]["code"] == "unknown_error"
         assert "Clear failed" in msg["error"]["message"]
+
+
+async def test_set_lock_usercode_duplicate_code_error(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test set_lock_usercode WS API returns error when duplicate code detected."""
+    ws_client = await hass_ws_client(hass)
+
+    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    with patch.object(
+        lock,
+        "async_internal_set_usercode",
+        AsyncMock(
+            side_effect=DuplicateCodeError(
+                code_slot=3,
+                conflicting_slot=7,
+                conflicting_slot_managed=False,
+                lock_entity_id=LOCK_1_ENTITY_ID,
+            )
+        ),
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/set_lock_usercode",
+                ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+                ATTR_CODE_SLOT: 3,
+                ATTR_USERCODE: "1234",
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert not msg["success"]
+        assert msg["error"]["code"] == "unknown_error"
+        assert "duplicate" in msg["error"]["message"].lower()
+        assert "slot 7" in msg["error"]["message"]
 
 
 # =============================================================================

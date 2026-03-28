@@ -1,4 +1,7 @@
-"""Binary sensor for lock_code_manager."""
+"""Sync sensor comparing desired state (config) against actual state (coordinator).
+
+Triggers set/clear operations to reconcile. See ARCHITECTURE.md for the sync decision flow.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +15,13 @@ from homeassistant.components.binary_sensor import (
     DOMAIN as BINARY_SENSOR_DOMAIN,
     BinarySensorEntity,
 )
+from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
@@ -51,12 +58,14 @@ from .const import (
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import LockCodeManagerConfigEntry, get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
-from .exceptions import LockDisconnected
+from .exceptions import DuplicateCodeError, LockDisconnected
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
 RETRY_DELAY = timedelta(seconds=10)
+MAX_SYNC_ATTEMPTS = 3
+SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
 
 async def async_setup_entry(
@@ -274,6 +283,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
         self._tracked_entity_ids: set[str] = set()
         self._retry_unsub: Callable[[], None] | None = None
         self._retry_active = False
+        self._sync_attempt_count: int = 0
+        self._sync_attempt_first: datetime | None = None
         self._state_tracking_unsub: Callable[[], None] | None = None
         self._tracking_all_states: bool = False
 
@@ -379,6 +390,59 @@ class LockCodeManagerCodeSlotInSyncEntity(
             await self.async_update()
         finally:
             self._retry_active = False
+
+    def _reset_sync_tracker(self) -> None:
+        """Reset the sync attempt tracker."""
+        self._sync_attempt_count = 0
+        self._sync_attempt_first = None
+
+    def _record_sync_attempt(self) -> None:
+        """Record a successful sync attempt (provider call did not raise)."""
+        now = datetime.now()
+        if (
+            self._sync_attempt_first is not None
+            and now - self._sync_attempt_first > SYNC_ATTEMPT_WINDOW
+        ):
+            # Window expired, start a new tracking window
+            self._sync_attempt_count = 0
+            self._sync_attempt_first = None
+
+        if self._sync_attempt_first is None:
+            self._sync_attempt_first = now
+        self._sync_attempt_count += 1
+
+    def _sync_attempts_exceeded(self) -> bool:
+        """Check if sync attempts have exceeded the limit within the time window."""
+        if self._sync_attempt_count < MAX_SYNC_ATTEMPTS:
+            return False
+        if self._sync_attempt_first is None:
+            return False
+        return datetime.now() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
+
+    async def _disable_slot_and_notify(self, title: str, message: str) -> None:
+        """Disable the slot via switch service and create a persistent notification."""
+        enabled_ent_id = self.ent_reg.async_get_entity_id(
+            SWITCH_DOMAIN,
+            DOMAIN,
+            f"{self.config_entry.entry_id}|{self.slot_num}|{CONF_ENABLED}",
+        )
+        if enabled_ent_id:
+            await self.hass.services.async_call(
+                SWITCH_DOMAIN,
+                SERVICE_TURN_OFF,
+                {ATTR_ENTITY_ID: enabled_ent_id},
+                blocking=True,
+            )
+        self._cancel_retry()
+        self._reset_sync_tracker()
+        async_create(
+            self.hass,
+            message,
+            title=title,
+            notification_id=(
+                f"{DOMAIN}_{self.lock.lock.entity_id}_{self.slot_num}_sync_failure"
+            ),
+        )
 
     def _build_entity_id_map(self) -> bool:
         """Build and cache entity IDs for this slot."""
@@ -503,12 +567,16 @@ class LockCodeManagerCodeSlotInSyncEntity(
         """
         Perform sync operation (set or clear usercode).
 
-        Returns True if sync was performed, False if lock disconnected.
+        Returns True if sync was performed, False if lock disconnected or
+        permanently failed (duplicate code, sync attempts exceeded).
         """
         try:
             if slot_state.active_state == STATE_ON:
                 await self.lock.async_internal_set_usercode(
-                    int(self.slot_num), slot_state.pin_state, slot_state.name_state
+                    int(self.slot_num),
+                    slot_state.pin_state,
+                    slot_state.name_state,
+                    source="sync",
                 )
                 _LOGGER.debug(
                     "%s (%s): Set usercode for %s slot %s",
@@ -518,7 +586,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     self.slot_num,
                 )
             else:  # active_state == STATE_OFF
-                await self.lock.async_internal_clear_usercode(int(self.slot_num))
+                await self.lock.async_internal_clear_usercode(
+                    int(self.slot_num), source="sync"
+                )
                 _LOGGER.debug(
                     "%s (%s): Cleared usercode for %s slot %s",
                     self.config_entry.entry_id,
@@ -526,8 +596,33 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     self.lock.lock.entity_id,
                     self.slot_num,
                 )
+            # Provider call succeeded — record for sync attempt tracking
+            self._record_sync_attempt()
             self._cancel_retry()
             return True
+        except DuplicateCodeError as err:
+            managed_str = "managed" if err.conflicting_slot_managed else "unmanaged"
+            _LOGGER.error(
+                "%s (%s): Duplicate code detected for %s slot %s — "
+                "PIN duplicates %s slot %s",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.lock.lock.entity_id,
+                self.slot_num,
+                managed_str,
+                err.conflicting_slot,
+            )
+            await self._disable_slot_and_notify(
+                title="Duplicate Lock Code",
+                message=(
+                    f"Lock **{err.lock_entity_id}**: cannot set code on slot "
+                    f"**{err.code_slot}** because the same PIN is already in "
+                    f"{managed_str} slot **{err.conflicting_slot}**. "
+                    f"Slot {err.code_slot} has been disabled. Set a unique "
+                    f"code and re-enable the slot."
+                ),
+            )
+            return False
         except LockDisconnected as err:
             _LOGGER.debug(
                 "%s (%s): Unable to %s usercode for %s slot %s: %s",
@@ -587,6 +682,32 @@ class LockCodeManagerCodeSlotInSyncEntity(
             if not expected_in_sync:
                 self._update_sync_state(False)
 
+                # Check if we've exceeded sync attempt limits (provider calls
+                # succeeded but lock keeps reverting — permanent failure)
+                if self._sync_attempts_exceeded():
+                    _LOGGER.error(
+                        "%s (%s): Sync attempts exceeded for %s slot %s "
+                        "(%s attempts in %s window), disabling slot",
+                        self.config_entry.entry_id,
+                        self.config_entry.title,
+                        self.lock.lock.entity_id,
+                        self.slot_num,
+                        self._sync_attempt_count,
+                        SYNC_ATTEMPT_WINDOW,
+                    )
+                    await self._disable_slot_and_notify(
+                        title="Lock Code Sync Failed",
+                        message=(
+                            f"Lock **{self.lock.lock.entity_id}**: slot "
+                            f"**{self.slot_num}** failed to sync after "
+                            f"{self._sync_attempt_count} consecutive attempts. "
+                            f"The lock may be rejecting the code silently. "
+                            f"Slot {self.slot_num} has been disabled. Check the "
+                            f"code and re-enable the slot."
+                        ),
+                    )
+                    return
+
                 # Perform sync operation
                 sync_performed = await self._perform_sync_operation(slot_state)
 
@@ -611,6 +732,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 # Was out of sync, now in sync
                 self._update_sync_state(True)
                 self._cancel_retry()
+                self._reset_sync_tracker()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -671,3 +793,4 @@ class LockCodeManagerCodeSlotInSyncEntity(
     async def _async_remove(self) -> None:
         """Handle removal cleanup."""
         self._cancel_retry()
+        self._reset_sync_tracker()

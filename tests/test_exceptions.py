@@ -10,6 +10,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import (
+    DuplicateCodeError,
     EntityNotFoundError,
     LockCodeManagerError,
     LockDisconnected,
@@ -228,3 +229,49 @@ async def test_entity_not_found_error(hass: HomeAssistant):
     assert err.key == "pin"
     assert "slot 5" in str(err)
     assert "pin" in str(err)
+
+
+# =============================================================================
+# DuplicateCodeError Tests
+# =============================================================================
+
+
+def test_duplicate_code_error_attributes():
+    """Test DuplicateCodeError stores conflicting slot and managed status."""
+    err = DuplicateCodeError(
+        code_slot=3,
+        conflicting_slot=7,
+        conflicting_slot_managed=False,
+        lock_entity_id="lock.front_door",
+    )
+    assert err.code_slot == 3
+    assert err.conflicting_slot == 7
+    assert err.conflicting_slot_managed is False
+    assert err.lock_entity_id == "lock.front_door"
+    assert "lock.front_door" in str(err)
+    assert "slot 3" in str(err)
+    assert "slot 7" in str(err)
+    assert "unmanaged" in str(err)
+
+
+def test_duplicate_code_error_managed_slot():
+    """Test DuplicateCodeError message for managed conflicting slot."""
+    err = DuplicateCodeError(
+        code_slot=3,
+        conflicting_slot=5,
+        conflicting_slot_managed=True,
+        lock_entity_id="lock.front_door",
+    )
+    assert "managed" in str(err)
+    assert "unmanaged" not in str(err)
+
+
+def test_duplicate_code_error_inherits_from_base():
+    """Test DuplicateCodeError inherits from LockCodeManagerError."""
+    err = DuplicateCodeError(
+        code_slot=1,
+        conflicting_slot=2,
+        conflicting_slot_managed=False,
+        lock_entity_id="lock.test",
+    )
+    assert isinstance(err, LockCodeManagerError)

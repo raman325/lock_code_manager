@@ -1,4 +1,8 @@
-"""Base integration module."""
+"""Abstract base for lock providers.
+
+Handles rate limiting, connection checking, and coordinator refresh after operations.
+See ARCHITECTURE.md for the provider interface contract.
+"""
 
 from __future__ import annotations
 
@@ -36,7 +40,11 @@ from ..const import (
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
-from ..exceptions import LockDisconnected, ProviderNotImplementedError
+from ..exceptions import (
+    DuplicateCodeError,
+    LockDisconnected,
+    ProviderNotImplementedError,
+)
 from .const import LOGGER
 
 MIN_OPERATION_DELAY = 2.0
@@ -201,6 +209,38 @@ class BaseLock:
     def _raise_not_implemented(self, method_name: str, guidance: str = "") -> NoReturn:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
+
+    @staticmethod
+    def is_masked(code: int | str | None) -> bool:
+        """Return whether a code is masked or empty (not comparable)."""
+        if not code:
+            return True
+        code_str = str(code)
+        return code_str == "*" * len(code_str)
+
+    def is_slot_managed(self, code_slot: int) -> bool:
+        """Return whether a code slot is managed by any LCM config entry for this lock."""
+        return any(
+            self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
+            and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+        )
+
+    @final
+    def _check_duplicate_code(self, code_slot: int, usercode: str) -> None:
+        """Raise DuplicateCodeError if the PIN duplicates another slot on this lock."""
+        if not self.coordinator or not self.coordinator.data:
+            return
+        for other_slot, other_code in self.coordinator.data.items():
+            if other_slot == code_slot or self.is_masked(other_code):
+                continue
+            if str(other_code) == usercode:
+                raise DuplicateCodeError(
+                    code_slot=code_slot,
+                    conflicting_slot=other_slot,
+                    conflicting_slot_managed=self.is_slot_managed(other_slot),
+                    lock_entity_id=self.lock.entity_id,
+                )
 
     @property
     def domain(self) -> str:
@@ -534,9 +574,14 @@ class BaseLock:
 
     @final
     async def async_internal_set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: int | str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> None:
         """Set a usercode on a code slot."""
+        self._check_duplicate_code(code_slot, str(usercode))
         changed = await self._execute_rate_limited(
             "set", self.async_set_usercode, code_slot, usercode, name=name
         )
@@ -589,7 +634,11 @@ class BaseLock:
         return await self._async_executor_call(self.clear_usercode, code_slot)
 
     @final
-    async def async_internal_clear_usercode(self, code_slot: int) -> None:
+    async def async_internal_clear_usercode(
+        self,
+        code_slot: int,
+        source: Literal["sync", "direct"] = "direct",
+    ) -> None:
         """Clear a usercode on a code slot."""
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot

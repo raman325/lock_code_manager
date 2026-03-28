@@ -25,6 +25,28 @@ class EntityNotFoundError(LockCodeManagerError):
         super().__init__(f"Entity not found for lock {lock} slot {slot_num} key {key}")
 
 
+class DuplicateCodeError(LockCodeManagerError):
+    """Raised when a PIN duplicates a code in another slot on the lock."""
+
+    def __init__(
+        self,
+        code_slot: int,
+        conflicting_slot: int,
+        conflicting_slot_managed: bool,
+        lock_entity_id: str,
+    ):
+        """Initialize the error."""
+        self.code_slot = code_slot
+        self.conflicting_slot = conflicting_slot
+        self.conflicting_slot_managed = conflicting_slot_managed
+        self.lock_entity_id = lock_entity_id
+        managed_str = "managed" if conflicting_slot_managed else "unmanaged"
+        super().__init__(
+            f"Lock {lock_entity_id}: cannot set code on slot {code_slot} — "
+            f"PIN duplicates {managed_str} slot {conflicting_slot}"
+        )
+
+
 class LockDisconnected(LockCodeManagerError):
     """Raised when lock can't be communicated with."""
 
