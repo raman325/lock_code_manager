@@ -8,6 +8,10 @@ body:
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
+
+        For guidance on gathering the information below, see the
+        [Troubleshooting](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting)
+        wiki page.
   - type: textarea
     id: what-happened
     attributes:
@@ -58,16 +62,36 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## Additional details
+        ## Diagnostics & Logs
+
+        Debug logs and device diagnostics are the two most important pieces of
+        information for diagnosing issues. See the
+        [Troubleshooting](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting)
+        wiki for detailed instructions on gathering both.
   - type: textarea
     id: logs
     attributes:
-      label: Relevant log output
+      label: Debug logs
       description: >
-        Please set the log level for the integration to debug, reproduce the issue,
-        and copy and paste any relevant log output. This will be automatically
-        formatted into code, so no need for backticks.
+        Enable debug logging by adding
+        `custom_components.lock_code_manager: debug` under `logger > logs` in
+        your `configuration.yaml`, restart, reproduce the issue, then paste the
+        relevant log lines here. See the
+        [Debug Logs](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Debug-Logs)
+        wiki page for detailed instructions. This field is automatically
+        formatted as code.
       render: shell
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Device diagnostics
+      description: >
+        Download diagnostics for your lock device from
+        Settings → Devices & Services → [your lock integration] → [lock device]
+        → ⋮ → Download diagnostics. Paste the JSON here or attach the file. See the
+        [Device Diagnostics](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Device-Diagnostics)
+        wiki page for detailed instructions.
+      render: json
   - type: textarea
     id: screenshots
     attributes:
