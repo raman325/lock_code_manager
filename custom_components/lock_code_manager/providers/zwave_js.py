@@ -1,4 +1,8 @@
-"""Module for Z-Wave JS locks."""
+"""Z-Wave JS lock provider.
+
+Handles push updates, masked PIN resolution, duplicate code detection, and rate-limited
+set/clear operations. See ARCHITECTURE.md for the provider's role in the data flow.
+"""
 
 from __future__ import annotations
 

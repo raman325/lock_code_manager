@@ -1,4 +1,7 @@
-"""Lock Code Manager Coordinators."""
+"""Manages the slot->code mapping for a single lock.
+
+Stores ALL slots (managed and unmanaged). See ARCHITECTURE.md for the full data flow.
+"""
 
 from __future__ import annotations
 
