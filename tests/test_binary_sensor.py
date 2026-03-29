@@ -55,7 +55,6 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
-    LOCK_DATA,
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
@@ -176,7 +175,8 @@ async def test_binary_sensor_entity(
     assert state.state == STATE_ON
 
     # Change PIN and ensure provider receives the update
-    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    service_calls = lock_provider.service_calls
     initial_set_calls = list(service_calls.get("set_usercode", []))
 
     await hass.services.async_call(
@@ -233,7 +233,8 @@ async def test_startup_no_code_flapping_when_synced(
 
     # Check that no set_usercode or clear_usercode calls were made during startup
     # We allow the initial coordinator refresh call, but no actual modifications
-    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    service_calls = lock_provider.service_calls
 
     # There should be no set_usercode calls during initial load
     set_calls = service_calls.get("set_usercode", [])
@@ -286,7 +287,8 @@ async def test_startup_detects_out_of_sync_code(
 
     # Verify that NO set_usercode was called during initial startup
     # (the fix prevents operations on first load)
-    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    service_calls = lock_provider.service_calls
     set_calls = service_calls.get("set_usercode", [])
     assert len(set_calls) == 0, (
         f"Expected no set_usercode calls during initial startup, but found: {set_calls}"
@@ -352,7 +354,8 @@ async def test_startup_out_of_sync_slots_sync_once(
     assert hass.states.get(in_sync_slot_1)
     assert hass.states.get(in_sync_slot_2)
 
-    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    service_calls = lock_provider.service_calls
 
     # Syncs now happen automatically via coordinator update callbacks
     # Both slots should have synced exactly once during/after startup
@@ -551,7 +554,7 @@ async def test_handles_disconnected_lock_on_set(
     assert synced_state.state in (STATE_OFF, STATE_UNAVAILABLE)
 
     # Verify the code wasn't actually changed (still old value)
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "1234"
+    assert lock_provider.codes[1] == "1234"
 
     # Reconnect the lock and refresh coordinator to restore availability
     lock_provider.set_connected(True)
@@ -565,7 +568,7 @@ async def test_handles_disconnected_lock_on_set(
     await in_sync_entity_obj._async_update_state()
     await hass.async_block_till_done()
 
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "9999"
+    assert lock_provider.codes[1] == "9999"
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
@@ -595,7 +598,7 @@ async def test_handles_disconnected_lock_on_clear(
     await _async_force_sync_cycle(hass, coordinator)
 
     # Verify the code wasn't actually cleared (still has value)
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) == "1234"
+    assert lock_provider.codes.get(1) == "1234"
 
     # Reconnect the lock and refresh coordinator to restore availability
     lock_provider.set_connected(True)
@@ -609,7 +612,7 @@ async def test_handles_disconnected_lock_on_clear(
     await in_sync_entity_obj._async_update_state()
     await hass.async_block_till_done()
 
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) is None
+    assert lock_provider.codes.get(1) is None
 
 
 async def test_coordinator_refresh_failure_schedules_retry(
@@ -701,14 +704,14 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     # Get the lock provider and coordinator
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
-    service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]
+    service_calls = lock_provider.service_calls
 
     # Clear any service calls from initial setup
     service_calls["set_usercode"].clear()
 
     # Simulate external change: someone changed the code on the lock to "9999"
     # This simulates what happens when the lock reports a different code
-    hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"
+    lock_provider.codes[1] = "9999"
 
     # Trigger coordinator refresh - this should detect the mismatch and sync
     await coordinator.async_refresh()
@@ -874,8 +877,8 @@ async def test_sync_disables_slot_on_duplicate_code(
 
     # Verify the "9999" code was never set — it should have been blocked
     # (The slot may have been cleared as a result of disabling, that's expected)
-    lock_codes = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"]
-    assert lock_codes.get(1) != "9999"
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert lock_provider.codes.get(1) != "9999"
 
 
 async def test_sync_attempts_exceeded_disables_slot(
@@ -914,8 +917,8 @@ async def test_sync_attempts_exceeded_disables_slot(
 
     # The "9999" code should never have been sent to the lock — the tracker
     # check fires BEFORE the sync operation
-    lock_codes = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"]
-    assert lock_codes.get(1) != "9999"
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert lock_provider.codes.get(1) != "9999"
 
 
 async def test_sync_tracker_resets_when_back_in_sync(

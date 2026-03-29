@@ -41,7 +41,6 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
-    LOCK_DATA,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,10 +98,9 @@ async def test_entry_setup_and_unload(
     assert resources.loaded
     assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
 
+    locks = lock_code_manager_config_entry.runtime_data.locks
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        assert not hass.data[LOCK_DATA][lock_entity_id]["service_calls"][
-            "hard_refresh_codes"
-        ]
+        assert not locks[lock_entity_id].service_calls["hard_refresh_codes"]
 
     await hass.services.async_call(
         DOMAIN,
@@ -110,10 +108,8 @@ async def test_entry_setup_and_unload(
         {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
         blocking=True,
     )
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["hard_refresh_codes"]
-    assert not hass.data[LOCK_DATA][LOCK_2_ENTITY_ID]["service_calls"][
-        "hard_refresh_codes"
-    ]
+    assert locks[LOCK_1_ENTITY_ID].service_calls["hard_refresh_codes"]
+    assert not locks[LOCK_2_ENTITY_ID].service_calls["hard_refresh_codes"]
 
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
