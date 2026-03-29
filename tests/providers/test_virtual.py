@@ -35,7 +35,7 @@ async def test_door_lock(hass: HomeAssistant):
     assert await lock.async_setup_internal(config_entry) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     assert lock.domain == "virtual"
-    assert await lock.async_internal_is_connection_up()
+    assert await lock.async_internal_is_integration_connected()
     assert lock._data == {}
     await lock.async_internal_hard_refresh_codes()
     assert lock._data == {}

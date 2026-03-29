@@ -88,8 +88,8 @@ class MockLCMLock(BaseLock):
         """Set connection state for testing."""
         self._connected = connected
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
     def hard_refresh_codes(self) -> None:
