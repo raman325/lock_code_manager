@@ -54,6 +54,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
+    SlotEntityData,
     _find_config_entry_by_title,
     _get_bool_state,
     _get_condition_entity_data,
@@ -61,6 +62,8 @@ from custom_components.lock_code_manager.websocket import (
     _get_next_calendar_event,
     _get_number_state,
     _get_slot_condition_entity_id,
+    _get_slot_entity_data,
+    _get_slot_state_entity_ids,
     _get_text_state,
 )
 
@@ -1994,3 +1997,415 @@ class TestUpdateSlotCondition:
         result = await ws_client.receive_json()
 
         assert result["success"] is True
+
+
+# =============================================================================
+# Tests for dynamic entity tracking refresh in WebSocket subscriptions
+# =============================================================================
+
+
+async def test_subscribe_lock_codes_entity_tracking_refreshes_on_update(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that subscribe_lock_codes re-subscribes when tracked entity set changes.
+
+    Verifies the _refresh_lock_state_tracking path where new entities appear
+    after the subscription was established (for example, during initial config
+    setup when entities may not exist yet).
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # Get the real entity IDs that will be returned initially
+    real_ids = _get_slot_state_entity_ids(hass, LOCK_1_ENTITY_ID)
+
+    # Create a synthetic new entity that will appear on the second call
+    new_entity_id = "switch.mock_title_code_slot_99_enabled"
+    hass.states.async_set(new_entity_id, STATE_ON)
+    await hass.async_block_till_done()
+
+    call_count = 0
+
+    def _mock_get_slot_state_entity_ids(hass_arg, lock_entity_id_arg):
+        """Return growing entity set to simulate entities appearing."""
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 1:
+            # First call (initial setup): return real entity IDs
+            return real_ids
+        # Subsequent calls: include the new entity
+        return [*real_ids, new_entity_id]
+
+    with patch(
+        "custom_components.lock_code_manager.websocket._get_slot_state_entity_ids",
+        side_effect=_mock_get_slot_state_entity_ids,
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/subscribe_lock_codes",
+                ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+                "reveal": True,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Receive initial event (which calls _send_update -> _refresh_lock_state_tracking
+        # with the expanded set)
+        event = await ws_client.receive_json()
+        assert event["type"] == "event"
+
+    # The refresh happened during the initial _send_update call.
+    # Now the new entity should be tracked. Verify by changing its state
+    # and checking that a WS update is received.
+    hass.states.async_set(new_entity_id, STATE_OFF)
+    await hass.async_block_till_done()
+
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    assert updated["event"][ATTR_LOCK_ENTITY_ID] == LOCK_1_ENTITY_ID
+
+
+async def test_subscribe_lock_codes_tracking_refresh_noop_when_unchanged(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that _refresh_lock_state_tracking is a no-op when entity set is unchanged.
+
+    When the tracked entity set has not changed between updates, the refresh
+    should return early without re-subscribing. This verifies the early-return
+    branch in _refresh_lock_state_tracking.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Receive initial event
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+
+    # Trigger a coordinator update - _send_update calls _refresh_lock_state_tracking
+    # with the same entity set, so it should be a no-op (early return)
+    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock.coordinator.push_update({1: "9999"})
+    await hass.async_block_till_done()
+
+    # Should still get the coordinator update event
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+
+    # Verify state tracking still works (entity state change produces update)
+    enabled_entity_id = "switch.mock_title_code_slot_1_enabled"
+    hass.states.async_set(enabled_entity_id, STATE_OFF)
+    await hass.async_block_till_done()
+
+    updated2 = await ws_client.receive_json()
+    assert updated2["type"] == "event"
+
+
+async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that subscribe_code_slot re-subscribes when tracked entity set changes.
+
+    Verifies the _refresh_state_tracking path in subscribe_code_slot where
+    new entities appear after the subscription was established.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # Get real entity data for the initial call
+    real_entity_data = _get_slot_entity_data(hass, lock_code_manager_config_entry, 1)
+
+    # Create a synthetic new entity that will appear on subsequent calls
+    new_entity_id = "text.mock_title_code_slot_1_extra"
+    hass.states.async_set(new_entity_id, "test_value")
+    await hass.async_block_till_done()
+
+    call_count = 0
+
+    def _mock_get_slot_entity_data(hass_arg, config_entry_arg, slot_num_arg):
+        """Return growing entity data to simulate entities appearing."""
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 1:
+            return real_entity_data
+        # Return entity data with the new entity added via name_entity_id
+        # (using a new SlotEntityData with an extra entity)
+        return SlotEntityData(
+            slot_num=real_entity_data.slot_num,
+            name_entity_id=new_entity_id,
+            pin_entity_id=real_entity_data.pin_entity_id,
+            enabled_entity_id=real_entity_data.enabled_entity_id,
+            active_entity_id=real_entity_data.active_entity_id,
+            number_of_uses_entity_id=real_entity_data.number_of_uses_entity_id,
+            event_entity_id=real_entity_data.event_entity_id,
+        )
+
+    with patch(
+        "custom_components.lock_code_manager.websocket._get_slot_entity_data",
+        side_effect=_mock_get_slot_entity_data,
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_SLOT: 1,
+                "reveal": True,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Receive initial event (triggers _send_update -> _refresh_state_tracking
+        # with the expanded entity set)
+        event = await ws_client.receive_json()
+        assert event["type"] == "event"
+
+    # The refresh happened during the initial _send_update.
+    # Now the new entity should be tracked. Verify by changing its state.
+    hass.states.async_set(new_entity_id, "new_value")
+    await hass.async_block_till_done()
+
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    assert updated["event"][ATTR_SLOT_NUM] == 1
+
+
+async def test_subscribe_code_slot_calendar_condition_state_change(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that calendar condition entity state changes trigger async calendar fetch.
+
+    When a calendar entity that is the condition entity for a slot changes state,
+    the _on_state_change handler should call _async_send_update_with_calendar
+    which re-resolves the condition entity and fetches the next calendar event.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # Register a mock calendar.get_events service for the async path
+    async def mock_get_events(call):
+        entity_id = call.data.get(ATTR_ENTITY_ID)
+        if isinstance(entity_id, list):
+            entity_id = entity_id[0] if entity_id else None
+        return {
+            entity_id: {
+                "events": [
+                    {
+                        "start": "2024-01-15T09:00:00",
+                        "end": "2024-01-15T10:00:00",
+                        "summary": "Test Event",
+                    }
+                ]
+            }
+        }
+
+    hass.services.async_register(
+        CALENDAR_DOMAIN, SERVICE_GET_EVENTS, mock_get_events, supports_response=True
+    )
+
+    try:
+        # Subscribe to slot 2 (which has calendar.test_1 as condition)
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_SLOT: 2,
+                "reveal": True,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Receive initial event
+        event = await ws_client.receive_json()
+        assert event["type"] == "event"
+        assert event["event"][ATTR_SLOT_NUM] == 2
+
+        # Change the calendar condition entity state to trigger the calendar
+        # async path in _on_state_change
+        hass.states.async_set("calendar.test_1", STATE_ON, {"friendly_name": "Test 1"})
+        await hass.async_block_till_done()
+
+        # Should receive an update through the _async_send_update_with_calendar path
+        updated = await ws_client.receive_json()
+        assert updated["type"] == "event"
+        assert updated["event"][ATTR_SLOT_NUM] == 2
+    finally:
+        hass.services.async_remove(CALENDAR_DOMAIN, SERVICE_GET_EVENTS)
+
+
+async def test_subscribe_code_slot_condition_entity_tracked_after_addition(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that a newly added condition entity gets tracked after refresh.
+
+    Subscribe to slot 1 (no condition), then simulate adding a condition
+    entity via _resolve_entity_ids returning it on subsequent calls.
+    Verify the condition entity state changes trigger websocket updates.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # Create a condition entity
+    condition_entity_id = "binary_sensor.test_condition"
+    hass.states.async_set(
+        condition_entity_id, STATE_ON, {"friendly_name": "Test Condition"}
+    )
+    await hass.async_block_till_done()
+
+    call_count = 0
+
+    def _mock_get_condition(config_entry_arg, slot_num_arg):
+        """Return None initially, then the condition entity on subsequent calls."""
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 1:
+            return None
+        return condition_entity_id
+
+    with patch(
+        "custom_components.lock_code_manager.websocket._get_slot_condition_entity_id",
+        side_effect=_mock_get_condition,
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_SLOT: 1,
+                "reveal": True,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Receive initial event (triggers _send_update -> _refresh_state_tracking
+        # which now includes the condition entity)
+        event = await ws_client.receive_json()
+        assert event["type"] == "event"
+
+    # The condition entity should now be tracked. Change its state.
+    hass.states.async_set(
+        condition_entity_id, STATE_OFF, {"friendly_name": "Test Condition"}
+    )
+    await hass.async_block_till_done()
+
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    assert updated["event"][ATTR_SLOT_NUM] == 1
+
+
+async def test_subscribe_lock_codes_unsub_all_with_empty_state_ref(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that _unsub_all handles empty unsub_state_ref gracefully.
+
+    When no entities were tracked (empty unsub_state_ref), unsubscribing
+    should not raise an error. This exercises the `if unsub_state_ref:` guard.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # Mock _get_slot_state_entity_ids to return empty list so
+    # unsub_state_ref stays empty
+    with patch(
+        "custom_components.lock_code_manager.websocket._get_slot_state_entity_ids",
+        return_value=[],
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/subscribe_lock_codes",
+                ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+                "reveal": True,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Receive initial event
+        event = await ws_client.receive_json()
+        assert event["type"] == "event"
+
+    # Unload the config entry, which should trigger _unsub_all.
+    # With empty unsub_state_ref, the guard should prevent an IndexError.
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test that _unsub_all in subscribe_code_slot handles empty unsub_state_ref.
+
+    When no entities were tracked (empty unsub_state_ref), unsubscribing
+    should not raise an error. This exercises the `if unsub_state_ref:` guard.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    # Mock entity data to return empty entity data so unsub_state_ref stays empty
+    empty_entity_data = SlotEntityData(slot_num=1)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.websocket._get_slot_entity_data",
+            return_value=empty_entity_data,
+        ),
+        patch(
+            "custom_components.lock_code_manager.websocket._get_slot_in_sync_entity_ids",
+            return_value={},
+        ),
+        patch(
+            "custom_components.lock_code_manager.websocket._get_slot_condition_entity_id",
+            return_value=None,
+        ),
+    ):
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/subscribe_code_slot",
+                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_SLOT: 1,
+                "reveal": True,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Receive initial event
+        event = await ws_client.receive_json()
+        assert event["type"] == "event"
+
+    # Unload the config entry, which should trigger _unsub_all.
+    # With empty unsub_state_ref, the guard should prevent an IndexError.
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
