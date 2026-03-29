@@ -1,5 +1,5 @@
 import { STATE_NOT_RUNNING } from 'home-assistant-js-websocket';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockHass } from './test/mock-hass';
 import { GenerateViewOptions, LockCodeManagerViewStrategyConfig } from './types';
@@ -14,6 +14,11 @@ vi.mock('./generate-view', () => {
             title: 'Generated View'
         })
     };
+});
+
+beforeEach(async () => {
+    const { generateView } = await import('./generate-view');
+    vi.mocked(generateView).mockClear();
 });
 
 // Helper to create partial config for tests
