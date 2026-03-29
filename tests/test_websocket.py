@@ -998,15 +998,14 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
     await hass.async_block_till_done()
 
     # Collect WebSocket updates until we see the new PIN
-    updated_pin = None
+    result = {"pin": None}
 
     async def _wait_for_pin() -> None:
-        nonlocal updated_pin
         for _ in range(10):
             msg = await ws_client.receive_json()
             if msg.get("type") == "event":
-                updated_pin = msg["event"].get(CONF_PIN)
-                if updated_pin == "9999":
+                result["pin"] = msg["event"].get(CONF_PIN)
+                if result["pin"] == "9999":
                     return
 
     try:
@@ -1014,7 +1013,7 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
     except TimeoutError:
         pass
 
-    assert updated_pin == "9999"
+    assert result["pin"] == "9999"
 
 
 async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
@@ -1068,15 +1067,14 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
     await hass.async_block_till_done()
 
     # Collect WebSocket updates until we see PIN is None
-    updated_pin = "not_none_sentinel"
+    result = {"pin": "not_none_sentinel"}
 
     async def _wait_for_cleared_pin() -> None:
-        nonlocal updated_pin
         for _ in range(10):
             msg = await ws_client.receive_json()
             if msg.get("type") == "event":
-                updated_pin = msg["event"].get(CONF_PIN)
-                if updated_pin is None:
+                result["pin"] = msg["event"].get(CONF_PIN)
+                if result["pin"] is None:
                     return
 
     try:
@@ -1084,7 +1082,7 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
     except TimeoutError:
         pass
 
-    assert updated_pin is None
+    assert result["pin"] is None
 
 
 async def test_enable_toggle_reflects_in_subscribe_code_slot(

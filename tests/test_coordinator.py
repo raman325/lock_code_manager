@@ -337,12 +337,11 @@ async def test_push_update_notifies_listeners(
     coordinator.data = {1: "1111"}
 
     # Track listener callbacks
-    listener_called = False
+    listener_called = [False]
 
     @callback
     def listener():
-        nonlocal listener_called
-        listener_called = True
+        listener_called[0] = True
 
     coordinator.async_add_listener(listener)
 
@@ -350,7 +349,7 @@ async def test_push_update_notifies_listeners(
     coordinator.push_update({1: "9999"})
 
     # Verify listener was called
-    assert listener_called
+    assert listener_called[0]
 
 
 async def test_subscribe_push_updates_called_during_setup(
