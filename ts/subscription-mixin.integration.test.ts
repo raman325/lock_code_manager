@@ -1,8 +1,9 @@
+/* eslint-disable no-underscore-dangle, @typescript-eslint/member-ordering, prefer-destructuring */
 import { LitElement, html } from 'lit';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { LcmSubscriptionMixin, LcmSubscriptionHost } from './subscription-mixin';
+import { LcmSubscriptionHost, LcmSubscriptionMixin } from './subscription-mixin';
 import { createMockHassWithConnection } from './test/mock-hass';
 import { CodeDisplayMode } from './types';
 
@@ -167,7 +168,7 @@ describe('LcmSubscriptionMixin integration', () => {
         el._hass = createMockHassWithConnection({
             onSubscribe: (callback) => {
                 capturedCallback = callback;
-            },
+            }
         });
 
         container.appendChild(el);
@@ -189,7 +190,7 @@ describe('LcmSubscriptionMixin integration', () => {
         el._hass = {
             callWS: vi.fn(),
             config: { state: 'RUNNING' },
-            states: {},
+            states: {}
         } as unknown as HomeAssistant;
 
         container.appendChild(el);

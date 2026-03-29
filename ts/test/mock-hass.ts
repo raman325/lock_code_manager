@@ -1,3 +1,4 @@
+/* eslint-disable line-comment-position */
 import { vi } from 'vitest';
 
 import { HomeAssistant } from '../ha_type_stubs';
@@ -66,18 +67,18 @@ export function createMockHassWithConnection(options?: {
     onSubscribe?: (callback: (data: unknown) => void, msg: unknown) => void;
     states?: Record<string, { attributes?: Record<string, unknown>; state: string }>;
 }): HomeAssistant {
-    const subscribeMessageMock = vi.fn().mockImplementation(
-        (callback: (data: unknown) => void, msg: unknown) => {
+    const subscribeMessageMock = vi
+        .fn()
+        .mockImplementation((callback: (data: unknown) => void, msg: unknown) => {
             options?.onSubscribe?.(callback, msg);
-            return Promise.resolve(() => {});  // unsubscribe function
-        }
-    );
+            return Promise.resolve(() => {}); // unsubscribe function
+        });
     return {
         ...createMockHass({
             callWS: options?.callWS,
             states: options?.states
         }),
-        connection: { subscribeMessage: subscribeMessageMock },
+        connection: { subscribeMessage: subscribeMessageMock }
     } as unknown as HomeAssistant;
 }
 

@@ -1,3 +1,4 @@
+/* eslint-disable no-underscore-dangle, prefer-destructuring */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
@@ -16,9 +17,7 @@ import { LockCoordinatorData } from './types';
  */
 
 /** Creates a LockCoordinatorData object with sensible defaults and optional overrides */
-function makeLockCoordinatorData(
-    overrides?: Partial<LockCoordinatorData>
-): LockCoordinatorData {
+function makeLockCoordinatorData(overrides?: Partial<LockCoordinatorData>): LockCoordinatorData {
     return {
         lock_entity_id: 'lock.test_1',
         lock_name: 'Test Lock',
@@ -30,10 +29,10 @@ function makeLockCoordinatorData(
                 enabled: true,
                 managed: true,
                 name: 'Test User',
-                slot: 1,
-            },
+                slot: 1
+            }
         ],
-        ...overrides,
+        ...overrides
     };
 }
 
@@ -79,9 +78,9 @@ describe('LockCodesCard integration', () => {
     describe('config validation', () => {
         it('throws when lock_entity_id is missing', () => {
             el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
-            expect(() =>
-                el.setConfig({ type: 'custom:lcm-lock-codes' })
-            ).toThrow('lock_entity_id is required');
+            expect(() => el.setConfig({ type: 'custom:lcm-lock-codes' })).toThrow(
+                'lock_entity_id is required'
+            );
         });
 
         it('throws when lock_entity_id is empty', () => {
@@ -95,7 +94,7 @@ describe('LockCodesCard integration', () => {
             el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
             el.setConfig({
                 lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes',
+                type: 'custom:lcm-lock-codes'
             });
             expect(el._config).toBeDefined();
         });
@@ -107,7 +106,7 @@ describe('LockCodesCard integration', () => {
             const hass = createMockHassWithConnection();
             el.setConfig({
                 lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes',
+                type: 'custom:lcm-lock-codes'
             });
             el.hass = hass;
 
@@ -120,7 +119,7 @@ describe('LockCodesCard integration', () => {
             const msg = subscribeMessage.mock.calls[0][1];
             expect(msg).toMatchObject({
                 lock_entity_id: 'lock.front_door',
-                type: 'lock_code_manager/subscribe_lock_codes',
+                type: 'lock_code_manager/subscribe_lock_codes'
             });
         });
     });
@@ -132,11 +131,11 @@ describe('LockCodesCard integration', () => {
             const hass = createMockHassWithConnection({
                 onSubscribe: (callback) => {
                     capturedCallback = callback;
-                },
+                }
             });
             el.setConfig({
                 lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes',
+                type: 'custom:lcm-lock-codes'
             });
             el.hass = hass;
 
@@ -155,11 +154,11 @@ describe('LockCodesCard integration', () => {
             const hass = createMockHassWithConnection({
                 onSubscribe: (callback) => {
                     capturedCallback = callback;
-                },
+                }
             });
             el.setConfig({
                 lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes',
+                type: 'custom:lcm-lock-codes'
             });
             el.hass = hass;
 
@@ -168,10 +167,25 @@ describe('LockCodesCard integration', () => {
 
             const testData = makeLockCoordinatorData({
                 slots: [
-                    { slot: 1, code: '1234', name: 'User A', managed: true, active: true, enabled: true },
-                    { slot: 2, code: null, code_length: 6, name: 'User B', managed: true, active: false, enabled: true },
-                    { slot: 3, code: null, name: undefined, managed: false },
-                ],
+                    {
+                        slot: 1,
+                        code: '1234',
+                        name: 'User A',
+                        managed: true,
+                        active: true,
+                        enabled: true
+                    },
+                    {
+                        slot: 2,
+                        code: null,
+                        code_length: 6,
+                        name: 'User B',
+                        managed: true,
+                        active: false,
+                        enabled: true
+                    },
+                    { slot: 3, code: null, name: undefined, managed: false }
+                ]
             });
             capturedCallback!(testData);
 
@@ -192,7 +206,7 @@ describe('LockCodesCard integration', () => {
             );
             el.setConfig({
                 lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes',
+                type: 'custom:lcm-lock-codes'
             });
             el.hass = hass;
 
@@ -208,11 +222,11 @@ describe('LockCodesCard integration', () => {
             const hass = createMockHassWithConnection({
                 onSubscribe: (callback) => {
                     capturedCallback = callback;
-                },
+                }
             });
             el.setConfig({
                 lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes',
+                type: 'custom:lcm-lock-codes'
             });
             el.hass = hass;
 
