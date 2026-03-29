@@ -396,9 +396,7 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_lock(hass, config_entry)
 
-    if {k: v for k, v in hass_data.items() if k != "resources"} == {
-        CONF_LOCKS: {},
-    }:
+    if not hass_data.get(CONF_LOCKS):
         await _async_cleanup_strategy_resource(hass, hass_data)
         hass.data.pop(DOMAIN)
 
