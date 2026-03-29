@@ -1,0 +1,412 @@
+Implement the following plan:
+
+# Fix overlapping lock coordinator race (Issue #865)
+
+## Context
+
+When two LCM config entries share the same lock (e.g., "All Locks" with slots 11-14 and "Front Door" with slots 1-6, both managing `lock.f`), startup produces:
+
+1. **"Coordinator missing for lock X when adding slot Y entities"** warnings — entities for the second config entry are never created, leaving them unavailable until reload
+2. **"Unable to remove unknown job listener"** error on reload — the `_on_started` one-time listener has already auto-removed itself, but unload tries to remove it again
+
+### Root cause
+
+**Coordinator missing**: During HA startup, both entries register `_on_started` listeners. When `EVENT_HOMEASSISTANT_STARTED` fires, both `async_update_listener` tasks run concurrently. Entry A creates the lock instance (stored in the global dict at `__init__.py:499` **before** the `await`), then starts `await lock.async_setup()`. Entry B finds the lock in the global dict (line 488), reuses it, but **skips** `async_setup` entirely. It immediately invokes `add_code_slot_entities` callbacks — which check `lock.coordinator is None` → warning, no entities created.
+
+**Listener error**: `async_listen_once` auto-removes the `_on_started` callback after it fires. On reload/unload, `_safe_unsub()` calls `unsub()` which hits `_async_remove_listener` — HA core logs an ERROR before raising ValueError. The `_safe_unsub` catches the ValueError, but the error log has already been emitted.
+
+## Changes
+
+### 1. `providers/_base.py` — Add setup gate
+
+Add an `asyncio.Event` field to `BaseLock` that signals when `async_setup` completes, so concurrent callers can wait:
+
+```python
+_setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+```
+
+At the end of `async_setup()`, after coordinator creation and push subscription, call:
+```python
+self._setup_complete.set()
+```
+
+Also set it in the early-return path (coordinator already exists, line 307-312) so re-setup calls don't block.
+
+### 2. `__init__.py` — Wait for setup on lock reuse
+
+In `async_update_listener()`, when a lock instance is reused (line 488-496), wait for its setup to complete before creating entities:
+
+```python
+if lock_entity_id in hass_data[CONF_LOCKS]:
+    lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][lock_entity_id]
+    await lock._setup_complete.wait()  # <-- ADD THIS
+else:
+    ...
+```
+
+This is a no-op if setup already completed (Event is already set), and blocks correctly if another entry's `async_update_listener` is still running `async_setup()`.
+
+### 3. `__init__.py` — Fix listener unsubscribe error
+
+In `async_setup_entry()`, track whether `_on_started` has fired and skip the unsub if it has:
+
+```python
+started = False
+
+@callback
+def _on_started(event: Event) -> None:
+    nonlocal started
+    started = True
+    _setup_entry_after_start(hass, config_entry, event)
+
+unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
+
+@callback
+def _safe_unsub() -> None:
+    if not started:
+        unsub()
+
+config_entry.async_on_unload(_safe_unsub)
+```
+
+### 4. Tests
+
+Add tests in `tests/test_init.py` (or a new `tests/test_overlapping_locks.py` if cleaner):
+
+1. **`test_overlapping_locks_both_entries_get_entities`** — Two config entries sharing a lock, both set up during startup. Verify both entries create their binary_sensor and sensor entities (no "Coordinator missing" warnings).
+2. **`test_overlapping_locks_reload_no_listener_error`** — Two config entries sharing a lock, reload one. Verify no "Unable to remove unknown job listener" error.
+3. **`test_setup_complete_event_set_after_setup`** — Verify `_setup_complete` is set after `async_setup` completes.
+
+## Files Modified
+
+- `custom_components/lock_code_manager/providers/_base.py` — `_setup_complete` event field + set it in `async_setup`
+- `custom_components/lock_code_manager/__init__.py` — `await lock._setup_complete.wait()` on reuse + fix `_safe_unsub`
+- `tests/test_init.py` (or new test file) — new tests
+
+## Verification
+
+1. `uv run pytest tests/ -x` — all tests pass
+2. `uv run pre-commit run --all-files` — linting passes
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/b1386405-5f79-42e9-a9bf-25375841c5d0.jsonl
+
+---
+
+Base directory for this skill: /Users/raman/.claude/plugins/cache/superpowers-marketplace/superpowers/4.3.0/skills/executing-plans
+
+# Executing Plans
+
+## Overview
+
+Load plan, review critically, execute tasks in batches, report for review between batches.
+
+**Core principle:** Batch execution with checkpoints for architect review.
+
+**Announce at start:** "I'm using the executing-plans skill to implement this plan."
+
+## The Process
+
+### Step 1: Load and Review Plan
+1. Read plan file
+2. Review critically - identify any questions or concerns about the plan
+3. If concerns: Raise them with your human partner before starting
+4. If no concerns: Create TodoWrite and proceed
+
+### Step 2: Execute Batch
+**Default: First 3 tasks**
+
+For each task:
+1. Mark as in_progress
+2. Follow each step exactly (plan has bite-sized steps)
+3. Run verifications as specified
+4. Mark as completed
+
+### Step 3: Report
+When batch complete:
+- Show what was implemented
+- Show verification output
+- Say: "Ready for feedback."
+
+### Step 4: Continue
+Based on feedback:
+- Apply changes if needed
+- Execute next batch
+- Repeat until complete
+
+### Step 5: Complete Development
+
+After all tasks complete and verified:
+- Announce: "I'm using the finishing-a-development-branch skill to complete this work."
+- **REQUIRED SUB-SKILL:** Use superpowers:finishing-a-development-branch
+- Follow that skill to verify tests, present options, execute choice
+
+## When to Stop and Ask for Help
+
+**STOP executing immediately when:**
+- Hit a blocker mid-batch (missing dependency, test fails, instruction unclear)
+- Plan has critical gaps preventing starting
+- You don't understand an instruction
+- Verification fails repeatedly
+
+**Ask for clarification rather than guessing.**
+
+## When to Revisit Earlier Steps
+
+**Return to Review (Step 1) when:**
+- Partner updates the plan based on your feedback
+- Fundamental approach needs rethinking
+
+**Don't force through blockers** - stop and ask.
+
+## Remember
+- Review plan critically first
+- Follow plan steps exactly
+- Don't skip verifications
+- Reference skills when plan says to
+- Between batches: just report and wait
+- Stop when blocked, don't guess
+- Never start implementation on main/master branch without explicit user consent
+
+## Integration
+
+**Required workflow skills:**
+- **superpowers:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
+- **superpowers:writing-plans** - Creates the plan this skill executes
+- **superpowers:finishing-a-development-branch** - Complete development after all tasks
+
+---
+
+[Request interrupted by user]
+
+---
+
+do that but try using serena to make modifications. If it seems like there is an easier path, share it before using it
+
+---
+
+can you explain what's happening with the started variable?
+
+---
+
+what is the nonlocal piece
+
+---
+
+is there another pattern we can use here that's easier to read? my first thought is a mutable object but that's just a hack
+
+---
+
+it might be in a shutting down state as well. Should it be if != running?
+
+---
+
+what happens if someone shuts HA Down before it is running?
+
+---
+
+then continue
+
+---
+
+Base directory for this skill: /Users/raman/.claude/plugins/cache/superpowers-marketplace/superpowers/4.3.0/skills/finishing-a-development-branch
+
+# Finishing a Development Branch
+
+## Overview
+
+Guide completion of development work by presenting clear options and handling chosen workflow.
+
+**Core principle:** Verify tests → Present options → Execute choice → Clean up.
+
+**Announce at start:** "I'm using the finishing-a-development-branch skill to complete this work."
+
+## The Process
+
+### Step 1: Verify Tests
+
+**Before presenting options, verify tests pass:**
+
+```bash
+# Run project's test suite
+npm test / cargo test / pytest / go test ./...
+```
+
+**If tests fail:**
+```
+Tests failing (<N> failures). Must fix before completing:
+
+[Show failures]
+
+Cannot proceed with merge/PR until tests pass.
+```
+
+Stop. Don't proceed to Step 2.
+
+**If tests pass:** Continue to Step 2.
+
+### Step 2: Determine Base Branch
+
+```bash
+# Try common base branches
+git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null
+```
+
+Or ask: "This branch split from main - is that correct?"
+
+### Step 3: Present Options
+
+Present exactly these 4 options:
+
+```
+Implementation complete. What would you like to do?
+
+1. Merge back to <base-branch> locally
+2. Push and create a Pull Request
+3. Keep the branch as-is (I'll handle it later)
+4. Discard this work
+
+Which option?
+```
+
+**Don't add explanation** - keep options concise.
+
+### Step 4: Execute Choice
+
+#### Option 1: Merge Locally
+
+```bash
+# Switch to base branch
+git checkout <base-branch>
+
+# Pull latest
+git pull
+
+# Merge feature branch
+git merge <feature-branch>
+
+# Verify tests on merged result
+<test command>
+
+# If tests pass
+git branch -d <feature-branch>
+```
+
+Then: Cleanup worktree (Step 5)
+
+#### Option 2: Push and Create PR
+
+```bash
+# Push branch
+git push -u origin <feature-branch>
+
+# Create PR
+gh pr create --title "<title>" --body "$(cat <<'EOF'
+## Summary
+<2-3 bullets of what changed>
+
+## Test Plan
+- [ ] <verification steps>
+EOF
+)"
+```
+
+Then: Cleanup worktree (Step 5)
+
+#### Option 3: Keep As-Is
+
+Report: "Keeping branch <name>. Worktree preserved at <path>."
+
+**Don't cleanup worktree.**
+
+#### Option 4: Discard
+
+**Confirm first:**
+```
+This will permanently delete:
+- Branch <name>
+- All commits: <commit-list>
+- Worktree at <path>
+
+Type 'discard' to confirm.
+```
+
+Wait for exact confirmation.
+
+If confirmed:
+```bash
+git checkout <base-branch>
+git branch -D <feature-branch>
+```
+
+Then: Cleanup worktree (Step 5)
+
+### Step 5: Cleanup Worktree
+
+**For Options 1, 2, 4:**
+
+Check if in worktree:
+```bash
+git worktree list | grep $(git branch --show-current)
+```
+
+If yes:
+```bash
+git worktree remove <worktree-path>
+```
+
+**For Option 3:** Keep worktree.
+
+## Quick Reference
+
+| Option | Merge | Push | Keep Worktree | Cleanup Branch |
+|--------|-------|------|---------------|----------------|
+| 1. Merge locally | ✓ | - | - | ✓ |
+| 2. Create PR | - | ✓ | ✓ | - |
+| 3. Keep as-is | - | - | ✓ | - |
+| 4. Discard | - | - | - | ✓ (force) |
+
+## Common Mistakes
+
+**Skipping test verification**
+- **Problem:** Merge broken code, create failing PR
+- **Fix:** Always verify tests before offering options
+
+**Open-ended questions**
+- **Problem:** "What should I do next?" → ambiguous
+- **Fix:** Present exactly 4 structured options
+
+**Automatic worktree cleanup**
+- **Problem:** Remove worktree when might need it (Option 2, 3)
+- **Fix:** Only cleanup for Options 1 and 4
+
+**No confirmation for discard**
+- **Problem:** Accidentally delete work
+- **Fix:** Require typed "discard" confirmation
+
+## Red Flags
+
+**Never:**
+- Proceed with failing tests
+- Merge without verifying tests on result
+- Delete work without confirmation
+- Force-push without explicit request
+
+**Always:**
+- Verify tests before offering options
+- Present exactly 4 options
+- Get typed confirmation for Option 4
+- Clean up worktree for Options 1 & 4 only
+
+## Integration
+
+**Called by:**
+- **subagent-driven-development** (Step 7) - After all tasks complete
+- **executing-plans** (Step 5) - After all batches complete
+
+**Pairs with:**
+- **using-git-worktrees** - Cleans up worktree created by that skill
+
+---
+
+push and create PR using PR template. Link to original issue

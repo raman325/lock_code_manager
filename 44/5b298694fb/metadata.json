@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "445b298694fb",
+  "strategy": "manual-commit",
+  "branch": "fix/dead-node-review-followup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/development/adding-a-provider.md",
+    "docs/development/provider-state-management.md",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/5b298694fb/0/metadata.json",
+      "transcript": "/44/5b298694fb/0/full.jsonl",
+      "context": "/44/5b298694fb/0/context.md",
+      "content_hash": "/44/5b298694fb/0/content_hash.txt",
+      "prompt": "/44/5b298694fb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 631,
+    "cache_creation_tokens": 1464144,
+    "cache_read_tokens": 136269171,
+    "output_tokens": 131818,
+    "api_call_count": 551
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "dae5e44e693f",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T06:25:49.304938Z",
+  "branch": "fix/dead-node-gating",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "61cbce4f134a",
+  "token_usage": {
+    "input_tokens": 586,
+    "cache_creation_tokens": 1442853,
+    "cache_read_tokens": 119582633,
+    "output_tokens": 124853,
+    "api_call_count": 512
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T06:25:47.156202Z",
+    "agent_lines": 0,
+    "human_added": 8,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 0
+  }
+}
