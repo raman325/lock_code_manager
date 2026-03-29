@@ -85,7 +85,7 @@ class MockLCMLock(BaseLock):
         """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
-    def hard_refresh_codes(self) -> None:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh all codes.
 
@@ -93,6 +93,7 @@ class MockLCMLock(BaseLock):
         with the lock.
         """
         self.service_calls["hard_refresh_codes"].append(())
+        return self.get_usercodes()
 
     def set_usercode(
         self, code_slot: int, usercode: str, name: str | None = None
@@ -132,8 +133,9 @@ class MockLCMLock(BaseLock):
             'B': '5678',
         }
         """
-        self.service_calls["get_usercodes"].append(self.codes)
-        return self.codes
+        snapshot = self.codes.copy()
+        self.service_calls["get_usercodes"].append(snapshot)
+        return snapshot
 
 
 class MockLockEntity(LockEntity):
