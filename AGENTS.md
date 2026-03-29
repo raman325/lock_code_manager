@@ -49,7 +49,7 @@ entities.
 - `zwave_js.py`: Z-Wave JS lock implementation
 - `virtual.py`: Virtual lock implementation for testing
 - Each provider implements: `async_get_usercodes()`, `async_set_usercode()`, `async_clear_usercode()`,
-  `async_is_connection_up()`, `async_hard_refresh_codes()`
+  `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
 
 **Coordinator** (`coordinator.py`)
@@ -237,13 +237,16 @@ yarn watch                     # Watch mode for development
 2. Subclass `BaseLock` from `providers/_base.py`
 3. Implement required abstract methods:
    - `domain` property: return integration domain string
-   - `async_is_connection_up()`: check if lock is reachable
+   - `async_is_integration_connected()`: check if integration is connected
    - `async_get_usercodes()`: return dict of slot→code mappings
    - `async_set_usercode()`: program a code to a slot
    - `async_clear_usercode()`: remove code from slot
-4. Override `setup()` to register event listeners
-5. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
-6. Add tests in `tests/<provider>/test_provider.py`
+4. Optionally override `is_device_available()` to return `False` when the physical
+   device is unresponsive (default returns `True`). Operations are gated on both
+   integration connectivity and device availability.
+5. Override `setup()` to register event listeners
+6. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
+7. Add tests in `tests/<provider>/test_provider.py`
 
 ### Optional Provider Properties
 
@@ -268,7 +271,7 @@ For providers where the underlying integration's value cache updates asynchronou
 push notifications), implement optimistic updates to prevent sync loops:
 
 ```python
-async def async_set_usercode(self, code_slot: int, usercode: int | str, ...) -> bool:
+async def async_set_usercode(self, code_slot: int, usercode: str, ...) -> bool:
     # ... perform the set operation ...
     await self._call_service_to_set_code(code_slot, usercode)
 

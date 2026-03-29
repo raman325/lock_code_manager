@@ -348,7 +348,7 @@ def _slot_sort_key(slot: Any) -> tuple[int, str]:
 
 def _serialize_slot(
     slot: Any,
-    code: int | str | None,
+    code: str | None,
     *,
     reveal: bool,
     name: str | None = None,
@@ -386,7 +386,7 @@ def _serialize_slot(
     else:
         # Masked: send code_length instead of actual code
         result[ATTR_CODE] = None
-        result[ATTR_CODE_LENGTH] = len(str(code))
+        result[ATTR_CODE_LENGTH] = len(code)
 
     # Configured code from LCM (desired state) - always include for managed slots
     if configured_code is not None:
@@ -617,15 +617,41 @@ async def subscribe_lock_codes(
 
     coordinator = lock.coordinator
 
+    # Mutable container for the current state tracking unsubscribe callback,
+    # allowing it to be replaced when tracked entities change
+    unsub_state_ref: list[Callable[[], None]] = []
+    tracked_set: set[str] = set()
+
+    @callback
+    def _refresh_lock_state_tracking() -> None:
+        """Re-subscribe to state changes if the tracked entity set has changed."""
+        new_ids = set(_get_slot_state_entity_ids(hass, lock_entity_id))
+        if new_ids == tracked_set:
+            return
+        tracked_set.clear()
+        tracked_set.update(new_ids)
+        # Unsubscribe from previous tracking
+        if unsub_state_ref:
+            unsub_state_ref[0]()
+            unsub_state_ref.clear()
+        # Subscribe to new set
+        if new_ids:
+            unsub_state_ref.append(
+                async_track_state_change_event(hass, list(new_ids), _on_state_change)
+            )
+
     @callback
     def _send_update() -> None:
         connection.send_event(
             msg["id"], _serialize_lock_coordinator(hass, lock, reveal=reveal)
         )
+        # Re-resolve tracked entities to pick up entities created after
+        # subscription was established
+        _refresh_lock_state_tracking()
 
     @callback
     def _on_state_change(event: Event[EventStateChangedData]) -> None:
-        """Handle LCM entity state changes."""
+        """Handle Lock Code Manager entity state changes."""
         old_state = event.data.get("old_state")
         new_state = event.data.get("new_state")
 
@@ -633,22 +659,27 @@ async def subscribe_lock_codes(
         if old_state is None or new_state is None or old_state.state != new_state.state:
             _send_update()
 
-    # Track coordinator updates (lock code changes)
+    # Track coordinator updates (lock code changes).
+    # Note: if coordinator is None AND the initial entity set is empty, nothing
+    # drives re-resolution of entities. This is acceptable because coordinators
+    # are always present for real lock providers; None only occurs in degenerate
+    # test scenarios where no actual lock hardware is involved.
     unsub_coordinator = (
         coordinator.async_add_listener(_send_update) if coordinator else lambda: None
     )
 
-    # Track LCM entity state changes (enabled, active, name, PIN)
+    # Track Lock Code Manager entity state changes (enabled, active, name, PIN)
     slot_entity_ids = _get_slot_state_entity_ids(hass, lock_entity_id)
-    unsub_state = (
-        async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
-        if slot_entity_ids
-        else lambda: None
-    )
+    tracked_set.update(slot_entity_ids)
+    if slot_entity_ids:
+        unsub_state_ref.append(
+            async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
+        )
 
     def _unsub_all() -> None:
         unsub_coordinator()
-        unsub_state()
+        if unsub_state_ref:
+            unsub_state_ref[0]()
 
     connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
@@ -897,9 +928,9 @@ def _serialize_slot_card_data(
             raw_code = coordinator.data.get(slot_num)
             if raw_code is not None:
                 if reveal:
-                    code_on_lock = str(raw_code)
+                    code_on_lock = raw_code
                 else:
-                    code_length = len(str(raw_code))
+                    code_length = len(raw_code)
 
         lock_status: dict[str, Any] = {
             ATTR_ENTITY_ID: lock_entity_id,
@@ -1013,10 +1044,19 @@ async def subscribe_code_slot(
         )
         return
 
-    # Get entity data
-    slot_entities = _get_slot_entity_data(hass, config_entry, slot_num)
-    in_sync_map = _get_slot_in_sync_entity_ids(hass, config_entry, slot_num)
-    condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
+    # Re-resolve entity IDs on each update to handle entities created after
+    # subscription (for example, during initial config setup when entities may
+    # not exist yet). These are lightweight entity registry lookups.
+    def _resolve_entity_ids() -> tuple[SlotEntityData, dict[str, str], str | None]:
+        """Resolve current entity IDs for this slot from the entity registry."""
+        return (
+            _get_slot_entity_data(hass, config_entry, slot_num),
+            _get_slot_in_sync_entity_ids(hass, config_entry, slot_num),
+            _get_slot_condition_entity_id(config_entry, slot_num),
+        )
+
+    # Initial resolution for state tracking setup
+    slot_entities, in_sync_map, condition_entity_id = _resolve_entity_ids()
 
     # Fetch next calendar event if condition is a calendar
     calendar_next_event: dict[str, Any] | None = None
@@ -1026,28 +1066,36 @@ async def subscribe_code_slot(
     ):
         calendar_next_event = await _get_next_calendar_event(hass, condition_entity_id)
 
+    # Mutable container for the current state tracking unsubscribe callback,
+    # allowing it to be replaced when tracked entities change
+    unsub_state_ref: list[Callable[[], None]] = []
+
     @callback
     def _send_update(next_event: dict[str, Any] | None = None) -> None:
+        # Re-resolve entity IDs each time to pick up entities created after
+        # subscription was established
+        current_entities, current_in_sync, current_condition = _resolve_entity_ids()
         connection.send_event(
             msg["id"],
             _serialize_slot_card_data(
                 hass,
                 config_entry,
                 slot_num,
-                slot_entities,
-                in_sync_map,
+                current_entities,
+                current_in_sync,
                 reveal=reveal,
                 calendar_next_event=next_event,
             ),
         )
+        # Update state tracking if the set of tracked entities has changed
+        _refresh_state_tracking(current_entities, current_in_sync, current_condition)
 
     async def _async_send_update_with_calendar() -> None:
         """Fetch next calendar event and send update (for state changes)."""
         next_event = None
-        if condition_entity_id and condition_entity_id.startswith(
-            f"{CALENDAR_DOMAIN}."
-        ):
-            next_event = await _get_next_calendar_event(hass, condition_entity_id)
+        current_condition = _get_slot_condition_entity_id(config_entry, slot_num)
+        if current_condition and current_condition.startswith(f"{CALENDAR_DOMAIN}."):
+            next_event = await _get_next_calendar_event(hass, current_condition)
         _send_update(next_event)
 
     @callback
@@ -1058,25 +1106,57 @@ async def subscribe_code_slot(
 
         # Only send update if actual state value changed
         if old_state is None or new_state is None or old_state.state != new_state.state:
+            # Re-resolve condition entity identifier for calendar check
+            current_condition = _get_slot_condition_entity_id(config_entry, slot_num)
             # For calendar entities, fetch next event asynchronously
             if (
-                event.data.get("entity_id") == condition_entity_id
-                and condition_entity_id
-                and split_entity_id(condition_entity_id)[0] == CALENDAR_DOMAIN
+                event.data.get("entity_id") == current_condition
+                and current_condition
+                and split_entity_id(current_condition)[0] == CALENDAR_DOMAIN
             ):
                 hass.async_create_task(_async_send_update_with_calendar())
             else:
                 _send_update()
 
-    # Track slot entity state changes (including condition entity for state updates)
+    # Keep track of which entity IDs are currently being tracked so we can
+    # detect when the set changes and re-subscribe
+    tracked_set: set[str] = set()
+
+    @callback
+    def _refresh_state_tracking(
+        current_entities: SlotEntityData,
+        current_in_sync: dict[str, str],
+        current_condition: str | None = None,
+    ) -> None:
+        """Re-subscribe to state changes if the tracked entity set has changed."""
+        new_ids = set(current_entities.all_entity_ids()) | set(current_in_sync.values())
+        if current_condition:
+            new_ids.add(current_condition)
+
+        if new_ids == tracked_set:
+            return
+
+        tracked_set.clear()
+        tracked_set.update(new_ids)
+        # Unsubscribe from previous tracking
+        if unsub_state_ref:
+            unsub_state_ref[0]()
+            unsub_state_ref.clear()
+        # Subscribe to new set
+        if new_ids:
+            unsub_state_ref.append(
+                async_track_state_change_event(hass, list(new_ids), _on_state_change)
+            )
+
+    # Initial state tracking setup
     tracked_entities = slot_entities.all_entity_ids() + list(in_sync_map.values())
     if condition_entity_id:
         tracked_entities.append(condition_entity_id)
-    unsub_state = (
-        async_track_state_change_event(hass, tracked_entities, _on_state_change)
-        if tracked_entities
-        else lambda: None
-    )
+    tracked_set.update(tracked_entities)
+    if tracked_entities:
+        unsub_state_ref.append(
+            async_track_state_change_event(hass, tracked_entities, _on_state_change)
+        )
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
@@ -1089,7 +1169,8 @@ async def subscribe_code_slot(
             unsub_coordinators.append(lock.coordinator.async_add_listener(_send_update))
 
     def _unsub_all() -> None:
-        unsub_state()
+        if unsub_state_ref:
+            unsub_state_ref[0]()
         for unsub in unsub_coordinators:
             unsub()
 

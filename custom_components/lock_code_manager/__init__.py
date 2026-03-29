@@ -29,6 +29,7 @@ from homeassistant.const import (
     CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
+    EVENT_LOVELACE_UPDATED,
 )
 from homeassistant.core import (
     CoreState,
@@ -46,6 +47,7 @@ from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
+    instance_id,
 )
 
 from .const import (
@@ -115,6 +117,21 @@ async def async_migrate_entry(
         )
 
     return True
+
+
+@callback
+def _async_notify_lovelace_dashboards(hass: HomeAssistant) -> None:
+    """Fire lovelace_updated for each registered dashboard.
+
+    This triggers the "Configuration changed" toast in the Home Assistant
+    frontend, prompting users to refresh the dashboard so the strategy
+    re-generates cards for any added or removed slots/locks.
+    """
+    lovelace_data = hass.data.get(LL_DOMAIN)
+    if not lovelace_data:
+        return
+    for url_path in lovelace_data.dashboards:
+        hass.bus.async_fire(EVENT_LOVELACE_UPDATED, {"url_path": url_path})
 
 
 def _get_lovelace_resources(
@@ -209,6 +226,7 @@ async def _async_cleanup_strategy_resource(
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
+    hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
         [
@@ -394,11 +412,8 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_lock(hass, config_entry)
 
-    if {k: v for k, v in hass_data.items() if k != "resources"} == {
-        CONF_LOCKS: {},
-    }:
+    if not hass_data.get(CONF_LOCKS):
         await _async_cleanup_strategy_resource(hass, hass_data)
-        hass.data.pop(DOMAIN)
 
     return unload_ok
 
@@ -517,7 +532,7 @@ async def async_update_listener(
             added_locks.append(lock)
 
             # Check if lock is connected (but don't wait - entity creation doesn't require it)
-            if not await lock.async_internal_is_connection_up():
+            if not await lock.async_internal_is_integration_connected():
                 _LOGGER.debug(
                     "%s (%s): Lock %s is not connected yet. Entities will be created "
                     "but will be unavailable until the lock comes online. This is normal "
@@ -644,3 +659,8 @@ async def async_update_listener(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
     hass.config_entries.async_update_entry(config_entry, data=new_data, options={})
+
+    # Notify Lovelace dashboards to re-render when structure changes
+    # (slots or locks added/removed), so strategy-generated cards update
+    if slots_to_add or slots_to_remove or locks_to_add or locks_to_remove:
+        _async_notify_lovelace_dashboards(hass)

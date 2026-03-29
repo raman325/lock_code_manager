@@ -35,7 +35,7 @@ async def test_door_lock(hass: HomeAssistant):
     assert await lock.async_setup_internal(config_entry) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     assert lock.domain == "virtual"
-    assert await lock.async_internal_is_connection_up()
+    assert await lock.async_internal_is_integration_connected()
     assert lock._data == {}
     await lock.async_internal_hard_refresh_codes()
     assert lock._data == {}
@@ -44,19 +44,19 @@ async def test_door_lock(hass: HomeAssistant):
     assert lock._data == {}
 
     # we should be able to set a usercode and see it in the data
-    await lock.async_internal_set_usercode(1, 1, "test")
-    assert lock._data["1"] == {"code": 1, "name": "test"}
+    await lock.async_internal_set_usercode(1, "1111", "test")
+    assert lock._data["1"] == {"code": "1111", "name": "test"}
     await lock.async_internal_get_usercodes()
-    assert lock._data["1"] == {"code": 1, "name": "test"}
+    assert lock._data["1"] == {"code": "1111", "name": "test"}
 
     # if we unload without removing permanently, the data should be saved
     assert await lock.async_unload(False) is None
     assert await lock.async_setup_internal(config_entry) is None
-    assert lock._data["1"] == {"code": 1, "name": "test"}
+    assert lock._data["1"] == {"code": "1111", "name": "test"}
 
     # we can clear a valid usercode
-    await lock.async_internal_set_usercode(2, 2, "test2")
-    assert lock._data["2"] == {"code": 2, "name": "test2"}
+    await lock.async_internal_set_usercode(2, "2222", "test2")
+    assert lock._data["2"] == {"code": "2222", "name": "test2"}
     await lock.async_internal_clear_usercode(2)
     assert "2" not in lock._data
 

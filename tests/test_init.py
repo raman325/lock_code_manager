@@ -41,7 +41,6 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
-    LOCK_DATA,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,10 +98,9 @@ async def test_entry_setup_and_unload(
     assert resources.loaded
     assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
 
+    locks = lock_code_manager_config_entry.runtime_data.locks
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        assert not hass.data[LOCK_DATA][lock_entity_id]["service_calls"][
-            "hard_refresh_codes"
-        ]
+        assert not locks[lock_entity_id].service_calls["hard_refresh_codes"]
 
     await hass.services.async_call(
         DOMAIN,
@@ -110,10 +108,8 @@ async def test_entry_setup_and_unload(
         {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
         blocking=True,
     )
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["hard_refresh_codes"]
-    assert not hass.data[LOCK_DATA][LOCK_2_ENTITY_ID]["service_calls"][
-        "hard_refresh_codes"
-    ]
+    assert locks[LOCK_1_ENTITY_ID].service_calls["hard_refresh_codes"]
+    assert not locks[LOCK_2_ENTITY_ID].service_calls["hard_refresh_codes"]
 
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
@@ -387,7 +383,7 @@ async def test_resource_not_loaded_on_unload(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert DOMAIN not in hass.data
+    assert not hass.data[DOMAIN].get(CONF_LOCKS)
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -430,7 +426,7 @@ async def test_resource_reregistered_after_unload_and_new_entry(
     await hass.config_entries.async_remove(config_entry_2.entry_id)
     await hass.async_block_till_done()
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert DOMAIN not in hass.data
+    assert not hass.data[DOMAIN].get(CONF_LOCKS)
 
     # Set up a new config entry - resource should be re-registered
     config_entry_3 = MockConfigEntry(
@@ -613,3 +609,52 @@ async def test_coordinator_exists_after_setup(
     runtime_data = lock_code_manager_config_entry.runtime_data
     for lock in runtime_data.locks.values():
         assert lock.coordinator is not None
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_lovelace_updated_on_structural_change(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test lovelace_updated event fires when slots are added or removed."""
+    events = []
+    hass.bus.async_listen("lovelace_updated", events.append)
+
+    # Add a new slot (structural change)
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][3] = {
+        CONF_NAME: "test3",
+        CONF_PIN: "4321",
+        CONF_ENABLED: True,
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_config
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data == {"url_path": None}
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_lovelace_not_updated_on_non_structural_change(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test lovelace_updated event does not fire on non-structural changes."""
+    events = []
+    hass.bus.async_listen("lovelace_updated", events.append)
+
+    # Change a PIN (non-structural change — same slots and locks)
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][1][CONF_PIN] = "9999"
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_config
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 0

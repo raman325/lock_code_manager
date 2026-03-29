@@ -59,18 +59,16 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
                 config.show_all_codes_for_locks ??
                 DEFAULT_SHOW_LOCK_CARDS;
 
-            return generateView(
-                hass,
-                config_entry,
-                showCodeSensors,
-                showLockSync,
-                showLockCards,
+            return generateView(hass, config_entry, {
                 codeDisplay,
-                config.use_slot_cards ?? DEFAULT_USE_SLOT_CARDS,
-                config.show_conditions ?? DEFAULT_SHOW_CONDITIONS,
-                config.show_lock_status ?? DEFAULT_SHOW_LOCK_STATUS,
-                config.collapsed_sections
-            );
+                collapsedSections: config.collapsed_sections,
+                showCodeSensors,
+                showConditions: config.show_conditions ?? DEFAULT_SHOW_CONDITIONS,
+                showLockCards,
+                showLockStatus: config.show_lock_status ?? DEFAULT_SHOW_LOCK_STATUS,
+                showLockSync,
+                useSlotCards: config.use_slot_cards ?? DEFAULT_USE_SLOT_CARDS
+            });
         } catch {
             return createErrorView(
                 formatConfigEntryNotFoundError(config_entry_id, config_entry_title)

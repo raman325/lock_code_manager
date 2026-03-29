@@ -295,3 +295,14 @@ export interface ConfigEntryJSONFragment {
 }
 
 export type GetConfigEntriesResponse = ConfigEntryJSONFragment[];
+
+export interface GenerateViewOptions {
+    codeDisplay: CodeDisplayMode;
+    collapsedSections?: ('conditions' | 'lock_status')[];
+    showCodeSensors: boolean;
+    showConditions?: boolean;
+    showLockCards: boolean;
+    showLockStatus?: boolean;
+    showLockSync: boolean;
+    useSlotCards: boolean;
+}

@@ -1,9 +1,12 @@
-"""Lock Code Manager Coordinators."""
+"""Manages the slot->code mapping for a single lock.
+
+Stores ALL slots (managed and unmanaged). See ARCHITECTURE.md for the full data flow.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -11,7 +14,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN
+from .const import (
+    BACKOFF_FAILURE_THRESHOLD,
+    BACKOFF_INITIAL_SECONDS,
+    BACKOFF_MAX_SECONDS,
+    DOMAIN,
+)
 from .exceptions import LockCodeManagerError
 
 if TYPE_CHECKING:
@@ -20,7 +28,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]]):
+class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
@@ -39,7 +47,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             update_interval=update_interval,
             config_entry=config_entry,
         )
-        self.data: dict[int, int | str] = {}
+        self.data: dict[int, str | None] = {}
+        self._consecutive_failures: int = 0
+        self._original_update_interval: timedelta | None = update_interval
 
         # Set up drift detection timer for locks with hard_refresh_interval
         if lock.hard_refresh_interval:
@@ -63,7 +73,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         return self._lock
 
     @callback
-    def push_update(self, updates: dict[int, int | str]) -> None:
+    def push_update(self, updates: dict[int, str | None]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
@@ -74,17 +84,65 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         if new_data == self.data:
             return
 
+        # A successful push update proves the lock is reachable, so reset
+        # backoff to re-enable drift checks and normal polling.
+        self._reset_backoff()
+
         self.async_set_updated_data(new_data)
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    def _apply_backoff(self) -> None:
+        """Increment failure counter and apply exponential backoff if threshold met."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= BACKOFF_FAILURE_THRESHOLD:
+            backoff_secs = min(
+                BACKOFF_INITIAL_SECONDS
+                * 2 ** (self._consecutive_failures - BACKOFF_FAILURE_THRESHOLD),
+                BACKOFF_MAX_SECONDS,
+            )
+            if self._original_update_interval is not None:
+                new_interval = timedelta(seconds=backoff_secs)
+                if new_interval != self.update_interval:  # type: ignore[has-type]
+                    self.update_interval = new_interval
+                    _LOGGER.warning(
+                        "Update failed %d consecutive times for %s, "
+                        "backing off polling interval to %ds",
+                        self._consecutive_failures,
+                        self._lock.lock.entity_id,
+                        backoff_secs,
+                    )
+            else:
+                _LOGGER.warning(
+                    "Update failed %d consecutive times for %s, "
+                    "suppressing drift checks until recovery",
+                    self._consecutive_failures,
+                    self._lock.lock.entity_id,
+                )
+
+    def _reset_backoff(self) -> None:
+        """Reset failure counter and restore original update interval."""
+        if self._consecutive_failures > 0:
+            _LOGGER.info(
+                "Lock %s recovered after %d consecutive failures",
+                self._lock.lock.entity_id,
+                self._consecutive_failures,
+            )
+            self._consecutive_failures = 0
+            if self._original_update_interval is not None:
+                self.update_interval = self._original_update_interval
+
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """Update usercodes."""
         try:
-            return await self._lock.async_internal_get_usercodes()
+            data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
+            self._apply_backoff()
             # We can silently fail if we've never been able to retrieve data
             if not self.last_update_success:
                 return {}
             raise UpdateFailed from err
+
+        self._reset_backoff()
+        return data
 
     async def _async_drift_check(self, now: datetime) -> None:
         """
@@ -98,6 +156,14 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         if not self.last_update_success:
             return
 
+        if self._consecutive_failures >= BACKOFF_FAILURE_THRESHOLD:
+            _LOGGER.debug(
+                "Skipping drift check for %s (in backoff after %d failures)",
+                self._lock.lock.entity_id,
+                self._consecutive_failures,
+            )
+            return
+
         _LOGGER.debug(
             "Performing drift detection hard refresh for %s",
             self._lock.lock.entity_id,
@@ -105,6 +171,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         try:
             new_data = await self._lock.async_internal_hard_refresh_codes()
         except LockCodeManagerError as err:
+            self._apply_backoff()
             _LOGGER.warning(
                 "Drift detection hard refresh failed for %s: %s",
                 self._lock.lock.entity_id,
@@ -128,7 +195,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
     async def _async_connection_check(self, now: datetime) -> None:
         """Poll connection state so providers can resubscribe on reconnect."""
         try:
-            await self._lock.async_internal_is_connection_up()
+            await self._lock.async_internal_is_integration_connected()
         except LockCodeManagerError as err:
             _LOGGER.debug(
                 "Connection check failed for %s: %s", self._lock.lock.entity_id, err

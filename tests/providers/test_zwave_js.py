@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import CommandClass
+from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.lock import (
     LOCK_USERCODE_PROPERTY,
     LOCK_USERCODE_STATUS_PROPERTY,
@@ -157,17 +157,17 @@ async def test_node_property(
 # Connection tests
 
 
-async def test_is_connection_up_when_loaded(
+async def test_is_integration_connected_when_loaded(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
     """Test connection is up when config entry is loaded and client connected."""
     assert zwave_integration.state == ConfigEntryState.LOADED
-    assert await zwave_js_lock.async_is_connection_up() is True
+    assert await zwave_js_lock.async_is_integration_connected() is True
 
 
-async def test_is_connection_down_when_not_loaded(
+async def test_is_integration_not_connected_when_not_loaded(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
@@ -177,7 +177,7 @@ async def test_is_connection_down_when_not_loaded(
     await hass.async_block_till_done()
 
     assert zwave_integration.state != ConfigEntryState.LOADED
-    assert await zwave_js_lock.async_is_connection_up() is False
+    assert await zwave_js_lock.async_is_integration_connected() is False
 
 
 # Usercode tests
@@ -1595,52 +1595,26 @@ async def test_push_update_user_id_status_enabled_ignored(
 # code_slot_in_use tests
 
 
-async def test_code_slot_in_use_returns_true(
+@pytest.mark.parametrize(
+    ("mock_config", "expected"),
+    [
+        ({"return_value": {"in_use": True, "usercode": "1234"}}, True),
+        ({"return_value": {"in_use": False, "usercode": ""}}, False),
+        ({"side_effect": KeyError("slot not found")}, None),
+        ({"side_effect": ValueError("invalid slot")}, None),
+    ],
+)
+async def test_code_slot_in_use(
     zwave_js_lock: ZWaveJSLock,
+    mock_config: dict,
+    expected: bool | None,
 ) -> None:
-    """Test code_slot_in_use returns True when slot is in use."""
+    """Test code_slot_in_use for various return values and exceptions."""
     with patch(
         "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-        return_value={"in_use": True, "usercode": "1234"},
+        **mock_config,
     ):
-        result = zwave_js_lock.code_slot_in_use(1)
-        assert result is True
-
-
-async def test_code_slot_in_use_returns_false(
-    zwave_js_lock: ZWaveJSLock,
-) -> None:
-    """Test code_slot_in_use returns False when slot is not in use."""
-    with patch(
-        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-        return_value={"in_use": False, "usercode": ""},
-    ):
-        result = zwave_js_lock.code_slot_in_use(1)
-        assert result is False
-
-
-async def test_code_slot_in_use_returns_none_on_key_error(
-    zwave_js_lock: ZWaveJSLock,
-) -> None:
-    """Test code_slot_in_use returns None when KeyError occurs."""
-    with patch(
-        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-        side_effect=KeyError("slot not found"),
-    ):
-        result = zwave_js_lock.code_slot_in_use(99)
-        assert result is None
-
-
-async def test_code_slot_in_use_returns_none_on_value_error(
-    zwave_js_lock: ZWaveJSLock,
-) -> None:
-    """Test code_slot_in_use returns None when ValueError occurs."""
-    with patch(
-        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-        side_effect=ValueError("invalid slot"),
-    ):
-        result = zwave_js_lock.code_slot_in_use(0)
-        assert result is None
+        assert zwave_js_lock.code_slot_in_use(1) is expected
 
 
 # All-zeros handling tests
@@ -1710,12 +1684,21 @@ async def test_resolve_pin_if_masked_all_zeros_slot_unknown(
 # _slot_expects_pin tests
 
 
-async def test_slot_expects_pin_returns_true_when_active_with_pin(
+@pytest.mark.parametrize(
+    ("active_state", "expected"),
+    [
+        ("on", True),
+        ("off", False),
+    ],
+)
+async def test_slot_expects_pin_by_active_state(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    active_state: str,
+    expected: bool,
 ) -> None:
-    """Test _slot_expects_pin returns True when active=ON and PIN is set."""
+    """Test _slot_expects_pin based on active entity state."""
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1726,7 +1709,6 @@ async def test_slot_expects_pin_returns_true_when_active_with_pin(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    # Create the active and PIN entities
     ent_reg = er.async_get(hass)
     base_unique_id = f"{lcm_entry.entry_id}|2"
 
@@ -1743,55 +1725,11 @@ async def test_slot_expects_pin_returns_true_when_active_with_pin(
         config_entry=lcm_entry,
     )
 
-    # Set states: active=ON, pin="1234"
-    hass.states.async_set(active_entry.entity_id, "on")
+    hass.states.async_set(active_entry.entity_id, active_state)
     hass.states.async_set(pin_entry.entity_id, "1234")
     await hass.async_block_till_done()
 
-    assert zwave_js_lock._slot_expects_pin(2) is True
-
-    await zwave_js_lock.async_unload(False)
-
-
-async def test_slot_expects_pin_returns_false_when_inactive(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-) -> None:
-    """Test _slot_expects_pin returns False when active=OFF."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    # Create the active and PIN entities
-    ent_reg = er.async_get(hass)
-    base_unique_id = f"{lcm_entry.entry_id}|2"
-
-    active_entry = ent_reg.async_get_or_create(
-        "binary_sensor",
-        DOMAIN,
-        f"{base_unique_id}|active",
-        config_entry=lcm_entry,
-    )
-    pin_entry = ent_reg.async_get_or_create(
-        "text",
-        DOMAIN,
-        f"{base_unique_id}|pin",
-        config_entry=lcm_entry,
-    )
-
-    # Set states: active=OFF, pin="1234"
-    hass.states.async_set(active_entry.entity_id, "off")
-    hass.states.async_set(pin_entry.entity_id, "1234")
-    await hass.async_block_till_done()
-
-    assert zwave_js_lock._slot_expects_pin(2) is False
+    assert zwave_js_lock._slot_expects_pin(2) is expected
 
     await zwave_js_lock.async_unload(False)
 
@@ -1924,6 +1862,51 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
+
+
+# Device availability tests
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (NodeStatus.ALIVE, True),
+        (NodeStatus.ASLEEP, True),
+        (NodeStatus.UNKNOWN, True),
+        (NodeStatus.DEAD, False),
+    ],
+)
+async def test_is_device_available_by_status(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+    status: NodeStatus,
+    expected: bool,
+) -> None:
+    """Test async_is_device_available for each node status."""
+    with patch.object(
+        type(lock_schlage_be469),
+        "status",
+        new_callable=lambda: property(lambda self: status),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is expected
+
+
+async def test_is_device_available_returns_false_on_exception(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that async_is_device_available returns False when node access raises."""
+
+    def raise_error(self):
+        raise RuntimeError("node gone")
+
+    with patch.object(
+        type(zwave_js_lock),
+        "node",
+        new_callable=lambda: property(raise_error),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is False
 
 
 # Duplicate code notification tests
