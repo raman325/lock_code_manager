@@ -13,6 +13,13 @@
   locks between tools. The guidance is now to commit fully to one tool.
 - **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
   code slots on a lock, so users can clean up stale codes without manual intervention.
+- **Unify Z-Wave event 15 duplicate handler with CodeRejectedError** — The reactive
+  duplicate handler (`_async_handle_duplicate_code` in `zwave_js.py`) duplicates the
+  disable+notify logic that now lives in the binary sensor's `_disable_slot_and_notify`.
+  It should surface through the exception hierarchy instead. Options: route through
+  the coordinator to trigger a binary sensor state update, or have the provider set a
+  flag that the binary sensor checks on next sync cycle. This would also allow the
+  event 15 handler to reset the sync tracker.
 - **Investigate lock-specific duplicate detection carve-outs** — Some locks don't mask
   PINs or don't reject duplicates. Explore whether duplicate detection behavior can be
   adapted per lock capability rather than one-size-fits-all.
