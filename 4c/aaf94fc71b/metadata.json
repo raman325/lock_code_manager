@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4caaf94fc71b",
+  "strategy": "manual-commit",
+  "branch": "refactor/parametrize-tests",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/providers/test_base.py",
+    "tests/providers/test_zwave_js.py",
+    "tests/test_exceptions.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4c/aaf94fc71b/0/metadata.json",
+      "transcript": "/4c/aaf94fc71b/0/full.jsonl",
+      "context": "/4c/aaf94fc71b/0/context.md",
+      "content_hash": "/4c/aaf94fc71b/0/content_hash.txt",
+      "prompt": "/4c/aaf94fc71b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 693,
+    "cache_creation_tokens": 1516893,
+    "cache_read_tokens": 162968188,
+    "output_tokens": 147868,
+    "api_call_count": 609
+  }
+}

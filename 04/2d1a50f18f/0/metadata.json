@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "042d1a50f18f",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T07:05:30.69567Z",
+  "branch": "feat/mask-pins-in-logs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a4f9cade187a",
+  "token_usage": {
+    "input_tokens": 769,
+    "cache_creation_tokens": 1546888,
+    "cache_read_tokens": 190275460,
+    "output_tokens": 159700,
+    "api_call_count": 663
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T07:05:28.099116Z",
+    "agent_lines": 0,
+    "human_added": 815,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 815,
+    "agent_percentage": 0
+  }
+}

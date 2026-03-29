@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f359967f87c4",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T07:09:25.392684Z",
+  "branch": "refactor/parametrize-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py",
+    "docs/development/adding-a-provider.md",
+    "docs/development/index.md",
+    "docs/development/provider-state-management.md",
+    "tests/test_coordinator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ec3539cac372",
+  "token_usage": {
+    "input_tokens": 782,
+    "cache_creation_tokens": 1554205,
+    "cache_read_tokens": 196035798,
+    "output_tokens": 161835,
+    "api_call_count": 674
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T07:09:22.790012Z",
+    "agent_lines": 0,
+    "human_added": 104,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 104,
+    "agent_percentage": 0
+  }
+}

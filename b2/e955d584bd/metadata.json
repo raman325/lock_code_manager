@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b2e955d584bd",
+  "strategy": "manual-commit",
+  "branch": "feat/duplicate-code-detection",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/binary_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b2/e955d584bd/0/metadata.json",
+      "transcript": "/b2/e955d584bd/0/full.jsonl",
+      "context": "/b2/e955d584bd/0/context.md",
+      "content_hash": "/b2/e955d584bd/0/content_hash.txt",
+      "prompt": "/b2/e955d584bd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 425,
+    "cache_creation_tokens": 1339426,
+    "cache_read_tokens": 66894186,
+    "output_tokens": 91375,
+    "api_call_count": 367
+  }
+}

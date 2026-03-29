@@ -1,0 +1,166 @@
+Implement the following plan:
+
+# Home Assistant Blueprints for Lock Code Manager
+
+## Context
+
+LCM currently has built-in features for number-of-uses tracking and condition entities. The user wants to externalize these as HA blueprints so LCM stays lean and users get more flexibility. The built-in `number_of_uses` entity will eventually be deprecated in favor of the blueprint.
+
+## Architecture
+
+Three blueprints. Template blueprints can only create ONE entity type (enforced by HA core), so calendar condition (template binary_sensor) and PIN setting (automation calling `text.set_value`) must be separate.
+
+| Blueprint | Domain | File | Purpose |
+|-----------|--------|------|---------|
+| Slot Usage Limiter | `automation` | `slot_usage_limiter.yaml` | Decrement counter on PIN use, disable at 0 |
+| Calendar Condition | `template` | `calendar_condition.yaml` | Binary sensor: ON when calendar event matches template criteria |
+| Calendar PIN Setter | `automation` | `calendar_pin_setter.yaml` | Extract PIN from calendar event via template, set on LCM |
+
+**Directory**: `blueprints/automation/lock_code_manager/` and `blueprints/template/lock_code_manager/`
+
+## Entity Derivation Strategy
+
+All blueprints take a `config_entry` selector (filtered to `lock_code_manager`) + `slot_number` input. Entity IDs are derived automatically using HA's built-in Jinja2 functions:
+
+```jinja2
+{% set title = config_entry_attr(config_entry, 'title') %}
+{% set all_entities = integration_entities(title) %}
+{% set pin_entity = all_entities | select('match', 'text\\..*_code_slot_' ~ slot ~ '_pin') | first | default('') %}
+```
+
+**Why this works:** `integration_entities(title)` returns all entity IDs for a config entry matching the title (`template/__init__.py:1163`). `config_entry_attr(id, 'title')` gets the title from a config entry ID (`:1204`). Neither function is blocked in HA's limited template block list (`template/__init__.py:1974-2000`), so they work in both `trigger_variables` and `variables:`.
+
+**Variable evaluation order:** HA's `ScriptVariables.async_render()` (`script_variables.py:51-59`) renders variables in insertion order, with each result available to subsequent variables. This is critical for Blueprints 2 & 3 where `slot_number` may be a template referencing calendar attributes that must be set first.
+
+**LCM entity naming** (from `entity.py:61-72`): Device name = `{title} Code slot {slot_num}`, unique_id = `{entry_id}|{slot_num}|{key}`. Translation keys: `pin_used` (event), `enabled` (switch), `pin` (text), `name` (text), `number_of_uses` (number), `in_sync` (binary_sensor).
+
+## Blueprint 1: Slot Usage Limiter
+
+**Inputs:**
+- `config_entry` — config_entry selector filtered to `lock_code_manager`
+- `slot_number` — number (1-999)
+- `uses_counter` — user-created `input_number` helper (entity selector, `domain: input_number`)
+- `initial_uses` (default: 0) — if >0, auto-resets counter when slot is re-enabled
+
+**Derived entities (via `trigger_variables`):**
+- `pin_used_entity` — `event.{slug}_code_slot_{n}_pin_used`
+- `enabled_switch` — `switch.{slug}_code_slot_{n}_enabled`
+
+Uses `trigger_variables` because these derived entity IDs are used in trigger `entity_id` fields. `trigger_variables` support `integration_entities()` and `config_entry_attr()` (not in HA's limited template block list at `template/__init__.py:1974-2000`).
+
+**Triggers:**
+1. `pin_used_entity` state change → decrement counter → if new value = 0, call `switch.turn_off`
+2. `enabled_switch` turns ON → if `initial_uses > 0`, reset counter to `initial_uses`
+
+**Key implementation detail:** Calculate `new_count` in a `variables:` step BEFORE setting the value, then check `new_count == 0` to decide whether to disable. This avoids a race between `input_number.set_value` and the state update.
+
+**Mode:** `queued` (handle rapid successive uses)
+
+## Blueprint 2: Calendar Condition
+
+Reference pattern: `.venv/.../homeassistant/components/template/blueprints/inverted_binary_sensor.yaml`
+
+**Inputs:**
+- `config_entry` — config_entry selector filtered to `lock_code_manager`
+- `slot_number` — template selector (can be static like `3` or dynamic like `{{ description | regex_findall('slot (\d+)') | first }}`)
+- `calendar_entity` — entity selector, `domain: calendar`
+- `condition_template` (default: `{{ true }}`) — Jinja2 template evaluated against event + LCM context
+
+**Creates:** `binary_sensor` — ON when calendar is ON AND condition template is truthy
+
+**Top-level `variables:` (static, don't depend on calendar state):**
+- `config_entry`, `calendar_entity` — from `!input`
+- `config_entry_title` — derived via `config_entry_attr()`
+- `_all_entities` — derived via `integration_entities()`
+
+**State template** — sets calendar attrs first (so dynamic `slot_number` can reference them), then derives LCM context:
+```jinja2
+{% set message = state_attr(calendar_entity, 'message') | default('') %}
+{% set description = state_attr(calendar_entity, 'description') | default('') %}
+{% set location = state_attr(calendar_entity, 'location') | default('') %}
+{% set start_time = state_attr(calendar_entity, 'start_time') | default('') %}
+{% set end_time = state_attr(calendar_entity, 'end_time') | default('') %}
+{% set all_day = state_attr(calendar_entity, 'all_day') | default(false) %}
+{% set slot_number = INLINED_SLOT_TEMPLATE %}
+{% set _name_entity = _all_entities | select('match', 'text\\..*_code_slot_' ~ slot_number ~ '_name') | first | default('') %}
+{% set name_state = states(_name_entity) if _name_entity else '' %}
+{% set _event_entity = _all_entities | select('match', 'event\\..*_code_slot_' ~ slot_number ~ '_pin_used') | first | default('') %}
+{% set lock_entity_ids = state_attr(_event_entity, 'event_types') | default([]) %}
+{{ is_state(calendar_entity, 'on') and (INLINED_CONDITION_TEMPLATE) }}
+```
+
+Calendar attrs are `{% set %}` before `slot_number` so dynamic slot templates can reference `description`, `message`, etc. The `_all_entities` comes from top-level `variables:`. The `!input` tags are inlined at blueprint instantiation.
+
+Lock entity IDs are derived from the `pin_used` event entity's `event_types` attribute (`event.py:82-84`), which lists all lock entity IDs that support code slot events.
+
+**Template variables available to user's condition:** `message`, `description`, `location`, `start_time`, `end_time`, `all_day`, `slot_number`, `config_entry_title`, `name_state`, `lock_entity_ids` (list)
+
+**Example condition:** `{{ 'Guest' in message }}`
+
+**How users use it:** Assign the created binary_sensor as the LCM slot's condition entity. LCM already supports `binary_sensor` in `CONDITION_ENTITY_DOMAINS` (`const.py:92`).
+
+## Blueprint 3: Calendar PIN Setter
+
+**Inputs:**
+- `config_entry` — config_entry selector filtered to `lock_code_manager`
+- `slot_number` — template selector (static or dynamic, same as Blueprint 2)
+- `calendar_entity` — entity selector, `domain: calendar`
+- `pin_template` — Jinja2 template that extracts a PIN from event attributes
+- `clear_on_end` (default: true) — clear PIN when event ends
+
+**Top-level `variables:` (static):**
+- `config_entry`, `calendar_entity`, `clear_on_end` — from `!input`
+- `config_entry_title` — derived via `config_entry_attr()`
+- `_all_entities` — derived via `integration_entities()`
+
+No `trigger_variables` needed because the trigger uses `!input calendar_entity` directly.
+
+**Triggers:** `calendar_entity` state change
+
+**Action flow (single `variables:` step, evaluated in order):**
+1. Set calendar attrs: `message`, `description`, `location`, `start_time`, `end_time`, `all_day`
+2. Evaluate `slot_number` (inlined `!input` — can reference calendar attrs from step 1)
+3. Derive `pin_entity` from `_all_entities` + `slot_number`
+4. Evaluate `pin_value` (inlined `!input pin_template` — can reference calendar attrs)
+
+Then `choose:`:
+- Calendar ON + `pin_value` non-empty → `text.set_value` on `pin_entity`
+- Calendar OFF + `clear_on_end` → `text.set_value` with empty string
+
+**Template variables for PIN extraction:** `message`, `description`, `location`, `start_time`, `end_time`, `all_day`
+
+**Example PIN template:** `{{ description | regex_findall('\\b\\d{4}\\b') | first | default('') }}`
+
+**Mode:** `single`
+
+## Template Debugging Guidance
+
+Include in each blueprint's `description` field:
+
+> To test your template, go to Developer Tools → Template and paste:
+> ```
+> {% set message = state_attr('calendar.YOUR_CALENDAR', 'message') | default('') %}
+> {% set description = state_attr('calendar.YOUR_CALENDAR', 'description') | default('') %}
+> {{ YOUR_TEMPLATE_HERE }}
+> ```
+
+## Files to Create
+
+1. `blueprints/automation/lock_code_manager/slot_usage_limiter.yaml`
+2. `blueprints/template/lock_code_manager/calendar_condition.yaml`
+3. `blueprints/automation/lock_code_manager/calendar_pin_setter.yaml`
+
+## Verification
+
+1. Validate YAML syntax: `python -c "import yaml; yaml.safe_load(open('file.yaml'))"`
+2. Verify entity selector filters match LCM entity domains
+3. Verify `integration_entities` and `config_entry_attr` are NOT in HA's limited template block list (`template/__init__.py:1974-2000`)
+4. Verify template variable names match HA calendar state attributes (`message`, `description`, `location`, `start_time`, `end_time`, `all_day`)
+5. Pre-commit passes
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/7c955a97-89aa-424d-84c1-3b2571976d8a.jsonl
+
+---
+
+create PR using PR template in draft state
