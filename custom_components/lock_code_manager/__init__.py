@@ -46,6 +46,7 @@ from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
+    instance_id,
 )
 
 from .const import (
@@ -208,6 +209,9 @@ async def _async_cleanup_strategy_resource(
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
+    from .util import set_instance_id  # noqa: PLC0415
+
+    set_instance_id(await instance_id.async_get(hass))
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
