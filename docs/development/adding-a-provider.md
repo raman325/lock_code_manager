@@ -86,11 +86,11 @@ def connection_check_interval(self) -> timedelta | None:
 
 ### is_integration_connected()
 
-Check if the lock is reachable:
+Check if the integration's client/driver/broker is connected:
 
 ```python
 def is_integration_connected(self) -> bool:
-    """Return whether connection to lock is up."""
+    """Return whether the integration is connected."""
     # Option 1: Check config entry state
     if self.lock_config_entry:
         return self.lock_config_entry.state == ConfigEntryState.LOADED
