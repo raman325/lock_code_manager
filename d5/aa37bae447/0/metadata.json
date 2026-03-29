@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d5aa37bae447",
+  "session_id": "0042d351-fad5-4c90-8890-a26276efc046",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T21:44:15.173822Z",
+  "branch": "fix/strategy-refresh-on-config-change",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/test_websocket.py",
+    "ts/config-watcher.test.ts",
+    "ts/config-watcher.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "3bb7493879a8",
+  "token_usage": {
+    "input_tokens": 1132,
+    "cache_creation_tokens": 679269,
+    "cache_read_tokens": 50605910,
+    "output_tokens": 71204,
+    "api_call_count": 240
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T21:44:14.17751Z",
+    "agent_lines": 1080,
+    "human_added": 1294,
+    "human_modified": 12,
+    "human_removed": 0,
+    "total_committed": 2386,
+    "agent_percentage": 45.26404023470243
+  }
+}

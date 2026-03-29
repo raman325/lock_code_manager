@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d5aa37bae447",
+  "strategy": "manual-commit",
+  "branch": "fix/strategy-refresh-on-config-change",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/test_websocket.py",
+    "ts/config-watcher.test.ts",
+    "ts/config-watcher.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d5/aa37bae447/0/metadata.json",
+      "transcript": "/d5/aa37bae447/0/full.jsonl",
+      "context": "/d5/aa37bae447/0/context.md",
+      "content_hash": "/d5/aa37bae447/0/content_hash.txt",
+      "prompt": "/d5/aa37bae447/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1132,
+    "cache_creation_tokens": 679269,
+    "cache_read_tokens": 50605910,
+    "output_tokens": 71204,
+    "api_call_count": 240
+  }
+}
