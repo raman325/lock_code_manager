@@ -18,7 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 class CodeSlotData(TypedDict):
     """Type for code slot data."""
 
-    code: int | str
+    code: str
     name: str | None
 
 
@@ -57,7 +57,7 @@ class VirtualLock(BaseLock):
         """Return whether connection to lock is up."""
         return True
 
-    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -68,7 +68,7 @@ class VirtualLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -94,9 +94,9 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {
-            int(slot_num): code_slot["code"]
+            int(slot_num): str(code_slot["code"])
             for slot_num, code_slot in self._data.items()
         }

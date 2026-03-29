@@ -502,7 +502,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         """
         # Use coordinator data if available, otherwise fall back to sensor state
         lock_code = (
-            str(slot_state.coordinator_code)
+            slot_state.coordinator_code
             if slot_state.coordinator_code is not None
             else slot_state.code_state
         )
@@ -516,7 +516,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         pin_state: str
         name_state: str | None
         code_state: str
-        coordinator_code: int | str | None
+        coordinator_code: str | None
 
     def _resolve_slot_state(
         self, event: Event[EventStateChangedData] | None

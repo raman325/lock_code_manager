@@ -261,6 +261,14 @@ class SlotStatus(StrEnum):
 4. Update all consumers of coordinator data (binary_sensor, sensor, websocket)
 5. Update frontend types and rendering
 
+**Related: Formalize lock/user/PIN data model with Matter in mind.** Matter
+introduces a richer credential model (users, credentials, credential types)
+that goes beyond simple slot→PIN mappings. When designing the enhanced data
+model, study Matter's DoorLock cluster credential management as a reference
+architecture and consider how it maps to Z-Wave, ZHA, and other lock standards.
+The goal is a provider-agnostic model that can express Matter's concepts without
+over-engineering for simpler protocols.
+
 **Estimated Effort:** High (12-16 hours)
 **Priority:** Medium
 **Status:** Not started

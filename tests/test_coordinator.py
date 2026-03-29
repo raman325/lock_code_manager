@@ -40,16 +40,16 @@ class MockLockWithHardRefresh(BaseLock):
         """Return whether connection to lock is up."""
         return self._is_connected
 
-    def hard_refresh_codes(self) -> dict[int, int | str]:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """Perform hard refresh and return all codes."""
         return self.get_usercodes()
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {}
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
         return True
