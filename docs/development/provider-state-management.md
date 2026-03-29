@@ -47,7 +47,7 @@ All modes include an initial poll to populate coordinator data.
 │    get_usercodes()                  # return current codes      │
 │    set_usercode()                   # set a code on lock        │
 │    clear_usercode()                 # clear a code from lock    │
-│    is_connection_up()               # check lock connectivity   │
+│    is_integration_connected()               # check lock connectivity   │
 ├─────────────────────────────────────────────────────────────────┤
 │  Optional Methods:                                              │
 │    hard_refresh_codes()             # re-fetch from device      │
@@ -265,12 +265,12 @@ def clear_usercode(self, code_slot: int) -> bool:
     return True
 ```
 
-### is_connection_up()
+### is_integration_connected()
 
 Check if the lock is reachable.
 
 ```python
-def is_connection_up(self) -> bool:
+def is_integration_connected(self) -> bool:
     """Return whether connection to lock is up.
 
     This is called periodically (at connection_check_interval) and
@@ -389,11 +389,11 @@ The default delay between operations is 2 seconds (`MIN_OPERATION_DELAY`).
 
 The base class handles connection state transitions:
 
-1. **Reconnection detection**: When `is_connection_up()` transitions from `False` to `True`:
+1. **Reconnection detection**: When `is_integration_connected()` transitions from `False` to `True`:
    - Coordinator refresh is triggered
    - Push subscriptions are re-established (if `supports_push=True`)
 
-2. **Disconnection handling**: When `is_connection_up()` transitions from `True` to `False`:
+2. **Disconnection handling**: When `is_integration_connected()` transitions from `True` to `False`:
    - Push subscriptions are cleaned up (if `supports_push=True`)
 
 3. **Config entry state changes**: For integrations that expose config entry state (like Z-Wave JS):
