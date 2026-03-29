@@ -123,6 +123,7 @@ async def test_get_locks_from_targets_deduplicates(
     ent_reg = er.async_get(hass)
     entry = ent_reg.async_get(LOCK_1_ENTITY_ID)
     assert entry is not None
+    assert entry.device_id is not None
 
     locks = get_locks_from_targets(
         hass,
