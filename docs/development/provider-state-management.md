@@ -237,7 +237,7 @@ def set_usercode(
 
     """
     # Check if already set to this value (optional optimization)
-    if self._cache.get(code_slot) == str(usercode):
+    if self._cache.get(code_slot) == usercode:
         return False
 
     # Set the code on the device

@@ -150,11 +150,11 @@ def set_usercode(
 
         # Optional: Check if already set to avoid unnecessary writes
         current = device.get_code(code_slot)
-        if current == str(usercode):
+        if current == usercode:
             return False
 
         # Set the code
-        device.set_code(code_slot, str(usercode), name=name)
+        device.set_code(code_slot, usercode, name=name)
         return True
 
     except SomeDeviceError as err:
@@ -403,7 +403,7 @@ class SmartLockLock(BaseLock):
     ) -> bool:
         """Set a usercode on a code slot."""
         try:
-            self._set_code_on_device(code_slot, str(usercode))
+            self._set_code_on_device(code_slot, usercode)
             return True
         except Exception as err:
             raise LockDisconnected(str(err)) from err

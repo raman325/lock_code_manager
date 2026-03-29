@@ -97,6 +97,6 @@ class VirtualLock(BaseLock):
     async def async_get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {
-            int(slot_num): code_slot["code"]
+            int(slot_num): str(code_slot["code"])
             for slot_num, code_slot in self._data.items()
         }
