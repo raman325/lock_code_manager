@@ -382,7 +382,7 @@ async def test_subscribe_push_updates_called_during_setup(
         ),
     ):
         assert not lock._subscribe_called
-        await lock.async_setup(mock_lock_config_entry)
+        await lock.async_setup_internal(mock_lock_config_entry)
         assert lock._subscribe_called
 
 
@@ -420,7 +420,7 @@ async def test_unsubscribe_push_updates_called_during_unload(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        await lock.async_setup(config_entry)
+        await lock.async_setup_internal(config_entry)
 
     # Unload
     assert not lock._unsubscribe_called
@@ -464,7 +464,7 @@ async def test_subscribe_push_not_called_for_non_push_lock(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        await lock.async_setup(config_entry)
+        await lock.async_setup_internal(config_entry)
         # subscribe_push_updates should NOT have been called
         assert not lock._subscribe_called
 

@@ -17,7 +17,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    DuplicateCodeError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
 
@@ -80,7 +83,7 @@ async def test_base(hass: HomeAssistant):
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        assert await lock.async_setup(config_entry) is None
+        assert await lock.async_setup_internal(config_entry) is None
     assert lock.coordinator is not None
     assert await lock.async_unload(False) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
@@ -603,12 +606,88 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
     ):
-        await lock.async_setup(lcm_config_entry)
+        await lock.async_setup_internal(lcm_config_entry)
 
         # Push subscription should be deferred (not called) since entry not loaded
         assert lock.subscribe_calls == 0
 
     await lock.async_unload(False)
+
+
+async def test_set_usercode_skips_refresh_for_push_provider(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test that async_internal_set_usercode does NOT refresh coordinator for push providers."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Push Set"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock_provider = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock_provider, MockLCMLockWithPush)
+        coordinator = lock_provider.coordinator
+        assert coordinator is not None
+
+        # Track coordinator refreshes
+        refresh_count = 0
+        original_refresh = coordinator.async_request_refresh
+
+        async def track_refresh():
+            nonlocal refresh_count
+            refresh_count += 1
+            return await original_refresh()
+
+        with patch.object(coordinator, "async_request_refresh", track_refresh):
+            # Setting a new usercode should NOT trigger refresh for push providers
+            await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
+            assert refresh_count == 0
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_clear_usercode_skips_refresh_for_push_provider(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Test that async_internal_clear_usercode does NOT refresh coordinator for push providers."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Push Clear"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock_provider = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock_provider, MockLCMLockWithPush)
+        coordinator = lock_provider.coordinator
+        assert coordinator is not None
+
+        # Track coordinator refreshes
+        refresh_count = 0
+        original_refresh = coordinator.async_request_refresh
+
+        async def track_refresh():
+            nonlocal refresh_count
+            refresh_count += 1
+            return await original_refresh()
+
+        with patch.object(coordinator, "async_request_refresh", track_refresh):
+            # Clearing an existing usercode should NOT trigger refresh for push providers
+            await lock_provider.async_internal_clear_usercode(1)
+            assert refresh_count == 0
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
 
 async def test_config_entry_state_listener_ignores_same_state(
@@ -684,3 +763,129 @@ async def test_execute_rate_limited_raises_when_device_not_available(
     with patch.object(lock_provider, "async_is_device_available", return_value=False):
         with pytest.raises(LockDisconnected, match="device not available"):
             await lock_provider.async_internal_set_usercode(2, "9999", "test")
+
+
+# =============================================================================
+# is_masked tests
+# =============================================================================
+
+
+class TestIsMasked:
+    """Tests for BaseLock.is_masked_or_empty static method."""
+
+    def test_none(self):
+        """Test None is treated as masked (not comparable)."""
+        assert BaseLock.is_masked_or_empty(None) is True
+
+    def test_empty_string(self):
+        """Test empty string is treated as masked (not comparable)."""
+        assert BaseLock.is_masked_or_empty("") is True
+
+    def test_all_stars(self):
+        """Test all-stars code is masked."""
+        assert BaseLock.is_masked_or_empty("****") is True
+
+    def test_single_star(self):
+        """Test single star is masked."""
+        assert BaseLock.is_masked_or_empty("*") is True
+
+    def test_real_code(self):
+        """Test real PIN code is not masked."""
+        assert BaseLock.is_masked_or_empty("1234") is False
+
+    def test_partial_mask(self):
+        """Test partially masked code is not masked."""
+        assert BaseLock.is_masked_or_empty("12*4") is False
+
+    def test_integer_zero(self):
+        """Test integer 0 is not masked (valid code)."""
+        assert BaseLock.is_masked_or_empty(0) is False
+
+    def test_integer_code(self):
+        """Test integer code is not masked."""
+        assert BaseLock.is_masked_or_empty(1234) is False
+
+    def test_string_zero(self):
+        """Test string '0' is not masked."""
+        assert BaseLock.is_masked_or_empty("0") is False
+
+
+# =============================================================================
+# _check_duplicate_code tests
+# =============================================================================
+
+
+async def test_check_duplicate_code_raises_on_match(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code raises when a duplicate PIN is found."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "1234", 2: "5678", 3: ""})
+
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        lock._check_duplicate_code(3, "1234")
+
+    assert exc_info.value.code_slot == 3
+    assert exc_info.value.conflicting_slot == 1
+
+
+async def test_check_duplicate_code_skips_masked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code skips masked codes."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "****", 3: ""})
+
+    lock._check_duplicate_code(3, "1234")
+
+
+async def test_check_duplicate_code_skips_same_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code skips the target slot itself."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "1234"})
+
+    lock._check_duplicate_code(1, "1234")
+
+
+async def test_check_duplicate_code_no_op_on_empty_usercode(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code is a no-op when usercode is empty."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock.coordinator
+    assert coordinator is not None
+
+    coordinator.async_set_updated_data({1: "", 2: ""})
+
+    lock._check_duplicate_code(3, "")
+
+
+async def test_check_duplicate_code_no_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test _check_duplicate_code is a no-op when coordinator has no data."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.coordinator = None
+
+    lock._check_duplicate_code(1, "1234")

@@ -32,7 +32,7 @@ async def test_door_lock(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
-    assert await lock.async_setup(config_entry) is None
+    assert await lock.async_setup_internal(config_entry) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     assert lock.domain == "virtual"
     assert await lock.async_internal_is_integration_connected()
@@ -51,7 +51,7 @@ async def test_door_lock(hass: HomeAssistant):
 
     # if we unload without removing permanently, the data should be saved
     assert await lock.async_unload(False) is None
-    assert await lock.async_setup(config_entry) is None
+    assert await lock.async_setup_internal(config_entry) is None
     assert lock._data["1"] == {"code": 1, "name": "test"}
 
     # we can clear a valid usercode
@@ -62,7 +62,7 @@ async def test_door_lock(hass: HomeAssistant):
 
     # if we unload with removing permanently, the data should be removed
     assert await lock.async_unload(True) is None
-    assert await lock.async_setup(config_entry) is None
+    assert await lock.async_setup_internal(config_entry) is None
     assert not lock._data
 
 
@@ -86,7 +86,7 @@ async def test_set_usercode_returns_changed_status(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
-    await lock.async_setup(config_entry)
+    await lock.async_setup_internal(config_entry)
 
     # First set should return True (value changed from empty)
     changed = await lock.async_set_usercode(1, "1234", "test")
@@ -128,7 +128,7 @@ async def test_clear_usercode_returns_changed_status(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
-    await lock.async_setup(config_entry)
+    await lock.async_setup_internal(config_entry)
 
     # Clearing non-existent slot should return False
     changed = await lock.async_clear_usercode(1)
