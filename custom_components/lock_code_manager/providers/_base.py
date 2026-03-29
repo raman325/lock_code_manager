@@ -225,6 +225,16 @@ class BaseLock:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
+    def mask_pin(self, pin: str | None) -> str:
+        """Return a masked representation of a PIN for logging."""
+        from ..util import mask_pin  # noqa: PLC0415
+
+        return mask_pin(
+            pin,
+            self.lock.entity_id,
+            self.hass.data.get(DOMAIN, {}).get("instance_id", ""),
+        )
+
     @staticmethod
     def is_masked_or_empty(code: str | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
@@ -617,9 +627,10 @@ class BaseLock:
     ) -> None:
         """Set a usercode on a code slot."""
         LOGGER.debug(
-            "Setting usercode on %s slot %s (source=%s)",
+            "Setting usercode on %s slot %s (pin=%s, source=%s)",
             self.lock.entity_id,
             code_slot,
+            self.mask_pin(usercode),
             source,
         )
         # Check for duplicate PINs under the lock so coordinator data
