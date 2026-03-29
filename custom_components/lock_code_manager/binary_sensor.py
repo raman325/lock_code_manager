@@ -436,13 +436,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self.lock.lock.entity_id,
             )
             return
+        self._cancel_retry()
         await self.hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TURN_OFF,
             {ATTR_ENTITY_ID: enabled_ent_id},
             blocking=True,
         )
-        self._cancel_retry()
         self._reset_sync_tracker()
         async_create(
             self.hass,
@@ -587,6 +587,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     slot_state.name_state,
                     source="sync",
                 )
+                # Only track set operations — clears always succeed and
+                # shouldn't count toward the sync failure limit
+                self._record_sync_attempt()
                 _LOGGER.debug(
                     "%s (%s): Set usercode for %s slot %s",
                     self.config_entry.entry_id,
@@ -605,8 +608,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     self.lock.lock.entity_id,
                     self.slot_num,
                 )
-            # Provider call succeeded — record for sync attempt tracking
-            self._record_sync_attempt()
             self._cancel_retry()
             return True
         except DuplicateCodeError as err:
@@ -691,9 +692,12 @@ class LockCodeManagerCodeSlotInSyncEntity(
             if not expected_in_sync:
                 self._update_sync_state(False)
 
-                # Check if we've exceeded sync attempt limits (provider calls
-                # succeeded but lock keeps reverting — permanent failure)
-                if self._sync_attempts_exceeded():
+                # Check if we've exceeded sync attempt limits for set operations
+                # (provider calls succeeded but lock keeps reverting)
+                if (
+                    slot_state.active_state == STATE_ON
+                    and self._sync_attempts_exceeded()
+                ):
                     _LOGGER.error(
                         "%s (%s): Sync attempts exceeded for %s slot %s "
                         "(%s attempts in %s window), disabling slot",
