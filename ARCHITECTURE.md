@@ -106,14 +106,14 @@ are the single entry point for all lock operations. They enforce cross-cutting c
 in this order:
 
 1. **Duplicate code check** (`_check_duplicate_code`) — pre-flight scan before rate limiting
-2. **Connection check** — verify lock is reachable
+2. **Integration connectivity check** — verify integration is connected
 3. **Rate limiting** — serialize via `asyncio.Lock` with minimum delay
 4. **Provider call** — delegate to subclass `async_set_usercode` / `async_clear_usercode`
 5. **Coordinator refresh** — update state (skipped for push-based providers)
 
 Helper methods available to all providers:
 
-- `is_masked(code)` — detect `****` masked codes
+- `is_masked_or_empty(code)` — detect `****` masked or empty codes
 - `is_slot_managed(code_slot)` — check if any LCM config entry manages this slot
 
 The `source` parameter (`"sync"` or `"direct"`) indicates whether the call came from

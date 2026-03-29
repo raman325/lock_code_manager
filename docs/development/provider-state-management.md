@@ -47,7 +47,7 @@ All modes include an initial poll to populate coordinator data.
 │    get_usercodes()                  # return current codes      │
 │    set_usercode()                   # set a code on lock        │
 │    clear_usercode()                 # clear a code from lock    │
-│    is_integration_connected()               # check lock connectivity   │
+│    is_integration_connected()       # check integration state    │
 ├─────────────────────────────────────────────────────────────────┤
 │  Optional Methods:                                              │
 │    hard_refresh_codes()             # re-fetch from device      │
@@ -267,14 +267,14 @@ def clear_usercode(self, code_slot: int) -> bool:
 
 ### is_integration_connected()
 
-Check if the lock is reachable.
+Check if the integration's client/driver/broker is connected.
 
 ```python
 def is_integration_connected(self) -> bool:
-    """Return whether connection to lock is up.
+    """Return whether the integration is connected.
 
     This is called periodically (at connection_check_interval) and
-    before each operation. Return False if the lock is unreachable.
+    before each operation. Return False if the integration is disconnected.
     """
     return self._device.is_connected()
 ```
