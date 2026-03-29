@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.persistent_notification import async_create
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
 from homeassistant.components.text import TextEntity, TextMode
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON, Platform
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_ON,
+    Platform,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -78,6 +85,8 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
             self._enabled_entity_id = self.ent_reg.async_get_entity_id(
                 Platform.SWITCH, DOMAIN, self._get_uid(CONF_ENABLED)
             )
+        # When clearing a PIN on an enabled slot, auto-disable the slot first so the
+        # sync logic will clear the code on the lock, then proceed to clear the PIN value.
         if (
             self.key == CONF_PIN
             and not value.strip()
@@ -85,16 +94,18 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
             and (state := self.hass.states.get(self._enabled_entity_id))
             and state.state == STATE_ON
         ):
-            async_create(
-                self.hass,
-                (
-                    f"PIN must be a valid value because slot {self.slot_num} is "
-                    f"enabled on the lock configuration {self.config_entry.title}."
-                ),
-                "Problem with Lock Code Manager",
-                f"{DOMAIN}_{self.config_entry.entry_id}_{self.slot_num}_pin_required",
+            _LOGGER.debug(
+                "%s (%s): Clearing PIN on enabled slot %s, auto-disabling slot",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.slot_num,
             )
-            return
+            await self.hass.services.async_call(
+                SWITCH_DOMAIN,
+                SERVICE_TURN_OFF,
+                {ATTR_ENTITY_ID: self._enabled_entity_id},
+                blocking=True,
+            )
 
         self._update_config_entry(value)
 
