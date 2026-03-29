@@ -57,3 +57,32 @@ async def test_text_entities(
     state = hass.states.get(SLOT_2_ENABLED_ENTITY)
     assert state
     assert state.state == STATE_OFF
+
+
+async def test_whitespace_pin_normalized_to_empty(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that a whitespace-only PIN is normalized to empty and auto-disables the slot."""
+    # First verify the slot is enabled and has a PIN
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
+    assert state
+    assert state.state == "5678"
+
+    # Set a whitespace-only PIN — should normalize to "" and auto-disable
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "   "},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
+        blocking=True,
+    )
+
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
+    assert state
+    assert state.state == ""
+
+    state = hass.states.get(SLOT_2_ENABLED_ENTITY)
+    assert state
+    assert state.state == STATE_OFF
