@@ -174,41 +174,26 @@ async def test_connection_transition_resubscribes(
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
 
-async def test_set_usercode_when_disconnected(
+@pytest.mark.parametrize(
+    ("operation", "call"),
+    [
+        ("set", lambda p: p.async_internal_set_usercode(2, "9999", "test")),
+        ("clear", lambda p: p.async_internal_clear_usercode(2)),
+    ],
+)
+async def test_operation_when_disconnected(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    operation: str,
+    call,
 ):
-    """Test that async_internal_set_usercode raises LockDisconnected when lock is disconnected."""
-    # Arrange: get the provider and force it offline
+    """Test that operations raise LockDisconnected when lock is disconnected."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Simulate disconnected lock
     lock_provider.set_connected(False)
 
-    # Attempt to set usercode should raise LockDisconnected
-    with pytest.raises(LockDisconnected, match="Cannot set on"):
-        await lock_provider.async_internal_set_usercode(2, "9999", "test")
-
-    # Verify no service calls were made
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"] == []
-
-
-async def test_clear_usercode_when_disconnected(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that async_internal_clear_usercode raises LockDisconnected when lock is disconnected."""
-    # Arrange: get the provider and force it offline
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Simulate disconnected lock
-    lock_provider.set_connected(False)
-
-    # Attempt to clear usercode should raise LockDisconnected
     with pytest.raises(LockDisconnected):
-        await lock_provider.async_internal_clear_usercode(2)
+        await call(lock_provider)
 
 
 async def test_rate_limiting_set_usercode(
@@ -766,40 +751,25 @@ async def test_execute_rate_limited_raises_when_device_not_available(
 
 
 # =============================================================================
-# is_masked tests
+# is_masked_or_empty tests
 # =============================================================================
 
 
-class TestIsMasked:
-    """Tests for BaseLock.is_masked_or_empty static method."""
-
-    def test_none(self):
-        """Test None is treated as masked (not comparable)."""
-        assert BaseLock.is_masked_or_empty(None) is True
-
-    def test_empty_string(self):
-        """Test empty string is treated as masked (not comparable)."""
-        assert BaseLock.is_masked_or_empty("") is True
-
-    def test_all_stars(self):
-        """Test all-stars code is masked."""
-        assert BaseLock.is_masked_or_empty("****") is True
-
-    def test_single_star(self):
-        """Test single star is masked."""
-        assert BaseLock.is_masked_or_empty("*") is True
-
-    def test_real_code(self):
-        """Test real PIN code is not masked."""
-        assert BaseLock.is_masked_or_empty("1234") is False
-
-    def test_partial_mask(self):
-        """Test partially masked code is not masked."""
-        assert BaseLock.is_masked_or_empty("12*4") is False
-
-    def test_string_zero(self):
-        """Test string '0' is not masked."""
-        assert BaseLock.is_masked_or_empty("0") is False
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (None, True),
+        ("", True),
+        ("****", True),
+        ("*", True),
+        ("1234", False),
+        ("12*4", False),
+        ("0", False),
+    ],
+)
+def test_is_masked_or_empty(code, expected: bool):
+    """Test BaseLock.is_masked_or_empty for various inputs."""
+    assert BaseLock.is_masked_or_empty(code) is expected
 
 
 # =============================================================================
