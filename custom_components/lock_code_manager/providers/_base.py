@@ -162,7 +162,7 @@ class BaseLock:
         """
         if not await self.async_internal_is_integration_connected():
             raise LockDisconnected(
-                f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - lock not connected"
+                f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - integration not connected"
             )
 
         if not await self.async_is_device_available():
