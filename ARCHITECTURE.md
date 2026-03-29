@@ -81,12 +81,23 @@ Both paths disable the slot and create a persistent notification.
 
 ## Sync Attempt Tracking
 
-The sync mechanism tracks consecutive successful attempts (provider call did not
-raise) that fail to resolve the out-of-sync state. If `MAX_SYNC_ATTEMPTS` are
-reached within `SYNC_ATTEMPT_WINDOW`, the slot is disabled and the user is notified.
+The sync mechanism tracks consecutive successful SET attempts (provider call did
+not raise) that fail to resolve the out-of-sync state. If `MAX_SYNC_ATTEMPTS`
+are reached within `SYNC_ATTEMPT_WINDOW`, the lock is assumed to be rejecting
+the PIN. The slot is disabled and the user is notified.
 
-Only "successful" provider calls are tracked — `LockDisconnected` exceptions are
-transient and use the separate retry mechanism with `RETRY_DELAY`.
+Only SET operations are tracked — clears always proceed and are not counted.
+`LockDisconnected` exceptions are transient and use the separate retry mechanism
+with `RETRY_DELAY`. The tracker resets when the slot is disabled or when the
+code is successfully synced.
+
+## Exception Hierarchy for Code Rejection
+
+- `CodeRejectedError` — base: the lock won't accept this PIN (any reason)
+- `DuplicateCodeError(CodeRejectedError)` — specific: PIN duplicates another slot
+
+The pre-flight duplicate check raises `DuplicateCodeError`. The sync path catches
+the parent `CodeRejectedError` so any rejection reason results in disable + notify.
 
 ## Base Provider (`BaseLock`)
 

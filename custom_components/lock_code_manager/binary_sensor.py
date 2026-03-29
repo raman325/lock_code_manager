@@ -59,7 +59,7 @@ from .const import (
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import LockCodeManagerConfigEntry, get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
-from .exceptions import DuplicateCodeError, LockDisconnected
+from .exceptions import CodeRejectedError, LockDisconnected
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -610,26 +610,21 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 )
             self._cancel_retry()
             return True
-        except DuplicateCodeError as err:
-            managed_str = "managed" if err.conflicting_slot_managed else "unmanaged"
+        except CodeRejectedError as err:
             _LOGGER.error(
-                "%s (%s): Duplicate code detected for %s slot %s — "
-                "PIN duplicates %s slot %s",
+                "%s (%s): Code rejected for %s slot %s: %s",
                 self.config_entry.entry_id,
                 self.config_entry.title,
                 self.lock.lock.entity_id,
                 self.slot_num,
-                managed_str,
-                err.conflicting_slot,
+                err,
             )
             await self._disable_slot_and_notify(
-                title="Duplicate Lock Code",
+                title="Lock Code Rejected",
                 message=(
-                    f"Lock **{err.lock_entity_id}**: cannot set code on slot "
-                    f"**{err.code_slot}** because the same PIN is already in "
-                    f"{managed_str} slot **{err.conflicting_slot}**. "
-                    f"Slot {err.code_slot} has been disabled. Set a unique "
-                    f"code and re-enable the slot."
+                    f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
+                    f"has been disabled. {err}\n\n"
+                    f"Fix the issue and re-enable the slot."
                 ),
             )
             return False

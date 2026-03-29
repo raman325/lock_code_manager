@@ -10,6 +10,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import (
+    CodeRejectedError,
     DuplicateCodeError,
     EntityNotFoundError,
     LockCodeManagerError,
@@ -232,6 +233,36 @@ async def test_entity_not_found_error(hass: HomeAssistant):
 
 
 # =============================================================================
+# CodeRejectedError Tests
+# =============================================================================
+
+
+def test_code_rejected_error_default_reason():
+    """Test CodeRejectedError with default reason."""
+    err = CodeRejectedError(code_slot=3, lock_entity_id="lock.front_door")
+    assert err.code_slot == 3
+    assert err.lock_entity_id == "lock.front_door"
+    assert "lock.front_door" in str(err)
+    assert "slot 3" in str(err)
+    assert "appears to reject" in str(err)
+
+
+def test_code_rejected_error_custom_reason():
+    """Test CodeRejectedError with custom reason."""
+    err = CodeRejectedError(
+        code_slot=3, lock_entity_id="lock.front_door", reason="PIN too short"
+    )
+    assert "PIN too short" in str(err)
+    assert "appears to reject" not in str(err)
+
+
+def test_code_rejected_error_inherits_from_base():
+    """Test CodeRejectedError inherits from LockCodeManagerError."""
+    err = CodeRejectedError(code_slot=1, lock_entity_id="lock.test")
+    assert isinstance(err, LockCodeManagerError)
+
+
+# =============================================================================
 # DuplicateCodeError Tests
 # =============================================================================
 
@@ -266,12 +297,13 @@ def test_duplicate_code_error_managed_slot():
     assert "unmanaged" not in str(err)
 
 
-def test_duplicate_code_error_inherits_from_base():
-    """Test DuplicateCodeError inherits from LockCodeManagerError."""
+def test_duplicate_code_error_inherits_from_code_rejected():
+    """Test DuplicateCodeError inherits from CodeRejectedError."""
     err = DuplicateCodeError(
         code_slot=1,
         conflicting_slot=2,
         conflicting_slot_managed=False,
         lock_entity_id="lock.test",
     )
+    assert isinstance(err, CodeRejectedError)
     assert isinstance(err, LockCodeManagerError)
