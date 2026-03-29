@@ -582,7 +582,7 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
-    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -594,7 +594,7 @@ class ZWaveJSLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -602,7 +602,6 @@ class ZWaveJSLock(BaseLock):
         Returns True if the value was changed, False if already set to this value.
         """
         # Check if the code is already set to this value (avoid unnecessary network call)
-        usercode = str(usercode)
         try:
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
@@ -698,7 +697,7 @@ class ZWaveJSLock(BaseLock):
         except Exception as err:
             raise LockDisconnected from err
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         code_slots = {
             int(code_slot)
@@ -706,7 +705,7 @@ class ZWaveJSLock(BaseLock):
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
-        data: dict[int, int | str] = {}
+        data: dict[int, str | None] = {}
 
         if not await self.async_is_integration_connected():
             raise LockDisconnected

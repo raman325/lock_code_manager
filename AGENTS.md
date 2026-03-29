@@ -271,7 +271,7 @@ For providers where the underlying integration's value cache updates asynchronou
 push notifications), implement optimistic updates to prevent sync loops:
 
 ```python
-async def async_set_usercode(self, code_slot: int, usercode: int | str, ...) -> bool:
+async def async_set_usercode(self, code_slot: int, usercode: str, ...) -> bool:
     # ... perform the set operation ...
     await self._call_service_to_set_code(code_slot, usercode)
 

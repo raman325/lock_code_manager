@@ -348,7 +348,7 @@ def _slot_sort_key(slot: Any) -> tuple[int, str]:
 
 def _serialize_slot(
     slot: Any,
-    code: int | str | None,
+    code: str | None,
     *,
     reveal: bool,
     name: str | None = None,
@@ -386,7 +386,7 @@ def _serialize_slot(
     else:
         # Masked: send code_length instead of actual code
         result[ATTR_CODE] = None
-        result[ATTR_CODE_LENGTH] = len(str(code))
+        result[ATTR_CODE_LENGTH] = len(code)
 
     # Configured code from LCM (desired state) - always include for managed slots
     if configured_code is not None:
@@ -897,9 +897,9 @@ def _serialize_slot_card_data(
             raw_code = coordinator.data.get(slot_num)
             if raw_code is not None:
                 if reveal:
-                    code_on_lock = str(raw_code)
+                    code_on_lock = raw_code
                 else:
-                    code_length = len(str(raw_code))
+                    code_length = len(raw_code)
 
         lock_status: dict[str, Any] = {
             ATTR_ENTITY_ID: lock_entity_id,

@@ -226,7 +226,7 @@ class BaseLock:
         raise ProviderNotImplementedError(self, method_name, guidance)
 
     @staticmethod
-    def is_masked_or_empty(code: int | str | None) -> bool:
+    def is_masked_or_empty(code: str | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
         if code is None or code == "":
             return True
@@ -524,7 +524,7 @@ class BaseLock:
         self._last_connection_up = is_up
         return is_up
 
-    def hard_refresh_codes(self) -> dict[int, int | str]:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -540,7 +540,7 @@ class BaseLock:
             "Override this method to re-fetch codes from the lock device.",
         )
 
-    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -550,7 +550,7 @@ class BaseLock:
         return await self._async_executor_call(self.hard_refresh_codes)
 
     @final
-    async def async_internal_hard_refresh_codes(self) -> dict[int, int | str]:
+    async def async_internal_hard_refresh_codes(self) -> dict[int, str | None]:
         """
         Perform hard refresh and return all codes.
 
@@ -562,7 +562,7 @@ class BaseLock:
         )
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -594,7 +594,7 @@ class BaseLock:
         )
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -611,7 +611,7 @@ class BaseLock:
     async def async_internal_set_usercode(
         self,
         code_slot: int,
-        usercode: int | str,
+        usercode: str,
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
     ) -> None:
@@ -704,7 +704,7 @@ class BaseLock:
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -725,7 +725,7 @@ class BaseLock:
             "Override this method to retrieve usercodes from the lock.",
         )
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -744,7 +744,7 @@ class BaseLock:
         return await self._async_executor_call(self.get_usercodes)
 
     @final
-    async def async_internal_get_usercodes(self) -> dict[int, int | str]:
+    async def async_internal_get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 

@@ -99,7 +99,7 @@ async def test_base(hass: HomeAssistant):
     with pytest.raises(NotImplementedError):
         await lock.async_internal_clear_usercode(1)
     with pytest.raises(NotImplementedError):
-        await lock.async_internal_set_usercode(1, 1)
+        await lock.async_internal_set_usercode(1, "1234")
     with pytest.raises(NotImplementedError):
         await lock.async_internal_get_usercodes()
 
@@ -796,14 +796,6 @@ class TestIsMasked:
     def test_partial_mask(self):
         """Test partially masked code is not masked."""
         assert BaseLock.is_masked_or_empty("12*4") is False
-
-    def test_integer_zero(self):
-        """Test integer 0 is not masked (valid code)."""
-        assert BaseLock.is_masked_or_empty(0) is False
-
-    def test_integer_code(self):
-        """Test integer code is not masked."""
-        assert BaseLock.is_masked_or_empty(1234) is False
 
     def test_string_zero(self):
         """Test string '0' is not masked."""
