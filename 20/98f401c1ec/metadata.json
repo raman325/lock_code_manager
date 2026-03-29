@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2098f401c1ec",
+  "strategy": "manual-commit",
+  "branch": "fix/overlapping-lock-coordinator-race",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/common.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_virtual.py",
+    "tests/providers/test_zwave_js.py",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/20/98f401c1ec/0/metadata.json",
+      "transcript": "/20/98f401c1ec/0/full.jsonl",
+      "context": "/20/98f401c1ec/0/context.md",
+      "content_hash": "/20/98f401c1ec/0/content_hash.txt",
+      "prompt": "/20/98f401c1ec/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 108079,
+    "cache_read_tokens": 1896074,
+    "output_tokens": 3427,
+    "api_call_count": 22
+  }
+}

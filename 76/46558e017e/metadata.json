@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "7646558e017e",
+  "strategy": "manual-commit",
+  "branch": "fix/usercode-cc-v1-support",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/76/46558e017e/0/metadata.json",
+      "transcript": "/76/46558e017e/0/full.jsonl",
+      "context": "/76/46558e017e/0/context.md",
+      "content_hash": "/76/46558e017e/0/content_hash.txt",
+      "prompt": "/76/46558e017e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 54691,
+    "cache_read_tokens": 3865298,
+    "output_tokens": 3033,
+    "api_call_count": 40
+  }
+}

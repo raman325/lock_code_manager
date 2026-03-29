@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ec6c0f5445a1",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T06:12:41.723531Z",
+  "branch": "refactor/normalize-code-type-to-str",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/providers/test_base.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_exceptions.py",
+    "tests/test_websocket.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5c38b098e49e",
+  "token_usage": {
+    "input_tokens": 511,
+    "cache_creation_tokens": 1385721,
+    "cache_read_tokens": 92580322,
+    "output_tokens": 110623,
+    "api_call_count": 443
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T06:12:39.836781Z",
+    "agent_lines": 0,
+    "human_added": 29,
+    "human_modified": 32,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 0
+  }
+}
