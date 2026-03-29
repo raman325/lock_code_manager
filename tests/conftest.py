@@ -26,6 +26,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
 from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
@@ -50,9 +51,9 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 @pytest.fixture(autouse=True)
 def auto_setup_mock_lock():
     """Automatically set up MockLCMLock for all tests."""
-    with patch(
+    with patch.dict(
         "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLock},
+        {"test": MockLCMLock, **INTEGRATIONS_CLASS_MAP},
     ):
         yield
 

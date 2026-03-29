@@ -41,6 +41,7 @@ BASE_CONFIG = {
 }
 
 SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
+SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
 SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
 SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
 SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
@@ -87,8 +88,8 @@ class MockLCMLock(BaseLock):
         """Set connection state for testing."""
         self._connected = connected
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
     def hard_refresh_codes(self) -> None:
@@ -103,7 +104,7 @@ class MockLCMLock(BaseLock):
         ].append(())
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -137,7 +138,7 @@ class MockLCMLock(BaseLock):
             return True
         return True
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """
         Get dictionary of code slots and usercodes.
 

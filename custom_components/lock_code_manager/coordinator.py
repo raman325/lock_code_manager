@@ -1,4 +1,7 @@
-"""Lock Code Manager Coordinators."""
+"""Manages the slot->code mapping for a single lock.
+
+Stores ALL slots (managed and unmanaged). See ARCHITECTURE.md for the full data flow.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]]):
+class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
@@ -44,7 +47,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             update_interval=update_interval,
             config_entry=config_entry,
         )
-        self.data: dict[int, int | str] = {}
+        self.data: dict[int, str | None] = {}
         self._consecutive_failures: int = 0
         self._original_update_interval: timedelta | None = update_interval
 
@@ -70,7 +73,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         return self._lock
 
     @callback
-    def push_update(self, updates: dict[int, int | str]) -> None:
+    def push_update(self, updates: dict[int, str | None]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
@@ -97,14 +100,16 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
                 BACKOFF_MAX_SECONDS,
             )
             if self._original_update_interval is not None:
-                self.update_interval = timedelta(seconds=backoff_secs)
-                _LOGGER.warning(
-                    "Update failed %d consecutive times for %s, "
-                    "backing off polling interval to %ds",
-                    self._consecutive_failures,
-                    self._lock.lock.entity_id,
-                    backoff_secs,
-                )
+                new_interval = timedelta(seconds=backoff_secs)
+                if new_interval != self.update_interval:  # type: ignore[has-type]
+                    self.update_interval = new_interval
+                    _LOGGER.warning(
+                        "Update failed %d consecutive times for %s, "
+                        "backing off polling interval to %ds",
+                        self._consecutive_failures,
+                        self._lock.lock.entity_id,
+                        backoff_secs,
+                    )
             else:
                 _LOGGER.warning(
                     "Update failed %d consecutive times for %s, "
@@ -125,7 +130,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str | None]:
         """Update usercodes."""
         try:
             data = await self._lock.async_internal_get_usercodes()
@@ -166,6 +171,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
         try:
             new_data = await self._lock.async_internal_hard_refresh_codes()
         except LockCodeManagerError as err:
+            self._apply_backoff()
             _LOGGER.warning(
                 "Drift detection hard refresh failed for %s: %s",
                 self._lock.lock.entity_id,
@@ -189,7 +195,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, int | str]])
     async def _async_connection_check(self, now: datetime) -> None:
         """Poll connection state so providers can resubscribe on reconnect."""
         try:
-            await self._lock.async_internal_is_connection_up()
+            await self._lock.async_internal_is_integration_connected()
         except LockCodeManagerError as err:
             _LOGGER.debug(
                 "Connection check failed for %s: %s", self._lock.lock.entity_id, err

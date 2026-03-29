@@ -327,20 +327,20 @@ async def async_setup_entry(
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
     else:
-        # One-time listeners auto-remove when they fire, so unsubscribing
-        # during unload may fail if the event already fired. Ignore that error.
+        started = False
+
         @callback
         def _on_started(event: Event) -> None:
+            nonlocal started
+            started = True
             _setup_entry_after_start(hass, config_entry, event)
 
         unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
 
         @callback
         def _safe_unsub() -> None:
-            try:
+            if not started:
                 unsub()
-            except ValueError:
-                pass  # Listener already removed when event fired
 
         config_entry.async_on_unload(_safe_unsub)
 
@@ -495,6 +495,7 @@ async def async_update_listener(
                 lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
                     lock_entity_id
                 ]
+                await lock.async_wait_for_setup()
             else:
                 lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
                     lock_entity_id
@@ -511,12 +512,12 @@ async def async_update_listener(
                     entry_title,
                     lock,
                 )
-                await lock.async_setup(config_entry)
+                await lock.async_setup_internal(config_entry)
 
             added_locks.append(lock)
 
             # Check if lock is connected (but don't wait - entity creation doesn't require it)
-            if not await lock.async_internal_is_connection_up():
+            if not await lock.async_internal_is_integration_connected():
                 _LOGGER.debug(
                     "%s (%s): Lock %s is not connected yet. Entities will be created "
                     "but will be unavailable until the lock comes online. This is normal "

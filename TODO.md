@@ -3,11 +3,30 @@
 ## New Items
 
 - Unify design across slot and lock data cards, with a preference towards the slot card design.
-- Add type checking to CI and pre-commit:
-  - Add mypy (or alternative) to pre-commit hooks
-  - Add type checking CI job to python-checks.yml
+- **Config flow: lock reset step** — Add a config flow step that checks for existing
+  unmanaged codes on the lock. Inform the user the lock will be reset before configuring.
+  Either they cancel or proceed and all slots are cleared. LCM will re-set its managed
+  codes immediately after.
+- **Config flow: conflicting integration detection** — Check for Keymaster or other
+  code management integrations at setup and warn the user.
+- **Update migration docs** — Revise any wiki content that talks about "slowly migrating"
+  locks between tools. The guidance is now to commit fully to one tool.
+- **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
+  code slots on a lock, so users can clean up stale codes without manual intervention.
+- **Unify Z-Wave event 15 duplicate handler with CodeRejectedError** — The reactive
+  duplicate handler (`_async_handle_duplicate_code` in `zwave_js.py`) duplicates the
+  disable+notify logic that now lives in the binary sensor's `_disable_slot_and_notify`.
+  It should surface through the exception hierarchy instead. Options: route through
+  the coordinator to trigger a binary sensor state update, or have the provider set a
+  flag that the binary sensor checks on next sync cycle. This would also allow the
+  event 15 handler to reset the sync tracker.
+- **Investigate lock-specific duplicate detection carve-outs** — Some locks don't mask
+  PINs or don't reject duplicates. Explore whether duplicate detection behavior can be
+  adapted per lock capability rather than one-size-fits-all.
+- Add type checking to CI:
+  - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
   - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
-  - Fix existing type errors (~30 errors as of Jan 2026)
+  - Fix existing type errors (~49 errors as of Mar 2026)
 - Test visual editor for both cards.
 
 ## Testing
@@ -16,7 +35,6 @@
   resource registration/unload in `tests/test_init.py`; still need end-to-end
   UI coverage (Lovelace resource registration + reload in a real frontend).
 - Add provider tests when new integrations beyond Z-Wave JS and virtual are added.
-- Add Z-Wave JS provider tests (requires Z-Wave JS door lock mocks/fixtures).
 - Test rate limiting and connection failure timing in live environment.
 
 ## Refactors and Maintenance
@@ -120,6 +138,13 @@ return {"in_sync": actual_code == desired_code, "actual_code": actual_code}
 - Would need to update binary sensor to be read-only
 - Config updates still flow through text/switch entities
 - Need to ensure coordinator runs sync on config changes
+
+**Related: Move sync attempt tracker to base provider.** The sync attempt
+tracker (count + time window that detects persistently failing slots) currently
+lives in `binary_sensor.py`. When sync logic moves to the coordinator, the
+tracker should move to `BaseLock` — the base provider owns the tracking state
+(per-slot attempt counts/times), and callers (coordinator, websocket) decide
+the policy (disable + notify, propagate error, etc.).
 
 **Estimated Effort:** High (16-24 hours)
 **Priority:** Medium
@@ -235,6 +260,14 @@ class SlotStatus(StrEnum):
    `dict[int, SlotData]` where `SlotData` includes code and status
 4. Update all consumers of coordinator data (binary_sensor, sensor, websocket)
 5. Update frontend types and rendering
+
+**Related: Formalize lock/user/PIN data model with Matter in mind.** Matter
+introduces a richer credential model (users, credentials, credential types)
+that goes beyond simple slot→PIN mappings. When designing the enhanced data
+model, study Matter's DoorLock cluster credential management as a reference
+architecture and consider how it maps to Z-Wave, ZHA, and other lock standards.
+The goal is a provider-agnostic model that can express Matter's concepts without
+over-engineering for simpler protocols.
 
 **Estimated Effort:** High (12-16 hours)
 **Priority:** Medium
@@ -427,7 +460,7 @@ calendar event metadata, eliminating need for separate slot configuration.
 
 ### Add Relevant New Home Assistant Core Features
 
-**Analysis:** Review Home Assistant release notes from 2024.1 through 2025.10
+**Analysis:** Review Home Assistant release notes from 2024.1 through current
 and integrate relevant new features.
 
 **Key Features to Evaluate (2024-2025):**

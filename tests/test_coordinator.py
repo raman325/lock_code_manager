@@ -43,20 +43,20 @@ class MockLockWithHardRefresh(BaseLock):
         """Return configurable hard refresh interval."""
         return self._hard_refresh_interval
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return self._is_connected
 
-    def hard_refresh_codes(self) -> dict[int, int | str]:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """Perform hard refresh and return all codes."""
         return self.get_usercodes()
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {}
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
         return True
@@ -389,7 +389,7 @@ async def test_subscribe_push_updates_called_during_setup(
         ),
     ):
         assert not lock._subscribe_called
-        await lock.async_setup(mock_lock_config_entry)
+        await lock.async_setup_internal(mock_lock_config_entry)
         assert lock._subscribe_called
 
 
@@ -427,7 +427,7 @@ async def test_unsubscribe_push_updates_called_during_unload(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        await lock.async_setup(config_entry)
+        await lock.async_setup_internal(config_entry)
 
     # Unload
     assert not lock._unsubscribe_called
@@ -471,7 +471,7 @@ async def test_subscribe_push_not_called_for_non_push_lock(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        await lock.async_setup(config_entry)
+        await lock.async_setup_internal(config_entry)
         # subscribe_push_updates should NOT have been called
         assert not lock._subscribe_called
 

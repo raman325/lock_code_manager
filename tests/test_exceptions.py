@@ -10,6 +10,8 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import (
+    CodeRejectedError,
+    DuplicateCodeError,
     EntityNotFoundError,
     LockCodeManagerError,
     LockDisconnected,
@@ -27,8 +29,8 @@ class MinimalMockLock(BaseLock):
         """Return integration domain."""
         return "test"
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return True
 
 
@@ -228,3 +230,80 @@ async def test_entity_not_found_error(hass: HomeAssistant):
     assert err.key == "pin"
     assert "slot 5" in str(err)
     assert "pin" in str(err)
+
+
+# =============================================================================
+# CodeRejectedError Tests
+# =============================================================================
+
+
+def test_code_rejected_error_default_reason():
+    """Test CodeRejectedError with default reason."""
+    err = CodeRejectedError(code_slot=3, lock_entity_id="lock.front_door")
+    assert err.code_slot == 3
+    assert err.lock_entity_id == "lock.front_door"
+    assert "lock.front_door" in str(err)
+    assert "slot 3" in str(err)
+    assert "appears to reject" in str(err)
+
+
+def test_code_rejected_error_custom_reason():
+    """Test CodeRejectedError with custom reason."""
+    err = CodeRejectedError(
+        code_slot=3, lock_entity_id="lock.front_door", reason="PIN too short"
+    )
+    assert "PIN too short" in str(err)
+    assert "appears to reject" not in str(err)
+
+
+def test_code_rejected_error_inherits_from_base():
+    """Test CodeRejectedError inherits from LockCodeManagerError."""
+    err = CodeRejectedError(code_slot=1, lock_entity_id="lock.test")
+    assert isinstance(err, LockCodeManagerError)
+
+
+# =============================================================================
+# DuplicateCodeError Tests
+# =============================================================================
+
+
+def test_duplicate_code_error_attributes():
+    """Test DuplicateCodeError stores conflicting slot and managed status."""
+    err = DuplicateCodeError(
+        code_slot=3,
+        conflicting_slot=7,
+        conflicting_slot_managed=False,
+        lock_entity_id="lock.front_door",
+    )
+    assert err.code_slot == 3
+    assert err.conflicting_slot == 7
+    assert err.conflicting_slot_managed is False
+    assert err.lock_entity_id == "lock.front_door"
+    assert "lock.front_door" in str(err)
+    assert "slot 3" in str(err)
+    assert "slot 7" in str(err)
+    assert "unmanaged" in str(err)
+
+
+def test_duplicate_code_error_managed_slot():
+    """Test DuplicateCodeError message for managed conflicting slot."""
+    err = DuplicateCodeError(
+        code_slot=3,
+        conflicting_slot=5,
+        conflicting_slot_managed=True,
+        lock_entity_id="lock.front_door",
+    )
+    assert "managed" in str(err)
+    assert "unmanaged" not in str(err)
+
+
+def test_duplicate_code_error_inherits_from_code_rejected():
+    """Test DuplicateCodeError inherits from CodeRejectedError."""
+    err = DuplicateCodeError(
+        code_slot=1,
+        conflicting_slot=2,
+        conflicting_slot_managed=False,
+        lock_entity_id="lock.test",
+    )
+    assert isinstance(err, CodeRejectedError)
+    assert isinstance(err, LockCodeManagerError)
