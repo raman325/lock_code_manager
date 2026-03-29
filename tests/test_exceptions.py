@@ -103,100 +103,31 @@ def test_provider_not_implemented_error_inherits_correctly():
     assert isinstance(err, NotImplementedError)
 
 
-async def test_base_lock_raises_provider_not_implemented_for_get_usercodes(
-    hass: HomeAssistant,
+@pytest.mark.parametrize(
+    ("method_name", "call"),
+    [
+        ("get_usercodes", lambda lock: lock.get_usercodes()),
+        ("set_usercode", lambda lock: lock.set_usercode(1, "1234")),
+        ("clear_usercode", lambda lock: lock.clear_usercode(1)),
+        ("hard_refresh_codes", lambda lock: lock.hard_refresh_codes()),
+        ("subscribe_push_updates", lambda lock: lock.subscribe_push_updates()),
+        ("unsubscribe_push_updates", lambda lock: lock.unsubscribe_push_updates()),
+    ],
+)
+async def test_base_lock_raises_provider_not_implemented(
+    hass: HomeAssistant, method_name: str, call
 ):
-    """Test that BaseLock.get_usercodes raises ProviderNotImplementedError."""
+    """Test that BaseLock raises ProviderNotImplementedError for unimplemented methods."""
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
 
     lock = create_minimal_lock(hass, config_entry)
 
     with pytest.raises(ProviderNotImplementedError) as exc_info:
-        lock.get_usercodes()
+        call(lock)
 
     assert "MinimalMockLock" in str(exc_info.value)
-    assert "get_usercodes" in str(exc_info.value)
-
-
-async def test_base_lock_raises_provider_not_implemented_for_set_usercode(
-    hass: HomeAssistant,
-):
-    """Test that BaseLock.set_usercode raises ProviderNotImplementedError."""
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-
-    with pytest.raises(ProviderNotImplementedError) as exc_info:
-        lock.set_usercode(1, "1234")
-
-    assert "MinimalMockLock" in str(exc_info.value)
-    assert "set_usercode" in str(exc_info.value)
-
-
-async def test_base_lock_raises_provider_not_implemented_for_clear_usercode(
-    hass: HomeAssistant,
-):
-    """Test that BaseLock.clear_usercode raises ProviderNotImplementedError."""
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-
-    with pytest.raises(ProviderNotImplementedError) as exc_info:
-        lock.clear_usercode(1)
-
-    assert "MinimalMockLock" in str(exc_info.value)
-    assert "clear_usercode" in str(exc_info.value)
-
-
-async def test_base_lock_raises_provider_not_implemented_for_hard_refresh(
-    hass: HomeAssistant,
-):
-    """Test that BaseLock.hard_refresh_codes raises ProviderNotImplementedError."""
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-
-    with pytest.raises(ProviderNotImplementedError) as exc_info:
-        lock.hard_refresh_codes()
-
-    assert "MinimalMockLock" in str(exc_info.value)
-    assert "hard_refresh_codes" in str(exc_info.value)
-
-
-async def test_base_lock_raises_provider_not_implemented_for_subscribe_push(
-    hass: HomeAssistant,
-):
-    """Test that BaseLock.subscribe_push_updates raises ProviderNotImplementedError."""
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-
-    with pytest.raises(ProviderNotImplementedError) as exc_info:
-        lock.subscribe_push_updates()
-
-    assert "MinimalMockLock" in str(exc_info.value)
-    assert "subscribe_push_updates" in str(exc_info.value)
-
-
-async def test_base_lock_raises_provider_not_implemented_for_unsubscribe_push(
-    hass: HomeAssistant,
-):
-    """Test that BaseLock.unsubscribe_push_updates raises ProviderNotImplementedError."""
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-
-    with pytest.raises(ProviderNotImplementedError) as exc_info:
-        lock.unsubscribe_push_updates()
-
-    assert "MinimalMockLock" in str(exc_info.value)
-    assert "unsubscribe_push_updates" in str(exc_info.value)
+    assert method_name in str(exc_info.value)
 
 
 # =============================================================================
@@ -267,34 +198,33 @@ def test_code_rejected_error_inherits_from_base():
 # =============================================================================
 
 
-def test_duplicate_code_error_attributes():
-    """Test DuplicateCodeError stores conflicting slot and managed status."""
+@pytest.mark.parametrize(
+    ("managed", "expected_word"),
+    [
+        (False, "unmanaged"),
+        (True, "managed"),
+    ],
+)
+def test_duplicate_code_error_managed_label(managed: bool, expected_word: str):
+    """Test DuplicateCodeError message labels managed/unmanaged correctly."""
     err = DuplicateCodeError(
         code_slot=3,
         conflicting_slot=7,
-        conflicting_slot_managed=False,
+        conflicting_slot_managed=managed,
         lock_entity_id="lock.front_door",
     )
     assert err.code_slot == 3
     assert err.conflicting_slot == 7
-    assert err.conflicting_slot_managed is False
+    assert err.conflicting_slot_managed is managed
     assert err.lock_entity_id == "lock.front_door"
+    assert expected_word in str(err)
     assert "lock.front_door" in str(err)
     assert "slot 3" in str(err)
     assert "slot 7" in str(err)
-    assert "unmanaged" in str(err)
-
-
-def test_duplicate_code_error_managed_slot():
-    """Test DuplicateCodeError message for managed conflicting slot."""
-    err = DuplicateCodeError(
-        code_slot=3,
-        conflicting_slot=5,
-        conflicting_slot_managed=True,
-        lock_entity_id="lock.front_door",
-    )
-    assert "managed" in str(err)
-    assert "unmanaged" not in str(err)
+    if not managed:
+        assert "unmanaged" in str(err)
+    else:
+        assert "unmanaged" not in str(err)
 
 
 def test_duplicate_code_error_inherits_from_code_rejected():
