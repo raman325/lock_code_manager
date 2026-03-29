@@ -625,11 +625,11 @@ async def subscribe_lock_codes(
     @callback
     def _refresh_lock_state_tracking() -> None:
         """Re-subscribe to state changes if the tracked entity set has changed."""
-        nonlocal tracked_set
         new_ids = set(_get_slot_state_entity_ids(hass, lock_entity_id))
         if new_ids == tracked_set:
             return
-        tracked_set = new_ids
+        tracked_set.clear()
+        tracked_set.update(new_ids)
         # Unsubscribe from previous tracking
         if unsub_state_ref:
             unsub_state_ref[0]()
@@ -670,7 +670,7 @@ async def subscribe_lock_codes(
 
     # Track Lock Code Manager entity state changes (enabled, active, name, PIN)
     slot_entity_ids = _get_slot_state_entity_ids(hass, lock_entity_id)
-    tracked_set = set(slot_entity_ids)
+    tracked_set.update(slot_entity_ids)
     if slot_entity_ids:
         unsub_state_ref.append(
             async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
@@ -1129,7 +1129,6 @@ async def subscribe_code_slot(
         current_condition: str | None = None,
     ) -> None:
         """Re-subscribe to state changes if the tracked entity set has changed."""
-        nonlocal tracked_set
         new_ids = set(current_entities.all_entity_ids()) | set(current_in_sync.values())
         if current_condition:
             new_ids.add(current_condition)
@@ -1137,7 +1136,8 @@ async def subscribe_code_slot(
         if new_ids == tracked_set:
             return
 
-        tracked_set = new_ids
+        tracked_set.clear()
+        tracked_set.update(new_ids)
         # Unsubscribe from previous tracking
         if unsub_state_ref:
             unsub_state_ref[0]()
@@ -1152,7 +1152,7 @@ async def subscribe_code_slot(
     tracked_entities = slot_entities.all_entity_ids() + list(in_sync_map.values())
     if condition_entity_id:
         tracked_entities.append(condition_entity_id)
-    tracked_set = set(tracked_entities)
+    tracked_set.update(tracked_entities)
     if tracked_entities:
         unsub_state_ref.append(
             async_track_state_change_event(hass, tracked_entities, _on_state_change)
