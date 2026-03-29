@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2c2c8114e0da",
+  "strategy": "manual-commit",
+  "branch": "fix/handle-duplicate-code-notification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/conftest.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2c/2c8114e0da/0/metadata.json",
+      "transcript": "/2c/2c8114e0da/0/full.jsonl",
+      "context": "/2c/2c8114e0da/0/context.md",
+      "content_hash": "/2c/2c8114e0da/0/content_hash.txt",
+      "prompt": "/2c/2c8114e0da/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 278,
+    "cache_creation_tokens": 270896,
+    "cache_read_tokens": 20914394,
+    "output_tokens": 12090,
+    "api_call_count": 188
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b2e955d584bd",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T05:47:59.977059Z",
+  "branch": "feat/duplicate-code-detection",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/binary_sensor.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cf1c8f3fc8f2",
+  "token_usage": {
+    "input_tokens": 425,
+    "cache_creation_tokens": 1339426,
+    "cache_read_tokens": 66894186,
+    "output_tokens": 91375,
+    "api_call_count": 367
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T05:47:58.37578Z",
+    "agent_lines": 0,
+    "human_added": 4,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 0
+  }
+}

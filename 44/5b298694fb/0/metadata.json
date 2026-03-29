@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "445b298694fb",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T06:34:09.640074Z",
+  "branch": "fix/dead-node-review-followup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/development/adding-a-provider.md",
+    "docs/development/provider-state-management.md",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2142909dbc18",
+  "token_usage": {
+    "input_tokens": 631,
+    "cache_creation_tokens": 1464144,
+    "cache_read_tokens": 136269171,
+    "output_tokens": 131818,
+    "api_call_count": 551
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T06:34:07.441481Z",
+    "agent_lines": 0,
+    "human_added": 79,
+    "human_modified": 30,
+    "human_removed": 0,
+    "total_committed": 100,
+    "agent_percentage": 0
+  }
+}

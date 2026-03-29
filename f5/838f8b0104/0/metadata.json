@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "f5838f8b0104",
+  "session_id": "112658aa-8e2f-43a4-9f8b-a690dfce9b04",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T20:00:40.041711Z",
+  "branch": "fix/usercode-cc-v1-support",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/development/adding-a-provider.md",
+    "docs/development/index.md",
+    "docs/development/provider-state-management.md",
+    "docs/plans/2026-02-15-usercode-cc-v1-support-design.md"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "976db68c-291c-4cd7-9933-7af03c907684",
+  "checkpoint_transcript_start": 5477,
+  "transcript_lines_at_start": 5477,
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 4457,
+    "cache_read_tokens": 756052,
+    "output_tokens": 239,
+    "api_call_count": 13
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T20:00:37.833224Z",
+    "agent_lines": 0,
+    "human_added": 1827,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1827,
+    "agent_percentage": 0
+  }
+}
