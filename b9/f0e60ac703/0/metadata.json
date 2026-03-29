@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b9f0e60ac703",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T07:55:56.674946Z",
+  "branch": "refactor/test-setup-fixtures",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d3328511d0a2",
+  "token_usage": {
+    "input_tokens": 970,
+    "cache_creation_tokens": 1636602,
+    "cache_read_tokens": 286974883,
+    "output_tokens": 193283,
+    "api_call_count": 834
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T07:55:53.758479Z",
+    "agent_lines": 0,
+    "human_added": 89,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 89,
+    "agent_percentage": 0
+  }
+}
