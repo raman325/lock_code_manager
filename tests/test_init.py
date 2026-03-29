@@ -387,7 +387,7 @@ async def test_resource_not_loaded_on_unload(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert DOMAIN not in hass.data
+    assert not hass.data[DOMAIN].get(CONF_LOCKS)
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -430,7 +430,7 @@ async def test_resource_reregistered_after_unload_and_new_entry(
     await hass.config_entries.async_remove(config_entry_2.entry_id)
     await hass.async_block_till_done()
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert DOMAIN not in hass.data
+    assert not hass.data[DOMAIN].get(CONF_LOCKS)
 
     # Set up a new config entry - resource should be re-registered
     config_entry_3 = MockConfigEntry(
