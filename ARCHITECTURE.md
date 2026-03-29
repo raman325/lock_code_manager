@@ -105,11 +105,13 @@ The `@final` methods `async_internal_set_usercode` and `async_internal_clear_use
 are the single entry point for all lock operations. They enforce cross-cutting concerns
 in this order:
 
-1. **Duplicate code check** (`_check_duplicate_code`) — pre-flight scan before rate limiting
-2. **Integration connectivity check** — verify integration is connected
-3. **Rate limiting** — serialize via `asyncio.Lock` with minimum delay
-4. **Provider call** — delegate to subclass `async_set_usercode` / `async_clear_usercode`
-5. **Coordinator refresh** — update state (skipped for push-based providers)
+1. **Integration connectivity check** — verify integration is connected
+2. **Device availability check** — verify physical device is responsive
+3. **Acquire operation lock** — serialize operations via `asyncio.Lock`
+4. **Pre-execute hook** (set only) — duplicate code check runs inside the lock
+5. **Rate limit delay** — minimum delay between operations
+6. **Provider call** — delegate to subclass `async_set_usercode` / `async_clear_usercode`
+7. **Coordinator refresh** — update state (skipped for push-based providers)
 
 Helper methods available to all providers:
 
