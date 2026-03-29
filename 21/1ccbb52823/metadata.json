@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "211ccbb52823",
+  "strategy": "manual-commit",
+  "branch": "troubleshooting-docs",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/ISSUE_TEMPLATE/bug_report.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/21/1ccbb52823/0/metadata.json",
+      "transcript": "/21/1ccbb52823/0/full.jsonl",
+      "context": "/21/1ccbb52823/0/context.md",
+      "content_hash": "/21/1ccbb52823/0/content_hash.txt",
+      "prompt": "/21/1ccbb52823/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 4245,
+    "cache_read_tokens": 789446,
+    "output_tokens": 1368,
+    "api_call_count": 7
+  }
+}

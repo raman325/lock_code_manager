@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4caaf94fc71b",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T06:45:08.859977Z",
+  "branch": "refactor/parametrize-tests",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/providers/test_base.py",
+    "tests/providers/test_zwave_js.py",
+    "tests/test_exceptions.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7706d0ebb4a6",
+  "token_usage": {
+    "input_tokens": 693,
+    "cache_creation_tokens": 1516893,
+    "cache_read_tokens": 162968188,
+    "output_tokens": 147868,
+    "api_call_count": 609
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T06:45:06.386134Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 107,
+    "human_removed": 173,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

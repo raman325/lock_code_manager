@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "f5838f8b0104",
+  "strategy": "manual-commit",
+  "branch": "fix/usercode-cc-v1-support",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docs/development/adding-a-provider.md",
+    "docs/development/index.md",
+    "docs/development/provider-state-management.md",
+    "docs/plans/2026-02-15-usercode-cc-v1-support-design.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f5/838f8b0104/0/metadata.json",
+      "transcript": "/f5/838f8b0104/0/full.jsonl",
+      "context": "/f5/838f8b0104/0/context.md",
+      "content_hash": "/f5/838f8b0104/0/content_hash.txt",
+      "prompt": "/f5/838f8b0104/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 19,
+    "cache_creation_tokens": 4457,
+    "cache_read_tokens": 756052,
+    "output_tokens": 239,
+    "api_call_count": 13
+  }
+}

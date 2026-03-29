@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b56bdd3cca8f",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T06:01:17.580504Z",
+  "branch": "feat/duplicate-code-detection",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "459059faba48",
+  "token_usage": {
+    "input_tokens": 469,
+    "cache_creation_tokens": 1361821,
+    "cache_read_tokens": 79244233,
+    "output_tokens": 101461,
+    "api_call_count": 405
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T06:01:15.882299Z",
+    "agent_lines": 0,
+    "human_added": 7,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 0
+  }
+}
