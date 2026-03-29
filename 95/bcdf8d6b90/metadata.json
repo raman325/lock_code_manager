@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "95bcdf8d6b90",
+  "strategy": "manual-commit",
+  "branch": "fix/strategy-refresh-on-config-change",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "ts/config-watcher.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/bcdf8d6b90/0/metadata.json",
+      "transcript": "/95/bcdf8d6b90/0/full.jsonl",
+      "context": "/95/bcdf8d6b90/0/context.md",
+      "content_hash": "/95/bcdf8d6b90/0/content_hash.txt",
+      "prompt": "/95/bcdf8d6b90/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1144,
+    "cache_creation_tokens": 689047,
+    "cache_read_tokens": 53716350,
+    "output_tokens": 73192,
+    "api_call_count": 250
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "33f445696167",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T07:39:36.06462Z",
+  "branch": "fix/post-merge-review-comments",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "docs/development/adding-a-provider.md",
+    "docs/development/provider-state-management.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1e56495911a6",
+  "token_usage": {
+    "input_tokens": 891,
+    "cache_creation_tokens": 1603337,
+    "cache_read_tokens": 246157037,
+    "output_tokens": 180105,
+    "api_call_count": 765
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T07:39:33.242148Z",
+    "agent_lines": 0,
+    "human_added": 103,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 103,
+    "agent_percentage": 0
+  }
+}

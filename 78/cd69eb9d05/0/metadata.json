@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "78cd69eb9d05",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T17:17:54.59948Z",
+  "branch": "feat/duplicate-code-detection",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_exceptions.py",
+    "tests/test_websocket.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9c160a31c1ba",
+  "token_usage": {
+    "input_tokens": 175,
+    "cache_creation_tokens": 289942,
+    "cache_read_tokens": 17485354,
+    "output_tokens": 48191,
+    "api_call_count": 159
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T17:17:53.811991Z",
+    "agent_lines": 596,
+    "human_added": 1,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 598,
+    "agent_percentage": 99.66555183946488
+  }
+}

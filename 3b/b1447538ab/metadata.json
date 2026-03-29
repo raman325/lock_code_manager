@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3bb1447538ab",
+  "strategy": "manual-commit",
+  "branch": "fix/dead-node-gating",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/common.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_virtual.py",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3b/b1447538ab/0/metadata.json",
+      "transcript": "/3b/b1447538ab/0/full.jsonl",
+      "context": "/3b/b1447538ab/0/context.md",
+      "content_hash": "/3b/b1447538ab/0/content_hash.txt",
+      "prompt": "/3b/b1447538ab/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 551,
+    "cache_creation_tokens": 1418011,
+    "cache_read_tokens": 106172405,
+    "output_tokens": 118952,
+    "api_call_count": 479
+  }
+}

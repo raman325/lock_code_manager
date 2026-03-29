@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "95bcdf8d6b90",
+  "session_id": "0042d351-fad5-4c90-8890-a26276efc046",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T22:02:04.850781Z",
+  "branch": "fix/strategy-refresh-on-config-change",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "ts/config-watcher.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "fcf1ff1a8529",
+  "token_usage": {
+    "input_tokens": 1144,
+    "cache_creation_tokens": 689047,
+    "cache_read_tokens": 53716350,
+    "output_tokens": 73192,
+    "api_call_count": 250
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T22:02:03.827181Z",
+    "agent_lines": 0,
+    "human_added": 97,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 97,
+    "agent_percentage": 0
+  }
+}

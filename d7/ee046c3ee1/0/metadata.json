@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d7ee046c3ee1",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T07:43:50.876028Z",
+  "branch": "chore/migrate-dev-docs-to-wiki",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/development/adding-a-provider.md",
+    "docs/development/index.md",
+    "docs/development/provider-state-management.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cbe60a83b9da",
+  "token_usage": {
+    "input_tokens": 920,
+    "cache_creation_tokens": 1611005,
+    "cache_read_tokens": 261860382,
+    "output_tokens": 183833,
+    "api_call_count": 792
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T07:43:48.036438Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

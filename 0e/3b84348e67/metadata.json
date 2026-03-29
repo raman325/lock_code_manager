@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "0e3b84348e67",
+  "strategy": "manual-commit",
+  "branch": "fix/post-merge-review-comments-2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/test_helpers.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/3b84348e67/0/metadata.json",
+      "transcript": "/0e/3b84348e67/0/full.jsonl",
+      "context": "/0e/3b84348e67/0/context.md",
+      "content_hash": "/0e/3b84348e67/0/content_hash.txt",
+      "prompt": "/0e/3b84348e67/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1044,
+    "cache_creation_tokens": 1681444,
+    "cache_read_tokens": 331180827,
+    "output_tokens": 208442,
+    "api_call_count": 904
+  }
+}

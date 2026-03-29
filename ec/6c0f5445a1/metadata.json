@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ec6c0f5445a1",
+  "strategy": "manual-commit",
+  "branch": "refactor/normalize-code-type-to-str",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/providers/test_base.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_exceptions.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/6c0f5445a1/0/metadata.json",
+      "transcript": "/ec/6c0f5445a1/0/full.jsonl",
+      "context": "/ec/6c0f5445a1/0/context.md",
+      "content_hash": "/ec/6c0f5445a1/0/content_hash.txt",
+      "prompt": "/ec/6c0f5445a1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 511,
+    "cache_creation_tokens": 1385721,
+    "cache_read_tokens": 92580322,
+    "output_tokens": 110623,
+    "api_call_count": 443
+  }
+}
