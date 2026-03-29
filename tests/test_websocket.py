@@ -31,6 +31,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_CODE_LENGTH,
     ATTR_CODE_SLOT,
+    ATTR_CONDITION_ENTITY,
     ATTR_CONDITION_ENTITY_DOMAIN,
     ATTR_CONDITION_ENTITY_ID,
     ATTR_CONDITION_ENTITY_NAME,
@@ -983,7 +984,6 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
         blocking=True,
     )
     await hass.async_block_till_done()
-    await hass.async_block_till_done()
 
     # Force coordinator refresh to pick up new code from mock lock
     lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
@@ -992,15 +992,20 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
 
     # Collect WebSocket updates until we see the new PIN
     updated_pin = None
-    for _ in range(10):
-        try:
-            updated = await asyncio.wait_for(ws_client.receive_json(), timeout=1.0)
-        except TimeoutError:
-            break
-        if updated.get("type") == "event":
-            updated_pin = updated["event"].get(CONF_PIN)
-            if updated_pin == "9999":
-                break
+
+    async def _wait_for_pin() -> None:
+        nonlocal updated_pin
+        for _ in range(10):
+            msg = await ws_client.receive_json()
+            if msg.get("type") == "event":
+                updated_pin = msg["event"].get(CONF_PIN)
+                if updated_pin == "9999":
+                    return
+
+    try:
+        await asyncio.wait_for(_wait_for_pin(), timeout=3.0)
+    except TimeoutError:
+        pass
 
     assert updated_pin == "9999"
 
@@ -1049,7 +1054,6 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
         blocking=True,
     )
     await hass.async_block_till_done()
-    await hass.async_block_till_done()
 
     # Force coordinator refresh
     lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
@@ -1058,15 +1062,20 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
 
     # Collect WebSocket updates until we see PIN is None
     updated_pin = "not_none_sentinel"
-    for _ in range(10):
-        try:
-            updated = await asyncio.wait_for(ws_client.receive_json(), timeout=1.0)
-        except TimeoutError:
-            break
-        if updated.get("type") == "event":
-            updated_pin = updated["event"].get(CONF_PIN)
-            if updated_pin is None:
-                break
+
+    async def _wait_for_cleared_pin() -> None:
+        nonlocal updated_pin
+        for _ in range(10):
+            msg = await ws_client.receive_json()
+            if msg.get("type") == "event":
+                updated_pin = msg["event"].get(CONF_PIN)
+                if updated_pin is None:
+                    return
+
+    try:
+        await asyncio.wait_for(_wait_for_cleared_pin(), timeout=3.0)
+    except TimeoutError:
+        pass
 
     assert updated_pin is None
 
@@ -1115,7 +1124,7 @@ async def test_enable_toggle_reflects_in_subscribe_code_slot(
     assert updated["event"][CONF_ENABLED] is True
 
 
-async def test_pin_set_reflects_in_subscribe_lock_codes(
+async def test_coordinator_push_update_reflects_in_subscribe_lock_codes(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
@@ -1257,7 +1266,6 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
     condition_msg = await ws_client.receive_json()
     assert condition_msg["success"]
     await hass.async_block_till_done()
-    await hass.async_block_till_done()
 
     # Open a new subscription to get the updated condition data
     await ws_client.send_json(
@@ -1276,9 +1284,10 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
     assert event["type"] == "event"
     conditions = event["event"][CONF_CONDITIONS]
     # The condition_entity key should contain the condition entity data
-    assert "condition_entity" in conditions
+    assert ATTR_CONDITION_ENTITY in conditions
     assert (
-        conditions["condition_entity"][ATTR_CONDITION_ENTITY_ID] == condition_entity_id
+        conditions[ATTR_CONDITION_ENTITY][ATTR_CONDITION_ENTITY_ID]
+        == condition_entity_id
     )
 
 
