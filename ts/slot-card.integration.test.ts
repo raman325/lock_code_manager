@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { createMockHassWithConnection } from './test/mock-hass';
@@ -14,9 +14,6 @@ import { SlotCardData } from './types';
  * behavior through the component's properties rather than querying
  * rendered output.
  */
-
-// Import the card module to trigger customElements.define
-import './slot-card';
 
 /** Creates a SlotCardData object with sensible defaults and optional overrides */
 function makeSlotCardData(overrides?: Partial<SlotCardData>): SlotCardData {
@@ -47,12 +44,21 @@ interface SlotCardElement extends HTMLElement {
     _data?: SlotCardData;
     _error?: string;
     _hass?: HomeAssistant;
+    hass: HomeAssistant;
     setConfig(config: Record<string, unknown>): void;
 }
 
 describe('LockCodeManagerSlotCard integration', () => {
     let el: SlotCardElement;
     let container: HTMLDivElement;
+
+    // Import the card module to trigger customElements.define, guarding against
+    // re-definition if the module is reloaded in watch mode
+    beforeAll(async () => {
+        if (!customElements.get('lcm-slot')) {
+            await import('./slot-card');
+        }
+    });
 
     beforeEach(() => {
         container = document.createElement('div');
@@ -105,7 +111,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
             const hass = createMockHassWithConnection();
             el.setConfig({ config_entry_id: 'my-entry', slot: 3, type: 'custom:lcm-slot' });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -130,7 +136,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 slot: 2,
                 type: 'custom:lcm-slot',
             });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -156,7 +162,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 },
             });
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -176,7 +182,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 },
             });
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -197,7 +203,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 },
             });
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -217,7 +223,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 new Error('Subscription failed')
             );
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();

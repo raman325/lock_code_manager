@@ -44,8 +44,10 @@ class TestSubscriptionElement
     }
 }
 
-// Register the custom element once
-customElements.define('test-subscription-element', TestSubscriptionElement);
+// Register the custom element once, guarding against re-definition in watch mode
+if (!customElements.get('test-subscription-element')) {
+    customElements.define('test-subscription-element', TestSubscriptionElement);
+}
 
 describe('LcmSubscriptionMixin integration', () => {
     let el: TestSubscriptionElement;

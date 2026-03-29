@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { createMockHassWithConnection } from './test/mock-hass';
@@ -14,9 +14,6 @@ import { LockCoordinatorData } from './types';
  * behavior through the component's properties rather than querying
  * rendered output.
  */
-
-// Import the card module to trigger customElements.define
-import './lock-codes-card';
 
 /** Creates a LockCoordinatorData object with sensible defaults and optional overrides */
 function makeLockCoordinatorData(
@@ -46,12 +43,21 @@ interface LockCodesCardElement extends HTMLElement {
     _data?: LockCoordinatorData;
     _error?: string;
     _hass?: HomeAssistant;
+    hass: HomeAssistant;
     setConfig(config: Record<string, unknown>): void;
 }
 
 describe('LockCodesCard integration', () => {
     let el: LockCodesCardElement;
     let container: HTMLDivElement;
+
+    // Import the card module to trigger customElements.define, guarding against
+    // re-definition if the module is reloaded in watch mode
+    beforeAll(async () => {
+        if (!customElements.get('lcm-lock-codes')) {
+            await import('./lock-codes-card');
+        }
+    });
 
     beforeEach(() => {
         container = document.createElement('div');
@@ -103,7 +109,7 @@ describe('LockCodesCard integration', () => {
                 lock_entity_id: 'lock.front_door',
                 type: 'custom:lcm-lock-codes',
             });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -132,7 +138,7 @@ describe('LockCodesCard integration', () => {
                 lock_entity_id: 'lock.front_door',
                 type: 'custom:lcm-lock-codes',
             });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -155,7 +161,7 @@ describe('LockCodesCard integration', () => {
                 lock_entity_id: 'lock.front_door',
                 type: 'custom:lcm-lock-codes',
             });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -188,7 +194,7 @@ describe('LockCodesCard integration', () => {
                 lock_entity_id: 'lock.front_door',
                 type: 'custom:lcm-lock-codes',
             });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
@@ -208,7 +214,7 @@ describe('LockCodesCard integration', () => {
                 lock_entity_id: 'lock.front_door',
                 type: 'custom:lcm-lock-codes',
             });
-            el._hass = hass;
+            el.hass = hass;
 
             container.appendChild(el);
             await flush();
