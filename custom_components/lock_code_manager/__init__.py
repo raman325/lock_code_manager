@@ -29,6 +29,7 @@ from homeassistant.const import (
     CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
+    EVENT_LOVELACE_UPDATED,
 )
 from homeassistant.core import (
     CoreState,
@@ -116,6 +117,21 @@ async def async_migrate_entry(
         )
 
     return True
+
+
+@callback
+def _async_notify_lovelace_dashboards(hass: HomeAssistant) -> None:
+    """Fire lovelace_updated for each registered dashboard.
+
+    This triggers the "Configuration changed" toast in the Home Assistant
+    frontend, prompting users to refresh the dashboard so the strategy
+    re-generates cards for any added or removed slots/locks.
+    """
+    lovelace_data = hass.data.get(LL_DOMAIN)
+    if not lovelace_data:
+        return
+    for url_path in lovelace_data.dashboards:
+        hass.bus.async_fire(EVENT_LOVELACE_UPDATED, {"url_path": url_path})
 
 
 def _get_lovelace_resources(
@@ -643,3 +659,8 @@ async def async_update_listener(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
     hass.config_entries.async_update_entry(config_entry, data=new_data, options={})
+
+    # Notify Lovelace dashboards to re-render when structure changes
+    # (slots or locks added/removed), so strategy-generated cards update
+    if slots_to_add or slots_to_remove or locks_to_add or locks_to_remove:
+        _async_notify_lovelace_dashboards(hass)

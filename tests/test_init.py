@@ -609,3 +609,52 @@ async def test_coordinator_exists_after_setup(
     runtime_data = lock_code_manager_config_entry.runtime_data
     for lock in runtime_data.locks.values():
         assert lock.coordinator is not None
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_lovelace_updated_on_structural_change(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test lovelace_updated event fires when slots are added or removed."""
+    events = []
+    hass.bus.async_listen("lovelace_updated", events.append)
+
+    # Add a new slot (structural change)
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][3] = {
+        CONF_NAME: "test3",
+        CONF_PIN: "4321",
+        CONF_ENABLED: True,
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_config
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data == {"url_path": None}
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_lovelace_not_updated_on_non_structural_change(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test lovelace_updated event does not fire on non-structural changes."""
+    events = []
+    hass.bus.async_listen("lovelace_updated", events.append)
+
+    # Change a PIN (non-structural change — same slots and locks)
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][1][CONF_PIN] = "9999"
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_config
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 0

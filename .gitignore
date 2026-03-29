@@ -16,3 +16,4 @@ htmlcov
 node_modules
 .ha
 docs/
+.serena/
