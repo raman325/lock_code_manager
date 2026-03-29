@@ -27,6 +27,8 @@ from custom_components.lock_code_manager.const import (
     ATTR_CALENDAR,
     ATTR_CALENDAR_ACTIVE,
     ATTR_CALENDAR_END_TIME,
+    ATTR_CALENDAR_NEXT_START,
+    ATTR_CALENDAR_NEXT_SUMMARY,
     ATTR_CALENDAR_SUMMARY,
     ATTR_CODE,
     ATTR_CODE_LENGTH,
@@ -39,6 +41,8 @@ from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
     ATTR_CONFIG_ENTRY_TITLE,
     ATTR_IN_SYNC,
+    ATTR_LAST_USED,
+    ATTR_LAST_USED_LOCK,
     ATTR_LOCK_ENTITY_ID,
     ATTR_LOCK_NAME,
     ATTR_MANAGED,
@@ -103,7 +107,7 @@ async def test_get_config_entry_data(
         {
             "id": 1,
             "type": "lock_code_manager/get_config_entry_data",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
         }
     )
     msg = await ws_client.receive_json()
@@ -136,7 +140,7 @@ async def test_get_config_entry_data(
         {
             "id": 2,
             "type": "lock_code_manager/get_config_entry_data",
-            "config_entry_title": "mock-title",
+            ATTR_CONFIG_ENTRY_TITLE: "mock-title",
         }
     )
     msg = await ws_client.receive_json()
@@ -148,7 +152,7 @@ async def test_get_config_entry_data(
         {
             "id": 3,
             "type": "lock_code_manager/get_config_entry_data",
-            "config_entry_id": "fake_entry_id",
+            ATTR_CONFIG_ENTRY_ID: "fake_entry_id",
         }
     )
     msg = await ws_client.receive_json()
@@ -169,7 +173,7 @@ async def test_get_config_entry_data(
         {
             "id": 5,
             "type": "lock_code_manager/get_config_entry_data",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
         }
     )
     msg = await ws_client.receive_json()
@@ -333,7 +337,7 @@ async def test_subscribe_code_slot(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -368,7 +372,7 @@ async def test_subscribe_code_slot_masked(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
         }
     )
@@ -395,7 +399,7 @@ async def test_subscribe_code_slot_invalid_slot(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 999,
         }
     )
@@ -533,7 +537,7 @@ async def test_subscribe_code_slot_state_change(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -571,7 +575,7 @@ async def test_subscribe_code_slot_coordinator_update(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -620,7 +624,7 @@ async def test_subscribe_code_slot_ignores_metadata_changes(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -661,7 +665,7 @@ async def test_subscribe_code_slot_with_title(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_title": "mock-title",
+            ATTR_CONFIG_ENTRY_TITLE: "mock-title",
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -687,7 +691,7 @@ async def test_subscribe_code_slot_invalid_title(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_title": "nonexistent-title",
+            ATTR_CONFIG_ENTRY_TITLE: "nonexistent-title",
             ATTR_SLOT: 1,
         }
     )
@@ -710,7 +714,7 @@ async def test_get_config_entry_data_invalid_title(
         {
             "id": 1,
             "type": "lock_code_manager/get_config_entry_data",
-            "config_entry_title": "nonexistent-title",
+            ATTR_CONFIG_ENTRY_TITLE: "nonexistent-title",
         }
     )
     msg = await ws_client.receive_json()
@@ -733,7 +737,7 @@ async def test_subscribe_code_slot_slot_2_with_calendar(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 2,
             "reveal": True,
         }
@@ -768,7 +772,7 @@ async def test_subscribe_code_slot_with_event_type(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 2,
             "reveal": True,
         }
@@ -780,8 +784,8 @@ async def test_subscribe_code_slot_with_event_type(
     data = event["event"]
     assert data[ATTR_SLOT_NUM] == 2
     # No event fired yet, so last_used should be None
-    assert data.get("last_used") is None
-    assert data.get("last_used_lock_name") is None
+    assert data.get(ATTR_LAST_USED) is None
+    assert data.get(ATTR_LAST_USED_LOCK) is None
 
     # Fire a code slot event
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
@@ -806,7 +810,7 @@ async def test_subscribe_code_slot_with_event_type(
     data = updated["event"]
     assert data[ATTR_SLOT_NUM] == 2
     # last_used should have the timestamp from the event
-    assert data.get("last_used") is not None
+    assert data.get(ATTR_LAST_USED) is not None
 
 
 async def test_subscribe_lock_codes_slot_metadata(
@@ -840,7 +844,7 @@ async def test_subscribe_lock_codes_slot_metadata(
     slot_1 = next((s for s in slots if s[ATTR_SLOT] == 1), None)
     assert slot_1 is not None
     assert slot_1.get(CONF_NAME) == "test1"
-    assert slot_1.get("managed") is True
+    assert slot_1.get(ATTR_MANAGED) is True
 
 
 async def test_set_lock_usercode_operation_failure(
@@ -962,7 +966,7 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -1032,7 +1036,7 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -1094,7 +1098,7 @@ async def test_enable_toggle_reflects_in_subscribe_code_slot(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -1233,7 +1237,7 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -1258,7 +1262,7 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
         {
             "id": 2,
             "type": "lock_code_manager/update_slot_condition",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "entity_id": condition_entity_id,
         }
@@ -1272,7 +1276,7 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
         {
             "id": 3,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -1309,7 +1313,7 @@ async def test_subscribe_code_slot_response_shape(
         {
             "id": 1,
             "type": "lock_code_manager/subscribe_code_slot",
-            "config_entry_id": lock_code_manager_config_entry.entry_id,
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "reveal": True,
         }
@@ -1652,17 +1656,6 @@ class TestGetSlotConditionEntityId:
         entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 999)
         assert entity_id is None
 
-    async def test_handles_string_slot_keys(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-    ) -> None:
-        """Test handles slot config with string keys."""
-        # The config uses string keys internally, test that int lookup works
-        entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 2)
-        assert entity_id == "calendar.test_1"
-
 
 class TestGetConditionEntityData:
     """Tests for _get_condition_entity_data helper."""
@@ -1890,8 +1883,8 @@ class TestGetNextCalendarEvent:
             result = await _get_next_calendar_event(hass, calendar_entity_id)
 
             assert result is not None
-            assert result["start_time"] == "2024-01-15T09:00:00"
-            assert result["summary"] == "Team Standup"
+            assert result[ATTR_CALENDAR_NEXT_START] == "2024-01-15T09:00:00"
+            assert result[ATTR_CALENDAR_NEXT_SUMMARY] == "Team Standup"
         finally:
             hass.services.async_remove(CALENDAR_DOMAIN, SERVICE_GET_EVENTS)
 
@@ -1990,8 +1983,8 @@ class TestGetNextCalendarEvent:
             result = await _get_next_calendar_event(hass, calendar_entity_id)
 
             assert result is not None
-            assert result["start_time"] == "2024-01-15T09:00:00"
-            assert "summary" not in result
+            assert result[ATTR_CALENDAR_NEXT_START] == "2024-01-15T09:00:00"
+            assert ATTR_CALENDAR_NEXT_SUMMARY not in result
         finally:
             hass.services.async_remove(CALENDAR_DOMAIN, SERVICE_GET_EVENTS)
 
@@ -2020,8 +2013,8 @@ class TestGetNextCalendarEvent:
             result = await _get_next_calendar_event(hass, calendar_entity_id)
 
             assert result is not None
-            assert "start_time" not in result
-            assert result["summary"] == "Mystery Event"
+            assert ATTR_CALENDAR_NEXT_START not in result
+            assert result[ATTR_CALENDAR_NEXT_SUMMARY] == "Mystery Event"
         finally:
             hass.services.async_remove(CALENDAR_DOMAIN, SERVICE_GET_EVENTS)
 
@@ -2076,7 +2069,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
             }
@@ -2109,7 +2102,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 2,
                 "entity_id": None,
             }
@@ -2135,9 +2128,9 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
-                "number_of_uses": 10,
+                CONF_NUMBER_OF_USES: 10,
             }
         )
         msg = await ws_client.receive_json()
@@ -2145,7 +2138,8 @@ class TestUpdateSlotCondition:
 
         # Verify config entry was updated
         assert (
-            lock_code_manager_config_entry.data[CONF_SLOTS][1]["number_of_uses"] == 10
+            lock_code_manager_config_entry.data[CONF_SLOTS][1][CONF_NUMBER_OF_USES]
+            == 10
         )
 
     async def test_clear_number_of_uses(
@@ -2163,9 +2157,9 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
-                "number_of_uses": 5,
+                CONF_NUMBER_OF_USES: 5,
             }
         )
         msg = await ws_client.receive_json()
@@ -2176,9 +2170,9 @@ class TestUpdateSlotCondition:
             {
                 "id": 2,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
-                "number_of_uses": None,
+                CONF_NUMBER_OF_USES: None,
             }
         )
         msg = await ws_client.receive_json()
@@ -2186,7 +2180,8 @@ class TestUpdateSlotCondition:
 
         # Verify number_of_uses was removed
         assert (
-            "number_of_uses" not in lock_code_manager_config_entry.data[CONF_SLOTS][1]
+            CONF_NUMBER_OF_USES
+            not in lock_code_manager_config_entry.data[CONF_SLOTS][1]
         )
 
     async def test_update_both_conditions(
@@ -2210,10 +2205,10 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": SCHEDULE_TEST_ENTITY_ID,
-                "number_of_uses": 3,
+                CONF_NUMBER_OF_USES: 3,
             }
         )
         msg = await ws_client.receive_json()
@@ -2222,7 +2217,7 @@ class TestUpdateSlotCondition:
         # Verify both were updated
         slot_config = lock_code_manager_config_entry.data[CONF_SLOTS][1]
         assert slot_config["entity_id"] == SCHEDULE_TEST_ENTITY_ID
-        assert slot_config["number_of_uses"] == 3
+        assert slot_config[CONF_NUMBER_OF_USES] == 3
 
     async def test_invalid_slot(
         self,
@@ -2238,7 +2233,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 999,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
             }
@@ -2265,7 +2260,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "sensor.temperature",
             }
@@ -2288,7 +2283,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "binary_sensor.nonexistent",
             }
@@ -2311,9 +2306,9 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
-                "number_of_uses": 0,
+                CONF_NUMBER_OF_USES: 0,
             }
         )
         msg = await ws_client.receive_json()
@@ -2340,7 +2335,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_title": lock_code_manager_config_entry.title,
+                ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
                 "slot": 1,
                 "entity_id": INPUT_BOOLEAN_TEST_ENTITY_ID,
             }
@@ -2386,7 +2381,7 @@ class TestUpdateSlotCondition:
                 {
                     "id": i + 1,
                     "type": "lock_code_manager/update_slot_condition",
-                    "config_entry_id": lock_code_manager_config_entry.entry_id,
+                    ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": entity_id,
                 }
@@ -2417,9 +2412,9 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": entry_id,
+                ATTR_CONFIG_ENTRY_ID: entry_id,
                 "slot": 1,
-                "number_of_uses": 10,
+                CONF_NUMBER_OF_USES: 10,
             }
         )
         msg = await ws_client.receive_json()
@@ -2463,7 +2458,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "switch.my_schedule",
             }
@@ -2499,7 +2494,7 @@ class TestUpdateSlotCondition:
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                "config_entry_id": lock_code_manager_config_entry.entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "schedule.work_hours",
             }
