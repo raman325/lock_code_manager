@@ -1955,6 +1955,24 @@ async def test_is_device_available_returns_true_when_asleep(
         assert await zwave_js_lock.async_is_device_available() is True
 
 
+async def test_is_device_available_returns_true_when_unknown(
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that async_is_device_available returns True when node status is UNKNOWN.
+
+    UNKNOWN occurs when the controller just started and hasn't pinged the node yet.
+    We treat it as available to avoid blocking operations during startup — the
+    command will either succeed or fail with a normal error.
+    """
+    with patch.object(
+        type(lock_schlage_be469),
+        "status",
+        new_callable=lambda: property(lambda self: NodeStatus.UNKNOWN),
+    ):
+        assert await zwave_js_lock.async_is_device_available() is True
+
+
 async def test_is_device_available_returns_false_when_dead(
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
