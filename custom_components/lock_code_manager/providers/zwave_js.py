@@ -574,7 +574,12 @@ class ZWaveJSLock(BaseLock):
         """Return whether the Z-Wave node is available for commands."""
         try:
             return self.node.status != NodeStatus.DEAD
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Lock %s: failed to check device availability: %s",
+                self.lock.entity_id,
+                err,
+            )
             return False
 
     async def async_hard_refresh_codes(self) -> dict[int, int | str]:
