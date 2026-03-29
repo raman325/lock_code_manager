@@ -54,7 +54,7 @@ class VirtualLock(BaseLock):
             await self._store.async_save(self._data)
 
     async def async_is_integration_connected(self) -> bool:
-        """Return whether connection to lock is up."""
+        """Return whether the integration is connected."""
         return True
 
     async def async_hard_refresh_codes(self) -> dict[int, int | str]:
