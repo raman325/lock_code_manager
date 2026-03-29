@@ -108,7 +108,7 @@ custom_components/lock_code_manager/
 Providers should include tests for:
 
 1. **Usercode operations**: `set_usercode`, `clear_usercode`, `get_usercodes`
-2. **Connection handling**: `is_connection_up`, disconnection recovery
+2. **Connection handling**: `is_integration_connected`, disconnection recovery
 3. **Push updates** (if supported): Event subscription and unsubscription
 4. **Error handling**: Proper exception types raised
 

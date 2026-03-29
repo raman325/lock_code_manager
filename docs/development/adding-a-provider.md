@@ -84,12 +84,12 @@ def connection_check_interval(self) -> timedelta | None:
 
 ## Step 3: Implement Required Methods
 
-### is_connection_up()
+### is_integration_connected()
 
 Check if the lock is reachable:
 
 ```python
-def is_connection_up(self) -> bool:
+def is_integration_connected(self) -> bool:
     """Return whether connection to lock is up."""
     # Option 1: Check config entry state
     if self.lock_config_entry:
@@ -383,7 +383,7 @@ class SmartLockLock(BaseLock):
         """Return scan interval for usercodes."""
         return timedelta(minutes=1)
 
-    def is_connection_up(self) -> bool:
+    def is_integration_connected(self) -> bool:
         """Return whether connection to lock is up."""
         if self.lock_config_entry:
             return self.lock_config_entry.state == ConfigEntryState.LOADED
@@ -507,7 +507,7 @@ async def test_clear_usercode(hass, mock_lock):
 
 **Connection state issues:**
 
-- Verify `is_connection_up()` accurately reflects device state
+- Verify `is_integration_connected()` accurately reflects device state
 - Check that `lock_config_entry` is set correctly
 
 ### Debug Logging
