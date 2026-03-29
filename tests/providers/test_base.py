@@ -22,7 +22,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockDisconnected,
 )
 from custom_components.lock_code_manager.providers._base import BaseLock
-from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_DATA, MockLCMLock
+from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 
 TEST_OPERATION_DELAY = 0.01
 
@@ -228,10 +228,7 @@ async def test_rate_limiting_set_usercode(
     assert second_duration >= TEST_OPERATION_DELAY
 
     # Verify both operations completed
-    assert (
-        len(hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"])
-        == 2
-    )
+    assert len(lock_provider.service_calls["set_usercode"]) == 2
 
 
 async def test_rate_limiting_mixed_operations(
@@ -319,10 +316,7 @@ async def test_operations_are_serialized(
     assert total_duration >= 2 * TEST_OPERATION_DELAY
 
     # Verify all operations completed
-    assert (
-        len(hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["set_usercode"])
-        == 3
-    )
+    assert len(lock_provider.service_calls["set_usercode"]) == 3
 
 
 async def test_connection_failure_does_not_rate_limit_next_operation(

@@ -21,8 +21,6 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
-LOCK_DATA = f"mock_{DOMAIN}"
-
 LOCK_1_ENTITY_ID = "lock.test_1"
 LOCK_2_ENTITY_ID = "lock.test_2"
 
@@ -63,6 +61,8 @@ class MockLCMLock(BaseLock):
         """Initialize mock lock."""
         super().__init__(*args, **kwargs)
         self._connected = True
+        self.codes: dict[int, str] = {1: "1234", 2: "5678"}
+        self.service_calls: defaultdict[str, list] = defaultdict(list)
 
     @property
     def domain(self) -> str:
@@ -72,17 +72,10 @@ class MockLCMLock(BaseLock):
     @callback
     def setup(self) -> None:
         """Set up lock."""
-        self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
-            self.lock.entity_id,
-            {"codes": {1: "1234", 2: "5678"}, "service_calls": defaultdict(list)},
-        )
 
     @callback
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
-        self.hass.data[LOCK_DATA].pop(self.lock.entity_id)
-        if not self.hass.data[LOCK_DATA]:
-            self.hass.data.pop(LOCK_DATA)
 
     def set_connected(self, connected: bool) -> None:
         """Set connection state for testing."""
@@ -96,12 +89,10 @@ class MockLCMLock(BaseLock):
         """
         Perform hard refresh all codes.
 
-        Needed for integraitons where usercodes are cached and may get out of sync with
-        the lock.
+        Needed for integrations where usercodes are cached and may get out of sync
+        with the lock.
         """
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "hard_refresh_codes"
-        ].append(())
+        self.service_calls["hard_refresh_codes"].append(())
 
     def set_usercode(
         self, code_slot: int, usercode: str, name: str | None = None
@@ -111,16 +102,10 @@ class MockLCMLock(BaseLock):
 
         Returns True if the value was changed, False if already set to this value.
         """
-        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
-        if lock_data:
-            # Check if value already matches
-            if lock_data["codes"].get(code_slot) == usercode:
-                return False
-            lock_data["codes"][code_slot] = usercode
-            lock_data["service_calls"]["set_usercode"].append(
-                (code_slot, usercode, name)
-            )
-            return True
+        if self.codes.get(code_slot) == usercode:
+            return False
+        self.codes[code_slot] = usercode
+        self.service_calls["set_usercode"].append((code_slot, usercode, name))
         return True
 
     def clear_usercode(self, code_slot: int) -> bool:
@@ -129,13 +114,10 @@ class MockLCMLock(BaseLock):
 
         Returns True if the value was changed, False if already cleared.
         """
-        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
-        if lock_data:
-            if code_slot not in lock_data["codes"]:
-                return False
-            lock_data["codes"].pop(code_slot, None)
-            lock_data["service_calls"]["clear_usercode"].append((code_slot,))
-            return True
+        if code_slot not in self.codes:
+            return False
+        self.codes.pop(code_slot, None)
+        self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
     def get_usercodes(self) -> dict[int, str | None]:
@@ -150,12 +132,8 @@ class MockLCMLock(BaseLock):
             'B': '5678',
         }
         """
-        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
-        if not lock_data:
-            return {}
-        codes = lock_data["codes"]
-        lock_data["service_calls"]["get_usercodes"].append(codes)
-        return codes
+        self.service_calls["get_usercodes"].append(self.codes)
+        return self.codes
 
 
 class MockLockEntity(LockEntity):
