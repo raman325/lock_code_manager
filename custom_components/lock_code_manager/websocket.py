@@ -659,7 +659,11 @@ async def subscribe_lock_codes(
         if old_state is None or new_state is None or old_state.state != new_state.state:
             _send_update()
 
-    # Track coordinator updates (lock code changes)
+    # Track coordinator updates (lock code changes).
+    # Note: if coordinator is None AND the initial entity set is empty, nothing
+    # drives re-resolution of entities. This is acceptable because coordinators
+    # are always present for real lock providers; None only occurs in degenerate
+    # test scenarios where no actual lock hardware is involved.
     unsub_coordinator = (
         coordinator.async_add_listener(_send_update) if coordinator else lambda: None
     )
@@ -1070,7 +1074,7 @@ async def subscribe_code_slot(
     def _send_update(next_event: dict[str, Any] | None = None) -> None:
         # Re-resolve entity IDs each time to pick up entities created after
         # subscription was established
-        current_entities, current_in_sync, _ = _resolve_entity_ids()
+        current_entities, current_in_sync, current_condition = _resolve_entity_ids()
         connection.send_event(
             msg["id"],
             _serialize_slot_card_data(
@@ -1084,7 +1088,7 @@ async def subscribe_code_slot(
             ),
         )
         # Update state tracking if the set of tracked entities has changed
-        _refresh_state_tracking(current_entities, current_in_sync)
+        _refresh_state_tracking(current_entities, current_in_sync, current_condition)
 
     async def _async_send_update_with_calendar() -> None:
         """Fetch next calendar event and send update (for state changes)."""
@@ -1122,10 +1126,10 @@ async def subscribe_code_slot(
     def _refresh_state_tracking(
         current_entities: SlotEntityData,
         current_in_sync: dict[str, str],
+        current_condition: str | None = None,
     ) -> None:
         """Re-subscribe to state changes if the tracked entity set has changed."""
         nonlocal tracked_set
-        current_condition = _get_slot_condition_entity_id(config_entry, slot_num)
         new_ids = set(current_entities.all_entity_ids()) | set(current_in_sync.values())
         if current_condition:
             new_ids.add(current_condition)
