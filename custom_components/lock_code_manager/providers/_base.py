@@ -229,7 +229,11 @@ class BaseLock:
         """Return a masked representation of a PIN for logging."""
         from ..util import mask_pin  # noqa: PLC0415
 
-        return mask_pin(pin, self.lock.entity_id)
+        return mask_pin(
+            pin,
+            self.lock.entity_id,
+            self.hass.data.get(DOMAIN, {}).get("instance_id", ""),
+        )
 
     @staticmethod
     def is_masked_or_empty(code: str | None) -> bool:
