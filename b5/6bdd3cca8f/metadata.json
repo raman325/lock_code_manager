@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b56bdd3cca8f",
+  "strategy": "manual-commit",
+  "branch": "feat/duplicate-code-detection",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b5/6bdd3cca8f/0/metadata.json",
+      "transcript": "/b5/6bdd3cca8f/0/full.jsonl",
+      "context": "/b5/6bdd3cca8f/0/context.md",
+      "content_hash": "/b5/6bdd3cca8f/0/content_hash.txt",
+      "prompt": "/b5/6bdd3cca8f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 469,
+    "cache_creation_tokens": 1361821,
+    "cache_read_tokens": 79244233,
+    "output_tokens": 101461,
+    "api_call_count": 405
+  }
+}
