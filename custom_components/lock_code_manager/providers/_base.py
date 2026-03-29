@@ -213,7 +213,7 @@ class BaseLock:
         raise ProviderNotImplementedError(self, method_name, guidance)
 
     @staticmethod
-    def is_masked(code: int | str | None) -> bool:
+    def is_masked_or_empty(code: int | str | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
         if code is None or code == "":
             return True
@@ -232,18 +232,26 @@ class BaseLock:
     @final
     def _check_duplicate_code(self, code_slot: int, usercode: str) -> None:
         """Raise DuplicateCodeError if the PIN duplicates another slot on this lock."""
+        # Return early if there's nothing to check
         if not usercode or not self.coordinator or not self.coordinator.data:
             return
-        for other_slot, other_code in self.coordinator.data.items():
-            if other_slot == code_slot or self.is_masked(other_code):
-                continue
-            if str(other_code) == usercode:
-                raise DuplicateCodeError(
-                    code_slot=code_slot,
-                    conflicting_slot=other_slot,
-                    conflicting_slot_managed=self.is_slot_managed(other_slot),
-                    lock_entity_id=self.lock.entity_id,
-                )
+        try:
+            other_code_slot = next(
+                other_code_slot
+                for other_code_slot, other_usercode in self.coordinator.data.items()
+                if other_code_slot != code_slot
+                and not self.is_masked_or_empty(other_usercode)
+                and str(other_usercode) == usercode
+            )
+        except StopIteration:
+            pass
+        else:
+            raise DuplicateCodeError(
+                code_slot=code_slot,
+                conflicting_slot=other_code_slot,
+                conflicting_slot_managed=self.is_slot_managed(other_code_slot),
+                lock_entity_id=self.lock.entity_id,
+            )
 
     @property
     def domain(self) -> str:

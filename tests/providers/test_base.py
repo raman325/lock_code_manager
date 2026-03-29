@@ -735,39 +735,39 @@ class TestIsMasked:
 
     def test_none(self):
         """Test None is treated as masked (not comparable)."""
-        assert BaseLock.is_masked(None) is True
+        assert BaseLock.is_masked_or_empty(None) is True
 
     def test_empty_string(self):
         """Test empty string is treated as masked (not comparable)."""
-        assert BaseLock.is_masked("") is True
+        assert BaseLock.is_masked_or_empty("") is True
 
     def test_all_stars(self):
         """Test all-stars code is masked."""
-        assert BaseLock.is_masked("****") is True
+        assert BaseLock.is_masked_or_empty("****") is True
 
     def test_single_star(self):
         """Test single star is masked."""
-        assert BaseLock.is_masked("*") is True
+        assert BaseLock.is_masked_or_empty("*") is True
 
     def test_real_code(self):
         """Test real PIN code is not masked."""
-        assert BaseLock.is_masked("1234") is False
+        assert BaseLock.is_masked_or_empty("1234") is False
 
     def test_partial_mask(self):
         """Test partially masked code is not masked."""
-        assert BaseLock.is_masked("12*4") is False
+        assert BaseLock.is_masked_or_empty("12*4") is False
 
     def test_integer_zero(self):
         """Test integer 0 is not masked (valid code)."""
-        assert BaseLock.is_masked(0) is False
+        assert BaseLock.is_masked_or_empty(0) is False
 
     def test_integer_code(self):
         """Test integer code is not masked."""
-        assert BaseLock.is_masked(1234) is False
+        assert BaseLock.is_masked_or_empty(1234) is False
 
     def test_string_zero(self):
         """Test string '0' is not masked."""
-        assert BaseLock.is_masked("0") is False
+        assert BaseLock.is_masked_or_empty("0") is False
 
 
 # =============================================================================
