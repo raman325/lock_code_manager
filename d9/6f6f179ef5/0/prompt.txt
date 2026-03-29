@@ -1,0 +1,80 @@
+Implement the following plan:
+
+# Handle duplicate code Z-Wave notification (Issue #848)
+
+## Context
+
+When a lock rejects a code because it duplicates a code in another slot, Z-Wave sends an Access Control notification (type 6, event 15: `NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE`). LCM currently ignores this notification, so the in-sync sensor sees the code isn't set, retries, gets rejected again, and loops indefinitely.
+
+**Goal**: When this notification is received, disable the affected slot, log an error, and create a persistent notification so the user knows to set a unique code.
+
+## Changes
+
+### 1. `providers/zwave_js.py` — Handle duplicate code notification
+
+**Add `_set_in_progress_code_slot: int | None` field** to `ZWaveJSLock` (default `None`). Lifecycle:
+- **Set** in `async_set_usercode` before the service call
+- **Cleared on success** in `on_value_updated` (inside `subscribe_push_updates`) when a real value update arrives for the in-progress slot — this confirms the lock accepted the code
+- **Cleared on failure** in `_handle_duplicate_code` when the notification is handled
+
+**In `_handle_zwave_js_event`**, before the normal event flow, check for event 15 — but **only when `_set_in_progress_code_slot` is set**. This guards against reacting to duplicate code notifications triggered externally (e.g., someone manually adding a duplicate code at the lock's keypad). We only want to react when LCM initiated the set operation:
+
+```python
+if (
+    evt.data[ATTR_EVENT] == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+    and self._set_in_progress_code_slot is not None
+    # If userId is in params, verify it matches our in-progress slot
+    # (otherwise the notification is about a different slot, not ours)
+    and (code_slot == 0 or code_slot == self._set_in_progress_code_slot)
+):
+    self._handle_duplicate_code()
+    return
+```
+
+**In `on_value_updated`** (inside `subscribe_push_updates`), clear the field when a real push update arrives for the in-progress slot (confirms lock accepted the code):
+
+```python
+if code_slot == self._set_in_progress_code_slot:
+    self._set_in_progress_code_slot = None
+```
+
+(Add this early in the handler, before the dedup/skip checks)
+
+**Add `_handle_duplicate_code()` callback method** to `ZWaveJSLock` (no params — uses `_set_in_progress_code_slot` directly since we only enter this when it's set):
+- Read `code_slot = self._set_in_progress_code_slot`
+- Clear `_set_in_progress_code_slot`
+- Find all LCM config entries managing this lock + slot (same pattern as `async_fire_code_slot_event`)
+- For each matching config entry:
+  - Disable the slot: `data[CONF_SLOTS][slot_num][CONF_ENABLED] = False` via `hass.config_entries.async_update_entry()`
+  - Create persistent notification with ID `{DOMAIN}_{entry_id}_{slot}_duplicate_code`
+- Log an error once (not per config entry)
+
+**New imports**: `copy`, `from homeassistant.components.persistent_notification import async_create`, `from homeassistant.const import CONF_ENABLED`
+
+### 2. `tests/providers/test_zwave_js.py` — Add tests
+
+Tests following existing notification event test patterns:
+
+1. **`test_duplicate_code_notification_disables_slot`** — Event 15 with `_set_in_progress_code_slot` set, matching userId → slot disabled in config entry, persistent notification created, error logged, field cleared
+2. **`test_duplicate_code_notification_no_user_id_disables_slot`** — Event 15 with `_set_in_progress_code_slot` set, no userId in params → still handles it (uses in-progress slot)
+3. **`test_duplicate_code_notification_ignored_when_not_in_progress`** — Event 15 arrives but `_set_in_progress_code_slot` is None (external trigger) → notification ignored, no slot disabled
+4. **`test_duplicate_code_notification_ignored_when_user_id_mismatches`** — Event 15 with `_set_in_progress_code_slot` set to slot 2, but userId says slot 3 → ignored (not our operation)
+5. **`test_set_in_progress_cleared_on_value_update`** — After `async_set_usercode`, a real push value update for that slot clears `_set_in_progress_code_slot`
+
+## Files Modified
+
+- `custom_components/lock_code_manager/providers/zwave_js.py` — notification handling + slot tracking
+- `tests/providers/test_zwave_js.py` — new tests
+
+## Verification
+
+1. `uv run pytest tests/providers/test_zwave_js.py -x` — new + existing tests pass
+2. `uv run pytest -x` — full suite passes
+3. `uv run pre-commit run --all-files` — linting passes
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/63a3c6a3-2dfd-4ff7-a7d0-d39f03b8014c.jsonl
+
+---
+
+commit and create branch, using PR template in .github/

@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "0f56f3ef72da",
+  "strategy": "manual-commit",
+  "branch": "fix/overlapping-lock-coordinator-race",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0f/56f3ef72da/0/metadata.json",
+      "transcript": "/0f/56f3ef72da/0/full.jsonl",
+      "context": "/0f/56f3ef72da/0/context.md",
+      "content_hash": "/0f/56f3ef72da/0/content_hash.txt",
+      "prompt": "/0f/56f3ef72da/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 201,
+    "cache_creation_tokens": 115858,
+    "cache_read_tokens": 4432845,
+    "output_tokens": 3198,
+    "api_call_count": 58
+  }
+}

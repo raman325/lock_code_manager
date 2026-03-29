@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e5163891a24a",
+  "session_id": "eff50567-4070-45c7-9cfd-145beb07fcaa",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-28T00:54:28.365983Z",
+  "branch": "troubleshooting-docs",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/ISSUE_TEMPLATE/bug_report.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "dc2a29f67160",
+  "checkpoint_transcript_start": 470,
+  "transcript_lines_at_start": 470,
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 6528,
+    "cache_read_tokens": 1183777,
+    "output_tokens": 3241,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-28T00:54:28.120022Z",
+    "agent_lines": 21,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 21,
+    "agent_percentage": 100
+  }
+}

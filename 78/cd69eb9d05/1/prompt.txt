@@ -1,0 +1,783 @@
+Implement the following plan:
+
+# Plan: Blueprint Documentation + Import Links
+
+## Context
+
+Three HA blueprints were created in PR #902 at `blueprints/` in the repo root. Users need documentation and easy import links. No programmatic installation — just docs.
+
+Wiki changes will be staged but **not committed** until the blueprint PR is released.
+
+## 1. New Wiki Page: `Blueprints.md`
+
+Three blueprints span different features, so a dedicated page with My HA import badges for each:
+
+```
+# Blueprints
+
+Intro: LCM provides blueprints for common automation patterns.
+Import them using the buttons below, or copy the YAML files from
+the blueprints/ directory in the repository.
+
+## Slot Usage Limiter (automation)
+- [Import badge]
+- What it does, setup steps (create input_number, import, configure)
+- Inputs table
+
+## Calendar Condition (template)
+- [Import badge]
+- What it does, setup, assign binary_sensor as condition entity
+- Inputs table
+- Available template variables list
+- Note about condition_template evaluation timing
+
+## Calendar PIN Setter (automation)
+- [Import badge]
+- What it does, setup steps
+- Inputs table
+- Example PIN templates
+```
+
+Import badge format:
+```markdown
+[![Import](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_limiter.yaml)
+```
+
+## 2. Wiki Cross-References
+
+- **Using-Condition-Entities.md**: Add note in "Binary Sensor Entities" section pointing to the Calendar Condition blueprint
+- **Using-"Number-of-Uses".md**: Expand with note about Slot Usage Limiter blueprint as an `input_number`-based alternative
+
+## 3. Wiki Navigation Updates
+
+**_Sidebar.md** — add under Features, after `[[Notifications]]`:
+```
+- [[Blueprints]]
+```
+
+**Home.md** — add to Features list:
+```
+- [[Blueprints]] - Ready-to-use automations and templates for common scenarios
+```
+
+## 4. README Updates
+
+Add a "Blueprints" subsection after the features bullet list (before "Locks from the following integrations"):
+
+```markdown
+### Blueprints
+
+LCM provides blueprints for common automation patterns:
+
+| Blueprint | Description | |
+|-----------|-------------|-|
+| Slot Usage Limiter | Limit PIN uses with a counter, auto-disable at 0 | [![Import](badge)](link) |
+| Calendar Condition | Binary sensor for calendar-based access control | [![Import](badge)](link) |
+| Calendar PIN Setter | Set PINs from calendar event data | [![Import](badge)](link) |
+
+See the [Blueprints wiki page](...) for setup details.
+```
+
+## Files to Modify
+
+**Main repo (commit to `add-blueprints` branch):**
+
+| File | Change |
+|------|--------|
+| `README.md` | Add Blueprints section with import badges + wiki link |
+
+**Wiki (stage only, do not commit):**
+
+| File | Change |
+|------|--------|
+| `../lock_code_manager.wiki/Blueprints.md` | New page |
+| `../lock_code_manager.wiki/_Sidebar.md` | Add Blueprints link under Features |
+| `../lock_code_manager.wiki/Home.md` | Add Blueprints to Features list |
+| `../lock_code_manager.wiki/Using-Condition-Entities.md` | Cross-ref to Calendar Condition blueprint |
+| `../lock_code_manager.wiki/Using-"Number-of-Uses".md` | Cross-ref to Slot Usage Limiter blueprint |
+
+## Verification
+
+1. Import badge URLs correctly URL-encoded and point to valid GitHub blob URLs
+2. Pre-commit passes on README changes
+3. Wiki markdown links use correct `[[Page|File]]` syntax
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/c63ce302-ab53-46e3-85e8-9f10a16c0217.jsonl
+
+---
+
+is it possible to create instances of blueprint automations/entities from code too? We won't do it in this PR, the thought is that in a new PR we get rid of number of uses, and in that PR when we migrate config entries, we offer to create the blueprints for users if they have it
+
+---
+
+commit local change
+
+---
+
+push
+
+---
+
+ff, then review copilot comments. address any relevant, commit and push, then respond to any you don't address
+
+---
+
+which mcp servers should I remove from your direct config? i understand that there may be duplicates because I configured the MCP servers in the desktop app as well
+
+---
+
+<bash-input>code ~/.claude.json</bash-input>
+
+---
+
+<bash-stdout>/Users/raman/.claude/shell-snapshots/snapshot-bash-1773242757429-j18tz9.sh: line 372: alias: --: not found</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+can't add HA native via the desktop app. I added it via the UI, when I go to connect, I get the following error: There was an error connecting to the MCP server. Please check your server URL and make sure your server handles auth correctly.
+
+---
+
+I was able to do oauth using claude code by forcing the callback port
+
+---
+
+ff main and run lint. If there are changes lets put up a PR for it
+
+---
+
+does the lcm wiki (../lock_code_manager.wiki) include any information about obtaining debug logs?
+
+---
+
+maybe a page on how to open a quality issue. We should probably also have an issue template that asks for the right information including debug logs and maybe links to the wiki if it's too much to embed directly in the template
+
+---
+
+1. troubleshooting section with subpages and some guidance
+2. both
+3. we just need a device diagnostics dump for their lock to help translate the logs
+
+---
+
+[Request interrupted by user]
+
+---
+
+1. troubleshooting section with subpages and some guidance
+2. both
+3. we just need a device diagnostics dump for their lock to help translate the logs. Correct me if I am wrong, but if we know everything HA knows about the device that we are managing, and we own all the code for LCM, and we have the necessary logs, do we need anything else? Those two should give the complete picture, although none of this covers frontend issues
+
+---
+
+yes and commit and push the wiki changes
+
+---
+
+Can we offer both options for device diagnostics and logs? It's a lot of data to paste in and github sometimes complains
+
+---
+
+[Request interrupted by user]
+
+---
+
+we want both the wiki and the issue template to set debug logs for lock_code_manager + homeassistant.components.zwave_js (user must replace with provider when we support more)
+
+---
+
+can we be more explicit that all that has to be replaced is the domain name?
+
+---
+
+now lets revert the blueprint changes and leave them unstaged for when we merge the corresponding PR
+
+---
+
+wiki should explain that the process for debug logs should be reversed
+
+---
+
+for the logs section, don't talk about filtering. It's easier for them to share the full logs or snippets of the log that are relevant. Maybe we can just say you can share the full log or just a section of time in the logs if that makes more sense.
+
+---
+
+[Request interrupted by user]
+
+---
+
+for the logs section, don't talk about filtering. It's easier for them to share the full logs or snippets of the log that are relevant. Any filtering we ask them to do would risk losing data
+
+---
+
+If they want to share a snippet, they can share the time period they think they're seeing the issue but shuold include extra time before and after just in case. They shouldn't try to frankenstein the logs together, that's just another form of filtering
+
+---
+
+We need to cover frontend issues. We should include dev console logs, and in the wiki include instructions on how to get them
+
+---
+
+copilot claims upload is not a valid form field type lol
+
+---
+
+CI failure here seems like a bug in our workflow definition. Maybe path filtering? https://github.com/raman325/lock_code_manager/pull/914
+
+---
+
+merged, delete stale branches and ff
+
+---
+
+report from the user we've been trying to fix a infinte sync issue with (see PR history if you want context). I think I’ve fixed my locks and got LCM working nicely with them!   Using the Developer Tool Actions, I found that I had some slots filled outside the ones set on LCM.  Also, some slots refused to be set either by an Action or LCM IF THE SAME CODE WAS PRESENT IN A DIFFERENT SLOT.  I don’t know if this is a feature of my locks or the software but I think that was why some slots were never getting into sync and constantly being queried.
+
+---
+
+users are still reporting this on the latest version. We probably need to check for duplicate codes ourselves. Do we get push updates for all slots? Don't we already poll all slots as well? So I think if we fix it in house we don't even need the event handling, but confirm this and challenge this assertion
+
+---
+
+<bash-input>code .</bash-input>
+
+---
+
+<bash-stdout>/Users/raman/.claude/shell-snapshots/snapshot-bash-1774658509637-jywyl5.sh: line 372: alias: --: not found</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+we show unmanaged codes in the UI. it seems we do get unmanaged user codes based on our comments in the zwave_js provider class function for getting usercodes
+
+---
+
+lets plan this out, but include in the plan a review of places where we imply that we only actively manage a subset of codes and make sure it's more clear. We may want to consider adding to the module docstring with an overarching view of what gets polled, what gets hard refreshed, what gets pushed, etc. Ideally there is a better way to do this than to make a giant docstring but consider that idea as you think through this secondary part of the plan
+
+---
+
+Base directory for this skill: /Users/raman/.claude/plugins/cache/superpowers-marketplace/superpowers/4.3.0/skills/brainstorming
+
+# Brainstorming Ideas Into Designs
+
+## Overview
+
+Help turn ideas into fully formed designs and specs through natural collaborative dialogue.
+
+Start by understanding the current project context, then ask questions one at a time to refine the idea. Once you understand what you're building, present the design and get user approval.
+
+<HARD-GATE>
+Do NOT invoke any implementation skill, write any code, scaffold any project, or take any implementation action until you have presented a design and the user has approved it. This applies to EVERY project regardless of perceived simplicity.
+</HARD-GATE>
+
+## Anti-Pattern: "This Is Too Simple To Need A Design"
+
+Every project goes through this process. A todo list, a single-function utility, a config change — all of them. "Simple" projects are where unexamined assumptions cause the most wasted work. The design can be short (a few sentences for truly simple projects), but you MUST present it and get approval.
+
+## Checklist
+
+You MUST create a task for each of these items and complete them in order:
+
+1. **Explore project context** — check files, docs, recent commits
+2. **Ask clarifying questions** — one at a time, understand purpose/constraints/success criteria
+3. **Propose 2-3 approaches** — with trade-offs and your recommendation
+4. **Present design** — in sections scaled to their complexity, get user approval after each section
+5. **Write design doc** — save to `docs/plans/YYYY-MM-DD-<topic>-design.md` and commit
+6. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+
+## Process Flow
+
+```dot
+digraph brainstorming {
+    "Explore project context" [shape=box];
+    "Ask clarifying questions" [shape=box];
+    "Propose 2-3 approaches" [shape=box];
+    "Present design sections" [shape=box];
+    "User approves design?" [shape=diamond];
+    "Write design doc" [shape=box];
+    "Invoke writing-plans skill" [shape=doublecircle];
+
+    "Explore project context" -> "Ask clarifying questions";
+    "Ask clarifying questions" -> "Propose 2-3 approaches";
+    "Propose 2-3 approaches" -> "Present design sections";
+    "Present design sections" -> "User approves design?";
+    "User approves design?" -> "Present design sections" [label="no, revise"];
+    "User approves design?" -> "Write design doc" [label="yes"];
+    "Write design doc" -> "Invoke writing-plans skill";
+}
+```
+
+**The terminal state is invoking writing-plans.** Do NOT invoke frontend-design, mcp-builder, or any other implementation skill. The ONLY skill you invoke after brainstorming is writing-plans.
+
+## The Process
+
+**Understanding the idea:**
+- Check out the current project state first (files, docs, recent commits)
+- Ask questions one at a time to refine the idea
+- Prefer multiple choice questions when possible, but open-ended is fine too
+- Only one question per message - if a topic needs more exploration, break it into multiple questions
+- Focus on understanding: purpose, constraints, success criteria
+
+**Exploring approaches:**
+- Propose 2-3 different approaches with trade-offs
+- Present options conversationally with your recommendation and reasoning
+- Lead with your recommended option and explain why
+
+**Presenting the design:**
+- Once you believe you understand what you're building, present the design
+- Scale each section to its complexity: a few sentences if straightforward, up to 200-300 words if nuanced
+- Ask after each section whether it looks right so far
+- Cover: architecture, components, data flow, error handling, testing
+- Be ready to go back and clarify if something doesn't make sense
+
+## After the Design
+
+**Documentation:**
+- Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
+- Use elements-of-style:writing-clearly-and-concisely skill if available
+- Commit the design document to git
+
+**Implementation:**
+- Invoke the writing-plans skill to create a detailed implementation plan
+- Do NOT invoke any other skill. writing-plans is the next step.
+
+## Key Principles
+
+- **One question at a time** - Don't overwhelm with multiple questions
+- **Multiple choice preferred** - Easier to answer than open-ended when possible
+- **YAGNI ruthlessly** - Remove unnecessary features from all designs
+- **Explore alternatives** - Always propose 2-3 approaches before settling
+- **Incremental validation** - Present design, get approval before moving on
+- **Be flexible** - Go back and clarify when something doesn't make sense
+
+---
+
+A is the best option available. If there are other options to explore for C, can we do that?
+
+---
+
+I agree A and 1 as a future enhancement. For this enhancement, we should update the config flow text to make it clear that some locks store PINs as masked, and consuming applications can only see it that way. Therefore, the most reliable way for this to work is to ensure that you only manage codes through a tool like LCM or Keymaster (choose 1 but not both). It's highly recommended to clear all slots before setting LCM up, even ones that were already set. If you need permanent access, just configure the slot through LCM without a condition. Something to that effect but less cerbose
+
+---
+
+note todos:
+- add a config flow step that checks for existing unmanaged codes, tells the user that the lock will be "reset" before configuring - either they cancel and can't continue, or they move forward and reset the lock. Even if we blow away codes managed by LCM (we should be able to avoid this), LCM will just add them back immediately
+- update docs that currently talk about slowly migrating over
+- look into more smartness here. This is specific to some locks, maybe we can carve this capability out further?
+- these will be fast follows along with the UI change we discussed. The config flow text changes should be part of the current implmenetation plan
+
+as for design:
+- on duplicate found, this behavior should only be the case for "sync" calls. For calls through the text.set_value action, the action should just fail
+
+---
+
+B makes sense
+
+---
+
+for the tools, LCM and Keymaster aren't the only options. num_slots text seems to be contradictory to the idea that you should manage it all here
+
+---
+
+only use one tool if using a tool at all. We need to also call out manual entry as unproductive. For the second, the rewrite looks good but add the dropped part in parenthesis to the end of the first sentence
+
+---
+
+we need to be stronger. If you are using a tool, do not manually update slots
+
+---
+
+they're already indicating they want to use LCM, maybe we should say it from that perspective
+
+---
+
+yes, another todo should be to check for exsting conflicting integrations (like keymaster)
+
+---
+
+I agree with your recommendation
+
+---
+
+complete
+
+---
+
+[Request interrupted by user]
+
+---
+
+make sure TODOs are captured in TODO.md
+
+---
+
+Base directory for this skill: /Users/raman/.claude/plugins/cache/superpowers-marketplace/superpowers/4.3.0/skills/writing-plans
+
+# Writing Plans
+
+## Overview
+
+Write comprehensive implementation plans assuming the engineer has zero context for our codebase and questionable taste. Document everything they need to know: which files to touch for each task, code, testing, docs they might need to check, how to test it. Give them the whole plan as bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
+
+Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
+
+**Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
+
+**Context:** This should be run in a dedicated worktree (created by brainstorming skill).
+
+**Save plans to:** `docs/plans/YYYY-MM-DD-<feature-name>.md`
+
+## Bite-Sized Task Granularity
+
+**Each step is one action (2-5 minutes):**
+- "Write the failing test" - step
+- "Run it to make sure it fails" - step
+- "Implement the minimal code to make the test pass" - step
+- "Run the tests and make sure they pass" - step
+- "Commit" - step
+
+## Plan Document Header
+
+**Every plan MUST start with this header:**
+
+```markdown
+# [Feature Name] Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** [One sentence describing what this builds]
+
+**Architecture:** [2-3 sentences about approach]
+
+**Tech Stack:** [Key technologies/libraries]
+
+---
+```
+
+## Task Structure
+
+````markdown
+### Task N: [Component Name]
+
+**Files:**
+- Create: `exact/path/to/file.py`
+- Modify: `exact/path/to/existing.py:123-145`
+- Test: `tests/exact/path/to/test.py`
+
+**Step 1: Write the failing test**
+
+```python
+def test_specific_behavior():
+    result = function(input)
+    assert result == expected
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/path/test.py::test_name -v`
+Expected: FAIL with "function not defined"
+
+**Step 3: Write minimal implementation**
+
+```python
+def function(input):
+    return expected
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/path/test.py::test_name -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add tests/path/test.py src/path/file.py
+git commit -m "feat: add specific feature"
+```
+````
+
+## Remember
+- Exact file paths always
+- Complete code in plan (not "add validation")
+- Exact commands with expected output
+- Reference relevant skills with @ syntax
+- DRY, YAGNI, TDD, frequent commits
+
+## Execution Handoff
+
+After saving the plan, offer execution choice:
+
+**"Plan complete and saved to `docs/plans/<filename>.md`. Two execution options:**
+
+**1. Subagent-Driven (this session)** - I dispatch fresh subagent per task, review between tasks, fast iteration
+
+**2. Parallel Session (separate)** - Open new session with executing-plans, batch execution with checkpoints
+
+**Which approach?"**
+
+**If Subagent-Driven chosen:**
+- **REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development
+- Stay in this session
+- Fresh subagent per task + code review
+
+**If Parallel Session chosen:**
+- Guide them to open new session in worktree
+- **REQUIRED SUB-SKILL:** New session uses superpowers:executing-plans
+
+---
+
+1.
+
+---
+
+Base directory for this skill: /Users/raman/.claude/plugins/cache/superpowers-marketplace/superpowers/4.3.0/skills/subagent-driven-development
+
+# Subagent-Driven Development
+
+Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first, then code quality review.
+
+**Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
+
+## When to Use
+
+```dot
+digraph when_to_use {
+    "Have implementation plan?" [shape=diamond];
+    "Tasks mostly independent?" [shape=diamond];
+    "Stay in this session?" [shape=diamond];
+    "subagent-driven-development" [shape=box];
+    "executing-plans" [shape=box];
+    "Manual execution or brainstorm first" [shape=box];
+
+    "Have implementation plan?" -> "Tasks mostly independent?" [label="yes"];
+    "Have implementation plan?" -> "Manual execution or brainstorm first" [label="no"];
+    "Tasks mostly independent?" -> "Stay in this session?" [label="yes"];
+    "Tasks mostly independent?" -> "Manual execution or brainstorm first" [label="no - tightly coupled"];
+    "Stay in this session?" -> "subagent-driven-development" [label="yes"];
+    "Stay in this session?" -> "executing-plans" [label="no - parallel session"];
+}
+```
+
+**vs. Executing Plans (parallel session):**
+- Same session (no context switch)
+- Fresh subagent per task (no context pollution)
+- Two-stage review after each task: spec compliance first, then code quality
+- Faster iteration (no human-in-loop between tasks)
+
+## The Process
+
+```dot
+digraph process {
+    rankdir=TB;
+
+    subgraph cluster_per_task {
+        label="Per Task";
+        "Dispatch implementer subagent (./implementer-prompt.md)" [shape=box];
+        "Implementer subagent asks questions?" [shape=diamond];
+        "Answer questions, provide context" [shape=box];
+        "Implementer subagent implements, tests, commits, self-reviews" [shape=box];
+        "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [shape=box];
+        "Spec reviewer subagent confirms code matches spec?" [shape=diamond];
+        "Implementer subagent fixes spec gaps" [shape=box];
+        "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [shape=box];
+        "Code quality reviewer subagent approves?" [shape=diamond];
+        "Implementer subagent fixes quality issues" [shape=box];
+        "Mark task complete in TodoWrite" [shape=box];
+    }
+
+    "Read plan, extract all tasks with full text, note context, create TodoWrite" [shape=box];
+    "More tasks remain?" [shape=diamond];
+    "Dispatch final code reviewer subagent for entire implementation" [shape=box];
+    "Use superpowers:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
+
+    "Read plan, extract all tasks with full text, note context, create TodoWrite" -> "Dispatch implementer subagent (./implementer-prompt.md)";
+    "Dispatch implementer subagent (./implementer-prompt.md)" -> "Implementer subagent asks questions?";
+    "Implementer subagent asks questions?" -> "Answer questions, provide context" [label="yes"];
+    "Answer questions, provide context" -> "Dispatch implementer subagent (./implementer-prompt.md)";
+    "Implementer subagent asks questions?" -> "Implementer subagent implements, tests, commits, self-reviews" [label="no"];
+    "Implementer subagent implements, tests, commits, self-reviews" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)";
+    "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" -> "Spec reviewer subagent confirms code matches spec?";
+    "Spec reviewer subagent confirms code matches spec?" -> "Implementer subagent fixes spec gaps" [label="no"];
+    "Implementer subagent fixes spec gaps" -> "Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)" [label="re-review"];
+    "Spec reviewer subagent confirms code matches spec?" -> "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [label="yes"];
+    "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" -> "Code quality reviewer subagent approves?";
+    "Code quality reviewer subagent approves?" -> "Implementer subagent fixes quality issues" [label="no"];
+    "Implementer subagent fixes quality issues" -> "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [label="re-review"];
+    "Code quality reviewer subagent approves?" -> "Mark task complete in TodoWrite" [label="yes"];
+    "Mark task complete in TodoWrite" -> "More tasks remain?";
+    "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
+    "More tasks remain?" -> "Dispatch final code reviewer subagent for entire implementation" [label="no"];
+    "Dispatch final code reviewer subagent for entire implementation" -> "Use superpowers:finishing-a-development-branch";
+}
+```
+
+## Prompt Templates
+
+- `./implementer-prompt.md` - Dispatch implementer subagent
+- `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
+- `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer subagent
+
+## Example Workflow
+
+```
+You: I'm using Subagent-Driven Development to execute this plan.
+
+[Read plan file once: docs/plans/feature-plan.md]
+[Extract all 5 tasks with full text and context]
+[Create TodoWrite with all tasks]
+
+Task 1: Hook installation script
+
+[Get Task 1 text and context (already extracted)]
+[Dispatch implementation subagent with full task text + context]
+
+Implementer: "Before I begin - should the hook be installed at user or system level?"
+
+You: "User level (~/.config/superpowers/hooks/)"
+
+Implementer: "Got it. Implementing now..."
+[Later] Implementer:
+  - Implemented install-hook command
+  - Added tests, 5/5 passing
+  - Self-review: Found I missed --force flag, added it
+  - Committed
+
+[Dispatch spec compliance reviewer]
+Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
+
+[Get git SHAs, dispatch code quality reviewer]
+Code reviewer: Strengths: Good test coverage, clean. Issues: None. Approved.
+
+[Mark Task 1 complete]
+
+Task 2: Recovery modes
+
+[Get Task 2 text and context (already extracted)]
+[Dispatch implementation subagent with full task text + context]
+
+Implementer: [No questions, proceeds]
+Implementer:
+  - Added verify/repair modes
+  - 8/8 tests passing
+  - Self-review: All good
+  - Committed
+
+[Dispatch spec compliance reviewer]
+Spec reviewer: ❌ Issues:
+  - Missing: Progress reporting (spec says "report every 100 items")
+  - Extra: Added --json flag (not requested)
+
+[Implementer fixes issues]
+Implementer: Removed --json flag, added progress reporting
+
+[Spec reviewer reviews again]
+Spec reviewer: ✅ Spec compliant now
+
+[Dispatch code quality reviewer]
+Code reviewer: Strengths: Solid. Issues (Important): Magic number (100)
+
+[Implementer fixes]
+Implementer: Extracted PROGRESS_INTERVAL constant
+
+[Code reviewer reviews again]
+Code reviewer: ✅ Approved
+
+[Mark Task 2 complete]
+
+...
+
+[After all tasks]
+[Dispatch final code-reviewer]
+Final reviewer: All requirements met, ready to merge
+
+Done!
+```
+
+## Advantages
+
+**vs. Manual execution:**
+- Subagents follow TDD naturally
+- Fresh context per task (no confusion)
+- Parallel-safe (subagents don't interfere)
+- Subagent can ask questions (before AND during work)
+
+**vs. Executing Plans:**
+- Same session (no handoff)
+- Continuous progress (no waiting)
+- Review checkpoints automatic
+
+**Efficiency gains:**
+- No file reading overhead (controller provides full text)
+- Controller curates exactly what context is needed
+- Subagent gets complete information upfront
+- Questions surfaced before work begins (not after)
+
+**Quality gates:**
+- Self-review catches issues before handoff
+- Two-stage review: spec compliance, then code quality
+- Review loops ensure fixes actually work
+- Spec compliance prevents over/under-building
+- Code quality ensures implementation is well-built
+
+**Cost:**
+- More subagent invocations (implementer + 2 reviewers per task)
+- Controller does more prep work (extracting all tasks upfront)
+- Review loops add iterations
+- But catches issues early (cheaper than debugging later)
+
+## Red Flags
+
+**Never:**
+- Start implementation on main/master branch without explicit user consent
+- Skip reviews (spec compliance OR code quality)
+- Proceed with unfixed issues
+- Dispatch multiple implementation subagents in parallel (conflicts)
+- Make subagent read plan file (provide full text instead)
+- Skip scene-setting context (subagent needs to understand where task fits)
+- Ignore subagent questions (answer before letting them proceed)
+- Accept "close enough" on spec compliance (spec reviewer found issues = not done)
+- Skip review loops (reviewer found issues = implementer fixes = review again)
+- Let implementer self-review replace actual review (both are needed)
+- **Start code quality review before spec compliance is ✅** (wrong order)
+- Move to next task while either review has open issues
+
+**If subagent asks questions:**
+- Answer clearly and completely
+- Provide additional context if needed
+- Don't rush them into implementation
+
+**If reviewer finds issues:**
+- Implementer (same subagent) fixes them
+- Reviewer reviews again
+- Repeat until approved
+- Don't skip the re-review
+
+**If subagent fails task:**
+- Dispatch fix subagent with specific instructions
+- Don't try to fix manually (context pollution)
+
+## Integration
+
+**Required workflow skills:**
+- **superpowers:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
+- **superpowers:writing-plans** - Creates the plan this skill executes
+- **superpowers:requesting-code-review** - Code review template for reviewer subagents
+- **superpowers:finishing-a-development-branch** - Complete development after all tasks
+
+**Subagents should use:**
+- **superpowers:test-driven-development** - Subagents follow TDD for each task
+
+**Alternative workflow:**
+- **superpowers:executing-plans** - Use for parallel session instead of same-session execution
+
+---
+
+[Request interrupted by user]
+
+---
+
+can you present the current plan?
+
+---
+
+[Request interrupted by user for tool use]
