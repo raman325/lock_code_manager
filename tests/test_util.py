@@ -1,5 +1,7 @@
 """Test utility functions."""
 
+import re
+
 import pytest
 
 from custom_components.lock_code_manager.util import mask_pin
@@ -8,19 +10,11 @@ INSTANCE_ID = "test-instance-uuid"
 LOCK = "lock.front_door"
 
 
-@pytest.mark.parametrize(
-    ("pin", "expected_prefix"),
-    [
-        ("1234", "pin#"),
-        ("5678", "pin#"),
-        ("0", "pin#"),
-    ],
-)
-def test_mask_pin_returns_hash(pin: str, expected_prefix: str):
-    """Test mask_pin returns a pin# prefixed 8-char hex hash."""
+@pytest.mark.parametrize("pin", ["1234", "5678", "0"])
+def test_mask_pin_returns_hash(pin: str):
+    """Test mask_pin returns a pin# prefixed 8-char lowercase hex hash."""
     result = mask_pin(pin, LOCK, INSTANCE_ID)
-    assert result.startswith(expected_prefix)
-    assert len(result) == 12  # "pin#" + 8 hex chars
+    assert re.fullmatch(r"pin#[0-9a-f]{8}", result), f"Unexpected format: {result}"
 
 
 def test_mask_pin_deterministic():

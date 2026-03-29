@@ -627,10 +627,10 @@ class BaseLock:
     ) -> None:
         """Set a usercode on a code slot."""
         LOGGER.debug(
-            "Setting usercode on %s slot %s (%s, source=%s)",
+            "Setting usercode on %s slot %s (pin=%s, source=%s)",
             self.lock.entity_id,
             code_slot,
-            self.mask_pin(str(usercode)),
+            self.mask_pin(usercode),
             source,
         )
         # Check for duplicate PINs under the lock so coordinator data
