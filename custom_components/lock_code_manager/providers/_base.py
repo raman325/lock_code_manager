@@ -152,15 +152,23 @@ class BaseLock:
         operation_type: Literal["get", "set", "clear", "refresh"],
         func: Callable[..., Awaitable[Any]],
         *args: Any,
+        pre_execute: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Execute operation with connection check, serialization, and delay."""
+        """Execute operation with connection check, serialization, and delay.
+
+        pre_execute runs inside the lock before the operation, for checks
+        that must be atomic with the operation (e.g., duplicate detection).
+        """
         if not await self.async_internal_is_connection_up():
             raise LockDisconnected(
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - lock not connected"
             )
 
         async with self._aio_lock:
+            if pre_execute:
+                pre_execute()
+
             elapsed = time.monotonic() - self._last_operation_time
             if elapsed < self._min_operation_delay:
                 delay = self._min_operation_delay - elapsed
@@ -595,21 +603,22 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> None:
         """Set a usercode on a code slot."""
-        if not await self.async_internal_is_connection_up():
-            raise LockDisconnected(
-                f"Cannot set on {self.lock.entity_id} - lock not connected"
-            )
-        async with self._aio_lock:
-            # Check for duplicate PINs under the lock so coordinator data
-            # can't change between the check and the set operation
-            self._check_duplicate_code(code_slot, str(usercode))
-
-            elapsed = time.monotonic() - self._last_operation_time
-            if elapsed < self._min_operation_delay:
-                await asyncio.sleep(self._min_operation_delay - elapsed)
-
-            changed = await self.async_set_usercode(code_slot, usercode, name=name)
-            self._last_operation_time = time.monotonic()
+        LOGGER.debug(
+            "Setting usercode on %s slot %s (source=%s)",
+            self.lock.entity_id,
+            code_slot,
+            source,
+        )
+        # Check for duplicate PINs under the lock so coordinator data
+        # can't change between the check and the set operation
+        changed = await self._execute_rate_limited(
+            "set",
+            self.async_set_usercode,
+            code_slot,
+            usercode,
+            pre_execute=lambda: self._check_duplicate_code(code_slot, str(usercode)),
+            name=name,
+        )
         # Refresh coordinator to update entity states from cache (only if changed).
         # Skip for push-based providers — they update the coordinator optimistically
         # via push_update() in their set/clear methods, and refreshing from cache
@@ -665,6 +674,12 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> None:
         """Clear a usercode on a code slot."""
+        LOGGER.debug(
+            "Clearing usercode on %s slot %s (source=%s)",
+            self.lock.entity_id,
+            code_slot,
+            source,
+        )
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )

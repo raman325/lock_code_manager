@@ -979,3 +979,34 @@ async def test_sync_tracker_expired_window_resets(
 
     # The _sync_attempts_exceeded check should return False (window expired)
     assert not in_sync_entity_obj._sync_attempts_exceeded()
+
+
+async def test_clear_operation_does_not_increment_tracker(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that clear sync operations do not increment the sync attempt tracker."""
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
+
+    # Verify starting at zero
+    assert in_sync_entity_obj._sync_attempt_count == 0
+
+    # Disable slot to trigger a clear sync cycle
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    await _async_force_sync_cycle(hass, coordinator)
+
+    # Clear operation should NOT have incremented the tracker
+    assert in_sync_entity_obj._sync_attempt_count == 0
