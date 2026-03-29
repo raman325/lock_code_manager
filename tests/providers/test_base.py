@@ -384,22 +384,21 @@ async def test_set_usercode_refreshes_coordinator_on_change(
     assert coordinator is not None
 
     # Track coordinator refreshes
-    refresh_count = 0
+    refresh_count = [0]
     original_refresh = coordinator.async_request_refresh
 
     async def track_refresh():
-        nonlocal refresh_count
-        refresh_count += 1
+        refresh_count[0] += 1
         return await original_refresh()
 
     with patch.object(coordinator, "async_request_refresh", track_refresh):
         # Setting a new usercode should trigger a coordinator refresh
         await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count == 1
+        assert refresh_count[0] == 1
 
         # Setting the same usercode should NOT trigger refresh (no change)
         await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        assert refresh_count == 1  # Still 1, no new refresh
+        assert refresh_count[0] == 1  # Still 1, no new refresh
 
 
 async def test_clear_usercode_refreshes_coordinator_on_change(
@@ -416,22 +415,21 @@ async def test_clear_usercode_refreshes_coordinator_on_change(
     await lock_provider.async_internal_set_usercode(4, "4444", "Test 4")
 
     # Track coordinator refreshes
-    refresh_count = 0
+    refresh_count = [0]
     original_refresh = coordinator.async_request_refresh
 
     async def track_refresh():
-        nonlocal refresh_count
-        refresh_count += 1
+        refresh_count[0] += 1
         return await original_refresh()
 
     with patch.object(coordinator, "async_request_refresh", track_refresh):
         # Clearing an existing usercode should trigger a coordinator refresh
         await lock_provider.async_internal_clear_usercode(4)
-        assert refresh_count == 1
+        assert refresh_count[0] == 1
 
         # Clearing a non-existent slot should NOT trigger refresh (no change)
         await lock_provider.async_internal_clear_usercode(999)
-        assert refresh_count == 1  # Still 1, no new refresh
+        assert refresh_count[0] == 1  # Still 1, no new refresh
 
 
 async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
@@ -615,18 +613,17 @@ async def test_set_usercode_skips_refresh_for_push_provider(
         assert coordinator is not None
 
         # Track coordinator refreshes
-        refresh_count = 0
+        refresh_count = [0]
         original_refresh = coordinator.async_request_refresh
 
         async def track_refresh():
-            nonlocal refresh_count
-            refresh_count += 1
+            refresh_count[0] += 1
             return await original_refresh()
 
         with patch.object(coordinator, "async_request_refresh", track_refresh):
             # Setting a new usercode should NOT trigger refresh for push providers
             await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-            assert refresh_count == 0
+            assert refresh_count[0] == 0
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
@@ -653,18 +650,17 @@ async def test_clear_usercode_skips_refresh_for_push_provider(
         assert coordinator is not None
 
         # Track coordinator refreshes
-        refresh_count = 0
+        refresh_count = [0]
         original_refresh = coordinator.async_request_refresh
 
         async def track_refresh():
-            nonlocal refresh_count
-            refresh_count += 1
+            refresh_count[0] += 1
             return await original_refresh()
 
         with patch.object(coordinator, "async_request_refresh", track_refresh):
             # Clearing an existing usercode should NOT trigger refresh for push providers
             await lock_provider.async_internal_clear_usercode(1)
-            assert refresh_count == 0
+            assert refresh_count[0] == 0
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
