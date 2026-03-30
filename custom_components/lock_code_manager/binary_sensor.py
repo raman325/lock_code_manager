@@ -417,7 +417,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return False
         return dt_util.utcnow() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
 
-    async def _disable_slot_and_notify(self, reason: str) -> None:
+    async def _disable_slot_and_notify(self, reason: str, title: str) -> None:
         """Disable the slot and create a persistent notification."""
         self._cancel_retry()
         await async_disable_slot(
@@ -426,6 +426,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
             self.config_entry.entry_id,
             self.slot_num,
             reason=reason,
+            title=title,
+            lock_name=self.lock.lock.name or self.lock.lock.original_name,
+            lock_entity_id=self.lock.lock.entity_id,
         )
         self._reset_sync_tracker()
 
@@ -598,7 +601,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
             await self._disable_slot_and_notify(
                 f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
                 f"has been disabled. {err}\n\n"
-                f"Fix the issue and re-enable the slot."
+                f"Fix the issue and re-enable the slot.",
+                title="Lock Code Rejected",
             )
             return False
         except LockDisconnected as err:
@@ -682,7 +686,8 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         f"{self._sync_attempt_count} consecutive attempts. "
                         f"The lock may be rejecting the code silently. "
                         f"Slot {self.slot_num} has been disabled. Check the "
-                        f"code and re-enable the slot."
+                        f"code and re-enable the slot.",
+                        title="Lock Code Sync Failed",
                     )
                     return
 

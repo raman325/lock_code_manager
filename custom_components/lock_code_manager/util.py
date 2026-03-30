@@ -37,11 +37,15 @@ async def async_disable_slot(
     slot_num: int,
     *,
     reason: str | None = None,
+    title: str = "Lock Code Manager: Slot Disabled",
+    lock_name: str | None = None,
+    lock_entity_id: str | None = None,
 ) -> bool:
     """Disable a slot via the enabled switch and optionally create a notification.
 
     Returns True if the switch was found and turned off, False otherwise.
-    When reason is provided, a persistent notification is created.
+    When reason is provided, a persistent notification is created with the
+    given title.
     """
     enabled_entity_id = ent_reg.async_get_entity_id(
         SWITCH_DOMAIN,
@@ -49,10 +53,11 @@ async def async_disable_slot(
         f"{config_entry_id}|{slot_num}|{CONF_ENABLED}",
     )
     if not enabled_entity_id:
+        lock_context = f" on {lock_name} ({lock_entity_id})" if lock_name else ""
         _LOGGER.warning(
-            "%s: Cannot disable slot %s — switch entity not found",
-            config_entry_id,
+            "Cannot disable slot %s%s — switch entity not found",
             slot_num,
+            lock_context,
         )
         return False
 
@@ -67,7 +72,7 @@ async def async_disable_slot(
         async_create(
             hass,
             reason,
-            title="Lock Code Manager: Slot Disabled",
+            title=title,
             notification_id=f"{DOMAIN}_{config_entry_id}_{slot_num}_slot_disabled",
         )
 

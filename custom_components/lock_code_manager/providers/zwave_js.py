@@ -524,6 +524,9 @@ class ZWaveJSLock(BaseLock):
             entry.entry_id,
             code_slot,
             reason=reason,
+            title="Duplicate Lock Code Rejected",
+            lock_name=self.lock.name or self.lock.original_name,
+            lock_entity_id=lock_ent_id,
         )
 
     @property
