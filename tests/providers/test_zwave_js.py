@@ -2063,7 +2063,7 @@ async def test_duplicate_code_notification_disables_slot(
 
     # Persistent notification should be created
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
+    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
     assert notification_id in notifications
 
     # In-progress field should be cleared
@@ -2136,9 +2136,7 @@ async def test_duplicate_code_notification_ignored_when_not_in_progress(
 
     # No persistent notification
     notifications = _async_get_or_create_notifications(hass)
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
-    lock_instance = runtime_data.locks[lock_entity.entity_id]
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
+    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
     assert notification_id not in notifications
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
@@ -2264,7 +2262,7 @@ async def test_handle_duplicate_code_early_return_code_slot_cleared(
     # Switch should still be on, no notification created
     assert hass.states.get(switch_entity_id).state == STATE_ON
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
+    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
     assert notification_id not in notifications
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
@@ -2297,7 +2295,7 @@ async def test_handle_duplicate_code_early_return_no_matching_entry(
     # Switch should still be on, no notification created
     assert hass.states.get(switch_entity_id).state == STATE_ON
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_99_dupe"
+    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_99_slot_disabled"
     assert notification_id not in notifications
     # In-progress should be cleared even on early return
     assert lock_instance._set_in_progress_code_slot is None
@@ -2333,7 +2331,7 @@ async def test_handle_duplicate_code_early_return_entity_not_found(
     # Switch should still be on, no notification created
     assert hass.states.get(switch_entity_id).state == STATE_ON
     notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lock_instance.lock.entity_id}_2_dupe"
+    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
     assert notification_id not in notifications
     # In-progress should be cleared
     assert lock_instance._set_in_progress_code_slot is None

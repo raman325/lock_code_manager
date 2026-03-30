@@ -15,13 +15,9 @@ from homeassistant.components.binary_sensor import (
     DOMAIN as BINARY_SENSOR_DOMAIN,
     BinarySensorEntity,
 )
-from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
@@ -64,6 +60,7 @@ from .data import LockCodeManagerConfigEntry, get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .exceptions import CodeRejectedError, LockDisconnected
 from .providers import BaseLock
+from .util import async_disable_slot
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -420,38 +417,20 @@ class LockCodeManagerCodeSlotInSyncEntity(
             return False
         return dt_util.utcnow() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
 
-    async def _disable_slot_and_notify(self, title: str, message: str) -> None:
-        """Disable the slot via switch service and create a persistent notification."""
-        enabled_ent_id = self.ent_reg.async_get_entity_id(
-            SWITCH_DOMAIN,
-            DOMAIN,
-            f"{self.config_entry.entry_id}|{self.slot_num}|{CONF_ENABLED}",
-        )
-        if not enabled_ent_id:
-            _LOGGER.warning(
-                "%s (%s): Cannot disable slot %s on %s — switch entity not found",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                self.slot_num,
-                self.lock.lock.entity_id,
-            )
-            return
+    async def _disable_slot_and_notify(self, reason: str, title: str) -> None:
+        """Disable the slot and create a persistent notification."""
         self._cancel_retry()
-        await self.hass.services.async_call(
-            SWITCH_DOMAIN,
-            SERVICE_TURN_OFF,
-            {ATTR_ENTITY_ID: enabled_ent_id},
-            blocking=True,
+        await async_disable_slot(
+            self.hass,
+            self.ent_reg,
+            self.config_entry.entry_id,
+            self.slot_num,
+            reason=reason,
+            title=title,
+            lock_name=self.lock.lock.name or self.lock.lock.original_name,
+            lock_entity_id=self.lock.lock.entity_id,
         )
         self._reset_sync_tracker()
-        async_create(
-            self.hass,
-            message,
-            title=title,
-            notification_id=(
-                f"{DOMAIN}_{self.lock.lock.entity_id}_{self.slot_num}_sync_failure"
-            ),
-        )
 
     def _build_entity_id_map(self) -> bool:
         """Build and cache entity IDs for this slot."""
@@ -620,12 +599,10 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 err,
             )
             await self._disable_slot_and_notify(
+                f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
+                f"has been disabled. {err}\n\n"
+                f"Fix the issue and re-enable the slot.",
                 title="Lock Code Rejected",
-                message=(
-                    f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
-                    f"has been disabled. {err}\n\n"
-                    f"Fix the issue and re-enable the slot."
-                ),
             )
             return False
         except LockDisconnected as err:
@@ -704,15 +681,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
                         SYNC_ATTEMPT_WINDOW,
                     )
                     await self._disable_slot_and_notify(
+                        f"Lock **{self.lock.lock.entity_id}**: slot "
+                        f"**{self.slot_num}** failed to sync after "
+                        f"{self._sync_attempt_count} consecutive attempts. "
+                        f"The lock may be rejecting the code silently. "
+                        f"Slot {self.slot_num} has been disabled. Check the "
+                        f"code and re-enable the slot.",
                         title="Lock Code Sync Failed",
-                        message=(
-                            f"Lock **{self.lock.lock.entity_id}**: slot "
-                            f"**{self.slot_num}** failed to sync after "
-                            f"{self._sync_attempt_count} consecutive attempts. "
-                            f"The lock may be rejecting the code silently. "
-                            f"Slot {self.slot_num} has been disabled. Check the "
-                            f"code and re-enable the slot."
-                        ),
                     )
                     return
 
