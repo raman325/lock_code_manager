@@ -85,10 +85,10 @@ async def async_disable_slot(
 
 
 class OneShotRetry:
-    """Schedule a single delayed retry of an async target.
+    """Schedule a single delayed retry of a target callable (sync or async).
 
     Idempotent: calling schedule() while a retry is already pending is a no-op.
-    The `active` property is True while the target coroutine is executing,
+    The `active` property is True while the target callback is executing,
     allowing callers to distinguish retry-driven invocations.
     """
 
@@ -135,11 +135,10 @@ class OneShotRetry:
 
     @callback
     def cancel(self) -> None:
-        """Cancel any pending retry."""
+        """Cancel a pending retry. Does not affect an in-flight execution."""
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
-        self._active = False
 
     async def _fire(self, _now: Any) -> None:
         """Execute the retry callback."""
