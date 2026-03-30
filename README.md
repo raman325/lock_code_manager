@@ -28,32 +28,15 @@ want to learn more about that and take a stab at it. Contributors welcome!
 
 ## Integrations That Cannot Currently Be Supported
 
-Many lock integrations don't yet have Lock Code Manager providers, but could potentially be
-added in the future. The integrations listed below are different - they **cannot** be
-supported due to fundamental limitations in their underlying libraries or protocols.
-
-The Home Assistant lock platform only requires lock/unlock operations. User code management
-is optional, and these integrations don't expose it.
-
-| Integration | Reason |
-| ----------- | ------ |
-| **ESPHome** | The ESPHome lock component only supports lock/unlock/open commands. User code management would need to be implemented in ESPHome's firmware and API first. |
-| **Yale/August** (`august`, `yale`, `yalexs_ble`, `yale_smart_alarm`) | The underlying libraries have limited support. The `yalexs` library (used by both `august` and `yale`) can read PINs via `async_get_pins()` but has no methods to create, update, or delete them. The `yalexs-ble` and `yalesmartalarmclient` libraries don't expose any PIN management. Support would require upstream library changes. |
-
-If you're interested in adding support for one of these integrations, the blocker is
-typically the underlying Python library - not Lock Code Manager itself. Contributing user
-code management features to those libraries would enable LCM support.
+Some lock integrations cannot currently be supported due to limitations in their underlying
+libraries. See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations)
+for details.
 
 ## Condition Entity Integrations Not Supported
 
-Some integrations create switch or binary_sensor entities that appear compatible but have
-semantics that don't map to Lock Code Manager's access control model:
-
-| Integration | Reason |
-| ----------- | ------ |
-| **[scheduler-component](https://github.com/nielsfaber/scheduler-component)** | Creates switch entities for task scheduling, not time-based access. The `on` state means "schedule is enabled and waiting," not "access is currently allowed." Use the native [Schedule helper](https://www.home-assistant.io/integrations/schedule/) instead. |
-
-See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations) for details.
+Some condition entity integrations are not compatible. See the
+[wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations)
+for details.
 
 ## Installation
 
@@ -69,18 +52,14 @@ The best way to install this integration is via HACS.
 
 ## Learn More
 
-The [Wiki](https://github.com/raman325/lock_code_manager/wiki) is a WIP but has some
-content that might be helpful for you!
+Visit the [Wiki](https://github.com/raman325/lock_code_manager/wiki) for detailed
+documentation including configuration, troubleshooting, dashboard setup, and development guides.
 
 ## UI & Dashboards
 
-Lock Code Manager provides Lovelace strategies and custom cards for managing and monitoring
-PINs. You can use the dashboard strategy (full dashboard), the view strategy (single view
-for a config entry), or the custom cards directly.
-
-See [DASHBOARD_CONFIGURATION.md](DASHBOARD_CONFIGURATION.md) for detailed configuration
-options, or the [wiki](https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management#dashboard)
-for additional guidance.
+Lock Code Manager provides Lovelace strategies and custom cards for managing PINs.
+See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management)
+for configuration options and setup guidance.
 
 ## Inspiration
 
