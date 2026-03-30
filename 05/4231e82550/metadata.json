@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "054231e82550",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase1-oneshot-retry",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/05/4231e82550/0/metadata.json",
+      "transcript": "/05/4231e82550/0/full.jsonl",
+      "content_hash": "/05/4231e82550/0/content_hash.txt",
+      "prompt": "/05/4231e82550/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1862,
+    "cache_creation_tokens": 400101,
+    "cache_read_tokens": 28946268,
+    "output_tokens": 53258,
+    "api_call_count": 195
+  }
+}
