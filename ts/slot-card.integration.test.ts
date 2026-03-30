@@ -1,3 +1,4 @@
+/* eslint-disable no-underscore-dangle, prefer-destructuring */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
@@ -28,13 +29,13 @@ function makeSlotCardData(overrides?: Partial<SlotCardData>): SlotCardData {
                 code: '1234',
                 entity_id: 'lock.test_1',
                 in_sync: true,
-                name: 'Test Lock',
-            },
+                name: 'Test Lock'
+            }
         ],
         name: 'Test User',
         pin: '1234',
         slot_num: 1,
-        ...overrides,
+        ...overrides
     };
 }
 
@@ -80,16 +81,16 @@ describe('LockCodeManagerSlotCard integration', () => {
     describe('config validation', () => {
         it('throws when config_entry_id and config_entry_title are both missing', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
-            expect(() =>
-                el.setConfig({ slot: 1, type: 'custom:lcm-slot' })
-            ).toThrow('config_entry_id or config_entry_title is required');
+            expect(() => el.setConfig({ slot: 1, type: 'custom:lcm-slot' })).toThrow(
+                'config_entry_id or config_entry_title is required'
+            );
         });
 
         it('throws when slot is missing', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
-            expect(() =>
-                el.setConfig({ config_entry_id: 'abc', type: 'custom:lcm-slot' })
-            ).toThrow('slot must be a number between 1 and 9999');
+            expect(() => el.setConfig({ config_entry_id: 'abc', type: 'custom:lcm-slot' })).toThrow(
+                'slot must be a number between 1 and 9999'
+            );
         });
 
         it('throws when slot is out of range', () => {
@@ -124,7 +125,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(msg).toMatchObject({
                 config_entry_id: 'my-entry',
                 slot: 3,
-                type: 'lock_code_manager/subscribe_code_slot',
+                type: 'lock_code_manager/subscribe_code_slot'
             });
         });
 
@@ -134,7 +135,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             el.setConfig({
                 config_entry_title: 'My Lock Manager',
                 slot: 2,
-                type: 'custom:lcm-slot',
+                type: 'custom:lcm-slot'
             });
             el.hass = hass;
 
@@ -146,7 +147,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(msg).toMatchObject({
                 config_entry_title: 'My Lock Manager',
                 slot: 2,
-                type: 'lock_code_manager/subscribe_code_slot',
+                type: 'lock_code_manager/subscribe_code_slot'
             });
             expect(msg.config_entry_id).toBeUndefined();
         });
@@ -159,7 +160,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             const hass = createMockHassWithConnection({
                 onSubscribe: (callback) => {
                     capturedCallback = callback;
-                },
+                }
             });
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
             el.hass = hass;
@@ -179,7 +180,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             const hass = createMockHassWithConnection({
                 onSubscribe: (callback) => {
                     capturedCallback = callback;
-                },
+                }
             });
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
             el.hass = hass;
@@ -200,7 +201,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             const hass = createMockHassWithConnection({
                 onSubscribe: (callback) => {
                     capturedCallback = callback;
-                },
+                }
             });
             el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
             el.hass = hass;
