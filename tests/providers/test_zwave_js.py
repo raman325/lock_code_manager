@@ -1268,106 +1268,60 @@ async def test_push_update_masked_code_skipped_when_unresolvable(
 # Integration tests for _resolve_pin_if_masked (without mocking)
 
 
-async def test_resolve_pin_if_masked_returns_pin_when_active(
+async def test_resolve_pin_if_masked_returns_pin_when_enabled(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test _resolve_pin_if_masked returns PIN when slot is active with valid PIN.
+    Test _resolve_pin_if_masked returns PIN when slot is enabled with a configured PIN.
 
-    This integration test exercises the actual resolution logic without mocking
-    to verify entity lookup and state checking works correctly.
+    Uses coordinator.expected_codes (populated from config entry data) instead of
+    entity state, so this works during startup before entities are created.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {}},
+            CONF_SLOTS: {"3": {CONF_PIN: "5678", CONF_ENABLED: True}},
         },
     )
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    # Create the active (binary_sensor) and PIN (text) entities with proper unique IDs
-    ent_reg = er.async_get(hass)
-    base_unique_id = f"{lcm_entry.entry_id}|3"
-
-    active_entry = ent_reg.async_get_or_create(
-        "binary_sensor",
-        DOMAIN,
-        f"{base_unique_id}|active",
-        config_entry=lcm_entry,
-    )
-    pin_entry = ent_reg.async_get_or_create(
-        "text",
-        DOMAIN,
-        f"{base_unique_id}|pin",
-        config_entry=lcm_entry,
-    )
-
-    # Set states: active=ON, pin="5678"
-    hass.states.async_set(active_entry.entity_id, "on")
-    hass.states.async_set(pin_entry.entity_id, "5678")
-    await hass.async_block_till_done()
-
     # Mock code_slot_in_use to return True (slot has a code on the lock)
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
-        # _resolve_pin_if_masked should return the PIN value when given a masked code
         result = zwave_js_lock._resolve_pin_if_masked("****", 3)
         assert result == "5678"
 
     await zwave_js_lock.async_unload(False)
 
 
-async def test_resolve_pin_if_masked_returns_masked_value_when_inactive(
+async def test_resolve_pin_if_masked_returns_masked_value_when_disabled(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test _resolve_pin_if_masked returns masked value when slot is inactive.
+    Test _resolve_pin_if_masked returns masked value when slot is disabled.
 
-    When the slot is managed but active=OFF (slot not enabled), the masked
-    code is returned as-is. This ensures sync logic knows a PIN is set on
-    the lock, even though the slot isn't currently active in LCM.
+    When the slot is disabled (no expected PIN), the masked code is returned
+    as-is so sync logic knows a PIN exists on the lock even though the slot
+    isn't enabled in LCM.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {}},
+            CONF_SLOTS: {"3": {CONF_PIN: "5678", CONF_ENABLED: False}},
         },
     )
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    # Create the active (binary_sensor) and PIN (text) entities
-    ent_reg = er.async_get(hass)
-    base_unique_id = f"{lcm_entry.entry_id}|3"
-
-    active_entry = ent_reg.async_get_or_create(
-        "binary_sensor",
-        DOMAIN,
-        f"{base_unique_id}|active",
-        config_entry=lcm_entry,
-    )
-    pin_entry = ent_reg.async_get_or_create(
-        "text",
-        DOMAIN,
-        f"{base_unique_id}|pin",
-        config_entry=lcm_entry,
-    )
-
-    # Set states: active=OFF (inactive), pin="5678"
-    hass.states.async_set(active_entry.entity_id, "off")
-    hass.states.async_set(pin_entry.entity_id, "5678")
-    await hass.async_block_till_done()
-
     # Mock code_slot_in_use to return True (slot has a code on the lock)
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
-        # _resolve_pin_if_masked should return the masked value (not None)
-        # so sync logic knows a PIN exists on the lock
+        # Disabled slot: expected_codes[3] = "", so masked value returned as-is
         result = zwave_js_lock._resolve_pin_if_masked("****", 3)
         assert result == "****"
 
@@ -1380,47 +1334,23 @@ async def test_resolve_pin_if_masked_returns_pin_even_if_not_numeric(
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test _resolve_pin_if_masked returns PIN state even if not strictly numeric.
+    Test _resolve_pin_if_masked returns expected PIN even if not strictly numeric.
 
-    The .isnumeric() check was removed to handle edge cases where PINs might
-    be stored in non-standard formats. When active=ON, the PIN entity state
-    is returned regardless of format.
+    When the configured PIN has non-numeric characters, expected_codes returns
+    it as-is for masked resolution.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {}},
+            CONF_SLOTS: {"3": {CONF_PIN: "unknown", CONF_ENABLED: True}},
         },
     )
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    # Create the active (binary_sensor) and PIN (text) entities
-    ent_reg = er.async_get(hass)
-    base_unique_id = f"{lcm_entry.entry_id}|3"
-
-    active_entry = ent_reg.async_get_or_create(
-        "binary_sensor",
-        DOMAIN,
-        f"{base_unique_id}|active",
-        config_entry=lcm_entry,
-    )
-    pin_entry = ent_reg.async_get_or_create(
-        "text",
-        DOMAIN,
-        f"{base_unique_id}|pin",
-        config_entry=lcm_entry,
-    )
-
-    # Set states: active=ON, pin="unknown" (non-numeric)
-    hass.states.async_set(active_entry.entity_id, "on")
-    hass.states.async_set(pin_entry.entity_id, "unknown")
-    await hass.async_block_till_done()
-
     # Mock code_slot_in_use to return True (slot has a code on the lock)
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
-        # _resolve_pin_if_masked should return the PIN state as-is
         result = zwave_js_lock._resolve_pin_if_masked("****", 3)
         assert result == "unknown"
 
@@ -1457,36 +1387,35 @@ async def test_resolve_pin_if_masked_returns_masked_for_unmanaged_slot(
     await zwave_js_lock.async_unload(False)
 
 
-async def test_resolve_pin_if_masked_returns_masked_when_entities_missing(
+async def test_resolve_pin_if_masked_returns_pin_without_entities(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test _resolve_pin_if_masked returns None when entities are not registered.
+    Test _resolve_pin_if_masked works before entities are created.
 
-    When slot is in use but entities are missing (config entry exists but entities
-    not created yet), the method returns None because it cannot look up the
-    active state or PIN.
+    Uses coordinator.expected_codes from config entry data, so it works
+    during startup when entities haven't been populated yet. This was the
+    original motivation for moving PIN lookup to the coordinator.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"3": {}},
+            CONF_SLOTS: {"3": {CONF_PIN: "5678", CONF_ENABLED: True}},
         },
     )
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    # Don't create any entities - they're "missing"
+    # Don't create any entities - they haven't been set up yet (startup)
 
     # Mock code_slot_in_use to return True (slot has a code on the lock)
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
-        # _resolve_pin_if_masked returns None when entities not found
-        # (can't look up active state or PIN)
+        # expected_codes has the PIN from config entry data, no entity needed
         result = zwave_js_lock._resolve_pin_if_masked("****", 3)
-        assert result is None
+        assert result == "5678"
 
     await zwave_js_lock.async_unload(False)
 
@@ -1517,6 +1446,7 @@ async def test_push_update_user_id_status_available_clears_slot(
     # Set up a mock coordinator with existing data
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: "1234"}  # Slot has a PIN
+    mock_coordinator.expected_codes = {}  # No expected PIN (slot not enabled)
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -1741,49 +1671,31 @@ async def test_resolve_pin_if_masked_all_zeros_slot_unknown(
 
 
 @pytest.mark.parametrize(
-    ("active_state", "expected"),
+    ("slot_config", "expected"),
     [
-        ("on", True),
-        ("off", False),
+        ({CONF_PIN: "1234", CONF_ENABLED: True}, True),
+        ({CONF_PIN: "1234", CONF_ENABLED: False}, False),
+        ({CONF_PIN: "", CONF_ENABLED: True}, False),
+        ({CONF_ENABLED: True}, False),
     ],
 )
-async def test_slot_expects_pin_by_active_state(
+async def test_slot_expects_pin_by_config(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
-    active_state: str,
+    slot_config: dict,
     expected: bool,
 ) -> None:
-    """Test _slot_expects_pin based on active entity state."""
+    """Test _slot_expects_pin based on coordinator.expected_codes from config entry."""
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
+            CONF_SLOTS: {"2": slot_config},
         },
     )
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    ent_reg = er.async_get(hass)
-    base_unique_id = f"{lcm_entry.entry_id}|2"
-
-    active_entry = ent_reg.async_get_or_create(
-        "binary_sensor",
-        DOMAIN,
-        f"{base_unique_id}|active",
-        config_entry=lcm_entry,
-    )
-    pin_entry = ent_reg.async_get_or_create(
-        "text",
-        DOMAIN,
-        f"{base_unique_id}|pin",
-        config_entry=lcm_entry,
-    )
-
-    hass.states.async_set(active_entry.entity_id, active_state)
-    hass.states.async_set(pin_entry.entity_id, "1234")
-    await hass.async_block_till_done()
 
     assert zwave_js_lock._slot_expects_pin(2) is expected
 
