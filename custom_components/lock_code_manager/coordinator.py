@@ -199,10 +199,8 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
             )
             return
 
-        # Retry push subscription if supported but not yet subscribed
-        # (handles case where initial setup failed but lock is now available)
-        if self._lock.supports_push:
-            self._lock.subscribe_push_updates()
+        # Push subscription retry is handled by BaseLock's OneShotRetry
+        # and the config entry state listener — no need to retry here.
 
         # Compare with current data and notify if changed
         if new_data != self.data:
