@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "457885f84d6c",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase2-expected-codes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/45/7885f84d6c/0/metadata.json",
+      "transcript": "/45/7885f84d6c/0/full.jsonl",
+      "content_hash": "/45/7885f84d6c/0/content_hash.txt",
+      "prompt": "/45/7885f84d6c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1966,
+    "cache_creation_tokens": 669994,
+    "cache_read_tokens": 49912069,
+    "output_tokens": 77167,
+    "api_call_count": 283
+  }
+}

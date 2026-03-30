@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "457885f84d6c",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-30T19:06:37.089869Z",
+  "branch": "resilience/phase2-expected-codes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d679dc8b1aeb",
+  "token_usage": {
+    "input_tokens": 1966,
+    "cache_creation_tokens": 669994,
+    "cache_read_tokens": 49912069,
+    "output_tokens": 77167,
+    "api_call_count": 283
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-30T19:06:35.865077Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 78,
+    "human_removed": 121,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
