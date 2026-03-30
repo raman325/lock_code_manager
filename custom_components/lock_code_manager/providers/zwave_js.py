@@ -52,10 +52,10 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN, PUSH_SUBSCRIBE_RETRY_DELAY
+from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
-from ..util import OneShotRetry, async_disable_slot
+from ..util import async_disable_slot
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -88,7 +88,6 @@ class ZWaveJSLock(BaseLock):
     lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
-    _push_retry: OneShotRetry | None = field(init=False, default=None)
     _set_in_progress_code_slot: int | None = field(init=False, default=None)
 
     @property
@@ -218,7 +217,7 @@ class ZWaveJSLock(BaseLock):
         return value
 
     @callback
-    def subscribe_push_updates(self) -> None:
+    def _subscribe_push_updates_impl(self) -> None:
         """Subscribe to User Code CC value update events."""
         # Idempotent - skip if already subscribed
         if self._value_update_unsub is not None:
@@ -226,13 +225,7 @@ class ZWaveJSLock(BaseLock):
 
         ready, reason = self._get_client_state()
         if not ready:
-            _LOGGER.debug(
-                "Lock %s: push subscription deferred (%s)",
-                self.lock.entity_id,
-                reason,
-            )
-            self._ensure_push_retry().schedule()
-            return
+            raise ConnectionError(reason)
 
         @callback
         def on_value_updated(event: dict[str, Any]) -> None:
@@ -328,30 +321,12 @@ class ZWaveJSLock(BaseLock):
             if self.coordinator:
                 self.coordinator.push_update({code_slot: resolved})
 
-        try:
-            self._value_update_unsub = self.node.on("value updated", on_value_updated)
-        except ValueError as err:
-            _LOGGER.debug(
-                "Lock %s push subscription deferred: %s", self.lock.entity_id, err
-            )
-            self._ensure_push_retry().schedule()
-
-    def _ensure_push_retry(self) -> OneShotRetry:
-        """Return the push retry helper, creating it on first use."""
-        if self._push_retry is None:
-            self._push_retry = OneShotRetry(
-                self.hass,
-                PUSH_SUBSCRIBE_RETRY_DELAY,
-                self.subscribe_push_updates,
-                f"push subscription for {self.lock.entity_id}",
-            )
-        return self._push_retry
+        # Raises ValueError if node not ready — BaseLock catches and retries
+        self._value_update_unsub = self.node.on("value updated", on_value_updated)
 
     @callback
-    def unsubscribe_push_updates(self) -> None:
+    def _unsubscribe_push_updates_impl(self) -> None:
         """Unsubscribe from value update events."""
-        if self._push_retry is not None:
-            self._push_retry.cancel()
         if self._value_update_unsub:
             self._value_update_unsub()
             self._value_update_unsub = None

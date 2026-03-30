@@ -37,6 +37,7 @@ from ..const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
+    PUSH_SUBSCRIBE_RETRY_DELAY,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
@@ -45,6 +46,7 @@ from ..exceptions import (
     LockDisconnected,
     ProviderNotImplementedError,
 )
+from ..util import OneShotRetry
 from .const import LOGGER
 
 MIN_OPERATION_DELAY = 2.0
@@ -134,6 +136,7 @@ class BaseLock:
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+    _push_retry: OneShotRetry | None = field(default=None, init=False)
 
     @final
     async def _async_executor_call(
@@ -331,38 +334,75 @@ class BaseLock:
         """
         return True
 
+    @final
     @callback
     def subscribe_push_updates(self) -> None:
-        """
-        Subscribe to push-based value updates.
+        """Subscribe to push-based value updates with automatic retry.
 
-        Override in subclasses that support push. Called during async_setup()
-        when supports_push is True, and retried during drift detection if
-        initial setup failed.
+        Calls the provider's _subscribe_push_updates_impl(). If it raises,
+        schedules a one-shot retry via OneShotRetry.
+        """
+        try:
+            self._subscribe_push_updates_impl()
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(
+                "Lock %s: push subscription deferred: %s",
+                self.lock.entity_id,
+                err,
+            )
+            self._ensure_push_retry().schedule()
+
+    @callback
+    def _subscribe_push_updates_impl(self) -> None:
+        """Subscribe to push-based value updates.
+
+        Override in subclasses that support push. Raise on failure to trigger
+        automatic retry via BaseLock.subscribe_push_updates().
 
         Implementations MUST be idempotent (no-op if already subscribed).
         """
         self._raise_not_implemented(
-            "subscribe_push_updates",
+            "_subscribe_push_updates_impl",
             "Override this method to subscribe to real-time value updates "
             "and call coordinator.push_update({slot: value}) when updates arrive. "
-            "Must be idempotent (no-op if already subscribed).",
+            "Must be idempotent (no-op if already subscribed). "
+            "Raise on failure to trigger automatic retry.",
         )
 
+    def _ensure_push_retry(self) -> OneShotRetry:
+        """Return the push retry helper, creating it on first use."""
+        if self._push_retry is None:
+            self._push_retry = OneShotRetry(
+                self.hass,
+                PUSH_SUBSCRIBE_RETRY_DELAY,
+                self.subscribe_push_updates,
+                f"push subscription for {self.lock.entity_id}",
+            )
+        return self._push_retry
+
+    @final
     @callback
     def unsubscribe_push_updates(self) -> None:
+        """Unsubscribe from push-based value updates.
+
+        Cancels any pending retry and calls the provider's
+        _unsubscribe_push_updates_impl().
         """
-        Unsubscribe from push-based value updates.
+        if self._push_retry is not None:
+            self._push_retry.cancel()
+        self._unsubscribe_push_updates_impl()
 
+    @callback
+    def _unsubscribe_push_updates_impl(self) -> None:
+        """Unsubscribe from push-based value updates.
+
+        Override in subclasses that support push.
         Implementations MUST be idempotent (no-op if already unsubscribed).
-
-        Override in subclasses that support push. Called during async_unload()
-        when supports_push is True.
         """
         self._raise_not_implemented(
-            "unsubscribe_push_updates",
+            "_unsubscribe_push_updates_impl",
             "Override this method to clean up any subscriptions "
-            "created in subscribe_push_updates().",
+            "created in _subscribe_push_updates_impl().",
         )
 
     @final
