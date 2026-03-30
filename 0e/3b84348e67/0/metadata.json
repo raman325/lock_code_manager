@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "0e3b84348e67",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T08:10:27.729652Z",
+  "branch": "fix/post-merge-review-comments-2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/test_helpers.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8630bb9e88e6",
+  "token_usage": {
+    "input_tokens": 1044,
+    "cache_creation_tokens": 1681444,
+    "cache_read_tokens": 331180827,
+    "output_tokens": 208442,
+    "api_call_count": 904
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T08:10:24.682948Z",
+    "agent_lines": 8,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "agent_percentage": 80
+  }
+}

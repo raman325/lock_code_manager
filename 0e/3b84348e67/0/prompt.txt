@@ -1,0 +1,465 @@
+Implement the following plan:
+
+# Plan: Duplicate Code Detection + Architecture Documentation
+
+## Context
+
+Users report infinite sync loops when a lock rejects a PIN that duplicates another slot's code. PR #899 added reactive handling via Z-Wave event 15, but some locks don't emit this event reliably. Since the coordinator already stores ALL slots (managed + unmanaged), we can detect duplicates pre-flight before sending to the lock.
+
+Additionally, the codebase lacks documentation on the data flow between coordinator, provider, and sync sensor, and the managed/unmanaged distinction is implicit.
+
+## Tasks
+
+### Task 1: Add DuplicateCodeError Exception
+- **Modify:** `custom_components/lock_code_manager/exceptions.py` — add `DuplicateCodeError` with `code_slot`, `conflicting_slot`, `conflicting_slot_managed`, `lock_entity_id` attributes
+- **Test:** `tests/test_exceptions.py` — verify attributes and message formatting for managed/unmanaged
+
+### Task 2: Pre-flight Duplicate Check in async_set_usercode
+- **Modify:** `custom_components/lock_code_manager/providers/zwave_js.py:580-628` — after the "already set" check, scan `self.coordinator.data` for matching PINs. Skip masked values (`****`), skip target slot. Raise `DuplicateCodeError` with managed/unmanaged info via `_get_slot_entity_states()`.
+- **Test:** `tests/providers/test_zwave_js.py` — duplicate found raises, masked slots skipped, no coordinator data proceeds normally
+
+### Task 3: Handle DuplicateCodeError in Sync Path
+- **Modify:** `custom_components/lock_code_manager/binary_sensor.py:502-542` — catch `DuplicateCodeError` in `_perform_sync_operation`, disable slot via switch service, create persistent notification with conflicting slot details, cancel retry (permanent error)
+- **Test:** `tests/test_binary_sensor.py` — verify slot disabled, notification created, no retry scheduled
+
+### Task 4: Verify DuplicateCodeError Propagates on Direct Set
+- **Verify:** `websocket.py` `set_lock_usercode` — `DuplicateCodeError` extends `HomeAssistantError`, should propagate naturally. Write test confirming error response.
+- **Test:** `tests/test_websocket.py`
+
+### Task 5: Config Flow Text Updates
+- **Modify:** `custom_components/lock_code_manager/strings.json` + `translations/en.json`
+  - `choose_path.description`: Add guidance about single-tool management, clearing slots before setup, not setting codes manually
+  - `ui.description`: "Configure slots for all codes you want on the lock (existing user codes for the slot range specified will be cleared)."
+
+### Task 6: Architecture Documentation
+- **Create:** `ARCHITECTURE.md` — data flow diagram, coordinator model, push/poll/refresh, managed vs unmanaged, sync decision, masked PINs, duplicate detection, rate limiting
+- **Modify:** Module docstrings in `coordinator.py`, `binary_sensor.py`, `zwave_js.py`, `_base.py` — 2-3 sentences + pointer to ARCHITECTURE.md
+
+### Task 7: Verify TODOs
+- Confirm TODO.md has the 5 future items: config flow reset step, conflicting integration detection, update migration docs, clear all unmanaged UI action, lock-specific carve-outs
+
+### Task 8: Final Verification
+- Full test suite, pre-commit, PR
+
+## Key Design Decisions
+
+- **DuplicateCodeError (exception B approach):** Provider raises, callers decide policy. Sync path disables + notifies. Direct path propagates error.
+- **Masked slots:** Can't detect duplicates against `****` values. Event 15 handler stays as safety net.
+- **Architecture doc over module docstrings:** Cross-cutting data flow belongs in one place, not split across 4 files.
+
+## Verification
+
+1. `pytest` — all tests pass
+2. `pre-commit run --all-files` — passes
+3. Manually verify: set duplicate PIN → sync path disables slot + notification; direct websocket set → error response
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/eff50567-4070-45c7-9cfd-145beb07fcaa.jsonl
+
+---
+
+is there anything from this we can pull into the base provider class? tracking retries and distinguishing between sync calls and set value calls seem like good candidates, what else?
+
+---
+
+can't 
+if other_slot == code_slot or not other_code:
+                continue
+            other_code_str = str(other_code)
+            if self.is_masked(other_code_str):
+                continue
+
+be
+if other_slot == code_slot ... or self.is_masked(str(code)):?
+
+---
+
+if that's just needed for masking, can't we just do that transofrmation in is_masked?
+
+---
+
+why do we constantly convert codes? Can't we handle this in one place instead of having this logic everywhere?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+before we do this, let's create a branch for the current work - commit, push it, and draft PR it using the PR issue template. Then we can proceed with this work on a new branch
+
+---
+
+[Request interrupted by user]
+
+---
+
+continue. Both should be branched off main. There will be merged conflicts but they should be minimal right?
+
+---
+
+proceed
+
+---
+
+the base provider should also accept None to represent no PIN. Eventually we need to improve our formalization of locks, users, and PINs. Matter makes it more complex and we should probably start figuring out how to leverage Matters design with other lock standards in mind
+
+---
+
+use the code-review:code-review skill for both PRs
+
+---
+
+do another set of code reviews for each PR
+
+---
+
+shouldn't all new methods/functions in the base lock provider be final?
+
+---
+
+are there any other functions or properties that don't have a final decorator or type?
+
+---
+
+[Request interrupted by user]
+
+---
+
+are there any other functions or properties that don't have a final decorator or type but should?
+
+---
+
+what is TOCTOU race condition? Spell it out where used
+
+---
+
+the comment makes it sound like its a second check instead of a check for duplicate codes
+
+---
+
+There's a lot of separation of logic for the sync attempts stuff. Is it all necessary or is it unnecessary abstraction? It's useful for grouping things together, but it feels like it might be too granular right now
+
+---
+
+leave as is. Are the unstaged changes a no-op logically?
+
+---
+
+I'm looking for more places where we can be more idiomatic. I prefer expressing things that way, and I love using list comprehension instead of loops because it often simplifies the design
+
+---
+
+I also care for readability in the sense that naming should be consistent. I made the change already, but other_code and slot should have been other_code_slot and other_usercode
+
+---
+
+should we not reset the tracker before disabling the slot? If the user tries to enable it again after fixing the issue, it'll immediately get disabled. We have to make sure we account for that anywhere we disable the lsot
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+that's wrong, it can only be done if the service call succeeds.
+
+---
+
+[Request interrupted by user]
+
+---
+
+that's wrong, it can only be reset after the service call has been verified by the coordinator update and subsequent sensor update
+
+---
+
+[Request interrupted by user]
+
+---
+
+reset as part of the disable function. Also reset on sync success operation
+
+---
+
+[Request interrupted by user]
+
+---
+
+reset as part of the disable function. Also reset on sync success operation. But you are also right that it should only record and validate number of syncs on set operations
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+continue
+
+---
+
+update the PR description based on the current state of the PR diff. Then run code review on the PR. I will restate the goal: After multiple consecutive attempts to set the same code on the same lock slot through a sync process (within a certain time period and also confirmed by source), assume there's a duplicate we can't see and disable the slot and notify the user. If we are disabling the slot or the slot is successfully set with the code, we can consider the count reset for that code and slot.
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+actually, the assumption in this case isn't that there's a duplicate we can't see. It's just that the lock won't take the PIN. That's more generic to all locks
+
+---
+
+[Request interrupted by user]
+
+---
+
+actually, the assumption in this case isn't that there's a duplicate we can't see. It's just that the lock won't take the PIN. That's more generic to all locks. Let's fix that first, commit, then run the code review
+
+---
+
+yes
+
+---
+
+merged, resolve confglicts on the other PR, then ff main
+
+---
+
+[Request interrupted by user]
+
+---
+
+do merge instead of rebase
+
+---
+
+now fix 889 then run code review on it
+
+---
+
+[Request interrupted by user]
+
+---
+
+add and commit. It will pass
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+ignore, go back to 889. Address review comments then run code review
+
+---
+
+[Request interrupted by user]
+
+---
+
+ignore, go back to 889. Address review comments, commit and push, then run code review
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+we need to fetch from main and fix merge conflicts first then proceed
+
+---
+
+[Request interrupted by user]
+
+---
+
+I merged the branch. FF main then create a new branch for these two changes
+
+---
+
+do all
+
+---
+
+pick what's most performant and good enough. I am ok to go to 5 or 6 characters if it helps
+
+---
+
+[Request interrupted by user]
+
+---
+
+do homeassistants have an ID? like can I tell one integration from another? If so, maybe it's that + lock entity + pin
+
+---
+
+does the uniqueness of the combo allow us to reduce the number of characters?
+
+---
+
+[Request interrupted by user]
+
+---
+
+instead of that, can we calculate a value using these three data points and go from there? it's deterministic but I don't see how it's reversible
+
+---
+
+I guess what I am getting at is, for any given lock and UUID, every PIN combo is unique. There has to be a way to do this so we can transform the PIN combo into another value. By doing this the number of characters becomes a consequence. So we just have to come up with a good formula. It could be a simple caesar cipher then if I'm understanding myself correctly
+
+---
+
+can we somehow do this in a way that makes it a standard number of characters always?
+
+---
+
+[Request interrupted by user]
+
+---
+
+nvm, stick with CRC, and let's map P(collision) by number of characters and magnitude of PINs 30 300 etc
+
+---
+
+how about 3000
+
+---
+
+do this 3 * 10 ^ x where x is from 1 - 5. characters from 3 to 16. It's a large table but show the entire thing
+
+---
+
+let's go with 8, it's a nice round number
+
+---
+
+[Request interrupted by user]
+
+---
+
+thing about the long ones is you only have to scan it if you start to see conflicts
+
+---
+
+920 and 922 should be merged
+
+---
+
+you can make the wiki change in ../lcm.wiki . Stash current changes there. Make the change, push, then unstash
+
+---
+
+[Request interrupted by user]
+
+---
+
+the integration during setup should grab the instance_id as you had suggested. Storing it in hass.data is fine
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+continue
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+this doesn't make sense. The instance ID is something that is set before the integration even loads. No lock is loaded before we setup hass.data. So we should always have instance_id, because we have CONF_LOCKS. We need to update async_setup too
+
+---
+
+[Request interrupted by user]
+
+---
+
+that's going to break tests because you don't have CONF_LOCKS or resources
+
+---
+
+[Request interrupted by user]
+
+---
+
+that's going to break tests because you don't have CONF_LOCKS or resources. Instead just mock the return of hass.data[DOMAIN]["instance_id"] to return test-instance-id
+
+---
+
+[Request interrupted by user]
+
+---
+
+that's going to break tests because you don't have CONF_LOCKS or resources. Instead just permanently patch the return of hass.data[DOMAIN]["instance_id"] to return test-instance-id
+
+---
+
+[Request interrupted by user]
+
+---
+
+that's going to break tests because you don't have CONF_LOCKS or resources. Instead just permanently patch the return of hass.data[DOMAIN]["instance_id"] to return test-instance-id. Now that I think about it though that's not possible right?
+
+---
+
+[Request interrupted by user]
+
+---
+
+stop manually setting things up. Any test that does things manually to avoid doing the real thing is incorrect. Every test should use proper setup and teardown fixtures. If conditions need to be forced, it should be mocked as upstream as possible.
+
+---
+
+2.
+
+---
+
+[Request interrupted by user]
+
+---
+
+commit. We'll just fix the test in the bigger test refactor. This is a waste of time
+
+---
+
+theyre merged. check status of all prs weve worked on. review all review comments that came after merge and address the valid ones in a PR you can merge. then delete stale brnaches and ff main. then work on this
+
+---
+
+one more task just befitest refactor. migrate dev docs to wiki and clean from this repo. also remember the path to the wiki repo for the future
+
+---
+
+[Request interrupted by user]
+
+---
+
+instead of trying to rebuild the existing tests it might be cleaner to start fresh. we csn use the dame file structure but consider e2e design, paramterizing, making tests unit tests but effectively intrgration ones
+
+---
+
+you may actually discover new bugs that way. we should repeat this exercise for typescript next and look at ../node-zwave-js tests dor inspiration
+
+---
+
+lets proceed but consider both test suites as separate PRs
+
+---
+
+[Request interrupted by user]
+
+---
+
+continue
+
+---
+
+yes. we need the bugfix bc its been released
+
+---
+
+ill push release, you keep going

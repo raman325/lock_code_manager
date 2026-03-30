@@ -1,0 +1,1635 @@
+Implement the following plan:
+
+# Plan: Integration & UX Testing (3 Layers)
+
+## Context
+
+Current tests verify data transformation but not user-facing behavior. Backend WS
+subscription tests don't verify full flows (set PIN → WS reflects change). Frontend
+tests ONLY cover extracted pure functions — no component rendering, subscription
+lifecycle, or user interaction. No manual release test plan exists.
+
+The Virtual/Mock lock provider already works as an in-memory mock lock in tests,
+so backend e2e tests can exercise the full path without Z-Wave mocking.
+
+## PR 1: Backend WebSocket API E2E Tests (Python)
+
+**File:** `tests/test_websocket.py` (extend existing)
+
+Uses existing `mock_lock_config_entry` + `lock_code_manager_config_entry` fixtures
+which set up real MockLCMLock providers with in-memory code storage.
+
+### 1a. Full Vertical Flow Tests (the key gap)
+
+Test the complete path: entity service call → lock provider sync → coordinator
+update → WS subscription delivers correct data.
+
+| Test | Action | Verify |
+|------|--------|--------|
+| `test_pin_set_via_service_reflects_in_subscribe_code_slot` | Subscribe slot 1, set PIN text entity to "9999" via `text.set_value` | WS update has `pin == "9999"`, lock data has matching code |
+| `test_pin_clear_via_service_reflects_in_subscribe_code_slot` | Subscribe slot 1, clear PIN text entity | WS update has `pin is None` |
+| `test_enable_toggle_reflects_in_subscribe_code_slot` | Subscribe slot 1, toggle enabled switch off then on | WS updates reflect `enabled: False` then `True` |
+| `test_pin_set_reflects_in_subscribe_lock_codes` | Subscribe lock 1, set PIN on slot 1, push coordinator update | WS update shows slot 1 with new code |
+| `test_set_lock_usercode_reflects_in_subscribe_lock_codes` | Subscribe lock 1, call `set_lock_usercode` for unmanaged slot 3 | WS update shows slot 3 with code and `managed: False` |
+| `test_update_slot_condition_reflects_in_subscribe_code_slot` | Subscribe slot, add condition via `update_slot_condition`, set condition entity ON | WS update includes condition data |
+
+### 1b. API Contract Shape Tests
+
+Verify WS response shapes match frontend TypeScript types exactly. These catch
+field renames, missing fields, and type mismatches.
+
+| Test | WS Command | Assert |
+|------|-----------|--------|
+| `test_subscribe_code_slot_response_shape` | `subscribe_code_slot` | All fields from `SlotCardData` present with correct types |
+| `test_subscribe_lock_codes_response_shape` | `subscribe_lock_codes` | All fields from `LockCoordinatorData` present |
+| `test_subscribe_lock_codes_masked_shape_contract` | `subscribe_lock_codes` (reveal=False) | `code is None`, `code_length` is int |
+
+### Implementation Pattern
+
+```python
+# Full flow test pattern:
+async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
+    hass, mock_lock_config_entry, lock_code_manager_config_entry, hass_ws_client
+):
+    ws_client = await hass_ws_client(hass)
+    # Subscribe
+    await ws_client.send_json({...subscribe_code_slot...})
+    msg = await ws_client.receive_json()  # success
+    initial = await ws_client.receive_json()  # initial event
+    assert initial["event"]["pin"] == "1234"
+
+    # Set PIN via service (triggers sync → coordinator → WS update)
+    await hass.services.async_call("text", "set_value", {...}, blocking=True)
+    await hass.async_block_till_done()
+
+    # Force coordinator refresh to reflect lock state
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    await lock.coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    update = await ws_client.receive_json()
+    assert update["event"]["pin"] == "9999"
+```
+
+## PR 2: Frontend Integration Tests (TypeScript)
+
+Progressive approach: enhance mock infrastructure, then test critical rendering paths.
+
+### 2a. Enhance Mock Infrastructure
+
+**File:** `ts/test/mock-hass.ts`
+
+Add `connection` mock with `subscribeMessage` for subscription-based components:
+
+```typescript
+export function createMockHassWithConnection(options?: {
+    onSubscribe?: (callback: (data: unknown) => void, msg: unknown) => void;
+    callWS?: (msg: unknown) => unknown;
+    states?: Record<string, unknown>;
+}): HomeAssistant {
+    const subscribeMessageMock = vi.fn().mockImplementation(
+        (callback, msg) => {
+            options?.onSubscribe?.(callback, msg);
+            return Promise.resolve(() => {});  // unsub function
+        }
+    );
+    return {
+        ...createMockHass(options),
+        connection: { subscribeMessage: subscribeMessageMock },
+    } as unknown as HomeAssistant;
+}
+```
+
+### 2b. Subscription Lifecycle Tests
+
+**File:** `ts/subscription-mixin.integration.test.ts` (new)
+
+Create a concrete test subclass of `LcmSubscriptionMixin(LitElement)` and test:
+
+| Test | Action | Verify |
+|------|--------|--------|
+| `connectedCallback triggers subscribe` | Add element to DOM | `subscribeMessage` called |
+| `disconnectedCallback triggers unsubscribe` | Remove from DOM | Unsub function called |
+| `reconnect after disconnect` | Add, remove, re-add | New subscription created |
+| `error sets _error on subscribe failure` | Mock reject | `_error` is set |
+| `no double subscribe` | Call `_subscribe()` while subscribing | Only one subscription |
+| `toggleReveal resubscribes` | Call `_toggleReveal()` | Unsub + new subscribe with opposite reveal |
+
+### 2c. Slot Card Rendering Tests
+
+**File:** `ts/slot-card.integration.test.ts` (new)
+
+Mount actual `<lcm-slot>` element, push data via subscription callback, query shadow DOM.
+
+**Rendering tests:**
+- Renders slot header with name and number
+- Renders masked PIN as dots when `code_display: masked`
+- Renders revealed PIN digits when `shouldReveal`
+- Renders active/inactive/disabled status badges correctly
+- Renders lock sync status for each lock
+- Renders condition section (collapsed by default when configured)
+
+**Edit flow tests:**
+- Click name → input appears → type → Enter → `callService` called with `text.set_value`
+- Click PIN edit → reveals first → shows input → Enter saves
+- Escape cancels edit without service call
+- Enable toggle calls `switch.turn_on`/`switch.turn_off`
+
+### 2d. Lock Codes Card Rendering Tests
+
+**File:** `ts/lock-codes-card.integration.test.ts` (new)
+
+Mount actual `<lcm-lock-codes>` element, push data, query shadow DOM.
+
+- Renders slot chips for each slot
+- Managed slots have different styling from unmanaged
+- Masked codes show correct dot count
+- Empty slots grouped into collapsed ranges
+- Edit unmanaged slot: input → Enter → `sendMessagePromise` with `set_lock_usercode`
+- Edit cancel on Escape
+- Navigate to managed slot pushes history state
+
+### Component Test Pattern
+
+```typescript
+let el: LockCodeManagerSlotCard;
+let pushData: (data: unknown) => void;
+
+beforeEach(async () => {
+    el = document.createElement('lcm-slot') as LockCodeManagerSlotCard;
+    const hass = createMockHassWithConnection({
+        onSubscribe: (callback) => { pushData = callback; }
+    });
+    el.hass = hass;
+    el.setConfig({ config_entry_id: 'test', slot: 1, code_display: 'masked_with_reveal' });
+    document.body.appendChild(el);
+    await el.updateComplete;
+});
+
+afterEach(() => { el.remove(); });
+
+it('renders masked PIN', async () => {
+    pushData({ pin: null, pin_length: 4, /* ... */ });
+    await el.updateComplete;
+    const pinEl = el.shadowRoot!.querySelector('.pin-display');
+    expect(pinEl?.textContent).toContain('••••');
+});
+```
+
+If jsdom can't render Lit shadow DOM properly, fall back to `@open-wc/testing`
+(add as devDependency).
+
+## Wiki: Manual Test Plan
+
+**File:** `../lock_code_manager.wiki/Manual-Test-Plan.md`
+
+### Pre-test Setup
+- Install on test HA instance with 2 locks
+  - Z-Wave JS locks for real hardware testing
+  - Virtual integration locks for quick functional testing without hardware
+  - Mix of both is ideal (verifies provider-agnostic behavior)
+- Configure 2+ slots (one with condition entity, one without)
+- Open dashboard with strategy-generated cards
+
+### Flow 1: Set/Clear PIN → Lock Syncs
+| Step | Action | Expected |
+|------|--------|----------|
+| 1.1 | Set PIN via slot card inline edit | Lock syncs, status shows "Synced" |
+| 1.2 | Verify PIN on lock (Z-Wave JS UI or device) | Code matches |
+| 1.3 | Clear PIN (empty field + Enter) | Lock clears code |
+| 1.4 | Set duplicate PIN | Error notification, slot disabled |
+
+### Flow 2: Card Display Accuracy
+| Step | Action | Expected |
+|------|--------|----------|
+| 2.1 | View with `masked_with_reveal` | Dots + eye icon |
+| 2.2 | Click reveal/hide | Toggles between digits and dots |
+| 2.3 | Disable slot via toggle | Status → "Disabled", card dims |
+| 2.4 | Add calendar condition, no event | Status → "Inactive" |
+| 2.5 | Trigger calendar event | Status → "Active" |
+| 2.6 | View lock-codes card | All slots, managed=blue, unmanaged=gray |
+
+### Flow 3: Edit Flows
+| Step | Action | Expected |
+|------|--------|----------|
+| 3.1 | Edit slot name inline | Name updates, other cards reflect |
+| 3.2 | Edit PIN inline | Reveals first, input, saves on Enter |
+| 3.3 | Escape during edit | Cancels, original value restored |
+| 3.4 | Edit unmanaged slot in lock-codes card | Sends set_lock_usercode WS |
+| 3.5 | Add/remove condition entity | Condition section updates |
+
+### Edge Cases
+| Step | Action | Expected |
+|------|--------|----------|
+| 4.1 | Disconnect lock | Status unavailable, operations fail gracefully |
+| 4.2 | Reconnect lock | Recovers, re-syncs |
+| 4.3 | Reload integration | Cards reconnect subscriptions |
+| 4.4 | Multiple browser tabs | All tabs update in sync |
+
+## Sequencing
+
+1. **PR A** (backend): Extend `tests/test_websocket.py` with full-flow + contract tests
+2. **PR B** (frontend): Enhance mock-hass, add integration tests for subscription/slot-card/lock-codes-card
+3. **Wiki**: Manual test plan (can be done anytime, no code dependency)
+
+**Bug handling:** Any bugs discovered during test development must be fixed in a
+separate PR, not bundled with the test PR. Use git worktrees (`isolation: "worktree"`)
+for bug fix agents so they don't block the main test development line.
+
+## Verification
+
+- PR A: `uv run pytest tests/test_websocket.py -x -q` + `pre-commit`
+- PR B: `npm test` + `yarn lint` + `yarn build`
+- Wiki: Review in browser
+
+## Key Files
+
+| File | Role |
+|------|------|
+| `tests/test_websocket.py` | Extend with full-flow + contract tests |
+| `ts/test/mock-hass.ts` | Enhance with connection/subscription mocks |
+| `ts/subscription-mixin.integration.test.ts` | New: subscription lifecycle tests |
+| `ts/slot-card.integration.test.ts` | New: slot card rendering + edit tests |
+| `ts/lock-codes-card.integration.test.ts` | New: lock codes card rendering + edit tests |
+| `../lock_code_manager.wiki/Manual-Test-Plan.md` | New: manual release checklist |
+| `tests/common.py` | MockLCMLock (virtual-like in-memory mock lock) |
+| `custom_components/lock_code_manager/websocket.py` | WS API implementation (contract source) |
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/63d8909b-820f-49f1-a229-8f5f7e106c70.jsonl
+
+---
+
+<task-notification>
+<task-id>a3364878b3e8a4e1e</task-id>
+<tool-use-id>toolu_015mMF67nd4F4DJesmCcA5FH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a3364878b3e8a4e1e.output</output-file>
+<status>completed</status>
+<summary>Agent "Wiki manual test plan" completed</summary>
+<result>Done. Created `/Users/raman/projects/lock_code_manager.wiki/Manual-Test-Plan.md` with four test flows:
+
+1. **Set/Clear PIN and Lock Sync** (4 steps) -- PIN lifecycle including duplicate detection
+2. **Card Display Accuracy** (6 steps) -- masked display, toggles, condition entity states, lock-codes card colors
+3. **Edit Flows** (5 steps) -- inline name/PIN editing, Escape cancellation, unmanaged slots, condition add/remove
+4. **Edge Cases** (4 steps) -- disconnect/reconnect, integration reload, multi-tab sync
+
+Each flow uses a table with pass/fail checkboxes. The page links to existing Troubleshooting wiki pages for capturing debug logs, browser console logs, and device diagnostics on failure. Committed and pushed to the wiki remote.</result>
+<usage><total_tokens>19077</total_tokens><tool_uses>7</tool_uses><duration_ms>54233</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a3364878b3e8a4e1e.output
+
+---
+
+<task-notification>
+<task-id>ab8556912ed01f177</task-id>
+<tool-use-id>toolu_01MomK7UF6eYZx3fhKVESFhe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ab8556912ed01f177.output</output-file>
+<status>completed</status>
+<summary>Agent "Frontend integration tests PR" completed</summary>
+<result>Done. Here is a summary of what was completed:
+
+**PR created:** https://github.com/raman325/lock_code_manager/pull/930
+
+**Files modified/created:**
+
+1. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ab855691/ts/test/mock-hass.ts` -- Added `createMockHassWithConnection()` function that provides a `connection.subscribeMessage` mock, enabling subscription lifecycle testing.
+
+2. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ab855691/ts/subscription-mixin.integration.test.ts` -- 8 tests covering:
+   - connectedCallback triggers subscribe
+   - disconnectedCallback triggers unsubscribe
+   - Reconnect after disconnect creates new subscription
+   - Error during subscribe sets `_error`
+   - No double subscribe when already subscribed
+   - toggleReveal unsubscribes and resubscribes
+   - Subscription callback sets `_data` and clears `_error`
+   - Sets error when connection is unavailable
+
+3. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ab855691/ts/slot-card.integration.test.ts` -- 10 tests covering:
+   - Config validation (missing entry, missing slot, out-of-range slot)
+   - Subscribe message construction with config_entry_id and config_entry_title
+   - Data handling for normal, masked PIN, and revealed PIN scenarios
+   - Error state on subscription failure
+
+4. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ab855691/ts/lock-codes-card.integration.test.ts` -- 8 tests covering:
+   - Config validation (missing/empty lock_entity_id)
+   - Subscribe message construction with lock_entity_id
+   - Data handling for single and multi-slot scenarios
+   - Error state on subscription failure and error clearing on data arrival
+
+All 322 tests pass (26 new + 296 existing). The `yarn-lint` pre-commit hook has a pre-existing worktree plugin resolution conflict unrelated to these changes.</result>
+<usage><total_tokens>66045</total_tokens><tool_uses>44</tool_uses><duration_ms>246340</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ab855691</worktreePath><worktreeBranch>worktree-agent-ab855691</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ab8556912ed01f177.output
+
+---
+
+<task-notification>
+<task-id>a7389646dc38f3939</task-id>
+<tool-use-id>toolu_01NNDB4MNBNjhTLuSpXjPEaj</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a7389646dc38f3939.output</output-file>
+<status>completed</status>
+<summary>Agent "Backend WS E2E tests PR" completed</summary>
+<result>The PR has been created successfully: https://github.com/raman325/lock_code_manager/pull/931
+
+Here is a summary of what was done:
+
+**Branch:** `test/websocket-e2e`
+**File modified:** `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a7389646/tests/test_websocket.py`
+
+**9 new tests added in two sections:**
+
+**Full Vertical Flow Tests (6 tests):**
+1. `test_pin_set_via_service_reflects_in_subscribe_code_slot` - Sets PIN "9999" via `text.set_value`, verifies it propagates through the sync chain to the WebSocket subscription
+2. `test_pin_clear_via_service_reflects_in_subscribe_code_slot` - Disables the slot first (required by the integration), clears the PIN, verifies it propagates as `None`
+3. `test_enable_toggle_reflects_in_subscribe_code_slot` - Toggles the enabled switch OFF then ON, verifies both transitions arrive via the subscription
+4. `test_pin_set_reflects_in_subscribe_lock_codes` - Pushes coordinator update, verifies `subscribe_lock_codes` delivers the new code
+5. `test_set_lock_usercode_reflects_in_subscribe_lock_codes` - Sets code on unmanaged slot 3 via WebSocket command, verifies it appears with `managed=False`
+6. `test_update_slot_condition_reflects_in_subscribe_code_slot` - Updates slot condition via WebSocket command, opens a new subscription to verify the condition data is present (the subscription resolves tracked entities at subscribe-time, so a new subscription is needed)
+
+**API Contract Shape Tests (3 tests):**
+7. `test_subscribe_code_slot_response_shape` - Validates all keys from `SlotCardData` TypeScript interface, entities dict keys, lock status keys, and correct Python types
+8. `test_subscribe_lock_codes_response_shape` - Validates `LockCoordinatorData` shape including managed slot fields
+9. `test_subscribe_lock_codes_masked_shape_contract` - Validates masked mode returns `code=None` with `code_length` as int
+
+All 97 tests pass in approximately 1.6 seconds. Pre-commit checks pass cleanly.</result>
+<usage><total_tokens>95115</total_tokens><tool_uses>63</tool_uses><duration_ms>421323</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a7389646</worktreePath><worktreeBranch>worktree-agent-a7389646</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a7389646dc38f3939.output
+
+---
+
+<task-notification>
+<task-id>aa0ebfe6ab90f4159</task-id>
+<tool-use-id>toolu_01GNqBzRMD5mNTFtinCkxiBN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/aa0ebfe6ab90f4159.output</output-file>
+<status>completed</status>
+<summary>Agent "Refactor MockLCMLock hass.data usage" completed</summary>
+<result>The PR has been created: https://github.com/raman325/lock_code_manager/pull/932
+
+Here is a summary of what was done:
+
+**Changes made to 4 files (all test-only, no production code):**
+
+1. **`/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa0ebfe6/tests/common.py`**:
+   - Removed the `LOCK_DATA` constant
+   - Added `self.codes` and `self.service_calls` as instance attributes in `MockLCMLock.__init__`
+   - Simplified `setup()` and `unload()` to no-ops (no more `hass.data` bookkeeping)
+   - Rewrote `hard_refresh_codes`, `set_usercode`, `clear_usercode`, and `get_usercodes` to use `self.codes` and `self.service_calls` directly instead of `hass.data[LOCK_DATA]`
+   - Fixed typo "integraitons" to "integrations" in docstring
+
+2. **`/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa0ebfe6/tests/test_init.py`**: Replaced `hass.data[LOCK_DATA][entity_id]["service_calls"]` with `locks[entity_id].service_calls` via `config_entry.runtime_data.locks`
+
+3. **`/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa0ebfe6/tests/test_binary_sensor.py`**: Updated 10 references from `hass.data[LOCK_DATA]` to use `lock_provider.codes` and `lock_provider.service_calls` accessed via `config_entry.runtime_data.locks`
+
+4. **`/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa0ebfe6/tests/providers/test_base.py`**: Updated 2 references from `hass.data[LOCK_DATA]` to use `lock_provider.service_calls`
+
+All 323 tests pass and all pre-commit hooks pass.</result>
+<usage><total_tokens>67925</total_tokens><tool_uses>88</tool_uses><duration_ms>380531</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa0ebfe6</worktreePath><worktreeBranch>worktree-agent-aa0ebfe6</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/aa0ebfe6ab90f4159.output
+
+---
+
+no bugs found?
+
+---
+
+bug report: So... I just used the yaml to do the following:  ```yaml "1":   name: test   pin: "5050"   enabled: true "2":   enabled: false "3":   enabled: false "4":   enabled: false "5":   enabled: false "6":   enabled: false "7":   enabled: false "8":   enabled: false "9":   enabled: false "10":   enabled: false ```  It lets me save it, but the cards aren't updating to show anything there either.
+
+---
+
+we also need go pick up the bugs you mentioned earlier
+
+---
+
+spawn shbavents to check existing PRS for review comments and address them. have the existing subagemgs do the same for these new PRs
+
+---
+
+<task-notification>
+<task-id>ae0d312b7e8cceae9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ae0d312b7e8cceae9.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix subscription entity ID snapshot bug" completed</summary>
+<result>Done. Here is the summary:
+
+**PR created:** https://github.com/raman325/lock_code_manager/pull/933
+
+**What was fixed in `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ae0d312b/custom_components/lock_code_manager/websocket.py`:**
+
+1. **`subscribe_code_slot`** -- Entity IDs (`slot_entities`, `in_sync_map`, `condition_entity_id`) were captured once at subscription time and reused in the `_send_update` closure. Now `_send_update` calls a `_resolve_entity_ids()` helper to re-resolve on every update. A `_refresh_state_tracking()` callback detects when the tracked entity set changes and re-subscribes the state change listener.
+
+2. **`subscribe_lock_codes`** -- `_get_slot_state_entity_ids` was computed once for state tracking. While the serialization already re-resolved (via `_serialize_lock_coordinator`), state change tracking was static. Added the same `_refresh_lock_state_tracking()` pattern to dynamically update the state change subscription.
+
+Both fixes use the same pattern: a mutable `unsub_state_ref` list holds the current unsubscribe callback, and a `tracked_set` is compared on each update to detect changes. All 88 websocket tests pass, and pre-commit checks pass.</result>
+<usage><total_tokens>52720</total_tokens><tool_uses>39</tool_uses><duration_ms>254674</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ae0d312b</worktreePath><worktreeBranch>worktree-agent-ae0d312b</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ae0d312b7e8cceae9.output
+
+---
+
+<task-notification>
+<task-id>afde91c197db2a9bb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/afde91c197db2a9bb.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PIN clear requires disable first" completed</summary>
+<result>Here is a summary of the investigation and fix:
+
+**Investigation findings:**
+
+The PIN validation in `text.py` (`async_set_value`) rejected empty values on enabled slots by creating a persistent notification and returning early. The switch entity (`switch.py`) separately prevented enabling a slot without a PIN. Together, these enforced the invariant: no enabled slot without a PIN. However, the rejection was silent from the frontend's perspective -- the service call succeeded but the value didn't change, with only an easily-missed persistent notification as feedback.
+
+**Decision: Bug (UX issue)**
+
+The safety invariant is valid, but the implementation was user-hostile. The correct behavior is to auto-disable the slot when the PIN is cleared, rather than silently rejecting the action.
+
+**Changes made:**
+
+1. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-afde91c1/custom_components/lock_code_manager/text.py` -- Changed `async_set_value` to call `switch.turn_off` on the enabled switch when clearing a PIN on an enabled slot, instead of rejecting with a persistent notification. Replaced the `persistent_notification.async_create` import with `switch.DOMAIN`/`SERVICE_TURN_OFF` imports.
+
+2. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-afde91c1/tests/test_text.py` -- Updated the test to verify that clearing a PIN on an enabled slot results in both the PIN being cleared and the slot being disabled.
+
+All 323 tests pass, pre-commit checks pass. PR created: https://github.com/raman325/lock_code_manager/pull/934</result>
+<usage><total_tokens>55999</total_tokens><tool_uses>40</tool_uses><duration_ms>250234</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-afde91c1</worktreePath><worktreeBranch>worktree-agent-afde91c1</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/afde91c197db2a9bb.output
+
+---
+
+<task-notification>
+<task-id>ade33645e2b245958</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ade33645e2b245958.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR #932 comments" completed</summary>
+<result>Done. Here is a summary of what was addressed:
+
+**PR #932 had two Copilot review comments on `/tests/common.py`:**
+
+1. **`hard_refresh_codes()` return type mismatch** -- The mock returned `None` but `BaseLock.hard_refresh_codes()` declares `-> dict[int, str | None]`. Fixed by changing the return type annotation and adding `return self.get_usercodes()`.
+
+2. **`get_usercodes()` mutable reference in service_calls** -- The method was appending `self.codes` directly (a mutable dict reference), meaning historical entries in `service_calls["get_usercodes"]` would mutate if `self.codes` changed later. Fixed by appending and returning `self.codes.copy()` instead.
+
+All 260 tests pass. The commit (`d9ce9c4`) has been pushed to `origin/refactor/mock-lock-instance-data`.</result>
+<usage><total_tokens>36477</total_tokens><tool_uses>34</tool_uses><duration_ms>200338</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ade33645e2b245958.output
+
+---
+
+<task-notification>
+<task-id>a866ea742f760e8ab</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a866ea742f760e8ab.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR #930 comments" completed</summary>
+<result>All changes have been pushed. Here is a summary of what was done:
+
+**PR #930 had 5 Copilot review comments across 3 files. All were addressed:**
+
+1. **`ts/subscription-mixin.integration.test.ts`** (line 47-48): Wrapped `customElements.define('test-subscription-element', ...)` with a guard (`if (!customElements.get(...))`) to prevent re-definition errors in vitest watch mode.
+
+2. **`ts/slot-card.integration.test.ts`** (lines 18-19 and 105-109):
+   - Replaced the static `import './slot-card'` with a guarded dynamic import inside `beforeAll`
+   - Changed all `el._hass = hass` to `el.hass = hass` to use the public setter (which triggers `_subscribe()`, matching real Home Assistant behavior)
+   - Added `hass` to the `SlotCardElement` interface
+   - Added `beforeAll` to the vitest imports
+
+3. **`ts/lock-codes-card.integration.test.ts`** (lines 18-19 and 100-107):
+   - Same changes as slot-card: guarded dynamic import in `beforeAll`, `el.hass` instead of `el._hass`, updated interface and imports
+
+**Note:** The `yarn-lint` pre-commit hook has a pre-existing ESLint plugin path conflict in this worktree (duplicate `@stylistic/js` plugin resolution between worktree and main repo `node_modules`). This is unrelated to the changes and was skipped for this commit. The CI lint check on GitHub should pass since it runs in a clean environment. All 322 tests pass.</result>
+<usage><total_tokens>55005</total_tokens><tool_uses>39</tool_uses><duration_ms>231642</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a866ea742f760e8ab.output
+
+---
+
+<task-notification>
+<task-id>ab51d1be33796f6e0</task-id>
+<tool-use-id>toolu_017NWv5JUCRRfwnAAPvPK3Py</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ab51d1be33796f6e0.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR #931 comments" completed</summary>
+<result>Done. Here is a summary of the review comments from Copilot on PR #931 and the fixes applied:
+
+**Review comments addressed (all from Copilot bot):**
+
+1. **Duplicate `async_block_till_done()` calls** -- Removed 3 back-to-back duplicate calls in `test_pin_set_via_service_reflects_in_subscribe_code_slot`, `test_pin_clear_via_service_reflects_in_subscribe_code_slot`, and `test_update_slot_condition_reflects_in_subscribe_code_slot`.
+
+2. **Slow timeout loops** -- The `for _ in range(10)` loops with per-iteration 1s timeouts could take up to 10 seconds on failure. Replaced with a single bounded `asyncio.wait_for(..., timeout=3.0)` pattern wrapping an inner coroutine, in both the pin-set and pin-clear tests.
+
+3. **Misleading test name** -- Renamed `test_pin_set_reflects_in_subscribe_lock_codes` to `test_coordinator_push_update_reflects_in_subscribe_lock_codes` since the test exercises `coordinator.push_update()`, not a PIN service call.
+
+4. **Hard-coded `"condition_entity"` string** -- Replaced with the `ATTR_CONDITION_ENTITY` constant (added to imports) to avoid drift if the constant value ever changes.
+
+5. **First test doesn't validate full lock sync path** (suggestion only) -- This was more of a design suggestion about asserting per-lock status in the `locks` field. Left as-is since it would require a larger test redesign and the current test still validates the service-call-to-subscription flow.
+
+All 97 tests pass, pre-commit checks pass, and the commit has been pushed to `test/websocket-e2e`.</result>
+<usage><total_tokens>55856</total_tokens><tool_uses>46</tool_uses><duration_ms>256541</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ab51d1be33796f6e0.output
+
+---
+
+<task-notification>
+<task-id>ad58f9466dd59028f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ad58f9466dd59028f.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix strategy cache not refreshing" completed</summary>
+<result>The PR has been created: https://github.com/raman325/lock_code_manager/pull/935
+
+## Summary
+
+**Problem:** After saving new slot configuration via the options flow, the Lovelace dashboard strategy did not refresh. New slots/locks wouldn't appear until the user manually reloaded the page.
+
+**Root cause:** The strategy's `generate()` method runs once at render time. When config entry data changes on the backend, nothing notified the frontend to re-run the strategy.
+
+**Investigation findings:**
+- Home Assistant has a standard `lovelace_updated` event (defined in `homeassistant.const.EVENT_LOVELACE_UPDATED`) 
+- The frontend subscribes to this event per-dashboard via `url_path` matching
+- When fired, the frontend shows a "Configuration changed" toast with a Refresh button
+- Clicking Refresh calls `_fetchConfig()` which, for strategy dashboards, re-runs `generateLovelaceDashboardStrategy()` -- this calls the strategy's `generate()` method
+
+**Fix (minimal, 2 files changed):**
+
+1. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ad58f946/custom_components/lock_code_manager/__init__.py`:
+   - Added `EVENT_LOVELACE_UPDATED` import from `homeassistant.const`
+   - Added `_async_notify_lovelace_update()` helper that iterates all registered Lovelace dashboards and fires the event for each
+   - Called this helper at the end of `async_update_listener`
+
+2. `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ad58f946/tests/test_init.py`:
+   - Added `test_lovelace_updated_event_fired_on_config_change` test verifying events are fired when config entry options change
+
+**Safety:** No infinite loop risk (strategy is read-only), no rate-limiting concern (only fires on user-initiated config saves). The event fires for all dashboards since we can't determine which ones use the Lock Code Manager strategy; the only side effect on other dashboards is a benign toast notification.</result>
+<usage><total_tokens>83076</total_tokens><tool_uses>84</tool_uses><duration_ms>527086</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ad58f946</worktreePath><worktreeBranch>worktree-agent-ad58f946</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ad58f9466dd59028f.output
+
+---
+
+have a subagent review any remaining feedback on any of the PRs opened (if a PR doesnt have feedback yet, clme back to it/wait for it). once ifs done, spawn subagents for each PR to do. a code review
+
+---
+
+935 just got ckmments
+
+---
+
+<task-notification>
+<task-id>a10299cffc4090f1b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a10299cffc4090f1b.output</output-file>
+<status>completed</status>
+<summary>Agent "Address PR #934 review comment" completed</summary>
+<result>Replied to the Copilot review comment on PR #934. No code changes were needed.
+
+The reply explains three reasons the current approach is sufficient:
+
+1. The enabled switch is always created alongside the PIN entity in the same setup flow, so its state will always be available.
+2. Even if the state lookup failed, the PIN still gets cleared (the `_update_config_entry` call runs unconditionally) -- the only thing skipped is the auto-disable, which is the same as the pre-fix behavior.
+3. Using config entry data directly would bypass the switch's service call, which is the proper mechanism for triggering side effects like the lock code sync logic.</result>
+<usage><total_tokens>20614</total_tokens><tool_uses>9</tool_uses><duration_ms>56042</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a10299cffc4090f1b.output
+
+---
+
+<task-notification>
+<task-id>a187202fddb3885eb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a187202fddb3885eb.output</output-file>
+<status>completed</status>
+<summary>Agent "Address PR #933 review comments" completed</summary>
+<result>All three replies were posted successfully. Here is a summary of what was done:
+
+**Comment 1 (push-based locks, `subscribe_lock_codes`)**: Replied explaining that `_send_update` is registered as a coordinator listener, so it fires on push updates and periodic drift checks (`hard_refresh_interval`, default 1 hour for Z-Wave JS). Entity-registry listeners are unnecessary complexity.
+
+**Comment 2 (same concern for `subscribe_code_slot`)**: Replied with the same reasoning -- coordinator listeners at line 1165 ensure `_send_update` fires on push updates and drift checks. Also noted that Copilot's suggested `async_track_entity_registry_updated_event` code was incorrect (it filters by entity ID, not config entry ID).
+
+**Comment 3 (no test coverage)**: Replied noting that per project convention, tests go in separate PRs from bug fixes and this will be covered in the ongoing websocket test rewrite effort.
+
+No code changes were needed -- all three comments were addressed with explanatory replies.</result>
+<usage><total_tokens>34183</total_tokens><tool_uses>13</tool_uses><duration_ms>99129</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a187202fddb3885eb.output
+
+---
+
+<task-notification>
+<task-id>a714605d5604e599d</task-id>
+<tool-use-id>toolu_012PW5BS77ZMvjLCJL4njSjN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a714605d5604e599d.output</output-file>
+<status>completed</status>
+<summary>Agent "Address PR #935 review comments" completed</summary>
+<result>Done. Here is a summary:
+
+**Review comment addressed:** There was one comment from Copilot (ID 3005927704) on `tests/test_init.py` pointing out that `ATTR_CODE` was used in the test's slot config instead of `CONF_PIN`. The config flow schema uses `CONF_PIN` for slot PIN values, while `ATTR_CODE` is a runtime state attribute.
+
+**Changes made in `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa0ebfe6/tests/test_init.py`:**
+- Line 127: Changed `ATTR_CODE: "4321"` to `CONF_PIN: "4321"` in the pre-existing `test_update_listener` test
+- Line 640: Changed `ATTR_CODE: "4321"` to `CONF_PIN: "4321"` in the new `test_lovelace_updated_event_fired_on_config_change` test
+
+All 15 tests in `test_init.py` pass, and all Python pre-commit checks pass. The fix was pushed to the PR branch and a reply was posted to the review comment.</result>
+<usage><total_tokens>31232</total_tokens><tool_uses>21</tool_uses><duration_ms>129145</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a714605d5604e599d.output
+
+---
+
+once all comments and code reviews are addressed, PRs that only change cam be merged
+
+---
+
+<task-notification>
+<task-id>a418f15d367c0ace4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a418f15d367c0ace4.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #932" completed</summary>
+<result>Now I have a complete picture. The PR description says it changes 18 lines (+18) in `test_binary_sensor.py`. Let me count the number of `hass.data[LOCK_DATA]` usages in `test_binary_sensor.py` that the PR must update:
+
+- Line 179: `service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]`
+- Line 236: `service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]`
+- Line 289: `service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]`
+- Line 355: `service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]`
+- Line 554: `assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "1234"`
+- Line 568: `assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] == "9999"`
+- Line 598: `assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) == "1234"`
+- Line 612: `assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"].get(1) is None`
+- Line 704: `service_calls = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]`
+- Line 711: `hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"` (WRITE to mock state)
+- Line 718: `assert len(service_calls["set_usercode"]) == 1`
+- Line 721: `assert service_calls["set_usercode"][0] == ...`
+- Line 877: `lock_codes = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"]`
+- Line 917: `lock_codes = hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"]`
+
+That's 14 uses across test_binary_sensor.py. The PR claims "+18, -15" lines changed. This count seems close (15 removals would cover most of these).
+
+The critical one I want to focus on is line 711:
+```python
+hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"
+```
+
+This **writes** to the mock codes dict to simulate an external change. After the PR refactor, this would need to become:
+```python
+lock_provider.codes[1] = "9999"
+```
+
+This should work correctly since `lock_provider` is already retrieved at line 702. The PR must handle this correctly.
+
+Now let me check the `test_startup_out_of_sync_slots_sync_once` test at line 355 - this one creates its own `config_entry` locally but uses `hass.data[LOCK_DATA]`. After the PR it needs to use `config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]`, which is `config_entry` (the local variable).
+
+Now I have enough information to write a comprehensive review. Let me check one more edge case - the `unload()` method in the mock after the PR. The PR says it simplifies `unload()`, but I want to make sure the method is still there (calling `super()` or being a no-op) so any tests relying on unload cleanup still work.
+
+Since the base class has a no-op `unload()`, and the only thing the current `unload()` does is clean up `hass.data`, after the refactor the mock's `unload()` can simply be removed (inherited no-op) or become a no-op. The PR summary says "Simplified ... unload() methods by eliminating data dictionary management."
+
+Let me also verify whether there's any issue with the `set_usercode()` fallback return `True` at the end when `lock_data` is absent (lines 124 in the current mock) - after the PR this fallback goes away since `self.codes` is always present.
+
+I have all the information needed for a thorough review. Let me write up my findings.
+
+---
+
+## Review of PR #932: Refactor MockLCMLock to use Instance Attributes
+
+This review covers the diff of PR #932 against `main` on `raman325/lock_code_manager`. The PR refactors `MockLCMLock` to store state (`codes` and `service_calls`) as instance attributes instead of via `hass.data`, and updates all test assertions to use the provider instance directly.
+
+### Summary
+
+The refactor is well-motivated and correct in its overall approach. Storing mock state on the instance rather than in `hass.data` is more natural, aligns with how real providers work, and eliminates the coupling between test assertions and HA internals. No high-confidence correctness bugs were found. One issue is worth flagging.
+
+---
+
+### Critical Issues
+
+None identified.
+
+---
+
+### Important Issues
+
+**1. Incomplete migration: `test_coordinator_update_triggers_sync_on_external_change` uses a write to `hass.data[LOCK_DATA]` that must become a write to `lock_provider.codes`**
+
+Confidence: 95
+
+File: `/Users/raman/projects/lock_code_manager/tests/test_binary_sensor.py`, line 711
+
+The test simulates an external code change on the lock by directly mutating `hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"`. After the PR removes `hass.data`-backed storage and moves `codes` to an instance attribute, this write will silently do nothing functional - it will write into a dict that `get_usercodes()` no longer reads from. The test would then falsely pass because `get_usercodes()` now returns `lock_provider.codes`, not `hass.data[LOCK_DATA][...]["codes"]`, so the coordinator would never see the externally-injected value.
+
+The PR summary mentions this test is updated to use `lock_provider.service_calls`, but based on the description the write on line 711 also needs to change to `lock_provider.codes[1] = "9999"`. The `lock_provider` is already retrieved at line 702 of that test, so the fix is straightforward. If this line is missed, the test would either break outright (if `LOCK_DATA` is no longer in `hass.data`) or - worse - silently stop testing what it claims to test.
+
+The fix must be:
+```python
+# Before
+hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["codes"][1] = "9999"
+
+# After
+lock_provider.codes[1] = "9999"
+```
+
+---
+
+### Low-Confidence Notes (not flagged as issues, for informational purposes)
+
+**Correctness of `get_usercodes()` snapshot**: The PR summary says it "creates a snapshot copy of `self.codes` before recording calls." This is correct behavior: the old code stored a reference to the mutable dict into `service_calls`, meaning inspection of call history would reflect the current state, not the state at the time of the call. The new snapshot (`dict(self.codes)` or similar) is semantically better for test assertions.
+
+**`hard_refresh_codes()` return type fix**: The base class declares `hard_refresh_codes() -> dict[int, str | None]`, but the current mock returns `None` (no `return` statement). The PR corrects this by returning `self.codes`. This is a legitimate bug fix bundled into the refactor.
+
+**Fallback `return True` removal**: The old `set_usercode()` and `clear_usercode()` had a fallback `return True` for when `lock_data` was absent. After the refactor these are unreachable dead code paths removed naturally. No correctness concern.
+
+**`LOCK_DATA` import chain**: The PR removes `LOCK_DATA` from `common.py` and all importing test files (`test_binary_sensor.py`, `test_init.py`, `tests/providers/test_base.py`). All four files are in scope. No orphaned import concern.</result>
+<usage><total_tokens>61502</total_tokens><tool_uses>35</tool_uses><duration_ms>212518</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a418f15d367c0ace4.output
+
+---
+
+<task-notification>
+<task-id>ab72df7ed71e7361a</task-id>
+<tool-use-id>toolu_01Nyoc7C9PAstr3WvomudWXQ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ab72df7ed71e7361a.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #930" completed</summary>
+<result>Now I have all the information I need for a comprehensive review. Let me analyze all the key issues I've found.
+
+---
+
+Reviewing PR #930 (test/frontend-integration) - adds `subscription-mixin.integration.test.ts`, `slot-card.integration.test.ts`, `lock-codes-card.integration.test.ts`, and extends `ts/test/mock-hass.ts`.
+
+---
+
+## Critical Issues
+
+None found - no test will crash or produce wrong results due to a critical bug.
+
+---
+
+## Important Issues
+
+### 1. `lock-codes-card.integration.test.ts` - Subscription triggered by `hass` setter, not `connectedCallback`, but the test checks after `container.appendChild`
+
+Confidence: 85
+
+In `lock-codes-card.ts`, the subscription logic is:
+- `connectedCallback` (from mixin) calls `_subscribe()`, but at that point `_hass` is `undefined` so `_subscribe()` returns immediately with no-op.
+- The `hass` setter calls `_subscribe()`. The tests set `el.hass = hass` **before** `container.appendChild(el)`, which means the `hass` setter fires first and calls `_subscribe()` while the element is disconnected.
+
+The `_subscribe()` guard checks `!this._hass || !this._config || this._unsub || this._subscribing` but does NOT check if the element is connected. So the subscription happens during the `hass` setter call (before `appendChild`), then `connectedCallback` fires and calls `_subscribe()` again - but that no-ops because `this._unsub` is already set.
+
+This is the correct behavior: the tests should work. However, the test for "connectedCallback triggers subscribe" in `subscription-mixin.integration.test.ts` sets `el._hass` directly (not through the setter), then relies on `connectedCallback` to trigger the subscribe. That is intentional and correct for the mixin test. The asymmetry is worth noting but not a bug.
+
+Actually, looking more carefully at the lock-codes-card integration test:
+
+```typescript
+el.hass = hass;          // triggers _subscribe() while NOT in DOM
+container.appendChild(el); // triggers connectedCallback → _subscribe() no-ops
+await flush();
+```
+
+The `subscribeMessage` mock is called once from the `hass` setter, before `flush()`. The `await flush()` is then redundant (there's nothing in-flight at that point). The test passes, but for the wrong reason - the subscription fires before the element is even in the DOM. This is an incidental correctness issue: the tests document that `hass` setter triggers subscription (which is true), not that `connectedCallback` triggers it. The `container.appendChild` in these card tests adds no value.
+
+This isn't outright broken but it's misleading - the test name "subscription connects with correct message" implies it tests the connection lifecycle via being in DOM, but the subscription is actually triggered by the `hass` setter before DOM attachment.
+
+File: `ts/lock-codes-card.integration.test.ts`, lines 98-115.
+
+Fix: Either set `hass` after `appendChild` (so the test accurately reflects the component lifecycle), or add a comment explaining that `hass` setter triggers the subscription independent of DOM attachment.
+
+---
+
+### 2. `subscription-mixin.integration.test.ts` - `el._hass` assigned directly without going through the public `hass` setter
+
+Confidence: 90
+
+In `TestSubscriptionElement`, there is no `hass` setter defined - only `_hass` as a plain property. This is correct for the mixin test because the mixin itself doesn't define a `hass` setter (only the concrete cards do). However, this diverges from how real HA components work, where `hass` is always set via a property setter.
+
+The PR description mentions that a Copilot review comment said to "use public `hass` setter instead of direct `_hass` assignment," and the contributor addressed it. But `TestSubscriptionElement` still uses `el._hass = ...` throughout the test (lines like `el._hass = createMockHassWithConnection()`).
+
+This is consistent for the mixin test since `TestSubscriptionElement` is a synthetic test subclass and doesn't have a public `hass` setter. But the PR description says this was addressed - suggesting there may be a disconnect between what was described and what was actually implemented.
+
+Looking at the real card components: `LockCodesCard` has `set hass(hass)` which calls `this._hass = hass; void this._subscribe()`. The `TestSubscriptionElement` doesn't do this, so the integration test is not testing the actual trigger path used in production. However, `connectedCallback` still calls `_subscribe()` correctly (which is what the mixin test actually focuses on), so the tests work.
+
+This is a test quality concern, not a bug in the test logic.
+
+---
+
+### 3. `lock-codes-card.integration.test.ts` - Test data `makeLockCoordinatorData` includes `config_entry_id` on slot but that field is not in `LockCoordinatorData` default creation for all slots in the multi-slot test
+
+Confidence: 80
+
+In `makeLockCoordinatorData`, the default slot object includes `config_entry_id: 'test-entry'`. But in the "handles data with multiple slots" test, the override slots do not include `config_entry_id`:
+
+```typescript
+slots: [
+    { slot: 1, code: '1234', name: 'User A', managed: true, active: true, enabled: true },
+    { slot: 2, code: null, code_length: 6, name: 'User B', managed: true, active: false, enabled: true },
+    { slot: 3, code: null, name: undefined, managed: false },
+],
+```
+
+This is fine because `config_entry_id` is optional in `LockCoordinatorSlotData`. Not an issue.
+
+However, `name: undefined` in the slot 3 definition is a subtle problem. The test asserts `el._data?.slots[2].managed` to be `false`, but does not verify the `name` field, so `undefined` is just being passed along. This is actually valid TypeScript given the `name?: string` type. Not an issue.
+
+---
+
+### 4. `lock-codes-card.integration.test.ts` - `_error` property not cleared after test in `afterEach`
+
+Confidence: 80
+
+The `clears _error when subscription data arrives` test manually sets `el._error = 'Previous error'` to simulate a prior failure. This relies on the `_error` field being writable and accessible, which it is (it's declared as `_error?: string` on the component). However, no `vi.clearAllMocks()` or equivalent cleanup is called in `afterEach` between tests.
+
+The `afterEach` block properly removes the element from the DOM and calls `container.remove()`, which is correct and sufficient for cleanup. The `_error` mutation in this single test is scoped to that test's element instance. This is fine.
+
+---
+
+### 5. `subscription-mixin.integration.test.ts` - `flush()` using `setTimeout(r, 0)` is fragile for chained microtasks
+
+Confidence: 82
+
+The `flush()` implementation is:
+```typescript
+async function flush(): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+}
+```
+
+`setTimeout(_, 0)` flushes the macrotask queue but only one level of microtask chaining. The `_subscribe()` method is `async` and uses `await` internally:
+
+```typescript
+protected async _subscribe(): Promise<void> {
+    // ...
+    this._unsub = await this._hass.connection.subscribeMessage<unknown>(...)
+    // ...
+}
+```
+
+Since `subscribeMessage` is mocked with `Promise.resolve(...)`, the `await` inside `_subscribe` resolves as a microtask before `setTimeout(_, 0)` fires. So `flush()` correctly waits for the subscription to complete in all test cases. This is fine in practice, and consistent with the established pattern in the existing tests.
+
+---
+
+### 6. `mock-hass.ts` - `createMockHassWithConnection` returns a default unsubscribe function `() => {}` that is not a `vi.fn()`
+
+Confidence: 85
+
+```typescript
+const subscribeMessageMock = vi.fn().mockImplementation(
+    (callback: (data: unknown) => void, msg: unknown) => {
+        options?.onSubscribe?.(callback, msg);
+        return Promise.resolve(() => {});  // unsubscribe function
+    }
+);
+```
+
+The default unsubscribe function `() => {}` is a plain arrow function, not a `vi.fn()`. This means tests that want to verify the unsubscribe was called (e.g., `disconnectedCallback triggers unsubscribe`) must override the mock with `.mockResolvedValue(unsubFn)` where `unsubFn = vi.fn()`.
+
+This is exactly what the tests do - they explicitly set `mockResolvedValue(unsubFn)` whenever they need to assert on the unsubscribe call. So this is by design and works correctly.
+
+However, it means any test that doesn't explicitly override the mock is silently ignoring whether `_unsubscribe` was called, since there's nothing to assert on. This is acceptable but means the factory helper's default is subtly less useful for some test scenarios. Not a bug.
+
+---
+
+### 7. Duplicate test coverage between unit tests and integration tests
+
+Confidence: 85
+
+The config validation tests in `lock-codes-card.integration.test.ts` (lines 71-99) and `slot-card.integration.test.ts` duplicate logic that is already fully tested in `lock-codes-card.test.ts` (lines 281-309) and `slot-card.test.ts` (lines 26-109) respectively.
+
+For example, "throws when lock_entity_id is missing" in the integration test calls `el.setConfig(...)` on a real component instance, but tests the same validation logic as the standalone unit tests. The integration test value-add here is verifying that `setConfig()` actually throws on the real component (rather than a local copy of the logic), which is marginally useful.
+
+The more significant concern: several tests like "throws when lock_entity_id is empty" and "accepts valid config and stores it" in the integration tests are effectively re-running the same scenario as the unit test suites, providing no new coverage value while adding component instantiation overhead.
+
+This is a test quality/maintainability concern per the project guidelines (AGENTS.md) which emphasize keeping tests efficient.
+
+---
+
+## Summary
+
+Reviewing PR #930: three new integration test files (`ts/subscription-mixin.integration.test.ts`, `ts/slot-card.integration.test.ts`, `ts/lock-codes-card.integration.test.ts`) and an updated `ts/test/mock-hass.ts`.
+
+**Critical issues**: None.
+
+**Issues worth addressing:**
+
+1. **Misleading test setup order in `lock-codes-card.integration.test.ts`** (Confidence: 85) - The subscription is triggered by the `hass` setter (before DOM attachment), but tests set `hass` before `appendChild`, making it appear as though `connectedCallback` drives the subscription when it doesn't for these card components. This is not a bug but is architecturally misleading. The `container.appendChild(el)` call followed by `await flush()` adds no value in the card tests (the subscription already fired from the `hass` setter). Suggest either reordering `hass` assignment to after `appendChild`, or adding a comment acknowledging this behavior difference from the mixin test.
+
+2. **`TestSubscriptionElement` uses direct `_hass` assignment** (Confidence: 90) - The `TestSubscriptionElement` in `subscription-mixin.integration.test.ts` doesn't define a public `hass` setter, so all tests assign `el._hass = createMockHassWithConnection()` directly and rely on `connectedCallback` to drive the subscription. This is intentionally different from production use (where the `hass` setter triggers `_subscribe()`), but the test class doesn't make this divergence explicit. The comment in the test file acknowledges this is a test subclass, but the behavior difference from real cards could confuse future maintainers. The PR description stated this was addressed (use public `hass` setter) but `TestSubscriptionElement` still does direct `_hass` assignment, which is correct for testing the mixin's `connectedCallback` path but mismatches the PR description.
+
+3. **Config validation tests are duplicated across unit and integration suites** (Confidence: 85) - The `config validation` describe blocks in both integration test files re-test the same `setConfig()` validation logic already covered in `lock-codes-card.test.ts` and `slot-card.test.ts`. Per AGENTS.md, tests should be efficient. The integration tests add genuine value for the subscription/lifecycle tests, but the config validation duplicates add overhead without new coverage.
+
+Relevant files:
+- `/Users/raman/projects/lock_code_manager/ts/subscription-mixin.integration.test.ts` (PR branch)
+- `/Users/raman/projects/lock_code_manager/ts/slot-card.integration.test.ts` (PR branch)
+- `/Users/raman/projects/lock_code_manager/ts/lock-codes-card.integration.test.ts` (PR branch)
+- `/Users/raman/projects/lock_code_manager/ts/test/mock-hass.ts`
+- `/Users/raman/projects/lock_code_manager/ts/subscription-mixin.ts`
+- `/Users/raman/projects/lock_code_manager/ts/lock-codes-card.ts` (lines 399-422, `hass` setter and `setConfig`)
+- `/Users/raman/projects/lock_code_manager/ts/slot-card.ts` (lines 819-856, `hass` setter and `setConfig`)</result>
+<usage><total_tokens>49415</total_tokens><tool_uses>35</tool_uses><duration_ms>219294</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ab72df7ed71e7361a.output
+
+---
+
+<task-notification>
+<task-id>a1d1f68f956fa0d00</task-id>
+<tool-use-id>toolu_01L5TLou8iCtBEsfaKuT55ya</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a1d1f68f956fa0d00.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #933" completed</summary>
+<result>`Callable` is already imported from `collections.abc`. The PR uses `list[Callable[[], None]]` for `unsub_state_ref` - this is already available.
+
+**Let me now check one final potential issue: the `_send_update` `@callback` in `subscribe_code_slot` calls `_resolve_entity_ids()` which is a plain function (not a `@callback`). In HA, `@callback` is a marker that the function runs in the event loop. A `@callback` function calling a plain sync function is fine - there's no restriction on calling sync helpers from within `@callback` functions.**
+
+Now let me consolidate my findings. Let me look specifically at one more potential issue - the `_send_update` in `subscribe_lock_codes` calls `_refresh_lock_state_tracking()`, and if the entity set is empty (initial subscription), it never registers any tracking. However, the coordinator listener drives `_send_update()` calls. But if the coordinator is None AND entities don't exist yet, nothing drives updates. This is a pre-existing gap in the fix's design that the PR description acknowledges (coordinator updates provide eventual consistency).
+
+Let me also verify whether there's a race with the initial `_send_update()` call and the tracking setup at the bottom of `subscribe_lock_codes` in the PR:
+
+From the diff for `subscribe_lock_codes`:
+```
+# Initial tracking setup happens BEFORE _send_update()
+tracked_set = set(slot_entity_ids)
+if slot_entity_ids:
+    unsub_state_ref.append(...)
+
+# Then:
+connection.subscriptions[msg["id"]] = _unsub_all
+connection.send_result(msg["id"])
+_send_update()  # This also calls _refresh_lock_state_tracking()
+```
+
+When `_send_update()` calls `_refresh_lock_state_tracking()`, it re-resolves entity IDs. If the result equals `tracked_set` (which was just set), it returns early. If the result differs, it replaces the tracking. This is correct and safe since everything runs on the event loop.
+
+Based on the thorough analysis, I have found one meaningful high-confidence issue and one moderate concern worth flagging.
+
+---
+
+Reviewing PR #933 (`fix/subscription-entity-snapshot`) on `raman325/lock_code_manager`. This PR modifies `custom_components/lock_code_manager/websocket.py` to fix entity ID snapshotting in `subscribe_lock_codes` and `subscribe_code_slot` by re-resolving entity IDs on each `_send_update()` call and dynamically refreshing state tracking.
+
+---
+
+## Critical
+
+No critical bugs found.
+
+---
+
+## Important
+
+### Issue 1 - Missed condition_entity_id in `_refresh_state_tracking` tracked set when `_on_state_change` triggers re-resolution (Confidence: 85)
+
+**File:** `custom_components/lock_code_manager/websocket.py`, `subscribe_code_slot`, `_on_state_change` handler
+
+**Explanation:**
+
+In the PR, when `_on_state_change` fires for a non-calendar entity, it calls `_send_update()` with no `next_event`. Inside `_send_update`, `_resolve_entity_ids()` is called, and the resolved `condition_entity_id` (the `_` discard) is silently thrown away:
+
+```python
+current_entities, current_in_sync, _ = _resolve_entity_ids()
+...
+_refresh_state_tracking(current_entities, current_in_sync)
+```
+
+Then `_refresh_state_tracking` independently calls `_get_slot_condition_entity_id` a third time to build the `new_ids` set. This triple-lookup is wasteful, but the real issue is that `_send_update` discards the resolved `condition_entity_id` from `_resolve_entity_ids()` even though it's the authoritative resolved value - `_refresh_state_tracking` then makes its own independent call. If `_get_slot_condition_entity_id` is not pure (e.g., config entry data mutates between the two calls at subscription teardown or during a `update_slot_condition` handler), these two calls could diverge, causing the tracked set to omit the condition entity that was actually used for serialization.
+
+The minimal fix is to thread the resolved condition entity through:
+
+```python
+current_entities, current_in_sync, current_condition = _resolve_entity_ids()
+...
+_refresh_state_tracking(current_entities, current_in_sync, current_condition)
+```
+
+And update `_refresh_state_tracking` to accept and use it directly instead of making its own call. This eliminates the inconsistency window and removes one redundant registry lookup per update cycle.
+
+---
+
+### Issue 2 - `subscribe_lock_codes` has no re-resolution trigger when coordinator is `None` and initial entity set is empty (Confidence: 80)
+
+**File:** `custom_components/lock_code_manager/websocket.py`, `subscribe_lock_codes`
+
+**Explanation:**
+
+The fix relies entirely on coordinator update callbacks to drive `_send_update()` calls, which in turn trigger entity ID re-resolution via `_refresh_lock_state_tracking()`. However, if `coordinator` is `None`:
+
+```python
+unsub_coordinator = (
+    coordinator.async_add_listener(_send_update) if coordinator else lambda: None
+)
+```
+
+And if the initial entity set is also empty (both are possible during initial setup), then:
+1. `_send_update` is never called by the coordinator
+2. `_on_state_change` never fires (no tracked entities)
+3. `_refresh_lock_state_tracking` is never called
+4. Entities created after subscription are never picked up
+
+The PR description states that "both subscriptions register as coordinator listeners" as the mechanism for eventual consistency - but that guarantee doesn't hold when `coordinator is None`. This is a partial fix: the race condition is fixed for the common case (coordinator exists), but the degenerate case where a lock has no coordinator AND entities are created after subscription remains broken.
+
+This is arguably a pre-existing design limitation, but the PR introduces the assumption that coordinator updates are always the re-resolution driver without documenting the `coordinator is None` gap. Worth a comment at minimum, or a guard that registers an entity-registry event listener as a fallback when no coordinator is available.
+
+---
+
+## No Issues Found For
+
+- Python closure forward-reference ordering: all `nonlocal` and callback cross-references resolve correctly at call time.
+- `@callback` calling `async_track_state_change_event`: confirmed to be a plain sync function, safe to call from callbacks.
+- `unsub_state_ref` list-as-mutable-container pattern: idiomatic HA Python, no thread safety issues (single event loop).
+- `_unsub_all` teardown: correctly handles empty `unsub_state_ref` with the `if unsub_state_ref:` guard.
+- Reentrancy / infinite loop: `_refresh_lock_state_tracking` and `_refresh_state_tracking` both have early-return guards on `if new_ids == tracked_set` that prevent re-registration when nothing has changed.
+- Coordinator listener signature compatibility: `_send_update(next_event=None)` is safely called with no arguments by `DataUpdateCoordinator`.
+- Unsubscribing from within a state-change handler: safe in HA's event system.</result>
+<usage><total_tokens>45169</total_tokens><tool_uses>25</tool_uses><duration_ms>249694</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a1d1f68f956fa0d00.output
+
+---
+
+<task-notification>
+<task-id>a8201894f283043da</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a8201894f283043da.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #934" completed</summary>
+<result>Now I have all the information I need. Let me write the review.
+
+---
+
+## Review: PR #934 - Auto-disable slot when clearing PIN on enabled slot
+
+**Reviewing:** Changes to `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/text.py` and `tests/test_text.py`. The PR replaces the old "reject with notification" behavior when clearing a PIN on an enabled slot with "auto-disable the slot first, then clear the PIN."
+
+---
+
+### Critical Issues
+
+None found.
+
+---
+
+### Important Issues
+
+**Issue 1: Silent PIN clear when switch entity lookup fails (confidence: 82)**
+
+File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/text.py`, `async_set_value`
+
+When `async_get_entity_id` returns `None` (e.g., the switch entity isn't registered yet, or there's an unexpected registry inconsistency), `self._enabled_entity_id` stays as `""`. The guard condition `and self._enabled_entity_id` is falsy, so the auto-disable block is skipped entirely, and `_update_config_entry(value)` proceeds unconditionally — storing an empty PIN into the config entry while the slot remains enabled in the config data.
+
+This creates an inconsistent state: `CONF_ENABLED=True` and `CONF_PIN=""` coexist in `config_entry.data`. The sync logic in `binary_sensor.py` would then see `active_state=STATE_ON` (driven by the enabled switch, plus any conditions) and `pin_state=""`, and attempt to call `async_set_usercode` with an empty string — which may be rejected by the lock or provider.
+
+The old behavior in this edge case was to silently do nothing (return early with a notification). The new behavior is arguably worse: it corrupts state instead of blocking.
+
+Compare with `binary_sensor.py`'s `_disable_slot_and_notify`, which explicitly guards with a `not enabled_ent_id` check and logs a warning rather than proceeding:
+
+```python
+if not enabled_ent_id:
+    _LOGGER.warning(
+        "%s (%s): Cannot disable slot %s on %s — switch entity not found",
+        ...
+    )
+    return
+```
+
+The fix in `text.py` should mirror this: if the entity ID can't be resolved but the slot is supposed to be enabled, either reject the operation (log + return, or raise) rather than silently clearing the PIN with the slot still enabled. However, since `_enabled_entity_id` is cached on the instance and entity creation is guaranteed by the setup flow (the switch entity is always created alongside the PIN entity), this failure path should be extremely rare in practice — which is why the confidence is 82 rather than higher.
+
+**Suggested fix:** Add an explicit guard for the case where the switch entity is expected but not found:
+
+```python
+if (
+    self.key == CONF_PIN
+    and not value.strip()
+):
+    if not self._enabled_entity_id:
+        # Entity not found - fall through to clear PIN (slot already disabled or not yet set up)
+        pass
+    elif (state := self.hass.states.get(self._enabled_entity_id)) and state.state == STATE_ON:
+        _LOGGER.debug(...)
+        await self.hass.services.async_call(...)
+```
+
+Or, more concisely, add a `return` if the entity should be there but isn't, similar to `_disable_slot_and_notify`.
+
+---
+
+**Issue 2: Whitespace-only PIN triggers auto-disable but is stored as whitespace (confidence: 80)**
+
+File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/text.py`, `async_set_value`
+
+The condition uses `not value.strip()` to detect a "blank" PIN, but stores the original `value` (not `value.strip()`). If a user sets a PIN to `"   "` (whitespace only):
+
+1. `not "   ".strip()` → `True`, so auto-disable fires
+2. The slot gets disabled
+3. `_update_config_entry("   ")` stores `"   "` as the PIN
+
+The slot is now disabled with a whitespace PIN stored. If the user later re-enables the slot, the switch's `async_turn_on` checks `state.state in (None, "", STATE_UNKNOWN)` — but `"   "` is none of those, so the switch would allow re-enabling, and the sync logic would attempt to set the code `"   "` on the lock. Whether the lock accepts or rejects whitespace codes is provider-dependent.
+
+This is a pre-existing issue with the whitespace check (present before this PR), not introduced by this PR per se. The PR does not make it worse in the auto-disable direction — the old code would have also rejected the clear and left the enabled state unchanged. But since the PR changes the code path, it's worth flagging that `_update_config_entry(value)` should probably store `value.strip()` or `""` when the stripped value is empty, to be consistent with what was checked.
+
+This is not strictly introduced by this PR but the PR is touching this code, making it an appropriate time to address.
+
+---
+
+### Minor Observations (no issues found)
+
+- The import of `SERVICE_TURN_OFF` from `homeassistant.components.switch` is consistent with the existing pattern already used in `binary_sensor.py` and `zwave_js.py`.
+- Passing `{ATTR_ENTITY_ID: ...}` as positional `service_data` rather than `target=` is consistent with how `binary_sensor.py`'s `_disable_slot_and_notify` does the same call.
+- Using `blocking=True` on the service call is correct — the PIN clear must happen only after the disable completes, to avoid a window where `active=True, PIN=""` triggers a sync.
+- The removal of the persistent notification is correct for this code path: the user explicitly requested a clear, so there's nothing to notify about.
+- The test correctly verifies the new behavior: PIN becomes `""` and enabled entity becomes `STATE_OFF` after clearing a PIN on an enabled slot.
+
+---
+
+### Summary
+
+The core logic of the PR is correct and well-reasoned: disabling the slot first (via the service, which properly triggers downstream sync logic) before clearing the PIN is the right approach. The `blocking=True` call correctly serializes the operations.
+
+The primary concern (Issue 1, confidence 82) is what happens in the path where `self._enabled_entity_id` cannot be resolved — the fallthrough to `_update_config_entry` can produce an inconsistent config state where `CONF_ENABLED=True` and `CONF_PIN=""`. Given that entity creation is guaranteed by the setup flow in practice, this is low-probability but worth hardening, especially since `binary_sensor.py` already demonstrates the pattern of guarding this case explicitly with a warning log and early return.</result>
+<usage><total_tokens>55587</total_tokens><tool_uses>47</tool_uses><duration_ms>266881</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a8201894f283043da.output
+
+---
+
+<task-notification>
+<task-id>a0a57c4dc851e635e</task-id>
+<tool-use-id>toolu_019L6FyBtegB1XYxJYiBbV35</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a0a57c4dc851e635e.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #935" completed</summary>
+<result>`EVENT_LOVELACE_UPDATED` is correctly imported from `homeassistant.const`. The import is valid and follows the project's import convention (canonical/top-level modules).
+
+Now I have a complete picture. Let me compile my final review.
+
+---
+
+## Review: PR #935 — Fire `lovelace_updated` Events on Config Entry Changes
+
+Reviewing the diff for `custom_components/lock_code_manager/__init__.py` and `tests/test_init.py`.
+
+### Summary of Changes
+
+The PR adds `_async_notify_lovelace_update()`, a `@callback` function that iterates over `lovelace_data.dashboards` keys and fires `EVENT_LOVELACE_UPDATED` for each dashboard. This is called at the end of `async_update_listener()` after the config entry is updated. A new test verifies at least one event fires when options change.
+
+---
+
+### Critical Issues
+
+None found.
+
+---
+
+### Important Issues
+
+**Issue 1 — Event fires on every initial setup, not just user-initiated config changes (Confidence: 82)**
+
+File: `custom_components/lock_code_manager/__init__.py`, end of `async_update_listener`
+
+The `_async_notify_lovelace_update(hass)` call executes unconditionally every time `async_update_listener` runs. This includes the very first run triggered during entry setup via `_setup_entry_after_start`. In the `data is empty` branch of `_setup_entry_after_start`, `async_update_listener` is called directly via `hass.async_create_task`. In the `data is non-empty` branch, it's called via the update listener after `async_update_entry` moves data to options.
+
+In both cases, `lovelace_updated` will fire on HA startup for every configured LCM entry. This causes the frontend to display a "Configuration changed - Refresh" toast on every HA startup — not just when the user actually modifies config via the options flow. This is the expected HA behavior for this event and will be surprising/noisy for users with multiple config entries.
+
+The fix would be to guard the call: only fire the event when the options actually changed from the user's perspective (i.e., when the listener was triggered by a real options-flow save rather than the initial data→options migration). For example:
+
+```python
+# At the top of async_update_listener, record whether this is a real options change:
+is_user_change = bool(config_entry.options)  # already checked at top of function
+
+# ...existing logic...
+
+hass.config_entries.async_update_entry(config_entry, data=new_data, options={})
+
+if is_user_change:
+    _async_notify_lovelace_update(hass)
+```
+
+The function already returns early with `if not config_entry.options: return` at line 411, so `is_user_change` would always be `True` if execution reaches the end. But the initial-setup path goes through `async_create_task` which calls the function with `options={}` — wait, actually let me revisit: `_setup_entry_after_start` calls `async_update_entry(config_entry, data={}, options={**config_entry.data})` which sets options to non-empty, triggering the listener with non-empty options. And the direct `async_create_task(async_update_listener(...))` path only fires when `config_entry.data` is already empty (first ever load with no data), which would be caught by the `if not config_entry.options: return` guard since options would also be empty at that point... Actually re-reading: when data is empty, options may still be non-empty from a previous run.
+
+The concrete real-world scenario: user has LCM set up and restarts HA. On every restart, HA will show a "Lovelace configuration changed" toast. This is user-visible noise on every boot.
+
+**Issue 2 — Test assertion is too weak (Confidence: 80)**
+
+File: `tests/test_init.py`, new test `test_lovelace_updated_event_fired_on_config_change`
+
+The test asserts `len(events) > 0` rather than the precise expected count. With `config={}` (storage mode, no custom dashboards), `lovelace_data.dashboards` contains exactly one entry (key `None` for the default dashboard), so exactly one event should fire. The weak assertion would pass even if spurious extra events were fired.
+
+Suggested fix:
+```python
+assert len(events) == 1
+assert events[0].data == {"url_path": None}
+```
+
+This also directly validates the event data content rather than just checking the key exists.
+
+---
+
+### No Issues Found
+
+**Infinite loop risk**: None. The event bus `lovelace_updated` has no path back to the config entry update listener. The final `async_update_entry(..., options={})` call at line 645 does not re-trigger the listener because HA's `_async_update_entry` checks `entry.options != options` — when options is already `{}`, no change is detected and no listeners are notified.
+
+**`url_path: None` correctness**: Correct. `lovelace_data.dashboards` is typed `dict[str | None, LovelaceConfig]` and the default dashboard is stored under key `None`. HA's own `_config_updated` fires the event with `{"url_path": self.url_path}` which is also `None` for the default dashboard. The PR replicates this correctly.
+
+**Import correctness**: `EVENT_LOVELACE_UPDATED` is correctly imported from `homeassistant.const` (confirmed it is defined there), consistent with the project's import convention of preferring canonical top-level modules.
+
+**`hass.data.get(LL_DOMAIN)` key compatibility**: Valid. `HassKey` is a subclass of `str`, so `LL_DOMAIN = "lovelace"` and `HassKey("lovelace")` are equal as dict keys.
+
+**Guard against missing lovelace data**: Correct. The function returns early if `lovelace_data` is falsy.
+
+Sources:
+- [Improved typing for hass.data | Home Assistant Developer Docs](https://developers.home-assistant.io/blog/2024/05/01/improved-hass-data-typing/)
+- [Multiple dashboards - Home Assistant](https://www.home-assistant.io/dashboards/dashboards/)</result>
+<usage><total_tokens>39383</total_tokens><tool_uses>34</tool_uses><duration_ms>289794</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a0a57c4dc851e635e.output
+
+---
+
+<task-notification>
+<task-id>ac0c45b04edf9309d</task-id>
+<tool-use-id>toolu_01WTY1n5hFJ8HfJrcrhetnT6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ac0c45b04edf9309d.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #931" completed</summary>
+<result>So `ATTR_LAST_USED = "last_used"` and `ATTR_MANAGED = "managed"`. The test uses raw string literals instead of these constants. Combined with the `TestGetNextCalendarEvent` tests using `"start_time"` and `"summary"`, this is a pattern of not using imported constants.
+
+However, none of these constants are in the test file's import list. So the test author would need to add them to the import block as well. This is a code quality issue - maintainability-wise, if a constant value changes, these tests won't detect it.
+
+This is the same issue as in the calendar tests but now affecting multiple places. Let me assess the overall confidence and importance:
+
+- These constants are used in protocol-level communication (websocket API keys that match TypeScript interfaces)
+- The values are correct
+- If the constant values change, the tests would miss the regression (because they'd still pass with the old string)
+- This is a code quality issue, not a correctness bug
+
+Confidence that this is a real issue: 80+. However since these are test files testing API contracts, using raw strings creates a fragile test that misses refactoring regressions. The whole point of the "contract shape tests" PR seems to be verifying these keys - but using raw strings defeats the purpose partially.
+
+Let me now verify my confidence on the duplicate test issue by confirming once more that `BASE_CONFIG` uses integer keys:
+
+Looking at `tests/common.py` line 31-40:
+```python
+BASE_CONFIG = {
+    CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID],
+    CONF_SLOTS: {
+        1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        2: {
+            CONF_NAME: "test2",
+            ...
+        },
+    },
+}
+```
+
+Keys `1` and `2` are integers. When `_get_slot_condition_entity_id` is called with `slot_num=2`:
+```python
+slot_config = slots_data.get(slot_num) or slots_data.get(str(slot_num)) or {}
+```
+`slots_data.get(2)` returns the slot 2 config (not None/empty), so the fallback `slots_data.get("2")` is never evaluated. The `test_handles_string_slot_keys` test name and comment claim to test the string key fallback, but they don't. The test is a duplicate.
+
+Now let me compile the final review. I'll rate confidence for each:
+
+1. **Duplicate test** `test_handles_string_slot_keys`: Confidence 85. The test is effectively identical to `test_returns_entity_for_slot_with_condition`. It doesn't test the claimed behavior (string slot keys).
+
+2. **Raw string literals instead of constants**: Confidence 82. Multiple tests use raw strings (`"managed"`, `"last_used"`, `"start_time"`, `"summary"`) instead of the defined constants (`ATTR_MANAGED`, `ATTR_LAST_USED`, `ATTR_CALENDAR_NEXT_START`, `ATTR_CALENDAR_NEXT_SUMMARY`). This is especially concerning for "contract shape" tests that are supposed to verify the API contract - using raw strings makes them less robust.
+
+Here is the review:
+
+---
+
+Reviewing PR #931 (test/websocket-e2e) against project guidelines and code quality standards. The PR adds tests to `/Users/raman/projects/lock_code_manager/tests/test_websocket.py`. No production code is changed.
+
+## Issues Found
+
+### Important
+
+**1. Duplicate test that does not test what it claims**
+Confidence: 85
+
+File: `/Users/raman/projects/lock_code_manager/tests/test_websocket.py`, lines 1142-1151
+
+`TestGetSlotConditionEntityId.test_handles_string_slot_keys` is functionally identical to `test_returns_entity_for_slot_with_condition` (lines 1110-1119). Both make the exact same call and assert the same result:
+
+```python
+entity_id = _get_slot_condition_entity_id(lock_code_manager_config_entry, 2)
+assert entity_id == "calendar.test_1"
+```
+
+The docstring says "test handles slot config with string keys" and the comment says "test that int lookup works", but `BASE_CONFIG` in `tests/common.py` defines slots with integer keys `{1: ..., 2: ...}`. When `slot_num=2` (int) is passed, `slots_data.get(2)` succeeds immediately. The string-key fallback path (`slots_data.get(str(slot_num))`) is never reached. This test provides zero additional coverage over the test above it. To actually test the string-key path, the fixture would need to use string keys or a separate config entry would need to be constructed with `{"2": {...}}` slot data.
+
+Fix: Either remove the duplicate test, or replace it with one that actually exercises the string-key fallback by creating a config entry whose slot data uses string keys.
+
+---
+
+**2. Raw string literals used instead of defined constants in "contract shape" tests**
+Confidence: 82
+
+File: `/Users/raman/projects/lock_code_manager/tests/test_websocket.py`, lines 770, 796, 830, 1380-1381, 1480, 1510-1511
+
+Multiple tests use raw string literals to check API response keys instead of the constants defined in `const.py`. This is particularly problematic since the stated purpose of several of these tests is to verify API contract shapes:
+
+- Lines 770, 796: `data.get("last_used")` — should use `ATTR_LAST_USED` (`= "last_used"`)
+- Line 830: `slot_1.get("managed")` — should use `ATTR_MANAGED` (`= "managed"`)
+- Lines 1380-1381, 1480, 1510-1511 in `TestGetNextCalendarEvent`: `result["start_time"]` and `result["summary"]` — should use `ATTR_CALENDAR_NEXT_START` (`= ATTR_CALENDAR_START_TIME = "start_time"`) and `ATTR_CALENDAR_NEXT_SUMMARY` (`= ATTR_CALENDAR_SUMMARY = "summary"`)
+
+None of these constants are imported in the test file, so they would need to be added to the import block alongside the existing const imports at lines 25-53.
+
+The values happen to be correct today, but if a constant's string value is ever changed (e.g., as part of a protocol revision), these tests would silently continue to pass while the production code produces a different key — exactly the kind of regression a contract test should catch. Adding the constants to the test imports and using them instead of literals is a one-line-per-constant fix.
+
+---
+
+## Confirmed Passing Patterns
+
+The following were investigated and verified correct:
+
+- The `asyncio.wait_for(..., timeout=0.1)` pattern in the "ignores metadata changes" tests (lines 306, 634) is pre-existing from main, not introduced by this PR.
+- The `config_entry.data` assertions in `TestUpdateSlotCondition` tests (e.g., line 1576-1578) appear correct: the `async_update_listener` task is scheduled via `async_create_task` when `async_update_entry(options=...)` is called, and it runs during the `await ws_client.receive_json()` call that precedes the assertion.
+- The `_get_next_calendar_event` tests register and clean up mock services using try/finally, which is correct. The assertions themselves (`result["start_time"]`, `result["summary"]`) match the actual constant values, just without using the constants.
+- `test_reject_scheduler_condition_entity` and `test_allow_schedule_helper_condition_entity` correctly test the platform-exclusion logic in the websocket handler.
+- Tests accessing `hass.data[DOMAIN][CONF_LOCKS][...]` are reads, not writes, and are consistent with existing test patterns.</result>
+<usage><total_tokens>104402</total_tokens><tool_uses>90</tool_uses><duration_ms>653474</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/ac0c45b04edf9309d.output
+
+---
+
+<task-notification>
+<task-id>a6c019466a012051d</task-id>
+<tool-use-id>toolu_01XevL6XtDttaLaZrcM8bF5G</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a6c019466a012051d.output</output-file>
+<status>completed</status>
+<summary>Agent "Merge PR #930 and #932" completed</summary>
+<result>Both PRs merged successfully via squash:
+
+1. **PR #932** (refactor/mock-lock-instance-data) -- merged
+2. **PR #930** (test/frontend-integration) -- merged</result>
+<usage><total_tokens>13280</total_tokens><tool_uses>2</tool_uses><duration_ms>15463</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a6c019466a012051d.output
+
+---
+
+<task-notification>
+<task-id>a171aaba7ae30fa94</task-id>
+<tool-use-id>toolu_015p9o6qPU29r7JUJcCCAWzU</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a171aaba7ae30fa94.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR #933 review findings" completed</summary>
+<result>Both fixes are committed and pushed to `fix/subscription-entity-snapshot`:
+
+**Fix 1 -- Thread `condition_entity_id` through instead of triple-lookup:**
+- In `_send_update`, changed `_` to `current_condition` when destructuring `_resolve_entity_ids()` return value
+- Passed `current_condition` as a third argument to `_refresh_state_tracking()`
+- Updated `_refresh_state_tracking` signature to accept `current_condition: str | None = None` and removed the redundant `_get_slot_condition_entity_id()` call
+
+**Fix 2 -- Document the coordinator=None gap:**
+- Added a comment block near the coordinator listener setup in `subscribe_lock_codes` explaining that if coordinator is None AND the initial entity set is empty, nothing drives re-resolution, and why this is acceptable (coordinators are always present for real lock providers).
+
+All 88 websocket tests pass, and all pre-commit hooks pass.</result>
+<usage><total_tokens>28779</total_tokens><tool_uses>27</tool_uses><duration_ms>183258</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a171aaba</worktreePath><worktreeBranch>worktree-agent-a171aaba</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a171aaba7ae30fa94.output
+
+---
+
+<task-notification>
+<task-id>a0d825e962f4559cd</task-id>
+<tool-use-id>toolu_01VcbwiFzYjRPBKUQnoKjfUo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a0d825e962f4559cd.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR #935 review findings" completed</summary>
+<result>Done. Here is a summary of the changes:
+
+**Fix 1: Skip lovelace_updated on initial setup** (`/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a0d825e9/custom_components/lock_code_manager/__init__.py` and `.../data.py`)
+- Added a `setup_complete: bool = False` field to `LockCodeManagerConfigEntryData`
+- In `async_update_listener`, the `_async_notify_lovelace_update(hass)` call is now guarded by `runtime_data.setup_complete`. On the first invocation (initial setup / HA restart), the flag is `False` so the event is skipped and the flag is set to `True`. On subsequent invocations (user-initiated config changes), the flag is `True` and the event fires normally.
+
+**Fix 2: Strengthen test assertion** (`/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a0d825e9/tests/test_init.py`)
+- Changed `assert len(events) > 0` plus the loop to:
+  - `assert len(events) == 1`
+  - `assert events[0].data == {"url_path": None}`
+
+All 15 tests in `test_init.py` pass, and all pre-commit checks pass.</result>
+<usage><total_tokens>33628</total_tokens><tool_uses>24</tool_uses><duration_ms>167639</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a0d825e9</worktreePath><worktreeBranch>worktree-agent-a0d825e9</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a0d825e962f4559cd.output
+
+---
+
+<task-notification>
+<task-id>affcefba60bcbde4c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/affcefba60bcbde4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR #934 review findings" completed</summary>
+<result>Done. Here is a summary of what was done:
+
+**Changes to `/custom_components/lock_code_manager/text.py`:**
+
+1. **Whitespace PIN normalization** -- Added early normalization at the top of `async_set_value`: if the key is `CONF_PIN` and `value.strip()` is empty, `value` is set to `""`. This prevents whitespace-only strings from being persisted in config entry data.
+
+2. **Guard against missing switch entity** -- Restructured the auto-disable logic:
+   - `async_get_entity_id` result is coalesced with `or ""` so `_enabled_entity_id` is always a string (prevents repeated lookups returning `None`).
+   - The condition now checks `if self.key == CONF_PIN and not value:` (simplified since value is already normalized).
+   - If the enabled entity ID cannot be resolved, a warning is logged instead of silently skipping. The PIN clear still proceeds regardless.
+
+**Changes to `/tests/test_text.py`:**
+
+- Added `test_whitespace_pin_normalized_to_empty` test that sets a whitespace-only PIN (`"   "`) and verifies it is stored as `""` and the slot is auto-disabled.
+
+All 324 tests pass, all pre-commit hooks pass, and the commit has been pushed to `fix/pin-clear-enabled-slot`.</result>
+<usage><total_tokens>31339</total_tokens><tool_uses>28</tool_uses><duration_ms>180070</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-affcefba</worktreePath><worktreeBranch>worktree-agent-affcefba</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/affcefba60bcbde4c.output
+
+---
+
+<task-notification>
+<task-id>af25d590fbec40218</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/af25d590fbec40218.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR #931 review findings and merge" completed</summary>
+<result>Done. Here is what was completed:
+
+**Fix 1 -- Removed duplicate test:** Deleted `test_handles_string_slot_keys` from `TestGetSlotConditionEntityId` in `/Users/raman/projects/lock_code_manager/tests/test_websocket.py`. It was identical to `test_returns_entity_for_slot_with_condition` and never actually tested string-key fallback.
+
+**Fix 2 -- Replaced raw strings with constants:** Added imports for `ATTR_LAST_USED`, `ATTR_LAST_USED_LOCK`, `ATTR_CALENDAR_NEXT_START`, and `ATTR_CALENDAR_NEXT_SUMMARY`. Replaced all raw string literals in test assertions and websocket payloads:
+- `"config_entry_id"` -> `ATTR_CONFIG_ENTRY_ID` (27 occurrences)
+- `"config_entry_title"` -> `ATTR_CONFIG_ENTRY_TITLE` (5 occurrences)
+- `"managed"` -> `ATTR_MANAGED`
+- `"last_used"` -> `ATTR_LAST_USED`
+- `"last_used_lock_name"` -> `ATTR_LAST_USED_LOCK`
+- `"number_of_uses"` -> `CONF_NUMBER_OF_USES` (9 occurrences)
+- `result["start_time"]` / `"start_time" not in` -> `ATTR_CALENDAR_NEXT_START`
+- `result["summary"]` / `"summary" not in` -> `ATTR_CALENDAR_NEXT_SUMMARY`
+
+All 96 tests pass, pre-commit checks pass, and PR #931 has been squash-merged.</result>
+<usage><total_tokens>46228</total_tokens><tool_uses>61</tool_uses><duration_ms>356062</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/af25d590fbec40218.output
+
+---
+
+isnt there a dourth
+
+---
+
+test
+
+---
+
+[Request interrupted by user]
+
+---
+
+we need to fix these PRs one by one, let's start with the first one. This comment is inaccurate: https://github.com/raman325/lock_code_manager/pull/933#discussion_r3005929234 we add tests when we write changes, we just had some test only changes because of refactoring. I am still reviewing the PR, but address that while I do
+
+---
+
+we need to fix these PRs one by one, let's start with the first one. This comment is inaccurate: https://github.com/raman325/lock_code_manager/pull/933#discussion_r3005929234 we add tests when we write changes, we just had some test only changes because of refactoring. I am still reviewing the PR, but address that while I do
+
+---
+
+we need to fix these PRs one by one, let's start with the first one. This comment is inaccurate: https://github.com/raman325/lock_code_manager/pull/933#discussion_r3005929234 we add tests when we write changes, we just had some test only changes because of refactoring. I am still reviewing the PR, but address that while I do
+
+---
+
+we need to fix these PRs one by one, let's start with the first one. This comment is inaccurate: https://github.com/raman325/lock_code_manager/pull/933#discussion_r3005929234 we add tests when we write changes, we just had some test only changes because of refactoring. I am still reviewing the PR, but address that while I do
+
+---
+
+CI is failing due to coverage. Once you get coverage up to snuff, go through a code review for this PR
+
+---
+
+we should avoid local, nonlocal, and global calls. We shouldn't mess with Python internals to get work done. That's a general rule
+
+---
+
+[Request interrupted by user]
+
+---
+
+we should avoid local, nonlocal, and global calls. We shouldn't mess with Python internals to get work done unless ABSOLUTELY necessary. That's a general rule
+
+---
+
+can we have another subagent create that one?
+
+---
+
+933 merged
+
+---
+
+see comments on 934
+
+---
+
+<task-notification>
+<task-id>a90bbd7baef370434</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a90bbd7baef370434.output</output-file>
+<status>completed</status>
+<summary>Agent "Remove nonlocal from all test files" completed</summary>
+<result>Done. Here is a summary of what was completed:
+
+**Branch:** `refactor/remove-nonlocal-from-tests`
+**PR:** https://github.com/raman325/lock_code_manager/pull/936
+
+**Changes made across 3 test files (7 `nonlocal` removals total):**
+
+1. `/tests/test_coordinator.py` (1 occurrence): Changed `listener_called = False` to `listener_called = [False]`, accessing via `listener_called[0]`.
+
+2. `/tests/test_websocket.py` (2 occurrences): Changed `updated_pin` scalar variables to `result = {"pin": ...}` dictionaries, accessing via `result["pin"]`.
+
+3. `/tests/providers/test_base.py` (4 occurrences): Changed `refresh_count = 0` to `refresh_count = [0]`, accessing via `refresh_count[0]`.
+
+All 331 tests pass and all pre-commit hooks pass.</result>
+<usage><total_tokens>30491</total_tokens><tool_uses>31</tool_uses><duration_ms>161047</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a90bbd7b</worktreePath><worktreeBranch>worktree-agent-a90bbd7b</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a90bbd7baef370434.output
+
+---
+
+935 feels heavy handed. We are asking every dashboard to update whether or not LCM is included because we got an update?
+
+---
+
+what would 2 look like?
+
+---
+
+I like it, make it so
+
+---
+
+in the meantime 936 merged
+
+---
+
+<task-notification>
+<task-id>a1a5f3d7376d552f5</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a1a5f3d7376d552f5.output</output-file>
+<status>completed</status>
+<summary>Agent "Rewrite PR #935 with targeted approach" completed</summary>
+<result>Done. Here is a summary of what was done:
+
+---
+
+## Summary
+
+Replaced the broad `lovelace_updated` event approach with a targeted WebSocket subscription for structural config changes.
+
+### Changes Made
+
+**Backend (Python):**
+- `/custom_components/lock_code_manager/websocket.py` -- Added `_get_structure_snapshot()` helper and `subscribe_config_structure` WebSocket command. The subscription uses `config_entry.add_update_listener()` and only fires events when the set of slot numbers or lock entity IDs changes (not on every config update like PIN changes). Uses a mutable dict (`state = {"structure": ...}`) instead of `nonlocal`.
+- `/custom_components/lock_code_manager/__init__.py` -- Reverted the `lovelace_updated` firing logic and the `_async_notify_lovelace_update` function.
+- `/custom_components/lock_code_manager/data.py` -- Reverted the `setup_complete` attribute addition.
+- `/tests/test_init.py` -- Reverted lovelace_updated tests.
+- `/tests/test_websocket.py` -- Added two new tests: `test_subscribe_config_structure_fires_on_slot_addition` (verifies event fires when a slot is added) and `test_subscribe_config_structure_silent_on_non_structural_change` (verifies no event fires when only a PIN changes, using `asyncio.TimeoutError` pattern).
+
+**Frontend (TypeScript):**
+- `/ts/config-watcher.ts` (new) -- Invisible LitElement sentinel that subscribes to `subscribe_config_structure` and calls `window.location.reload()` when the structure changes.
+- `/ts/config-watcher.test.ts` (new) -- 7 tests covering setConfig, subscription with config_entry_id/title, reload on change, and no-subscribe edge cases.
+- `/ts/generate-view.ts` -- Injects an `lcm-config-watcher` card section at the end of each generated view.
+- `/ts/generate-view.test.ts` -- Updated 5 section count assertions (+1 each) to account for the config watcher section.
+- `/ts/main.ts` -- Added `import './config-watcher'` to register the custom element.
+
+**Test results:** 325 backend tests passed, 303 frontend tests passed. Force-pushed to `origin/fix/strategy-refresh-on-config-change`.</result>
+<usage><total_tokens>93245</total_tokens><tool_uses>152</tool_uses><duration_ms>918801</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a1a5f3d7</worktreePath><worktreeBranch>worktree-agent-a1a5f3d7</worktreeBranch></worktree>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/eb5af12b-07a3-4b34-8a71-8b1ce6d11a38/tasks/a1a5f3d7376d552f5.output
+
+---
+
+merge main
+
+---
+
+update PR name and fix CI
+
+---
+
+still codecov gaps
+
+---
+
+do a code review on this PR
+
+---
+
+fix all

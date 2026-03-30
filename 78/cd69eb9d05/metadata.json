@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "78cd69eb9d05",
+  "strategy": "manual-commit",
+  "branch": "feat/duplicate-code-detection",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/common.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_exceptions.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/78/cd69eb9d05/0/metadata.json",
+      "transcript": "/78/cd69eb9d05/0/full.jsonl",
+      "context": "/78/cd69eb9d05/0/context.md",
+      "content_hash": "/78/cd69eb9d05/0/content_hash.txt",
+      "prompt": "/78/cd69eb9d05/0/prompt.txt"
+    },
+    {
+      "metadata": "/78/cd69eb9d05/1/metadata.json",
+      "transcript": "/78/cd69eb9d05/1/full.jsonl",
+      "context": "/78/cd69eb9d05/1/context.md",
+      "content_hash": "/78/cd69eb9d05/1/content_hash.txt",
+      "prompt": "/78/cd69eb9d05/1/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 780,
+    "cache_creation_tokens": 1079846,
+    "cache_read_tokens": 42022858,
+    "output_tokens": 93078,
+    "api_call_count": 360
+  }
+}

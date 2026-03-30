@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "53d0b0eb198b",
+  "strategy": "manual-commit",
+  "branch": "add-blueprints",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/53/d0b0eb198b/0/metadata.json",
+      "transcript": "/53/d0b0eb198b/0/full.jsonl",
+      "context": "/53/d0b0eb198b/0/context.md",
+      "content_hash": "/53/d0b0eb198b/0/content_hash.txt",
+      "prompt": "/53/d0b0eb198b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 352,
+    "cache_creation_tokens": 61268,
+    "cache_read_tokens": 1329708,
+    "output_tokens": 445,
+    "api_call_count": 27
+  }
+}

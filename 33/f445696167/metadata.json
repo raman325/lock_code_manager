@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "33f445696167",
+  "strategy": "manual-commit",
+  "branch": "fix/post-merge-review-comments",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ARCHITECTURE.md",
+    "docs/development/adding-a-provider.md",
+    "docs/development/provider-state-management.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/33/f445696167/0/metadata.json",
+      "transcript": "/33/f445696167/0/full.jsonl",
+      "context": "/33/f445696167/0/context.md",
+      "content_hash": "/33/f445696167/0/content_hash.txt",
+      "prompt": "/33/f445696167/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 891,
+    "cache_creation_tokens": 1603337,
+    "cache_read_tokens": 246157037,
+    "output_tokens": 180105,
+    "api_call_count": 765
+  }
+}

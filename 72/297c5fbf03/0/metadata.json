@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "72297c5fbf03",
+  "session_id": "98642744-cce1-47af-b53b-e824cd8c45c5",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-19T21:43:22.181088Z",
+  "branch": "chore/annotate-lint-ignores-and-remove-up006-up007",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".eslintrc.cjs",
+    ".github/workflows/frontend-checks.yml",
+    ".github/workflows/integration.yaml",
+    ".github/workflows/labeler.yaml",
+    ".github/workflows/python-checks.yml",
+    ".github/workflows/release.yaml",
+    ".github/workflows/repository.yaml",
+    ".markdownlint.json",
+    ".markdownlint.yaml",
+    "pyproject.toml"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "4510cec1-cdab-4b51-940e-dbbd185c3c78",
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 88314,
+    "cache_read_tokens": 7617530,
+    "output_tokens": 6731,
+    "api_call_count": 99
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-19T21:43:22.133735Z",
+    "agent_lines": 0,
+    "human_added": 196,
+    "human_modified": 55,
+    "human_removed": 0,
+    "total_committed": 228,
+    "agent_percentage": 0
+  }
+}

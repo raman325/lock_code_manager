@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "682c04d53d9f",
+  "session_id": "63d8909b-820f-49f1-a229-8f5f7e106c70",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-29T06:38:00.438284Z",
+  "branch": "fix/coordinator-backoff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "TODO.md",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "custom_components/lock_code_manager/websocket.py",
+    "docs/development/adding-a-provider.md",
+    "docs/development/provider-state-management.md",
+    "tests/common.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_virtual.py",
+    "tests/providers/test_zwave_js.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_coordinator.py",
+    "tests/test_exceptions.py",
+    "tests/test_websocket.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2142909dbc18",
+  "token_usage": {
+    "input_tokens": 658,
+    "cache_creation_tokens": 1481117,
+    "cache_read_tokens": 148317182,
+    "output_tokens": 136881,
+    "api_call_count": 578
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-29T06:37:58.154274Z",
+    "agent_lines": 0,
+    "human_added": 377,
+    "human_modified": 31,
+    "human_removed": 0,
+    "total_committed": 377,
+    "agent_percentage": 0
+  }
+}

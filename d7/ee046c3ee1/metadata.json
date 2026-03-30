@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d7ee046c3ee1",
+  "strategy": "manual-commit",
+  "branch": "chore/migrate-dev-docs-to-wiki",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/development/adding-a-provider.md",
+    "docs/development/index.md",
+    "docs/development/provider-state-management.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d7/ee046c3ee1/0/metadata.json",
+      "transcript": "/d7/ee046c3ee1/0/full.jsonl",
+      "context": "/d7/ee046c3ee1/0/context.md",
+      "content_hash": "/d7/ee046c3ee1/0/content_hash.txt",
+      "prompt": "/d7/ee046c3ee1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 920,
+    "cache_creation_tokens": 1611005,
+    "cache_read_tokens": 261860382,
+    "output_tokens": 183833,
+    "api_call_count": 792
+  }
+}

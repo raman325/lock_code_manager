@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ac889c35c3d6",
+  "strategy": "manual-commit",
+  "branch": "add-blueprints",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".pre-commit-config.yaml",
+    "blueprints/automation/lock_code_manager/calendar_pin_setter.yaml",
+    "blueprints/automation/lock_code_manager/slot_usage_limiter.yaml",
+    "blueprints/template/lock_code_manager/calendar_condition.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ac/889c35c3d6/0/metadata.json",
+      "transcript": "/ac/889c35c3d6/0/full.jsonl",
+      "context": "/ac/889c35c3d6/0/context.md",
+      "content_hash": "/ac/889c35c3d6/0/content_hash.txt",
+      "prompt": "/ac/889c35c3d6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 67,
+    "cache_creation_tokens": 249177,
+    "cache_read_tokens": 4863632,
+    "output_tokens": 3840,
+    "api_call_count": 63
+  }
+}
