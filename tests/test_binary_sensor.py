@@ -631,7 +631,7 @@ async def test_coordinator_refresh_failure_schedules_retry(
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
     # Verify no retry is scheduled initially
-    assert in_sync_entity_obj._retry_unsub is None
+    assert not in_sync_entity_obj._retry.pending
 
     # Patch coordinator refresh to fail BEFORE changing PIN
     # This way the failure happens during the sync triggered by the PIN change
@@ -651,12 +651,12 @@ async def test_coordinator_refresh_failure_schedules_retry(
         await hass.async_block_till_done()
 
     # Retry should be scheduled due to coordinator refresh failure
-    assert in_sync_entity_obj._retry_unsub is not None, (
+    assert in_sync_entity_obj._retry.pending, (
         "Retry should be scheduled when coordinator refresh fails after sync"
     )
 
     # Clean up - cancel the retry
-    in_sync_entity_obj._cancel_retry()
+    in_sync_entity_obj._retry.cancel()
 
 
 async def test_coordinator_update_triggers_sync_on_external_change(
