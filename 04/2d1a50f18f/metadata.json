@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "042d1a50f18f",
+  "strategy": "manual-commit",
+  "branch": "feat/mask-pins-in-logs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/04/2d1a50f18f/0/metadata.json",
+      "transcript": "/04/2d1a50f18f/0/full.jsonl",
+      "context": "/04/2d1a50f18f/0/context.md",
+      "content_hash": "/04/2d1a50f18f/0/content_hash.txt",
+      "prompt": "/04/2d1a50f18f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 769,
+    "cache_creation_tokens": 1546888,
+    "cache_read_tokens": 190275460,
+    "output_tokens": 159700,
+    "api_call_count": 663
+  }
+}

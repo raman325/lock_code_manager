@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f359967f87c4",
+  "strategy": "manual-commit",
+  "branch": "refactor/parametrize-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py",
+    "docs/development/adding-a-provider.md",
+    "docs/development/index.md",
+    "docs/development/provider-state-management.md",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f3/59967f87c4/0/metadata.json",
+      "transcript": "/f3/59967f87c4/0/full.jsonl",
+      "context": "/f3/59967f87c4/0/context.md",
+      "content_hash": "/f3/59967f87c4/0/content_hash.txt",
+      "prompt": "/f3/59967f87c4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 782,
+    "cache_creation_tokens": 1554205,
+    "cache_read_tokens": 196035798,
+    "output_tokens": 161835,
+    "api_call_count": 674
+  }
+}

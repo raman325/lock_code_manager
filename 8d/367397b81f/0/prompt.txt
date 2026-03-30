@@ -1,0 +1,117 @@
+Implement the following plan:
+
+# Plan: Duplicate Code Detection + Architecture Documentation
+
+## Context
+
+Users report infinite sync loops when a lock rejects a PIN that duplicates another slot's code. PR #899 added reactive handling via Z-Wave event 15, but some locks don't emit this event reliably. Since the coordinator already stores ALL slots (managed + unmanaged), we can detect duplicates pre-flight before sending to the lock.
+
+Additionally, the codebase lacks documentation on the data flow between coordinator, provider, and sync sensor, and the managed/unmanaged distinction is implicit.
+
+## Tasks
+
+### Task 1: Add DuplicateCodeError Exception
+- **Modify:** `custom_components/lock_code_manager/exceptions.py` — add `DuplicateCodeError` with `code_slot`, `conflicting_slot`, `conflicting_slot_managed`, `lock_entity_id` attributes
+- **Test:** `tests/test_exceptions.py` — verify attributes and message formatting for managed/unmanaged
+
+### Task 2: Pre-flight Duplicate Check in async_set_usercode
+- **Modify:** `custom_components/lock_code_manager/providers/zwave_js.py:580-628` — after the "already set" check, scan `self.coordinator.data` for matching PINs. Skip masked values (`****`), skip target slot. Raise `DuplicateCodeError` with managed/unmanaged info via `_get_slot_entity_states()`.
+- **Test:** `tests/providers/test_zwave_js.py` — duplicate found raises, masked slots skipped, no coordinator data proceeds normally
+
+### Task 3: Handle DuplicateCodeError in Sync Path
+- **Modify:** `custom_components/lock_code_manager/binary_sensor.py:502-542` — catch `DuplicateCodeError` in `_perform_sync_operation`, disable slot via switch service, create persistent notification with conflicting slot details, cancel retry (permanent error)
+- **Test:** `tests/test_binary_sensor.py` — verify slot disabled, notification created, no retry scheduled
+
+### Task 4: Verify DuplicateCodeError Propagates on Direct Set
+- **Verify:** `websocket.py` `set_lock_usercode` — `DuplicateCodeError` extends `HomeAssistantError`, should propagate naturally. Write test confirming error response.
+- **Test:** `tests/test_websocket.py`
+
+### Task 5: Config Flow Text Updates
+- **Modify:** `custom_components/lock_code_manager/strings.json` + `translations/en.json`
+  - `choose_path.description`: Add guidance about single-tool management, clearing slots before setup, not setting codes manually
+  - `ui.description`: "Configure slots for all codes you want on the lock (existing user codes for the slot range specified will be cleared)."
+
+### Task 6: Architecture Documentation
+- **Create:** `ARCHITECTURE.md` — data flow diagram, coordinator model, push/poll/refresh, managed vs unmanaged, sync decision, masked PINs, duplicate detection, rate limiting
+- **Modify:** Module docstrings in `coordinator.py`, `binary_sensor.py`, `zwave_js.py`, `_base.py` — 2-3 sentences + pointer to ARCHITECTURE.md
+
+### Task 7: Verify TODOs
+- Confirm TODO.md has the 5 future items: config flow reset step, conflicting integration detection, update migration docs, clear all unmanaged UI action, lock-specific carve-outs
+
+### Task 8: Final Verification
+- Full test suite, pre-commit, PR
+
+## Key Design Decisions
+
+- **DuplicateCodeError (exception B approach):** Provider raises, callers decide policy. Sync path disables + notifies. Direct path propagates error.
+- **Masked slots:** Can't detect duplicates against `****` values. Event 15 handler stays as safety net.
+- **Architecture doc over module docstrings:** Cross-cutting data flow belongs in one place, not split across 4 files.
+
+## Verification
+
+1. `pytest` — all tests pass
+2. `pre-commit run --all-files` — passes
+3. Manually verify: set duplicate PIN → sync path disables slot + notification; direct websocket set → error response
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/raman/.claude/projects/-Users-raman-projects-lock-code-manager/eff50567-4070-45c7-9cfd-145beb07fcaa.jsonl
+
+---
+
+is there anything from this we can pull into the base provider class? tracking retries and distinguishing between sync calls and set value calls seem like good candidates, what else?
+
+---
+
+can't 
+if other_slot == code_slot or not other_code:
+                continue
+            other_code_str = str(other_code)
+            if self.is_masked(other_code_str):
+                continue
+
+be
+if other_slot == code_slot ... or self.is_masked(str(code)):?
+
+---
+
+if that's just needed for masking, can't we just do that transofrmation in is_masked?
+
+---
+
+why do we constantly convert codes? Can't we handle this in one place instead of having this logic everywhere?
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+before we do this, let's create a branch for the current work - commit, push it, and draft PR it using the PR issue template. Then we can proceed with this work on a new branch
+
+---
+
+[Request interrupted by user]
+
+---
+
+continue. Both should be branched off main. There will be merged conflicts but they should be minimal right?
+
+---
+
+proceed
+
+---
+
+the base provider should also accept None to represent no PIN. Eventually we need to improve our formalization of locks, users, and PINs. Matter makes it more complex and we should probably start figuring out how to leverage Matters design with other lock standards in mind
+
+---
+
+use the code-review:code-review skill for both PRs
+
+---
+
+do another set of code reviews for each PR
+
+---
+
+shouldn't all new methods/functions in the base lock provider be final?

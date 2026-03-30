@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d80bf286ef8d",
+  "session_id": "7c955a97-89aa-424d-84c1-3b2571976d8a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-11T21:06:30.461739Z",
+  "branch": "fix/overlapping-lock-coordinator-race",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "be3af2b33f08",
+  "checkpoint_transcript_start": 396,
+  "transcript_lines_at_start": 396,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 5822,
+    "cache_read_tokens": 1014658,
+    "output_tokens": 368,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-11T21:06:30.17528Z",
+    "agent_lines": 38,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 38,
+    "agent_percentage": 100
+  }
+}

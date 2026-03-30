@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "72297c5fbf03",
+  "strategy": "manual-commit",
+  "branch": "chore/annotate-lint-ignores-and-remove-up006-up007",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".eslintrc.cjs",
+    ".github/workflows/frontend-checks.yml",
+    ".github/workflows/integration.yaml",
+    ".github/workflows/labeler.yaml",
+    ".github/workflows/python-checks.yml",
+    ".github/workflows/release.yaml",
+    ".github/workflows/repository.yaml",
+    ".markdownlint.json",
+    ".markdownlint.yaml",
+    "pyproject.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/72/297c5fbf03/0/metadata.json",
+      "transcript": "/72/297c5fbf03/0/full.jsonl",
+      "context": "/72/297c5fbf03/0/context.md",
+      "content_hash": "/72/297c5fbf03/0/content_hash.txt",
+      "prompt": "/72/297c5fbf03/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 88314,
+    "cache_read_tokens": 7617530,
+    "output_tokens": 6731,
+    "api_call_count": 99
+  }
+}
