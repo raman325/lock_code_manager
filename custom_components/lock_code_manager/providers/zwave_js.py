@@ -58,7 +58,6 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import Event, callback
-from homeassistant.helpers.event import async_call_later
 
 from ..const import (
     ATTR_ACTIVE,
@@ -69,7 +68,7 @@ from ..const import (
 )
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
-from ..util import async_disable_slot
+from ..util import OneShotRetry, async_disable_slot
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -102,7 +101,7 @@ class ZWaveJSLock(BaseLock):
     lock_config_entry: ConfigEntry = field(repr=False)
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
-    _push_retry_cancel: Callable[[], None] | None = field(init=False, default=None)
+    _push_retry: OneShotRetry | None = field(init=False, default=None)
     _set_in_progress_code_slot: int | None = field(init=False, default=None)
 
     @property
@@ -290,7 +289,7 @@ class ZWaveJSLock(BaseLock):
                 self.lock.entity_id,
                 reason,
             )
-            self._schedule_push_retry(reason)
+            self._ensure_push_retry().schedule()
             return
 
         @callback
@@ -393,39 +392,24 @@ class ZWaveJSLock(BaseLock):
             _LOGGER.debug(
                 "Lock %s push subscription deferred: %s", self.lock.entity_id, err
             )
-            self._schedule_push_retry("node not ready")
+            self._ensure_push_retry().schedule()
 
-    def _schedule_push_retry(self, reason: str) -> None:
-        """Schedule a retry for push subscription if one isn't pending."""
-        if self._push_retry_cancel:
-            return
-
-        _LOGGER.debug(
-            "Lock %s: scheduling push subscription retry in %ss (%s)",
-            self.lock.entity_id,
-            PUSH_SUBSCRIBE_RETRY_DELAY.total_seconds(),
-            reason,
-        )
-        self._push_retry_cancel = async_call_later(
-            self.hass,
-            PUSH_SUBSCRIBE_RETRY_DELAY.total_seconds(),
-            self._handle_push_retry,
-        )
-
-    @callback
-    def _handle_push_retry(self, _now: Any) -> None:
-        """Retry push subscription after delay."""
-        if self._push_retry_cancel:
-            self._push_retry_cancel()
-            self._push_retry_cancel = None
-        self.subscribe_push_updates()
+    def _ensure_push_retry(self) -> OneShotRetry:
+        """Return the push retry helper, creating it on first use."""
+        if self._push_retry is None:
+            self._push_retry = OneShotRetry(
+                self.hass,
+                PUSH_SUBSCRIBE_RETRY_DELAY,
+                self.subscribe_push_updates,
+                f"push subscription for {self.lock.entity_id}",
+            )
+        return self._push_retry
 
     @callback
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from value update events."""
-        if self._push_retry_cancel:
-            self._push_retry_cancel()
-            self._push_retry_cancel = None
+        if self._push_retry is not None:
+            self._push_retry.cancel()
         if self._value_update_unsub:
             self._value_update_unsub()
             self._value_update_unsub = None

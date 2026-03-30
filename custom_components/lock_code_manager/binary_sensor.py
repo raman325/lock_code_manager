@@ -37,7 +37,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     TrackStates,
-    async_call_later,
     async_track_state_change_event,
     async_track_state_change_filtered,
 )
@@ -60,7 +59,7 @@ from .data import LockCodeManagerConfigEntry, get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .exceptions import CodeRejectedError, LockDisconnected
 from .providers import BaseLock
-from .util import async_disable_slot
+from .util import OneShotRetry, async_disable_slot
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -279,8 +278,12 @@ class LockCodeManagerCodeSlotInSyncEntity(
         self._lock = asyncio.Lock()
         self._attr_is_on: bool | None = None  # None means not yet initialized
         self._tracked_entity_ids: set[str] = set()
-        self._retry_unsub: Callable[[], None] | None = None
-        self._retry_active = False
+        self._retry = OneShotRetry(
+            hass,
+            RETRY_DELAY,
+            self.async_update,
+            f"{lock.lock.entity_id} slot {slot_num}",
+        )
         self._sync_attempt_count: int = 0
         self._sync_attempt_first: datetime | None = None
         self._state_tracking_unsub: Callable[[], None] | None = None
@@ -308,7 +311,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
             or self.is_on
             or not (state := self.hass.states.get(self.lock.lock.entity_id))
             or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-            or (not self.coordinator.last_update_success and not self._retry_active)
+            or (not self.coordinator.last_update_success and not self._retry.active)
         ):
             return
 
@@ -351,44 +354,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 name=f"lcm_sync_check_{self.entity_id}",
             )
 
-    def _cancel_retry(self) -> None:
-        """Cancel any scheduled retry callback."""
-        if self._retry_unsub:
-            self._retry_unsub()
-            self._retry_unsub = None
-        self._retry_active = False
-
-    def _schedule_retry(self) -> None:
-        """Schedule a retry if one isn't already pending."""
-        if self._retry_unsub:
-            return
-
-        _LOGGER.debug(
-            "%s (%s): Scheduling retry for %s slot %s in %ss",
-            self.config_entry.entry_id,
-            self.config_entry.title,
-            self.lock.lock.entity_id,
-            self.slot_num,
-            RETRY_DELAY.total_seconds(),
-        )
-
-        self._retry_unsub = async_call_later(
-            self.hass,
-            RETRY_DELAY.total_seconds(),
-            self._handle_retry_callback,
-        )
-
-    async def _handle_retry_callback(self, _now: datetime) -> None:
-        """Handle retry callback."""
-        if self._retry_unsub:
-            self._retry_unsub()
-            self._retry_unsub = None
-        self._retry_active = True
-        try:
-            await self.async_update()
-        finally:
-            self._retry_active = False
-
     def _reset_sync_tracker(self) -> None:
         """Reset the sync attempt tracker."""
         self._sync_attempt_count = 0
@@ -419,7 +384,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     async def _disable_slot_and_notify(self, reason: str, title: str) -> None:
         """Disable the slot and create a persistent notification."""
-        self._cancel_retry()
+        self._retry.cancel()
         await async_disable_slot(
             self.hass,
             self.ent_reg,
@@ -504,7 +469,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
         entity_id = event.data["entity_id"] if event else None
         to_state = event.data["new_state"] if event else None
 
-        if not self.coordinator.last_update_success and not self._retry_active:
+        if not self.coordinator.last_update_success and not self._retry.active:
             return None
 
         if not self._build_entity_id_map():
@@ -587,7 +552,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                     self.lock.lock.entity_id,
                     self.slot_num,
                 )
-            self._cancel_retry()
+            self._retry.cancel()
             return True
         except CodeRejectedError as err:
             _LOGGER.error(
@@ -615,7 +580,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
                 self.slot_num,
                 err,
             )
-            self._schedule_retry()
+            self._retry.schedule()
             return False
 
     async def _async_update_state(
@@ -709,12 +674,12 @@ class LockCodeManagerCodeSlotInSyncEntity(
                             self.slot_num,
                             err,
                         )
-                        self._schedule_retry()
+                        self._retry.schedule()
 
             elif not self._attr_is_on:
                 # Was out of sync, now in sync
                 self._update_sync_state(True)
-                self._cancel_retry()
+                self._retry.cancel()
                 self._reset_sync_tracker()
 
     async def async_added_to_hass(self) -> None:
@@ -775,5 +740,5 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     async def _async_remove(self) -> None:
         """Handle removal cleanup."""
-        self._cancel_retry()
+        self._retry.cancel()
         self._reset_sync_tracker()
