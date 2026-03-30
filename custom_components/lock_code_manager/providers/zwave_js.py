@@ -64,13 +64,18 @@ from homeassistant.const import (
 from homeassistant.core import Event, callback
 from homeassistant.helpers.event import async_call_later
 
-from ..const import ATTR_ACTIVE, CONF_LOCKS, CONF_SLOTS, DOMAIN
+from ..const import (
+    ATTR_ACTIVE,
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+    PUSH_SUBSCRIBE_RETRY_DELAY,
+)
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
-PUSH_SUBSCRIBE_RETRY_DELAY = 10
 
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
@@ -401,11 +406,13 @@ class ZWaveJSLock(BaseLock):
         _LOGGER.debug(
             "Lock %s: scheduling push subscription retry in %ss (%s)",
             self.lock.entity_id,
-            PUSH_SUBSCRIBE_RETRY_DELAY,
+            PUSH_SUBSCRIBE_RETRY_DELAY.total_seconds(),
             reason,
         )
         self._push_retry_cancel = async_call_later(
-            self.hass, PUSH_SUBSCRIBE_RETRY_DELAY, self._handle_push_retry
+            self.hass,
+            PUSH_SUBSCRIBE_RETRY_DELAY.total_seconds(),
+            self._handle_push_retry,
         )
 
     @callback
