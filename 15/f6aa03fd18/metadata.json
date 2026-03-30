@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "15f6aa03fd18",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase2-expected-codes",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/15/f6aa03fd18/0/metadata.json",
+      "transcript": "/15/f6aa03fd18/0/full.jsonl",
+      "content_hash": "/15/f6aa03fd18/0/content_hash.txt",
+      "prompt": "/15/f6aa03fd18/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2013,
+    "cache_creation_tokens": 698008,
+    "cache_read_tokens": 63151910,
+    "output_tokens": 87849,
+    "api_call_count": 328
+  }
+}
