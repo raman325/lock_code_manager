@@ -55,6 +55,9 @@ from .const import (
     CONF_NUMBER_OF_USES,
     DOMAIN,
     EVENT_PIN_USED,
+    MAX_SYNC_ATTEMPTS,
+    RETRY_DELAY,
+    SYNC_ATTEMPT_WINDOW,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import LockCodeManagerConfigEntry, get_slot_data
@@ -64,9 +67,6 @@ from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
-RETRY_DELAY = timedelta(seconds=10)
-MAX_SYNC_ATTEMPTS = 3
-SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
 
 async def async_setup_entry(

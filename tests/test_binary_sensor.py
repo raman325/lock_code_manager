@@ -37,14 +37,12 @@ from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from custom_components.lock_code_manager.binary_sensor import (
-    MAX_SYNC_ATTEMPTS,
-    SYNC_ATTEMPT_WINDOW,
-)
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+    SYNC_ATTEMPT_WINDOW,
 )
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
