@@ -54,7 +54,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
         self._config_entry = config_entry
         self._consecutive_failures: int = 0
         self._original_update_interval: timedelta | None = update_interval
-        self.expected_codes: dict[int, str] = self._build_expected_codes()
 
         # Set up drift detection timer for locks with hard_refresh_interval
         if lock.hard_refresh_interval:
@@ -77,11 +76,13 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
         """Return the lock."""
         return self._lock
 
-    def _build_expected_codes(self) -> dict[int, str]:
-        """Build expected codes from config entry data.
+    @property
+    def expected_codes(self) -> dict[int, str]:
+        """Return expected codes from current config entry data.
 
         For each managed slot, returns the configured PIN if the slot is enabled
-        and has a PIN, or empty string otherwise.
+        and has a PIN, or empty string otherwise. Computed on access so it
+        always reflects the latest config entry state.
         """
         slots = get_entry_data(self._config_entry, CONF_SLOTS, {})
         return {
@@ -90,11 +91,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
             else ""
             for slot_num, slot_data in slots.items()
         }
-
-    @callback
-    def refresh_expected_codes(self) -> None:
-        """Rebuild expected codes from current config entry data."""
-        self.expected_codes = self._build_expected_codes()
 
     @callback
     def push_update(self, updates: dict[int, str | None]) -> None:
@@ -156,7 +152,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
 
     async def async_get_usercodes(self) -> dict[int, str | None]:
         """Update usercodes."""
-        self.refresh_expected_codes()
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
