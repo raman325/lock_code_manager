@@ -4,16 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
 from homeassistant.components.text import TextEntity, TextMode
-from homeassistant.const import (
-    ATTR_ENTITY_ID,
-    CONF_ENABLED,
-    CONF_NAME,
-    CONF_PIN,
-    STATE_ON,
-    Platform,
-)
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -21,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
+from .util import async_disable_slot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,11 +99,11 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
                     self.config_entry.title,
                     self.slot_num,
                 )
-                await self.hass.services.async_call(
-                    SWITCH_DOMAIN,
-                    SERVICE_TURN_OFF,
-                    {ATTR_ENTITY_ID: self._enabled_entity_id},
-                    blocking=True,
+                await async_disable_slot(
+                    self.hass,
+                    self.ent_reg,
+                    self.config_entry.entry_id,
+                    self.slot_num,
                 )
             elif not self._enabled_entity_id:
                 _LOGGER.warning(

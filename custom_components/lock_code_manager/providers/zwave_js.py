@@ -35,8 +35,6 @@ from zwave_js_server.util.lock import (
 )
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
-from homeassistant.components.persistent_notification import async_create
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
@@ -56,9 +54,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
-    CONF_ENABLED,
     CONF_PIN,
-    SERVICE_TURN_OFF,
     STATE_ON,
 )
 from homeassistant.core import Event, callback
@@ -73,6 +69,7 @@ from ..const import (
 )
 from ..data import get_entry_data
 from ..exceptions import LockDisconnected
+from ..util import async_disable_slot
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -506,48 +503,27 @@ class ZWaveJSLock(BaseLock):
         except StopIteration:
             return
 
-        # Guard that will never trigger but satisfies type checkers that an entity exists
-        if (
-            enabled_ent_id := self.ent_reg.async_get_entity_id(
-                SWITCH_DOMAIN, DOMAIN, f"{entry.entry_id}|{code_slot}|{CONF_ENABLED}"
-            )
-        ) is None:
-            return
-
-        await self.hass.services.async_call(
-            SWITCH_DOMAIN,
-            SERVICE_TURN_OFF,
-            {ATTR_ENTITY_ID: enabled_ent_id},
-            blocking=True,
-        )
-
         entry_title = entry.title or entry.entry_id
-
-        def _dupe_msg(
-            lock_entity_id: str, code_slot: str, config_entry_title: str
-        ) -> str:
-            """Return message for duplicate code rejection."""
-            return (
-                f"Lock {lock_entity_id} rejected the code for slot {code_slot} "
-                f"(config entry {config_entry_title}) because it duplicates a code "
-                f"in another slot. Slot {code_slot} has been disabled. Please set a "
-                f"unique code and re-enable slot {code_slot}"
-            )
-
+        reason = (
+            f"Lock **{lock_ent_id}** rejected the code for slot **{code_slot}** "
+            f"(config entry **{entry_title}**) because it duplicates a code "
+            f"in another slot. Slot {code_slot} has been disabled. Please set a "
+            f"unique code and re-enable slot {code_slot}"
+        )
         _LOGGER.error(
-            _dupe_msg("%s", "%s", "%s"),
+            "Lock %s rejected the code for slot %s (config entry %s) because "
+            "it duplicates a code in another slot. Slot %s has been disabled",
             lock_ent_id,
             code_slot,
             entry_title,
             code_slot,
-            code_slot,
         )
-
-        async_create(
+        await async_disable_slot(
             self.hass,
-            _dupe_msg(f"**{lock_ent_id}**", f"**{code_slot}**", f"**{entry_title}**"),
-            title="Duplicate Lock Code Rejected",
-            notification_id=(f"{DOMAIN}_{lock_ent_id}_{code_slot}_dupe"),
+            self.ent_reg,
+            entry.entry_id,
+            code_slot,
+            reason=reason,
         )
 
     @property
