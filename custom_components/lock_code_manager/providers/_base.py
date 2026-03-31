@@ -43,11 +43,10 @@ from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
 from ..exceptions import (
     DuplicateCodeError,
-    LockCodeManagerError,
     LockDisconnected,
     ProviderNotImplementedError,
 )
-from ..util import OneShotRetry
+from ..util import OneShotRetry, mask_pin
 from .const import LOGGER
 
 MIN_OPERATION_DELAY = 2.0
@@ -232,8 +231,6 @@ class BaseLock:
 
     def mask_pin(self, pin: str | None) -> str:
         """Return a masked representation of a PIN for logging."""
-        from ..util import mask_pin  # noqa: PLC0415
-
         return mask_pin(
             pin,
             self.lock.entity_id,
@@ -341,28 +338,24 @@ class BaseLock:
     def subscribe_push_updates(self) -> None:
         """Subscribe to push-based value updates with automatic retry.
 
-        Calls the provider's setup_push_subscription(). If it raises a
-        transient error, schedules a one-shot retry. Permanent errors
-        (ProviderNotImplementedError) propagate immediately.
+        Calls the provider's setup_push_subscription(). Any exception other than
+        ProviderNotImplementedError is treated as a potentially transient failure:
+        it is logged at debug level and a one-shot retry is scheduled. Permanent
+        errors (ProviderNotImplementedError) propagate immediately.
         """
-        # Block retry-driven calls after unsubscribe to prevent race conditions
-        # where an in-flight retry resubscribes after teardown. Explicit calls
-        # (from setup or state listener) clear the flag.
+        # Block retry-driven calls after unsubscribe to prevent in-flight retries
+        # from resubscribing after teardown. Explicit calls (from setup or state
+        # listener) clear the flag and cancel any stale pending retry.
         if self._push_disabled:
             if self._push_retry and self._push_retry.active:
                 return
             self._push_disabled = False
+            if self._push_retry:
+                self._push_retry.cancel()
         try:
             self.setup_push_subscription()
         except ProviderNotImplementedError:
             raise
-        except LockCodeManagerError as err:
-            LOGGER.debug(
-                "Lock %s: push subscription deferred: %s",
-                self.lock.entity_id,
-                err,
-            )
-            self._ensure_push_retry().schedule()
         except Exception as err:  # noqa: BLE001
             LOGGER.debug(
                 "Lock %s: push subscription deferred: %s",

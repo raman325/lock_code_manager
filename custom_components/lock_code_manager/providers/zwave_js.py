@@ -321,8 +321,10 @@ class ZWaveJSLock(BaseLock):
             if self.coordinator:
                 self.coordinator.push_update({code_slot: resolved})
 
-        # Raises ValueError if node not ready — BaseLock catches and retries
-        self._value_update_unsub = self.node.on("value updated", on_value_updated)
+        try:
+            self._value_update_unsub = self.node.on("value updated", on_value_updated)
+        except ValueError as err:
+            raise LockDisconnected(f"node not ready: {err}") from err
 
     @callback
     def teardown_push_subscription(self) -> None:
