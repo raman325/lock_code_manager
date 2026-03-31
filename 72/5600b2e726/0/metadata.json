@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "725600b2e726",
+  "session_id": "0042d351-fad5-4c90-8890-a26276efc046",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T04:37:58.84422Z",
+  "branch": "refactor/extract-reusable-helpers",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bf3e63599671",
+  "token_usage": {
+    "input_tokens": 1321,
+    "cache_creation_tokens": 2341865,
+    "cache_read_tokens": 97522512,
+    "output_tokens": 105690,
+    "api_call_count": 375
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-31T04:37:57.600801Z",
+    "agent_lines": 0,
+    "human_added": 1387,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 1387,
+    "agent_percentage": 0
+  }
+}
