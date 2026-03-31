@@ -43,6 +43,7 @@ from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
 from ..exceptions import (
     DuplicateCodeError,
+    LockCodeManagerError,
     LockDisconnected,
     ProviderNotImplementedError,
 )
@@ -137,6 +138,7 @@ class BaseLock:
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _push_retry: OneShotRetry | None = field(default=None, init=False)
+    _push_disabled: bool = field(default=False, init=False)
 
     @final
     async def _async_executor_call(
@@ -339,11 +341,28 @@ class BaseLock:
     def subscribe_push_updates(self) -> None:
         """Subscribe to push-based value updates with automatic retry.
 
-        Calls the provider's setup_push_subscription(). If it raises,
-        schedules a one-shot retry via OneShotRetry.
+        Calls the provider's setup_push_subscription(). If it raises a
+        transient error, schedules a one-shot retry. Permanent errors
+        (ProviderNotImplementedError) propagate immediately.
         """
+        # Block retry-driven calls after unsubscribe to prevent race conditions
+        # where an in-flight retry resubscribes after teardown. Explicit calls
+        # (from setup or state listener) clear the flag.
+        if self._push_disabled:
+            if self._push_retry and self._push_retry.active:
+                return
+            self._push_disabled = False
         try:
             self.setup_push_subscription()
+        except ProviderNotImplementedError:
+            raise
+        except LockCodeManagerError as err:
+            LOGGER.debug(
+                "Lock %s: push subscription deferred: %s",
+                self.lock.entity_id,
+                err,
+            )
+            self._ensure_push_retry().schedule()
         except Exception as err:  # noqa: BLE001
             LOGGER.debug(
                 "Lock %s: push subscription deferred: %s",
@@ -351,6 +370,10 @@ class BaseLock:
                 err,
             )
             self._ensure_push_retry().schedule()
+        else:
+            # Subscription succeeded — cancel any pending retry
+            if self._push_retry is not None:
+                self._push_retry.cancel()
 
     @callback
     def setup_push_subscription(self) -> None:
@@ -385,9 +408,10 @@ class BaseLock:
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from push-based value updates.
 
-        Cancels any pending retry and calls the provider's
-        teardown_push_subscription().
+        Sets _push_disabled to prevent in-flight retries from resubscribing,
+        cancels any pending retry, and calls teardown_push_subscription().
         """
+        self._push_disabled = True
         if self._push_retry is not None:
             self._push_retry.cancel()
         self.teardown_push_subscription()

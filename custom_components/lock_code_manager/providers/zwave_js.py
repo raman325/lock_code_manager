@@ -225,7 +225,7 @@ class ZWaveJSLock(BaseLock):
 
         ready, reason = self._get_client_state()
         if not ready:
-            raise ConnectionError(reason)
+            raise LockDisconnected(reason)
 
         @callback
         def on_value_updated(event: dict[str, Any]) -> None:
