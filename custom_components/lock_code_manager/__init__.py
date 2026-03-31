@@ -497,7 +497,6 @@ async def _async_setup_new_locks(
 
 
 async def _async_reconcile_slot_entities(
-    hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     slot_num: int,
     old_config: dict[str, Any],
@@ -682,7 +681,6 @@ async def async_update_listener(
     # configuration options have changed
     for slot_num in set(curr_slots).intersection(new_slots):
         await _async_reconcile_slot_entities(
-            hass,
             config_entry,
             slot_num,
             curr_slots[slot_num],
