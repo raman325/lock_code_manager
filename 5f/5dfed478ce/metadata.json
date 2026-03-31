@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "5f5dfed478ce",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase2-push-retry-baselock",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5f/5dfed478ce/0/metadata.json",
+      "transcript": "/5f/5dfed478ce/0/full.jsonl",
+      "content_hash": "/5f/5dfed478ce/0/content_hash.txt",
+      "prompt": "/5f/5dfed478ce/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2102,
+    "cache_creation_tokens": 1055795,
+    "cache_read_tokens": 88163361,
+    "output_tokens": 103161,
+    "api_call_count": 405
+  }
+}
