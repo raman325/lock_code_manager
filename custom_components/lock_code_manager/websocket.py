@@ -836,7 +836,7 @@ def _get_last_used_info(
     if last_used_lock_id := event_state.attributes.get("event_type"):
         if lock_state := hass.states.get(last_used_lock_id):
             last_used_lock_name = lock_state.attributes.get(
-                "friendly_name", last_used_lock_id
+                ATTR_FRIENDLY_NAME, last_used_lock_id
             )
     return last_used, last_used_lock_name
 
@@ -844,8 +844,6 @@ def _get_last_used_info(
 def _build_lock_status(
     hass: HomeAssistant,
     lock: BaseLock,
-    ent_reg: er.EntityRegistry,
-    entry_id: str,
     slot_num: int,
     in_sync_map: dict[str, str],
     *,
@@ -967,7 +965,6 @@ def _serialize_slot_card_data(
     condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
 
     # Build per-lock status
-    ent_reg = er.async_get(hass)
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
     entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
 
@@ -975,8 +972,6 @@ def _serialize_slot_card_data(
         _build_lock_status(
             hass,
             lock,
-            ent_reg,
-            config_entry.entry_id,
             slot_num,
             in_sync_map,
             reveal=reveal,
