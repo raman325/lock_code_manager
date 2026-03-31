@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -18,8 +19,10 @@ from .const import (
     BACKOFF_FAILURE_THRESHOLD,
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
+    CONF_SLOTS,
     DOMAIN,
 )
+from .data import get_entry_data
 from .exceptions import LockCodeManagerError
 
 if TYPE_CHECKING:
@@ -48,6 +51,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
             config_entry=config_entry,
         )
         self.data: dict[int, str | None] = {}
+        self._config_entry = config_entry
         self._consecutive_failures: int = 0
         self._original_update_interval: timedelta | None = update_interval
 
@@ -71,6 +75,22 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
     def lock(self) -> BaseLock:
         """Return the lock."""
         return self._lock
+
+    @property
+    def expected_codes(self) -> dict[int, str]:
+        """Return expected codes from current config entry data.
+
+        For each managed slot, returns the configured PIN if the slot is enabled
+        and has a PIN, or empty string otherwise. Computed on access so it
+        always reflects the latest config entry state.
+        """
+        slots = get_entry_data(self._config_entry, CONF_SLOTS, {})
+        return {
+            int(slot_num): slot_data.get(CONF_PIN, "")
+            if slot_data.get(CONF_ENABLED)
+            else ""
+            for slot_num, slot_data in slots.items()
+        }
 
     @callback
     def push_update(self, updates: dict[int, str | None]) -> None:
