@@ -79,11 +79,11 @@ class MockLockWithPush(MockLockWithHardRefresh):
         """Return whether this lock supports push-based updates."""
         return self._supports_push
 
-    def subscribe_push_updates(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to push-based value updates."""
         self._subscribe_called = True
 
-    def unsubscribe_push_updates(self) -> None:
+    def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates."""
         self._unsubscribe_called = True
 

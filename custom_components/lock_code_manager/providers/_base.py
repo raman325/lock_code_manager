@@ -37,6 +37,7 @@ from ..const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
+    PUSH_SUBSCRIBE_RETRY_DELAY,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import get_entry_data
@@ -45,6 +46,7 @@ from ..exceptions import (
     LockDisconnected,
     ProviderNotImplementedError,
 )
+from ..util import OneShotRetry, mask_pin
 from .const import LOGGER
 
 MIN_OPERATION_DELAY = 2.0
@@ -134,6 +136,8 @@ class BaseLock:
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+    _push_retry: OneShotRetry | None = field(default=None, init=False)
+    _push_disabled: bool = field(default=False, init=False)
 
     @final
     async def _async_executor_call(
@@ -227,8 +231,6 @@ class BaseLock:
 
     def mask_pin(self, pin: str | None) -> str:
         """Return a masked representation of a PIN for logging."""
-        from ..util import mask_pin  # noqa: PLC0415
-
         return mask_pin(
             pin,
             self.lock.entity_id,
@@ -331,38 +333,93 @@ class BaseLock:
         """
         return True
 
+    @final
     @callback
     def subscribe_push_updates(self) -> None:
-        """
-        Subscribe to push-based value updates.
+        """Subscribe to push-based value updates with automatic retry.
 
-        Override in subclasses that support push. Called during async_setup()
-        when supports_push is True, and retried during drift detection if
-        initial setup failed.
+        Calls the provider's setup_push_subscription(). Any exception other than
+        ProviderNotImplementedError is treated as a potentially transient failure:
+        it is logged at debug level and a one-shot retry is scheduled. Permanent
+        errors (ProviderNotImplementedError) propagate immediately.
+        """
+        # Block retry-driven calls after unsubscribe to prevent in-flight retries
+        # from resubscribing after teardown. Explicit calls (from setup or state
+        # listener) clear the flag and cancel any stale pending retry.
+        if self._push_disabled:
+            if self._push_retry and self._push_retry.active:
+                return
+            self._push_disabled = False
+            if self._push_retry:
+                self._push_retry.cancel()
+        try:
+            self.setup_push_subscription()
+        except ProviderNotImplementedError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(
+                "Lock %s: push subscription deferred: %s",
+                self.lock.entity_id,
+                err,
+            )
+            self._ensure_push_retry().schedule()
+        else:
+            # Subscription succeeded — cancel any pending retry
+            if self._push_retry is not None:
+                self._push_retry.cancel()
+
+    @callback
+    def setup_push_subscription(self) -> None:
+        """Subscribe to push-based value updates.
+
+        Override in subclasses that support push. Raise on failure to trigger
+        automatic retry via BaseLock.subscribe_push_updates().
 
         Implementations MUST be idempotent (no-op if already subscribed).
         """
         self._raise_not_implemented(
-            "subscribe_push_updates",
+            "setup_push_subscription",
             "Override this method to subscribe to real-time value updates "
             "and call coordinator.push_update({slot: value}) when updates arrive. "
-            "Must be idempotent (no-op if already subscribed).",
+            "Must be idempotent (no-op if already subscribed). "
+            "Raise on failure to trigger automatic retry.",
         )
 
+    def _ensure_push_retry(self) -> OneShotRetry:
+        """Return the push retry helper, creating it on first use."""
+        if self._push_retry is None:
+            self._push_retry = OneShotRetry(
+                self.hass,
+                PUSH_SUBSCRIBE_RETRY_DELAY,
+                self.subscribe_push_updates,
+                f"push subscription for {self.lock.entity_id}",
+            )
+        return self._push_retry
+
+    @final
     @callback
     def unsubscribe_push_updates(self) -> None:
+        """Unsubscribe from push-based value updates.
+
+        Sets _push_disabled to prevent in-flight retries from resubscribing,
+        cancels any pending retry, and calls teardown_push_subscription().
         """
-        Unsubscribe from push-based value updates.
+        self._push_disabled = True
+        if self._push_retry is not None:
+            self._push_retry.cancel()
+        self.teardown_push_subscription()
 
+    @callback
+    def teardown_push_subscription(self) -> None:
+        """Unsubscribe from push-based value updates.
+
+        Override in subclasses that support push.
         Implementations MUST be idempotent (no-op if already unsubscribed).
-
-        Override in subclasses that support push. Called during async_unload()
-        when supports_push is True.
         """
         self._raise_not_implemented(
-            "unsubscribe_push_updates",
+            "teardown_push_subscription",
             "Override this method to clean up any subscriptions "
-            "created in subscribe_push_updates().",
+            "created in setup_push_subscription().",
         )
 
     @final

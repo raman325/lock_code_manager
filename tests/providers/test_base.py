@@ -41,11 +41,11 @@ class MockLCMLockWithPush(MockLCMLock):
         """Return whether this lock supports push-based updates."""
         return True
 
-    def subscribe_push_updates(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to push-based value updates."""
         self.subscribe_calls += 1
 
-    def unsubscribe_push_updates(self) -> None:
+    def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates."""
         self.unsubscribe_calls += 1
 

@@ -110,8 +110,14 @@ def test_provider_not_implemented_error_inherits_correctly():
         ("set_usercode", lambda lock: lock.set_usercode(1, "1234")),
         ("clear_usercode", lambda lock: lock.clear_usercode(1)),
         ("hard_refresh_codes", lambda lock: lock.hard_refresh_codes()),
-        ("subscribe_push_updates", lambda lock: lock.subscribe_push_updates()),
-        ("unsubscribe_push_updates", lambda lock: lock.unsubscribe_push_updates()),
+        (
+            "setup_push_subscription",
+            lambda lock: lock.setup_push_subscription(),
+        ),
+        (
+            "teardown_push_subscription",
+            lambda lock: lock.teardown_push_subscription(),
+        ),
     ],
 )
 async def test_base_lock_raises_provider_not_implemented(
