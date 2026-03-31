@@ -205,7 +205,9 @@ class SlotSyncManager:
         entity_id = event.data["entity_id"] if event else None
         to_state = event.data["new_state"] if event else None
 
-        if not self._coordinator.last_update_success and not self._retry.pending:
+        if not self._coordinator.last_update_success and not (
+            self._retry.pending or self._retry.active
+        ):
             return None
 
         if not self._build_entity_id_map():
@@ -477,7 +479,10 @@ class SlotSyncManager:
             or self._in_sync
             or not (state := self._hass.states.get(self._lock.lock.entity_id))
             or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-            or (not self._coordinator.last_update_success and not self._retry.pending)
+            or (
+                not self._coordinator.last_update_success
+                and not (self._retry.pending or self._retry.active)
+            )
         ):
             return
 
