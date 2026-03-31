@@ -1272,3 +1272,11 @@ nvm lets just keep as is. Let's open a PR for the TODO.md changes
 ---
 
 lets remove completed items from TODO.md instead of leaving them in there
+
+---
+
+are tehre any other completed items we can remove?
+
+---
+
+yes. Do a complete review of TODO.md and clean up stale info
