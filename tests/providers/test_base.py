@@ -125,14 +125,14 @@ async def test_config_entry_state_change_resubscribes(
 
         lock.subscribe_calls = 0
         lock.unsubscribe_calls = 0
-        lock.coordinator.async_refresh = AsyncMock()
+        lock.coordinator.async_request_refresh = AsyncMock()
 
         await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
         await hass.async_block_till_done()
 
         assert lock.unsubscribe_calls == 1
         assert lock.subscribe_calls == 1
-        lock.coordinator.async_refresh.assert_awaited()
+        lock.coordinator.async_request_refresh.assert_awaited()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
@@ -227,8 +227,8 @@ async def test_rate_limiting_set_usercode(
     # Second operation should take at least the rate limit time
     assert second_duration >= TEST_OPERATION_DELAY
 
-    # Verify both operations completed
-    assert len(lock_provider.service_calls["set_usercode"]) == 2
+    # Verify both explicit operations completed (sync manager may add more)
+    assert len(lock_provider.service_calls["set_usercode"]) >= 2
 
 
 async def test_rate_limiting_mixed_operations(

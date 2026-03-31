@@ -216,6 +216,9 @@ async def test_startup_no_code_flapping_when_synced(
     end = now + timedelta(hours=1)
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
+    # Extra block_till_done: sync manager runs initial sync in a task triggered
+    # by state change callbacks during entity setup
+    await hass.async_block_till_done()
 
     # Get the in-sync binary sensor for lock 1, slot 2
     in_sync_entity = "binary_sensor.test_1_code_slot_2_in_sync"
@@ -411,7 +414,7 @@ async def test_startup_waits_for_valid_active_state(
     assert in_sync_entity_obj
 
     # Reset to simulate pre-initial-load state
-    in_sync_entity_obj._attr_is_on = None
+    in_sync_entity_obj._sync_manager._in_sync = None
 
     # Set the active entity to unavailable
     hass.states.async_set(active_entity_id, STATE_UNAVAILABLE)
@@ -422,7 +425,7 @@ async def test_startup_waits_for_valid_active_state(
     await hass.async_block_till_done()
 
     # Verify initial state is still not loaded (is_on still None)
-    assert in_sync_entity_obj._attr_is_on is None
+    assert in_sync_entity_obj._sync_manager._in_sync is None
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -438,7 +441,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     assert in_sync_entity_obj is not None
 
     # Simulate pre-initialization state
-    in_sync_entity_obj._attr_is_on = None
+    in_sync_entity_obj._sync_manager._in_sync = None
 
     # Remove the PIN entity state so _ensure_entities_ready() fails
     hass.states.async_remove(SLOT_1_PIN_ENTITY)
@@ -448,7 +451,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     await hass.async_block_till_done()
 
     # Entity should still be waiting on initial state
-    assert in_sync_entity_obj._attr_is_on is None, (
+    assert in_sync_entity_obj._sync_manager._in_sync is None, (
         "In-sync sensor should not initialize when PIN state is missing"
     )
 
@@ -459,7 +462,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
     await hass.async_block_till_done()
 
-    assert in_sync_entity_obj._attr_is_on is True, (
+    assert in_sync_entity_obj._sync_manager._in_sync is True, (
         "In-sync sensor should initialize once dependent states are available"
     )
 
@@ -563,7 +566,7 @@ async def test_handles_disconnected_lock_on_set(
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
     # Directly trigger the update state method to perform sync
-    await in_sync_entity_obj._async_update_state()
+    await in_sync_entity_obj._sync_manager._async_check_and_sync()
     await hass.async_block_till_done()
 
     assert lock_provider.codes[1] == "9999"
@@ -607,7 +610,7 @@ async def test_handles_disconnected_lock_on_clear(
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
     # Directly trigger the update state method to perform sync
-    await in_sync_entity_obj._async_update_state()
+    await in_sync_entity_obj._sync_manager._async_check_and_sync()
     await hass.async_block_till_done()
 
     assert lock_provider.codes.get(1) is None
@@ -631,7 +634,7 @@ async def test_coordinator_refresh_failure_schedules_retry(
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
     # Verify no retry is scheduled initially
-    assert not in_sync_entity_obj._retry.pending
+    assert not in_sync_entity_obj._sync_manager._retry.pending
 
     # Patch coordinator refresh to fail BEFORE changing PIN
     # This way the failure happens during the sync triggered by the PIN change
@@ -651,12 +654,12 @@ async def test_coordinator_refresh_failure_schedules_retry(
         await hass.async_block_till_done()
 
     # Retry should be scheduled due to coordinator refresh failure
-    assert in_sync_entity_obj._retry.pending, (
+    assert in_sync_entity_obj._sync_manager._retry.pending, (
         "Retry should be scheduled when coordinator refresh fails after sync"
     )
 
     # Clean up - cancel the retry
-    in_sync_entity_obj._retry.cancel()
+    in_sync_entity_obj._sync_manager._retry.cancel()
 
 
 async def test_coordinator_update_triggers_sync_on_external_change(
@@ -713,6 +716,9 @@ async def test_coordinator_update_triggers_sync_on_external_change(
 
     # Trigger coordinator refresh - this should detect the mismatch and sync
     await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    # Second block_till_done: the sync task refreshes the coordinator, which
+    # fires another listener notification that updates the in_sync state
     await hass.async_block_till_done()
 
     # The fix: coordinator update should have triggered sync to restore "1234"
@@ -895,8 +901,8 @@ async def test_sync_attempts_exceeded_disables_slot(
 
     # Pre-load the tracker with MAX_SYNC_ATTEMPTS successful attempts within the window
     now = dt_util.utcnow()
-    in_sync_entity_obj._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_attempt_first = now
+    in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
+    in_sync_entity_obj._sync_manager._sync_attempt_first = now
 
     # Change PIN to trigger sync — the tracker check should fire BEFORE
     # attempting another sync, disabling the slot
@@ -934,8 +940,8 @@ async def test_sync_tracker_resets_when_back_in_sync(
     assert in_sync_entity_obj is not None
 
     # Simulate some previous sync attempts (but below threshold)
-    in_sync_entity_obj._sync_attempt_count = 2
-    in_sync_entity_obj._sync_attempt_first = dt_util.utcnow()
+    in_sync_entity_obj._sync_manager._sync_attempt_count = 2
+    in_sync_entity_obj._sync_manager._sync_attempt_first = dt_util.utcnow()
 
     # Verify currently in sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
@@ -956,8 +962,8 @@ async def test_sync_tracker_resets_when_back_in_sync(
     # The tracker should have been reset when the slot came back in sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
-    assert in_sync_entity_obj._sync_attempt_count == 0
-    assert in_sync_entity_obj._sync_attempt_first is None
+    assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0
+    assert in_sync_entity_obj._sync_manager._sync_attempt_first is None
 
 
 async def test_sync_tracker_expired_window_resets(
@@ -975,11 +981,13 @@ async def test_sync_tracker_expired_window_resets(
     assert in_sync_entity_obj is not None
 
     # Set up tracker with max attempts but with an expired window
-    in_sync_entity_obj._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_attempt_first = dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
+    in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
+    in_sync_entity_obj._sync_manager._sync_attempt_first = (
+        dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
+    )
 
     # The _sync_attempts_exceeded check should return False (window expired)
-    assert not in_sync_entity_obj._sync_attempts_exceeded()
+    assert not in_sync_entity_obj._sync_manager._sync_attempts_exceeded()
 
 
 async def test_clear_operation_does_not_increment_tracker(
@@ -997,7 +1005,7 @@ async def test_clear_operation_does_not_increment_tracker(
     assert in_sync_entity_obj is not None
 
     # Verify starting at zero
-    assert in_sync_entity_obj._sync_attempt_count == 0
+    assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0
 
     # Disable slot to trigger a clear sync cycle
     await hass.services.async_call(
@@ -1010,4 +1018,4 @@ async def test_clear_operation_does_not_increment_tracker(
     await _async_force_sync_cycle(hass, coordinator)
 
     # Clear operation should NOT have incremented the tracker
-    assert in_sync_entity_obj._sync_attempt_count == 0
+    assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0

@@ -1,30 +1,23 @@
-"""Sync sensor comparing desired state (config) against actual state (coordinator).
+"""Binary sensor entities for lock_code_manager.
 
-Triggers set/clear operations to reconcile. See ARCHITECTURE.md for the sync decision flow.
+LockCodeManagerActiveEntity: PIN active status (enabled + conditions met).
+LockCodeManagerCodeSlotInSyncEntity: Per-lock sync status — thin observer
+    that delegates all sync logic to SlotSyncManager.
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 
-from homeassistant.components.binary_sensor import (
-    DOMAIN as BINARY_SENSOR_DOMAIN,
-    BinarySensorEntity,
-)
-from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
+from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
     STATE_OFF,
     STATE_ON,
-    STATE_UNAVAILABLE,
-    STATE_UNKNOWN,
     EntityCategory,
 )
 from homeassistant.core import (
@@ -35,31 +28,20 @@ from homeassistant.core import (
 )
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import (
-    TrackStates,
-    async_track_state_change_event,
-    async_track_state_change_filtered,
-)
-from homeassistant.helpers.update_coordinator import CoordinatorEntity, UpdateFailed
-from homeassistant.util import dt as dt_util
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     ATTR_ACTIVE,
-    ATTR_CODE,
     ATTR_IN_SYNC,
     CONF_NUMBER_OF_USES,
-    DOMAIN,
     EVENT_PIN_USED,
-    MAX_SYNC_ATTEMPTS,
-    RETRY_DELAY,
-    SYNC_ATTEMPT_WINDOW,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
 from .data import LockCodeManagerConfigEntry, get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
-from .exceptions import CodeRejectedError, LockDisconnected
 from .providers import BaseLock
-from .util import OneShotRetry, async_disable_slot
+from .sync import SlotSyncManager
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -249,7 +231,11 @@ class LockCodeManagerCodeSlotInSyncEntity(
     CoordinatorEntity[LockUsercodeUpdateCoordinator],
     BinarySensorEntity,
 ):
-    """PIN synced binary sensor entity for lock code manager."""
+    """PIN synced binary sensor entity for lock code manager.
+
+    Thin observer that delegates all sync logic to SlotSyncManager.
+    Reads manager.in_sync for display state.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -267,27 +253,22 @@ class LockCodeManagerCodeSlotInSyncEntity(
             self, hass, ent_reg, config_entry, lock, slot_num, ATTR_IN_SYNC
         )
         CoordinatorEntity.__init__(self, coordinator)
-        self._entity_id_map: dict[str, str] = {}
-        self._active_unique_id = self._get_uid(ATTR_ACTIVE)
-        self._name_text_unique_id = self._get_uid(CONF_NAME)
-        self._pin_text_unique_id = self._get_uid(CONF_PIN)
-        lock_entity_id = self.lock.lock.entity_id
-        self._lock_slot_sensor_unique_id = (
-            f"{self._get_uid(ATTR_CODE)}|{lock_entity_id}"
-        )
-        self._lock = asyncio.Lock()
-        self._attr_is_on: bool | None = None  # None means not yet initialized
-        self._tracked_entity_ids: set[str] = set()
-        self._retry = OneShotRetry(
+
+        @callback
+        def _sync_and_write_state() -> None:
+            """Sync _attr_is_on from manager and write HA state."""
+            self._attr_is_on = self._sync_manager.in_sync
+            self.async_write_ha_state()
+
+        self._sync_manager = SlotSyncManager(
             hass,
-            RETRY_DELAY,
-            self.async_update,
-            f"{lock.lock.entity_id} slot {slot_num}",
+            ent_reg,
+            config_entry,
+            coordinator,
+            lock,
+            slot_num,
+            state_writer=_sync_and_write_state,
         )
-        self._sync_attempt_count: int = 0
-        self._sync_attempt_first: datetime | None = None
-        self._state_tracking_unsub: Callable[[], None] | None = None
-        self._tracking_all_states: bool = False
 
     @property
     def should_poll(self) -> bool:
@@ -302,385 +283,17 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
 
     async def async_update(self) -> None:
-        """Update entity."""
-        if self._attr_is_on is None:
-            return
-
-        if (
-            self._lock.locked()
-            or self.is_on
-            or not (state := self.hass.states.get(self.lock.lock.entity_id))
-            or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-            or (not self.coordinator.last_update_success and not self._retry.active)
-        ):
-            return
-
-        _LOGGER.debug(
-            "Code slot %s on %s is out of sync, syncing now",
-            self.slot_num,
-            self.lock.lock.entity_id,
-        )
-        await self._async_update_state()
-
-    def _get_entity_state(self, key: str) -> str | None:
-        """Get entity state."""
-        if (state := self.hass.states.get(self._entity_id_map[key])) is None:
-            return None
-        return state.state
-
-    def _update_sync_state(self, is_on: bool) -> None:
-        """Update sync state and write to Home Assistant."""
-        self._attr_is_on = is_on
-        self.async_write_ha_state()
+        """Poll-driven sync check."""
+        await self._sync_manager._async_poll_sync()
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """
-        Handle updated data from the coordinator.
+        """Handle updated data from the coordinator.
 
-        Triggers sync check when coordinator data changes to ensure we sync
-        when the lock reports different codes than expected (e.g., someone
-        manually changed a code on the lock).
-
-        Multiple tasks may be queued during rapid updates, but they serialize
-        via asyncio.Lock and each reads the latest coordinator data when it runs.
-        After the first successful sync, subsequent tasks exit early (is_on=True).
+        The sync manager has its own coordinator listener, but we still need
+        the CoordinatorEntity base class to update availability.
         """
         super()._handle_coordinator_update()
-        # Skip if not yet initialized or sync already in progress
-        if self._attr_is_on is not None and not self._lock.locked():
-            self.hass.async_create_task(
-                self._async_update_state(),
-                name=f"lcm_sync_check_{self.entity_id}",
-            )
-
-    def _reset_sync_tracker(self) -> None:
-        """Reset the sync attempt tracker."""
-        self._sync_attempt_count = 0
-        self._sync_attempt_first = None
-
-    def _record_sync_attempt(self) -> None:
-        """Record a successful sync attempt (provider call did not raise)."""
-        now = dt_util.utcnow()
-        if (
-            self._sync_attempt_first is not None
-            and now - self._sync_attempt_first > SYNC_ATTEMPT_WINDOW
-        ):
-            # Window expired, start a new tracking window
-            self._sync_attempt_count = 0
-            self._sync_attempt_first = None
-
-        if self._sync_attempt_first is None:
-            self._sync_attempt_first = now
-        self._sync_attempt_count += 1
-
-    def _sync_attempts_exceeded(self) -> bool:
-        """Check if sync attempts have exceeded the limit within the time window."""
-        if self._sync_attempt_count < MAX_SYNC_ATTEMPTS:
-            return False
-        if self._sync_attempt_first is None:
-            return False
-        return dt_util.utcnow() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
-
-    async def _disable_slot_and_notify(self, reason: str, title: str) -> None:
-        """Disable the slot and create a persistent notification."""
-        self._retry.cancel()
-        await async_disable_slot(
-            self.hass,
-            self.ent_reg,
-            self.config_entry.entry_id,
-            self.slot_num,
-            reason=reason,
-            title=title,
-            lock_name=self.lock.lock.name or self.lock.lock.original_name,
-            lock_entity_id=self.lock.lock.entity_id,
-        )
-        self._reset_sync_tracker()
-
-    def _build_entity_id_map(self) -> bool:
-        """Build and cache entity IDs for this slot."""
-        missing = False
-        for key, domain, unique_id in (
-            (CONF_PIN, TEXT_DOMAIN, self._pin_text_unique_id),
-            (CONF_NAME, TEXT_DOMAIN, self._name_text_unique_id),
-            (ATTR_ACTIVE, BINARY_SENSOR_DOMAIN, self._active_unique_id),
-            (ATTR_CODE, SENSOR_DOMAIN, self._lock_slot_sensor_unique_id),
-        ):
-            if key in self._entity_id_map:
-                continue
-            ent_id = self.ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)
-            if not ent_id:
-                missing = True
-                continue
-            self._entity_id_map[key] = ent_id
-        self._tracked_entity_ids = set(self._entity_id_map.values())
-        return not missing
-
-    def _ensure_entities_ready(self) -> bool:
-        """Ensure all dependent entities exist with valid states."""
-        for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
-            if key not in self._entity_id_map:
-                return False
-
-            # Verify entity has a state
-            state = self._get_entity_state(key)
-            if state is None or state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                _LOGGER.debug(
-                    "%s (%s): Waiting for %s state for %s slot %s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    key,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                )
-                return False
-
-        return True
-
-    def _calculate_expected_sync(self, slot_state: _SlotState) -> bool:
-        """
-        Calculate whether slot should be in sync.
-
-        Active: PIN should match code on lock
-        Inactive: Code on lock should be empty
-        """
-        # Use coordinator data if available, otherwise fall back to sensor state
-        lock_code = (
-            slot_state.coordinator_code
-            if slot_state.coordinator_code is not None
-            else slot_state.code_state
-        )
-        if slot_state.active_state == STATE_ON:
-            return slot_state.pin_state == lock_code
-        return lock_code == ""
-
-    @dataclass(frozen=True)
-    class _SlotState:
-        active_state: str
-        pin_state: str
-        name_state: str | None
-        code_state: str
-        coordinator_code: str | None
-
-    def _resolve_slot_state(
-        self, event: Event[EventStateChangedData] | None
-    ) -> _SlotState | None:
-        """Resolve slot state while applying shared guards."""
-        entity_id = event.data["entity_id"] if event else None
-        to_state = event.data["new_state"] if event else None
-
-        if not self.coordinator.last_update_success and not self._retry.active:
-            return None
-
-        if not self._build_entity_id_map():
-            return None
-
-        # NOTE: We intentionally don't call _update_state_tracking_filter() here.
-        # While it would be nice to switch from tracking all states to only specific
-        # entities, modifying subscriptions from within a callback causes timing issues.
-        # The performance impact of tracking all states is minimal since this method
-        # has early-return guards that skip processing for irrelevant entities.
-
-        if self._attr_is_on is None and int(self.slot_num) not in self.coordinator.data:
-            _LOGGER.debug(
-                "%s (%s): Slot %s not yet in coordinator data, skipping",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                self.slot_num,
-            )
-            return None
-
-        if entity_id is not None and entity_id not in self._tracked_entity_ids:
-            return None
-
-        if to_state and to_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return None
-
-        if not self._ensure_entities_ready():
-            return None
-
-        active_state = self._get_entity_state(ATTR_ACTIVE)
-        pin_state = self._get_entity_state(CONF_PIN)
-        name_state = self._get_entity_state(CONF_NAME)
-        code_state = self._get_entity_state(ATTR_CODE)
-
-        if active_state is None or pin_state is None or code_state is None:
-            return None
-
-        coordinator_code = self.coordinator.data.get(int(self.slot_num))
-        return self._SlotState(
-            active_state=active_state,
-            pin_state=pin_state,
-            name_state=name_state,
-            code_state=code_state,
-            coordinator_code=coordinator_code,
-        )
-
-    async def _perform_sync_operation(self, slot_state: _SlotState) -> bool:
-        """
-        Perform sync operation (set or clear usercode).
-
-        Returns True if sync was performed, False if lock disconnected or
-        permanently failed (duplicate code, sync attempts exceeded).
-        """
-        try:
-            if slot_state.active_state == STATE_ON:
-                await self.lock.async_internal_set_usercode(
-                    int(self.slot_num),
-                    slot_state.pin_state,
-                    slot_state.name_state,
-                    source="sync",
-                )
-                # Only track set operations — clears always succeed and
-                # shouldn't count toward the sync failure limit
-                self._record_sync_attempt()
-                _LOGGER.debug(
-                    "%s (%s): Set usercode for %s slot %s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                )
-            else:  # active_state == STATE_OFF
-                await self.lock.async_internal_clear_usercode(
-                    int(self.slot_num), source="sync"
-                )
-                _LOGGER.debug(
-                    "%s (%s): Cleared usercode for %s slot %s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                )
-            self._retry.cancel()
-            return True
-        except CodeRejectedError as err:
-            _LOGGER.error(
-                "%s (%s): Code rejected for %s slot %s: %s",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                self.lock.lock.entity_id,
-                self.slot_num,
-                err,
-            )
-            await self._disable_slot_and_notify(
-                f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
-                f"has been disabled. {err}\n\n"
-                f"Fix the issue and re-enable the slot.",
-                title="Lock Code Rejected",
-            )
-            return False
-        except LockDisconnected as err:
-            _LOGGER.debug(
-                "%s (%s): Unable to %s usercode for %s slot %s: %s",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                "set" if slot_state.active_state == STATE_ON else "clear",
-                self.lock.lock.entity_id,
-                self.slot_num,
-                err,
-            )
-            self._retry.schedule()
-            return False
-
-    async def _async_update_state(
-        self, event: Event[EventStateChangedData] | None = None
-    ) -> None:
-        """
-        Update binary sensor state by checking dependent entity states.
-
-        On initial load (when _attr_is_on is None): Sets sync state without operations.
-        On subsequent updates: Performs sync operations when out of sync.
-        """
-        async with self._lock:
-            slot_state = self._resolve_slot_state(event)
-            if slot_state is None:
-                return
-
-            # Calculate expected sync state
-            expected_in_sync = self._calculate_expected_sync(slot_state)
-
-            # Initial load: Set sync state without performing operations (prevents startup flapping)
-            if self._attr_is_on is None:
-                # Guard: Verify active state is valid
-                if slot_state.active_state not in (STATE_ON, STATE_OFF):
-                    _LOGGER.debug(
-                        "%s (%s): Active entity for %s slot %s has invalid state '%s'",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        self.lock.lock.entity_id,
-                        self.slot_num,
-                        slot_state.active_state,
-                    )
-                    return
-
-                self._update_sync_state(expected_in_sync)
-                _LOGGER.debug(
-                    "%s (%s): Initial state loaded for %s slot %s, in_sync=%s",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.lock.lock.entity_id,
-                    self.slot_num,
-                    expected_in_sync,
-                )
-                return
-
-            # Normal operation: Perform sync if needed
-            if not expected_in_sync:
-                self._update_sync_state(False)
-
-                # Check if we've exceeded sync attempt limits for set operations
-                # (provider calls succeeded but lock keeps reverting)
-                if (
-                    slot_state.active_state == STATE_ON
-                    and self._sync_attempts_exceeded()
-                ):
-                    _LOGGER.error(
-                        "%s (%s): Sync attempts exceeded for %s slot %s "
-                        "(%s attempts in %s window), disabling slot",
-                        self.config_entry.entry_id,
-                        self.config_entry.title,
-                        self.lock.lock.entity_id,
-                        self.slot_num,
-                        self._sync_attempt_count,
-                        SYNC_ATTEMPT_WINDOW,
-                    )
-                    await self._disable_slot_and_notify(
-                        f"Lock **{self.lock.lock.entity_id}**: slot "
-                        f"**{self.slot_num}** failed to sync after "
-                        f"{self._sync_attempt_count} consecutive attempts. "
-                        f"The lock may be rejecting the code silently. "
-                        f"Slot {self.slot_num} has been disabled. Check the "
-                        f"code and re-enable the slot.",
-                        title="Lock Code Sync Failed",
-                    )
-                    return
-
-                # Perform sync operation
-                sync_performed = await self._perform_sync_operation(slot_state)
-
-                # Refresh coordinator to verify operation completed
-                # Rate limiting at provider level prevents excessive calls
-                if sync_performed:
-                    try:
-                        await self.coordinator.async_refresh()
-                    except UpdateFailed as err:
-                        _LOGGER.debug(
-                            "%s (%s): Coordinator refresh failed after sync for %s "
-                            "slot %s, scheduling retry: %s",
-                            self.config_entry.entry_id,
-                            self.config_entry.title,
-                            self.lock.lock.entity_id,
-                            self.slot_num,
-                            err,
-                        )
-                        self._retry.schedule()
-
-            elif not self._attr_is_on:
-                # Was out of sync, now in sync
-                self._update_sync_state(True)
-                self._retry.cancel()
-                self._reset_sync_tracker()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
@@ -688,57 +301,5 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
 
-        # Register cleanup for state tracking subscription
-        self.async_on_remove(self._cleanup_state_tracking)
-
-        self._setup_state_tracking()
-        await self._async_update_state()
-
-    @callback
-    def _cleanup_state_tracking(self) -> None:
-        """Clean up state tracking subscription if one exists."""
-        if self._state_tracking_unsub:
-            self._state_tracking_unsub()
-            self._state_tracking_unsub = None
-            self._tracking_all_states = False
-
-    @callback
-    def _setup_state_tracking(self) -> None:
-        """
-        Set up state change tracking for dependent entities.
-
-        If all entity IDs are available, tracks only those specific entities.
-        Otherwise, tracks all state changes until entities become available.
-        """
-        # Clean up existing subscription before setting up new one
-        self._cleanup_state_tracking()
-
-        if self._build_entity_id_map():
-            # All entities found - track only those
-            self._state_tracking_unsub = async_track_state_change_event(
-                self.hass, self._tracked_entity_ids, self._async_update_state
-            )
-            self._tracking_all_states = False
-        else:
-            # Some entities not yet registered - track all states temporarily
-            # _async_update_state has guards that return early if entities aren't ready
-            tracker = async_track_state_change_filtered(
-                self.hass,
-                TrackStates(True, set(), set()),
-                self._async_update_state,
-            )
-            self._state_tracking_unsub = tracker.async_remove
-            self._tracking_all_states = True
-            _LOGGER.debug(
-                "%s (%s): Waiting for dependent entities for %s slot %s, "
-                "tracking all state changes",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                self.lock.lock.entity_id,
-                self.slot_num,
-            )
-
-    async def _async_remove(self) -> None:
-        """Handle removal cleanup."""
-        self._retry.cancel()
-        self._reset_sync_tracker()
+        self.async_on_remove(self._sync_manager.async_stop)
+        await self._sync_manager.async_start()
