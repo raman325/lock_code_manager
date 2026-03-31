@@ -816,6 +816,81 @@ def _get_condition_entity_data(
     return result
 
 
+def _get_last_used_info(
+    hass: HomeAssistant, event_entity_id: str | None
+) -> tuple[str | None, str | None]:
+    """
+    Get last-used timestamp and lock name from an event entity.
+
+    Returns a tuple of (last_used_timestamp, last_used_lock_name).
+    The event entity's state is the ISO timestamp of the last event,
+    and its event_type attribute is the lock entity ID where the PIN was used.
+    """
+    if not event_entity_id:
+        return None, None
+    event_state = hass.states.get(event_entity_id)
+    if not event_state or event_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+        return None, None
+    last_used = event_state.state
+    last_used_lock_name: str | None = None
+    if last_used_lock_id := event_state.attributes.get("event_type"):
+        if lock_state := hass.states.get(last_used_lock_id):
+            last_used_lock_name = lock_state.attributes.get(
+                ATTR_FRIENDLY_NAME, last_used_lock_id
+            )
+    return last_used, last_used_lock_name
+
+
+def _build_lock_status(
+    hass: HomeAssistant,
+    lock: BaseLock,
+    slot_num: int,
+    in_sync_map: dict[str, str],
+    *,
+    reveal: bool,
+) -> dict[str, Any]:
+    """
+    Build the per-lock status dict for a slot card.
+
+    Includes lock name, in-sync state, last synced time, and the code on the lock
+    (masked or revealed depending on the reveal flag).
+    """
+    lock_entity_id = lock.lock.entity_id
+    lock_name = _get_lock_friendly_name(hass, lock)
+    in_sync_entity_id = in_sync_map.get(lock_entity_id)
+    in_sync = _get_bool_state(hass, in_sync_entity_id)
+    last_synced = _get_last_changed(hass, in_sync_entity_id)
+
+    # Get code from coordinator
+    coordinator = lock.coordinator
+    code_on_lock = None
+    code_length = None
+    if coordinator and coordinator.data:
+        raw_code = coordinator.data.get(slot_num)
+        if raw_code is not None:
+            if reveal:
+                code_on_lock = raw_code
+            else:
+                code_length = len(raw_code)
+
+    lock_status: dict[str, Any] = {
+        ATTR_ENTITY_ID: lock_entity_id,
+        CONF_NAME: lock_name,
+        ATTR_IN_SYNC: in_sync,
+    }
+    if last_synced:
+        lock_status[ATTR_LAST_SYNCED] = last_synced
+    if reveal and code_on_lock is not None:
+        lock_status[ATTR_CODE] = code_on_lock
+    elif code_length is not None:
+        lock_status[ATTR_CODE] = None
+        lock_status[ATTR_CODE_LENGTH] = code_length
+    else:
+        lock_status[ATTR_CODE] = None
+
+    return lock_status
+
+
 async def _get_next_calendar_event(
     hass: HomeAssistant, calendar_entity_id: str
 ) -> dict[str, Any] | None:
@@ -882,72 +957,28 @@ def _serialize_slot_card_data(
     active = _get_bool_state(hass, slot_entities.active_entity_id)
     number_of_uses = _get_number_state(hass, slot_entities.number_of_uses_entity_id)
 
-    # Get last_used from event entity state
-    # EventEntity's state IS the timestamp (ISO format) of when the last event fired
-    # - If state is "unknown" or "unavailable", no event has ever fired
-    # - Otherwise, the state value is the ISO timestamp
-    # The event_type attribute is the lock entity ID where the PIN was last used
-    last_used: str | None = None
-    last_used_lock_name: str | None = None
-    if slot_entities.event_entity_id:
-        if event_state := hass.states.get(slot_entities.event_entity_id):
-            if event_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-                # The state IS the timestamp
-                last_used = event_state.state
-                # Get the friendly name of the lock where PIN was last used
-                # event_type is now the lock entity ID (instead of ATTR_LOCK_ENTITY_ID)
-                if last_used_lock_id := event_state.attributes.get("event_type"):
-                    if lock_state := hass.states.get(last_used_lock_id):
-                        last_used_lock_name = lock_state.attributes.get(
-                            "friendly_name", last_used_lock_id
-                        )
+    last_used, last_used_lock_name = _get_last_used_info(
+        hass, slot_entities.event_entity_id
+    )
 
     # Get condition entity from config using helper
     condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
 
     # Build per-lock status
-    locks_data: list[dict[str, Any]] = []
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
     entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
 
-    for lock_entity_id in entry_lock_ids:
-        lock = all_locks.get(lock_entity_id)
-        if not lock:
-            continue
-
-        lock_name = _get_lock_friendly_name(hass, lock)
-        in_sync_entity_id = in_sync_map.get(lock_entity_id)
-        in_sync = _get_bool_state(hass, in_sync_entity_id)
-        last_synced = _get_last_changed(hass, in_sync_entity_id)
-
-        # Get code from coordinator
-        coordinator = lock.coordinator
-        code_on_lock = None
-        code_length = None
-        if coordinator and coordinator.data:
-            raw_code = coordinator.data.get(slot_num)
-            if raw_code is not None:
-                if reveal:
-                    code_on_lock = raw_code
-                else:
-                    code_length = len(raw_code)
-
-        lock_status: dict[str, Any] = {
-            ATTR_ENTITY_ID: lock_entity_id,
-            CONF_NAME: lock_name,
-            ATTR_IN_SYNC: in_sync,
-        }
-        if last_synced:
-            lock_status[ATTR_LAST_SYNCED] = last_synced
-        if reveal and code_on_lock is not None:
-            lock_status[ATTR_CODE] = code_on_lock
-        elif code_length is not None:
-            lock_status[ATTR_CODE] = None
-            lock_status[ATTR_CODE_LENGTH] = code_length
-        else:
-            lock_status[ATTR_CODE] = None
-
-        locks_data.append(lock_status)
+    locks_data: list[dict[str, Any]] = [
+        _build_lock_status(
+            hass,
+            lock,
+            slot_num,
+            in_sync_map,
+            reveal=reveal,
+        )
+        for lock_entity_id in entry_lock_ids
+        if (lock := all_locks.get(lock_entity_id))
+    ]
 
     # Build result
     result: dict[str, Any] = {
@@ -1148,15 +1179,8 @@ async def subscribe_code_slot(
                 async_track_state_change_event(hass, list(new_ids), _on_state_change)
             )
 
-    # Initial state tracking setup
-    tracked_entities = slot_entities.all_entity_ids() + list(in_sync_map.values())
-    if condition_entity_id:
-        tracked_entities.append(condition_entity_id)
-    tracked_set.update(tracked_entities)
-    if tracked_entities:
-        unsub_state_ref.append(
-            async_track_state_change_event(hass, tracked_entities, _on_state_change)
-        )
+    # Initial state tracking setup (reuse _refresh_state_tracking to avoid duplication)
+    _refresh_state_tracking(slot_entities, in_sync_map, condition_entity_id)
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
