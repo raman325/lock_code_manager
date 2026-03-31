@@ -1,0 +1,22 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a2b5daa7ad5d",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-31T01:50:42.754914Z",
+  "branch": "resilience/phase2-push-retry-baselock",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "53d1451bf26e",
+  "token_usage": {
+    "input_tokens": 2067,
+    "cache_creation_tokens": 1033769,
+    "cache_read_tokens": 78203753,
+    "output_tokens": 96260,
+    "api_call_count": 376
+  },
+  "session_metrics": {
+    "turn_count": 13
+  }
+}

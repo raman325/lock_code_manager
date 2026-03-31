@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a2b5daa7ad5d",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase2-push-retry-baselock",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a2/b5daa7ad5d/0/metadata.json",
+      "transcript": "/a2/b5daa7ad5d/0/full.jsonl",
+      "content_hash": "/a2/b5daa7ad5d/0/content_hash.txt",
+      "prompt": "/a2/b5daa7ad5d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2067,
+    "cache_creation_tokens": 1033769,
+    "cache_read_tokens": 78203753,
+    "output_tokens": 96260,
+    "api_call_count": 376
+  }
+}
