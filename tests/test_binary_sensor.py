@@ -216,6 +216,9 @@ async def test_startup_no_code_flapping_when_synced(
     end = now + timedelta(hours=1)
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
+    # Extra block_till_done: sync manager runs initial sync in a task triggered
+    # by state change callbacks during entity setup
+    await hass.async_block_till_done()
 
     # Get the in-sync binary sensor for lock 1, slot 2
     in_sync_entity = "binary_sensor.test_1_code_slot_2_in_sync"

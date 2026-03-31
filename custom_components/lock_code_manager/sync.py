@@ -34,7 +34,6 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_state_change_filtered,
 )
-from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -86,6 +85,7 @@ class SlotSyncManager:
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         slot_num: int,
+        state_writer: Callable[[], None],
     ) -> None:
         """Initialize the sync manager."""
         self._hass = hass
@@ -94,6 +94,7 @@ class SlotSyncManager:
         self._coordinator = coordinator
         self._lock = lock
         self._slot_num = slot_num
+        self._state_writer = state_writer
 
         self._log_prefix = (
             f"{config_entry.entry_id} ({config_entry.title}): "
@@ -115,7 +116,6 @@ class SlotSyncManager:
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
         self._aio_lock = asyncio.Lock()
-        self._state_writer: Callable[[], None] | None = None
 
         # Retry + circuit breaker
         self._retry = OneShotRetry(
@@ -137,10 +137,6 @@ class SlotSyncManager:
     def in_sync(self) -> bool | None:
         """Return current sync state (None = not yet determined)."""
         return self._in_sync
-
-    def set_state_writer(self, writer: Callable[[], None]) -> None:
-        """Register the entity's async_write_ha_state callback."""
-        self._state_writer = writer
 
     async def async_start(self) -> None:
         """Start the sync manager — discover entities, subscribe, initial sync."""
@@ -209,11 +205,16 @@ class SlotSyncManager:
         entity_id = event.data["entity_id"] if event else None
         to_state = event.data["new_state"] if event else None
 
-        if not self._coordinator.last_update_success and not self._retry.active:
+        if not self._coordinator.last_update_success and not self._retry.pending:
             return None
 
         if not self._build_entity_id_map():
             return None
+
+        # NOTE: We intentionally don't upgrade from catch-all to targeted tracking
+        # here. Modifying subscriptions from within a state change callback causes
+        # timing issues. The catch-all has early-return guards that skip irrelevant
+        # entities, so the performance impact is minimal.
 
         if self._in_sync is None and int(self._slot_num) not in self._coordinator.data:
             _LOGGER.debug(
@@ -310,6 +311,14 @@ class SlotSyncManager:
             )
             self._retry.schedule()
             return False
+        except Exception:
+            _LOGGER.exception(
+                "%s: Unexpected error during %s usercode",
+                self._log_prefix,
+                "set" if slot_state.active_state == STATE_ON else "clear",
+            )
+            self._retry.schedule()
+            return False
 
     async def _disable_slot(self, reason: str, title: str) -> None:
         """Disable the slot and create a persistent notification."""
@@ -359,8 +368,7 @@ class SlotSyncManager:
 
     def _write_state(self) -> None:
         """Notify the entity to write its HA state."""
-        if self._state_writer:
-            self._state_writer()
+        self._state_writer()
 
     async def _async_check_and_sync(
         self, event: Event[EventStateChangedData] | None = None
@@ -371,6 +379,10 @@ class SlotSyncManager:
         progress and will read latest state when it runs).
         """
         if self._aio_lock.locked():
+            _LOGGER.debug(
+                "%s: Sync in progress, relying on re-read and poll",
+                self._log_prefix,
+            )
             return
 
         async with self._aio_lock:
@@ -431,12 +443,12 @@ class SlotSyncManager:
                 if sync_performed:
                     try:
                         await self._coordinator.async_refresh()
-                    except UpdateFailed as err:
+                    except Exception:  # noqa: BLE001
                         _LOGGER.debug(
                             "%s: Coordinator refresh failed after sync, "
-                            "scheduling retry: %s",
+                            "scheduling retry",
                             self._log_prefix,
-                            err,
+                            exc_info=True,
                         )
                         self._retry.schedule()
 
@@ -465,7 +477,7 @@ class SlotSyncManager:
             or self._in_sync
             or not (state := self._hass.states.get(self._lock.lock.entity_id))
             or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
-            or (not self._coordinator.last_update_success and not self._retry.active)
+            or (not self._coordinator.last_update_success and not self._retry.pending)
         ):
             return
 

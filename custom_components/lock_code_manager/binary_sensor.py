@@ -253,19 +253,27 @@ class LockCodeManagerCodeSlotInSyncEntity(
             self, hass, ent_reg, config_entry, lock, slot_num, ATTR_IN_SYNC
         )
         CoordinatorEntity.__init__(self, coordinator)
+
+        @callback
+        def _sync_and_write_state() -> None:
+            """Sync _attr_is_on from manager and write HA state."""
+            self._attr_is_on = self._sync_manager.in_sync
+            self.async_write_ha_state()
+
         self._sync_manager = SlotSyncManager(
-            hass, ent_reg, config_entry, coordinator, lock, slot_num
+            hass,
+            ent_reg,
+            config_entry,
+            coordinator,
+            lock,
+            slot_num,
+            state_writer=_sync_and_write_state,
         )
 
     @property
     def should_poll(self) -> bool:
         """Return whether entity should poll."""
         return True
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return whether the slot is in sync."""
-        return self._sync_manager.in_sync
 
     @property
     def available(self) -> bool:
@@ -293,10 +301,5 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
 
-        self._sync_manager.set_state_writer(self.async_write_ha_state)
         self.async_on_remove(self._sync_manager.async_stop)
         await self._sync_manager.async_start()
-
-    async def _async_remove(self) -> None:
-        """Handle removal cleanup."""
-        self._sync_manager.async_stop()
