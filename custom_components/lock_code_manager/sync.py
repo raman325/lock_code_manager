@@ -218,9 +218,9 @@ class SlotSyncManager:
         # timing issues. The catch-all has early-return guards that skip irrelevant
         # entities, so the performance impact is minimal.
 
-        if self._in_sync is None and int(self._slot_num) not in self._coordinator.data:
+        if int(self._slot_num) not in self._coordinator.data:
             _LOGGER.debug(
-                "%s: Slot not yet in coordinator data, skipping",
+                "%s: Slot not in coordinator data, skipping",
                 self._log_prefix,
             )
             return None
