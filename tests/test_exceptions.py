@@ -111,12 +111,12 @@ def test_provider_not_implemented_error_inherits_correctly():
         ("clear_usercode", lambda lock: lock.clear_usercode(1)),
         ("hard_refresh_codes", lambda lock: lock.hard_refresh_codes()),
         (
-            "_subscribe_push_updates_impl",
-            lambda lock: lock._subscribe_push_updates_impl(),
+            "setup_push_subscription",
+            lambda lock: lock.setup_push_subscription(),
         ),
         (
-            "_unsubscribe_push_updates_impl",
-            lambda lock: lock._unsubscribe_push_updates_impl(),
+            "teardown_push_subscription",
+            lambda lock: lock.teardown_push_subscription(),
         ),
     ],
 )

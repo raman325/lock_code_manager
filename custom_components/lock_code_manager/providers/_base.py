@@ -339,11 +339,11 @@ class BaseLock:
     def subscribe_push_updates(self) -> None:
         """Subscribe to push-based value updates with automatic retry.
 
-        Calls the provider's _subscribe_push_updates_impl(). If it raises,
+        Calls the provider's setup_push_subscription(). If it raises,
         schedules a one-shot retry via OneShotRetry.
         """
         try:
-            self._subscribe_push_updates_impl()
+            self.setup_push_subscription()
         except Exception as err:  # noqa: BLE001
             LOGGER.debug(
                 "Lock %s: push subscription deferred: %s",
@@ -353,7 +353,7 @@ class BaseLock:
             self._ensure_push_retry().schedule()
 
     @callback
-    def _subscribe_push_updates_impl(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to push-based value updates.
 
         Override in subclasses that support push. Raise on failure to trigger
@@ -362,7 +362,7 @@ class BaseLock:
         Implementations MUST be idempotent (no-op if already subscribed).
         """
         self._raise_not_implemented(
-            "_subscribe_push_updates_impl",
+            "setup_push_subscription",
             "Override this method to subscribe to real-time value updates "
             "and call coordinator.push_update({slot: value}) when updates arrive. "
             "Must be idempotent (no-op if already subscribed). "
@@ -386,23 +386,23 @@ class BaseLock:
         """Unsubscribe from push-based value updates.
 
         Cancels any pending retry and calls the provider's
-        _unsubscribe_push_updates_impl().
+        teardown_push_subscription().
         """
         if self._push_retry is not None:
             self._push_retry.cancel()
-        self._unsubscribe_push_updates_impl()
+        self.teardown_push_subscription()
 
     @callback
-    def _unsubscribe_push_updates_impl(self) -> None:
+    def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates.
 
         Override in subclasses that support push.
         Implementations MUST be idempotent (no-op if already unsubscribed).
         """
         self._raise_not_implemented(
-            "_unsubscribe_push_updates_impl",
+            "teardown_push_subscription",
             "Override this method to clean up any subscriptions "
-            "created in _subscribe_push_updates_impl().",
+            "created in setup_push_subscription().",
         )
 
     @final

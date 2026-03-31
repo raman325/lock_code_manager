@@ -217,7 +217,7 @@ class ZWaveJSLock(BaseLock):
         return value
 
     @callback
-    def _subscribe_push_updates_impl(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to User Code CC value update events."""
         # Idempotent - skip if already subscribed
         if self._value_update_unsub is not None:
@@ -325,7 +325,7 @@ class ZWaveJSLock(BaseLock):
         self._value_update_unsub = self.node.on("value updated", on_value_updated)
 
     @callback
-    def _unsubscribe_push_updates_impl(self) -> None:
+    def teardown_push_subscription(self) -> None:
         """Unsubscribe from value update events."""
         if self._value_update_unsub:
             self._value_update_unsub()
