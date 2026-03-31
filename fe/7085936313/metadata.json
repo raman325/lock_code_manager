@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "fe7085936313",
+  "strategy": "manual-commit",
+  "branch": "chore/todo-cleanup",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fe/7085936313/0/metadata.json",
+      "transcript": "/fe/7085936313/0/full.jsonl",
+      "content_hash": "/fe/7085936313/0/content_hash.txt",
+      "prompt": "/fe/7085936313/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2500,
+    "cache_creation_tokens": 2400051,
+    "cache_read_tokens": 242854424,
+    "output_tokens": 201893,
+    "api_call_count": 724
+  }
+}
