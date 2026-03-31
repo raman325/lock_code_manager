@@ -217,6 +217,66 @@ class ZWaveJSLock(BaseLock):
         return value
 
     @callback
+    def _handle_usercode_status_update(self, code_slot: int, status: Any) -> None:
+        """Handle userIdStatus value update for a code slot."""
+        if status == CodeSlotStatus.AVAILABLE:
+            # Ignore AVAILABLE status if Lock Code Manager expects a PIN on this
+            # slot. Some locks send stale AVAILABLE events after a code was set,
+            # which would cause infinite sync loops.
+            if self._slot_expects_pin(code_slot):
+                _LOGGER.debug(
+                    "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
+                    "(LCM expects PIN on this slot)",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return
+
+            # Slot was cleared - update coordinator if needed
+            if self.coordinator and self.coordinator.data.get(code_slot) != "":
+                _LOGGER.debug(
+                    "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                self.coordinator.push_update({code_slot: ""})
+
+    @callback
+    def _handle_usercode_value_update(self, code_slot: int, new_value: Any) -> None:
+        """Handle userCode value update for a code slot."""
+        # Treat empty, None, or all-zeros as cleared
+        if not new_value or (isinstance(new_value, str) and new_value.strip("0") == ""):
+            value = ""
+        else:
+            value = str(new_value)
+
+        # Resolve masked codes (all asterisks) to expected PIN
+        # This prevents infinite sync loops when locks return masked values
+        resolved = self._resolve_pin_if_masked(value, code_slot)
+        if resolved is None:
+            _LOGGER.debug(
+                "Lock %s: skipping masked code update for slot %s (unable to resolve)",
+                self.lock.entity_id,
+                code_slot,
+            )
+            return
+
+        # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
+        if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
+            return
+
+        _LOGGER.debug(
+            "Lock %s received push update for slot %s: %s",
+            self.lock.entity_id,
+            code_slot,
+            "****" if resolved else "(cleared)",
+        )
+
+        # Push update to coordinator
+        if self.coordinator:
+            self.coordinator.push_update({code_slot: resolved})
+
+    @callback
     def setup_push_subscription(self) -> None:
         """Subscribe to User Code CC value update events."""
         # Idempotent - skip if already subscribed
@@ -231,7 +291,7 @@ class ZWaveJSLock(BaseLock):
         def on_value_updated(event: dict[str, Any]) -> None:
             """Handle value update events from Z-Wave JS."""
             args: dict[str, Any] = event["args"]
-            # Filter for User Code CC - handle both userCode and userIdStatus
+            # Filter for User Code command class
             if args.get("commandClass") != CommandClass.USER_CODE:
                 return
 
@@ -257,69 +317,11 @@ class ZWaveJSLock(BaseLock):
             ):
                 self._set_in_progress_code_slot = None
 
-            # Handle userIdStatus updates - slot cleared is a fast path
+            # Delegate to the appropriate handler
             if property_name == LOCK_USERCODE_STATUS_PROPERTY:
-                status = args.get("newValue")
-                if status == CodeSlotStatus.AVAILABLE:
-                    # Ignore AVAILABLE status if LCM expects a PIN on this slot.
-                    # Some locks send stale AVAILABLE events after a code was set,
-                    # which would cause infinite sync loops.
-                    if self._slot_expects_pin(code_slot):
-                        _LOGGER.debug(
-                            "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
-                            "(LCM expects PIN on this slot)",
-                            self.lock.entity_id,
-                            code_slot,
-                        )
-                        return
-
-                    # Slot was cleared - update coordinator if needed
-                    if self.coordinator and self.coordinator.data.get(code_slot) != "":
-                        _LOGGER.debug(
-                            "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
-                            self.lock.entity_id,
-                            code_slot,
-                        )
-                        self.coordinator.push_update({code_slot: ""})
-                return
-
-            # Handle userCode updates
-            # newValue is the raw PIN string (or None/empty/"0000" if cleared)
-            new_value = args.get("newValue")
-            # Treat empty, None, or all-zeros as cleared
-            if not new_value or (
-                isinstance(new_value, str) and new_value.strip("0") == ""
-            ):
-                value = ""
+                self._handle_usercode_status_update(code_slot, args.get("newValue"))
             else:
-                value = str(new_value)
-
-            # Resolve masked codes (all asterisks) to expected PIN
-            # This prevents infinite sync loops when locks return masked values
-            resolved = self._resolve_pin_if_masked(value, code_slot)
-            if resolved is None:
-                _LOGGER.debug(
-                    "Lock %s: skipping masked code update for slot %s "
-                    "(unable to resolve)",
-                    self.lock.entity_id,
-                    code_slot,
-                )
-                return
-
-            # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
-            if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
-                return
-
-            _LOGGER.debug(
-                "Lock %s received push update for slot %s: %s",
-                self.lock.entity_id,
-                code_slot,
-                "****" if resolved else "(cleared)",
-            )
-
-            # Push update to coordinator
-            if self.coordinator:
-                self.coordinator.push_update({code_slot: resolved})
+                self._handle_usercode_value_update(code_slot, args.get("newValue"))
 
         try:
             self._value_update_unsub = self.node.on("value updated", on_value_updated)
