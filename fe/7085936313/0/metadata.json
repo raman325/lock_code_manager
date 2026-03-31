@@ -3,31 +3,20 @@
   "checkpoint_id": "fe7085936313",
   "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
   "strategy": "manual-commit",
-  "created_at": "2026-03-31T03:56:44.717773Z",
+  "created_at": "2026-03-31T03:58:29.852278Z",
   "branch": "chore/todo-cleanup",
-  "checkpoints_count": 8,
-  "files_touched": [
-    "TODO.md"
-  ],
+  "checkpoints_count": 1,
+  "files_touched": [],
   "agent": "Claude Code",
-  "turn_id": "a920ea8bb2a8",
+  "turn_id": "cd8788d6ae99",
   "token_usage": {
-    "input_tokens": 2500,
-    "cache_creation_tokens": 2400051,
-    "cache_read_tokens": 242854424,
-    "output_tokens": 201893,
-    "api_call_count": 724
+    "input_tokens": 2507,
+    "cache_creation_tokens": 2402366,
+    "cache_read_tokens": 245676609,
+    "output_tokens": 202813,
+    "api_call_count": 729
   },
   "session_metrics": {
-    "turn_count": 49
-  },
-  "initial_attribution": {
-    "calculated_at": "2026-03-31T03:56:42.236913Z",
-    "agent_lines": 19,
-    "human_added": 0,
-    "human_modified": 0,
-    "human_removed": 0,
-    "total_committed": 19,
-    "agent_percentage": 100
+    "turn_count": 50
   }
 }

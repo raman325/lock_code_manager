@@ -1268,3 +1268,7 @@ look at data, helpers, and util. They can probably be combined somehow or redist
 ---
 
 nvm lets just keep as is. Let's open a PR for the TODO.md changes
+
+---
+
+lets remove completed items from TODO.md instead of leaving them in there
