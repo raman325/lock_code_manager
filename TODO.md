@@ -14,12 +14,12 @@
 - **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
   code slots on a lock, so users can clean up stale codes without manual intervention.
 - **Unify Z-Wave event 15 duplicate handler with CodeRejectedError** — The reactive
-  duplicate handler (`_async_handle_duplicate_code` in `zwave_js.py`) duplicates the
-  disable+notify logic that now lives in the binary sensor's `_disable_slot_and_notify`.
-  It should surface through the exception hierarchy instead. Options: route through
-  the coordinator to trigger a binary sensor state update, or have the provider set a
-  flag that the binary sensor checks on next sync cycle. This would also allow the
-  event 15 handler to reset the sync tracker.
+  duplicate handler (`_async_handle_duplicate_code` in `zwave_js.py`) uses
+  `async_disable_slot` (shared helper in `util.py`). It should surface through
+  the exception hierarchy instead. Options: route through the coordinator to
+  trigger a sync manager state update, or have the provider set a flag that the
+  sync manager checks on next sync cycle. This would also allow the event 15
+  handler to reset the sync tracker.
 - **Investigate lock-specific duplicate detection carve-outs** — Some locks don't mask
   PINs or don't reject duplicates. Explore whether duplicate detection behavior can be
   adapted per lock capability rather than one-size-fits-all.
@@ -41,114 +41,33 @@
 
 ### Simplify Tests
 
-**Current Issues:**
-
-- `tests/common.py` has some duplicated mock setup code
-- Some tests may have redundant assertions
-- Test fixtures could potentially be more reusable across test files
-
-**Potential Improvements:**
-
-- Consolidate duplicate test setup code into shared fixtures
-- Review test naming conventions for clarity
+- Consolidate duplicate test setup code in `tests/common.py` into shared fixtures
 - Consider parametrized tests where multiple similar tests exist
 - Reduce test boilerplate with helper functions
 
-**Estimated Effort:** Medium (4-8 hours)
-**Priority:** Medium
-**Status:** Not started
-
 ### Simplify Code
 
-#### Remove Other Unnecessary Complexity
-
-**Areas to Review:**
+#### Dual Storage and Config Entry Patterns
 
 1. **Dual storage pattern** (`data` + `options` in config entries) - Can this be
    simplified?
-2. **Entity unique ID format** - Is `{entry_id}|{slot}|{type}` optimal?
-3. **Multiple coordinator instances** - One per lock - could this be unified?
-4. **Internal method wrappers** - `async_internal_*` methods with locks - are
-   all necessary?
+2. **Clarify data vs options usage** — Document and standardize when to read from
+   `config_entry.data` vs `config_entry.options`. Current understanding: prefer
+   `options` only within the config entry update listener during options updates;
+   elsewhere use `data` to avoid mid-update inconsistencies.
 
-#### Clarify Config Entry Data vs Options Usage
+#### Other Complexity
 
-Document and standardize when to read from `config_entry.data` vs
-`config_entry.options`. Current understanding: prefer `options` only within the
-config entry update listener during options updates; elsewhere use `data` to
-avoid mid-update inconsistencies. Add helper(s) or guidance to reduce ambiguity
-and prevent regressions.
+- **Entity unique ID format** - Is `{entry_id}|{slot}|{type}` optimal?
+- **`async_internal_*` method wrappers** — are all necessary?
 
-**Specific Items:**
+#### Sync Manager Follow-ups
 
-- Review if all `_get_entity_state()` calls can be simplified
-- Evaluate if `_entity_id_map` dictionary caching is worth the complexity
-- Consider if provider `async_internal_*` wrapper methods can be simplified
-- Review entity base classes for potential consolidation
-
-**Estimated Effort:** High (20+ hours)
-**Priority:** Low-Medium
-**Status:** Not started
-
-#### Move Sync Logic to Coordinator
-
-**Current Architecture Issues:**
-
-- In-sync binary sensor reads PIN config from text entities via
-  `_get_entity_state()`
-- Reads lock state from coordinator data
-- Compares them and triggers sync operations (set_usercode/clear_usercode)
-- Cross-entity dependencies create race conditions during startup
-- Current guard uses `_attr_is_on is None` to avoid initial sync operations
-
-**Proposed Solution:**
-Move sync logic entirely into the coordinator:
-
-- Coordinator already has access to both desired state (from config) and actual
-  state (from lock)
-- Coordinator performs sync operations during its `_async_update_data()` cycle
-- Binary sensor becomes read-only, just displays coordinator's computed in-sync
-  status
-- Text/number/switch entities remain as config views
-
-**Example Implementation:**
-
-```python
-# In coordinator._async_update_data()
-actual_code = await self.provider.get_usercodes()
-desired_code = self.config_entry.data[slot]["pin"]
-
-if actual_code != desired_code and slot_enabled:
-    await self.provider.set_usercode(slot, desired_code)
-
-return {"in_sync": actual_code == desired_code, "actual_code": actual_code}
-```
-
-**Benefits:**
-
-- Eliminates cross-entity state reading
-- Removes `_initial_state_loaded` flag and startup detection logic
-- No race conditions during startup
-- Simpler, more centralized sync logic
-- Coordinator is single source of truth
-
-**Considerations:**
-
-- Major architectural change
-- Would need to update binary sensor to be read-only
-- Config updates still flow through text/switch entities
-- Need to ensure coordinator runs sync on config changes
-
-**Related: Move sync attempt tracker to base provider.** The sync attempt
-tracker (count + time window that detects persistently failing slots) currently
-lives in `binary_sensor.py`. When sync logic moves to the coordinator, the
-tracker should move to `BaseLock` — the base provider owns the tracking state
-(per-slot attempt counts/times), and callers (coordinator, websocket) decide
-the policy (disable + notify, propagate error, etc.).
-
-**Estimated Effort:** High (16-24 hours)
-**Priority:** Medium
-**Status:** Not started
+- Make unload symmetric with setup (unload treats everything as "remove all
+  slots/locks" through the same update_listener path)
+- Upgrade catch-all state tracking to targeted once entities are discovered
+  (currently deferred — modifying subscriptions from within a callback causes
+  timing issues)
 
 ### Convert Config and Internal Dicts to Dataclasses
 
@@ -160,50 +79,6 @@ improves type safety, IDE autocompletion, and code readability.
 
 **Why not Voluptuous?** Voluptuous is for validation, not object instantiation.
 Other options like `dacite` or Pydantic add dependencies.
-
-**Example implementation:**
-
-```python
-@dataclass
-class SlotConfig:
-    name: str
-    pin: str
-    enabled: bool = True
-    calendar: str | None = None
-    number_of_uses: int | None = None
-
-    @classmethod
-    def from_dict(cls, data: dict) -> SlotConfig:
-        return cls(
-            name=data[CONF_NAME],
-            pin=data[CONF_PIN],
-            enabled=data.get(CONF_ENABLED, True),
-            calendar=data.get(CONF_CALENDAR),
-            number_of_uses=data.get(CONF_NUMBER_OF_USES),
-        )
-
-@dataclass
-class LCMConfig:
-    locks: list[str]
-    slots: dict[int, SlotConfig]
-
-    @classmethod
-    def from_entry(cls, entry: ConfigEntry) -> LCMConfig:
-        return cls(
-            locks=get_entry_data(entry, CONF_LOCKS, []),
-            slots={
-                int(k): SlotConfig.from_dict(v)
-                for k, v in get_entry_data(entry, CONF_SLOTS, {}).items()
-            },
-        )
-```
-
-**Places to audit for dict-to-dataclass conversion:**
-
-- `config_entry.data` / `config_entry.options` access patterns
-- `get_entry_data()` / `get_slot_data()` return values
-- Coordinator `self.data` structure
-- Lock provider internal state
 
 ### Handle Disabled Lock Slots
 
@@ -219,10 +94,6 @@ or `Disabled`. Currently the coordinator only stores the code value, not the sta
 
 **Related:** See "Enhance Coordinator Data Model" below.
 
-**Estimated Effort:** Medium (4-8 hours)
-**Priority:** Medium
-**Status:** Not started
-
 ### Enhance Coordinator Data Model with Slot Status
 
 **Current State:** Coordinator stores `{slot: code}` mapping only.
@@ -230,88 +101,17 @@ or `Disabled`. Currently the coordinator only stores the code value, not the sta
 **Proposed Change:** Store `{slot: {code, status}}` where status is a generic
 LCM enum that providers map to.
 
-**Generic Status Enum:**
-
-```python
-class SlotStatus(StrEnum):
-    ENABLED = "enabled"    # Slot has active code
-    AVAILABLE = "available"  # Slot can be used but is empty
-    DISABLED = "disabled"  # Slot cannot be used (locked out)
-```
-
-**Provider Mapping:**
-
-- Z-Wave JS: Maps `userIdStatus` (Enabled/Available/Disabled) → `SlotStatus`
-- Other providers: Map their equivalent states to the generic enum
-
-**Benefits:**
-
-- Frontend can distinguish between "slot is empty" vs "slot is disabled"
-- Better handling of disabled slots in sync logic
-- More accurate representation of lock state
-- Provider-agnostic data model
-
-**Implementation:**
-
-1. Define `SlotStatus` enum in `const.py`
-2. Update Z-Wave JS provider to track userIdStatus and map to `SlotStatus`
-   (currently filtered out in `on_value_updated`)
-3. Change coordinator data schema from `dict[int, str]` to
-   `dict[int, SlotData]` where `SlotData` includes code and status
-4. Update all consumers of coordinator data (binary_sensor, sensor, websocket)
-5. Update frontend types and rendering
-
 **Related: Formalize lock/user/PIN data model with Matter in mind.** Matter
 introduces a richer credential model (users, credentials, credential types)
 that goes beyond simple slot→PIN mappings. When designing the enhanced data
 model, study Matter's DoorLock cluster credential management as a reference
-architecture and consider how it maps to Z-Wave, ZHA, and other lock standards.
-The goal is a provider-agnostic model that can express Matter's concepts without
-over-engineering for simpler protocols.
-
-**Estimated Effort:** High (12-16 hours)
-**Priority:** Medium
-**Status:** Not started
+architecture.
 
 ### Add Optional Flags to `get_config_entry_data` Websocket Command
 
-**Context:** PR #787 consolidated multiple websocket commands into a single
-`get_config_entry_data` command that returns `{config_entry, entities, locks, slots}`.
-However, not all callers need all the data:
-
-| Caller | config_entry | entities | locks | slots |
-| ------ | ------------ | -------- | ----- | ----- |
-| `view-strategy.ts` | ✅ | ❌ | ❌ | ❌ |
-| `generate-view.ts` | ❌ | ❌ | ✅ | ✅ |
-| `slot-section-strategy.ts` (legacy) | ✅ | ✅ | ❌ | ✅ |
-| `dashboard-strategy.ts` | ❌ | ❌ | ✅ | ❌ |
-| `lock-codes-card-editor.ts` | ❌ | ❌ | ✅ | ❌ |
-
-**Cost Analysis:**
-
-- `config_entry` - Very cheap (just `config_entry.as_json_fragment`)
-- `slots` - Very cheap (extracts calendar IDs from config)
-- `locks` - Moderate (iterates locks, gets friendly names via state lookups)
-- `entities` - Most expensive (queries entity registry, maps to `as_partial_dict`)
-
-**Proposed Change:** Add optional `include_entities` and `include_locks` flags
-(default `True` for backwards compatibility). Skip `config_entry` and `slots`
-flags since they're essentially free.
-
-```python
-vol.Optional("include_entities", default=True): bool,
-vol.Optional("include_locks", default=True): bool,
-```
-
-**Benefits:**
-
-- `view-strategy.ts` can skip both entities and locks
-- `dashboard-strategy.ts` and `lock-codes-card-editor.ts` can skip entities
-- Legacy `slot-section-strategy.ts` can skip locks
-
-**Estimated Effort:** Low (2-4 hours)
-**Priority:** Low
-**Status:** Not started
+Not all callers need all the data from `get_config_entry_data`. Add optional
+`include_entities` and `include_locks` flags (default `True` for backwards
+compatibility) to skip expensive entity registry queries when not needed.
 
 ### Entity Registry Change Detection
 
@@ -321,34 +121,7 @@ required).
 ### Add Provider Diagnostic Data Method
 
 Add `get_diagnostic_data()` method to `BaseLock` for exposing provider-specific
-diagnostic information. Keymaster has this pattern with `get_platform_data()`.
-
-**Example Implementation:**
-
-```python
-# In BaseLock
-def get_diagnostic_data(self) -> dict[str, Any]:
-    """Return provider-specific diagnostic data."""
-    return {}
-
-# In ZWaveJSLock
-def get_diagnostic_data(self) -> dict[str, Any]:
-    return {
-        "node_id": self.node.node_id,
-        "home_id": self.node.client.driver.controller.home_id,
-        "client_connected": self.node.client.connected,
-        "config_entry_state": self.lock_config_entry.state.value,
-    }
-```
-
-**Benefits:**
-
-- Easier troubleshooting of provider-specific issues
-- Can be exposed via diagnostics platform or websocket
-
-**Estimated Effort:** Low (2-4 hours)
-**Priority:** Low
-**Status:** Not started
+diagnostic information.
 
 ### Drift Detection Failure Alerting
 
@@ -358,137 +131,6 @@ no visibility to users or entities.
 
 ## Features
 
-### Add Schedule and Entity Condition Types
-
-**Problem:** Users report that managing calendars in HA is too painful for simple
-recurring schedules. Calendars are overkill for "weekdays 9-5" patterns.
-
-**Proposed Solution:** Add alternative condition types alongside `calendar`:
-
-| Condition Type | Use Case |
-| -------------- | -------- |
-| `calendar` | One-time events, external calendar sync (existing) |
-| `schedule` | Recurring weekly patterns via HA schedule helper |
-| `entity` | Custom logic via any binary sensor/input_boolean |
-
-**Implementation:**
-
-1. **Config Flow Changes:**
-   - Add condition type selector (calendar/schedule/entity)
-   - Show appropriate entity selector based on type
-   - `schedule`: EntitySelector filtered to `schedule` domain
-   - `entity`: EntitySelector filtered to `binary_sensor`, `input_boolean`
-
-2. **Binary Sensor Changes:**
-   - Update `_get_entity_state()` to handle different condition types
-   - Schedule entities: check if current time is within schedule (state = "on")
-   - Entity conditions: directly use entity state
-
-3. **Slot Data Model:**
-   - Add `condition_type` field: `calendar | schedule | entity`
-   - Add `condition_entity` field (alternative to `calendar`)
-   - Maintain backward compatibility with existing `calendar` field
-
-4. **Frontend Updates:**
-   - Update slot card to show condition type
-   - Show appropriate icon/label for each type
-
-**Benefits:**
-
-- Schedule helper is much simpler for recurring patterns
-- Entity condition allows maximum flexibility (templates, automations)
-- Calendar remains available for complex/one-time events
-
-**Estimated Effort:** Medium (8-12 hours)
-**Priority:** Medium-High
-**Status:** Not started
-
-### Advanced Calendar Configuration
-
-**Feature Request:** Allow slot number and PIN to be configured directly in
-calendar event metadata, eliminating need for separate slot configuration.
-
-**Design Considerations:**
-
-**Current Behavior:**
-
-- Slot configured in config flow with fixed PIN
-- Calendar event (when present) only controls whether slot is active/inactive
-- PIN and slot number are static configuration
-
-**Proposed Behavior:**
-
-- Calendar event contains slot number and PIN in its metadata
-- User configures regex/pattern to extract slot number and PIN from:
-  - Event title (e.g., "Slot 3: 1234")
-  - Event description
-  - Event location
-  - Custom calendar properties
-
-**Implementation Requirements:**
-
-1. **Config Flow Changes:**
-   - Add "advanced calendar mode" toggle per slot
-   - When enabled, show pattern configuration UI
-   - Pattern fields: slot number regex, PIN regex, which field to parse
-     (title/description/location)
-2. **Entity Changes:**
-   - Calendar event listener needs to parse event metadata
-   - Extract slot number and PIN based on user-defined patterns
-   - Validate extracted values (numeric slot, PIN format)
-3. **Binary Sensor Changes:**
-   - Check if calendar event contains valid extracted values
-   - Use extracted PIN instead of configured PIN
-   - Handle multiple calendar events with different slots
-
-**Example Patterns:**
-
-- Title: "Guest Access: Slot 5, PIN 9876" -> Slot: `\d+`, PIN: `\d{4}$`
-- Description: "Code: 1234 for slot 3" -> Slot: `slot (\d+)`, PIN: `Code: (\d+)`
-- Location: "5:1234" -> Slot: `^(\d+):`, PIN: `:(\d+)$`
-
-**Challenges:**
-
-- Multiple calendar events with different slots
-- Error handling for invalid patterns
-- UI for testing patterns
-- Backward compatibility with existing simple calendar mode
-
-**Estimated Effort:** Very High (40+ hours)
-**Priority:** Medium
-**Status:** Not started
-
-### Add Relevant New Home Assistant Core Features
-
-**Analysis:** Review Home Assistant release notes from 2024.1 through current
-and integrate relevant new features.
-
-**Key Features to Evaluate (2024-2025):**
-
-1. **Entity Category Enhancements** (2024.x)
-   - New entity categories available
-   - **Action:** Review entity category assignments
-2. **Selector Improvements** (2024.x)
-   - New selector types for config flow
-   - **Action:** Review config flow UI for better selectors
-3. **Repair Platform** (2024.x)
-   - Notify users of configuration issues
-   - **Action:** Consider adding repairs for common misconfigurations
-
-**Already Evaluated (No Changes Needed):**
-
-- **Config Entry Runtime Data**: `hass.data[DOMAIN]` correctly holds global
-  cross-config-entry state (lock registry, resource flag). Per-entry data
-  already uses `runtime_data`.
-- **DataUpdateCoordinator `_async_setup()`**: All coordinator setup is
-  synchronous (timer registration). No async initialization needed.
-- **Config Entry Diagnostics**: No significant internal state to expose beyond
-  what's already visible via entities and config entries.
-
-**Estimated Effort:** Low-Medium (4-8 hours)
-**Priority:** Medium
-**Status:** Partially evaluated
-
 ### Add Support for Additional Lock Providers
 
 **Current Providers:**
@@ -496,177 +138,54 @@ and integrate relevant new features.
 - Z-Wave JS (`zwave_js.py`)
 - Virtual (`virtual.py`) - for testing only
 
-**Available Lock Integrations in Home Assistant Core:**
+**High Priority:**
 
-**Smart Home Platforms:**
+- **ZHA (Zigbee Home Automation)** - Very popular, supports many lock brands
+- **Matter** - Future-proof, industry standard (PR open)
+- **MQTT** - Generic protocol, many custom implementations
 
-- `deconz` - deCONZ (Zigbee/Z-Wave gateway)
-- `homematic` - Homematic (CCU)
-- `homematicip_cloud` - Homematic IP Cloud
-- `homekit_controller` - HomeKit accessories
-- `matter` - Matter protocol (PR open)
-- `mqtt` - MQTT locks
-- `smartthings` - SmartThings
-- `zha` - Zigbee Home Automation
-- `zwave_js` - Z-Wave JS (already supported)
-- `zwave_me` - Z-Wave.Me
+**Medium Priority:**
 
-**Brand-Specific Integrations:**
-
-- `abode` - Abode Security
-- `bmw_connected_drive` - BMW Connected Drive
-- `dormakaba_dkey` - Dormakaba dkey
-- `igloohome` - igloohome
-- `kiwi` - Kiwi (Eufy)
-- `loqed` - Loqed Smart Lock
-- `nuki` - Nuki Smart Lock
-- `schlage` - Schlage Encode
-- `sesame` - Sesame Smart Lock
-- `switchbot` - SwitchBot Lock
-- `switchbot_cloud` - SwitchBot Cloud
-- `tedee` - Tedee Smart Lock
-- `yolink` - YoLink
-
-**Security Systems:**
-
-- `simplisafe` - SimpliSafe
-- `verisure` - Verisure
+- **Nuki** - Popular in Europe
+- **Schlage** - Popular in North America
+- **SwitchBot** - Growing popularity
+- **SmartThings** - Large user base
+- **HomeKit Controller** - Apple ecosystem
 
 **Cannot Be Supported** (see README for details):
 
 - `esphome` - No user code API in ESPHome
 - `august`, `yale`, `yalexs_ble`, `yale_smart_alarm` - Library limitations
 
-**Vehicle Integrations:**
+See `AGENTS.md` for implementation approach and `BaseLock` interface.
 
-- `subaru` - Subaru Starlink
-- `tesla_fleet` - Tesla Fleet API
-- `teslemetry` - Teslemetry
-- `tessie` - Tessie (Tesla)
-- `starline` - StarLine
+### Add Relevant New Home Assistant Core Features
 
-**Other Integrations:**
+**Key Features to Evaluate:**
 
-- `fibaro` - Fibaro
-- `freedompro` - Freedompro
-- `insteon` - Insteon
-- `isy994` - Universal Devices ISY
-- `keba` - KEBA EV Charger
-- `overkiz` - Overkiz (Somfy TaHoma)
-- `surepetcare` - Sure Petcare
-- `unifiprotect` - UniFi Protect
-- `vera` - Vera
-- `wallbox` - Wallbox EV Charger
-- `xiaomi_aqara` - Xiaomi Aqara
-
-**Utility/Helper Integrations:**
-
-- `demo` - Demo platform
-- `group` - Lock groups
-- `kitchen_sink` - Testing platform
-- `switch_as_x` - Convert switches to locks
-- `template` - Template locks
-- `homee` - Homee gateway
-
-**Recommended Priorities for Support:**
-
-**High Priority** (popular, widely used):
-
-1. **ZHA (Zigbee Home Automation)** - Very popular, supports many lock brands
-2. **Matter** - Future-proof, industry standard (PR open)
-3. **MQTT** - Generic protocol, many custom implementations
-
-**Medium Priority** (brand-specific, popular):
-
-1. **Nuki** - Popular in Europe
-2. **Schlage** - Popular in North America
-3. **SwitchBot** - Growing popularity
-
-**Low Priority** (niche or less common):
-
-- Vehicle locks (Tesla, BMW, Subaru) - different use case
-- Security system locks - usually managed by their own systems
-- Utility integrations (template, group) - may work without specific provider
-
-**Implementation Approach:**
-
-For each new provider:
-
-1. Create `providers/INTEGRATION_NAME.py`
-2. Subclass `BaseLock`
-3. Implement required methods
-4. Add integration-specific event listeners
-5. Add tests in `tests/INTEGRATION_NAME/test_provider.py`
-6. Update documentation
-
-**Estimated Effort per Provider:** Medium (6-12 hours each)
-**Priority:** Medium-High
-**Status:** Not started
-**Recommended First Addition:** ZHA (Zigbee)
+1. **Selector Improvements** — Review config flow UI for better selectors
+2. **Repair Platform** — Consider adding repairs for common misconfigurations
 
 ### Improve Dashboard UI/UX
-
-**Ideas:**
 
 - Add visual indicator when codes are out of sync
 - Bulk operations (enable/disable multiple slots)
 - Import/export slot configuration
-- QR code generation for PIN sharing
 - History view showing when codes were used
-- Slot templates for quick configuration
-
-**Estimated Effort:** High (20+ hours)
-**Priority:** Medium
-**Status:** Not started
 
 ### Add Service Actions
 
-**Ideas:**
-
 - `lock_code_manager.set_temporary_code` - Create time-limited PIN
 - `lock_code_manager.generate_pin` - Auto-generate secure PIN
-- `lock_code_manager.bulk_enable` - Enable multiple slots at once
-- `lock_code_manager.bulk_disable` - Disable multiple slots at once
-- `lock_code_manager.copy_slot` - Copy configuration from one slot to another
+- `lock_code_manager.bulk_enable` / `bulk_disable` - Enable/disable multiple slots
 - Note: `hard_refresh_usercodes` service already exists for lock-wide refresh.
 
-**Estimated Effort:** Medium (8-16 hours)
-**Priority:** Medium-Low
-**Status:** Not started
-
-### Enhanced Notifications
-
-**Ideas:**
-
-- Notify when PIN is used (already have event entity, could add notification
-  action)
-- Notify when code goes out of sync
-- Notify when calendar event starts (PIN becomes active)
-- Notify when number of uses is depleted
-
-**Estimated Effort:** Medium (6-10 hours)
-**Priority:** Low
-**Status:** Not started
-
 ### Configuration Validation
-
-**Ideas:**
 
 - Warn if PIN is too simple (e.g., "1234", "0000")
 - Warn if multiple slots use same PIN
 - Validate PIN format against lock requirements
 - Check for slot conflicts across config entries
-
-**Estimated Effort:** Low-Medium (4-8 hours)
-**Priority:** Medium
-**Status:** Not started
-
-### Additional Feature Notes
-
-- Better out-of-sync visibility in the UI.
-- Websocket commands expose lock data via `lock_code_manager/subscribe_lock_codes`
-  and slot data via `lock_code_manager/subscribe_code_slot`. The `lcm-lock-codes`
-  and `lcm-slot` frontend cards subscribe to these respectively.
 
 ## Docs and Process
 
