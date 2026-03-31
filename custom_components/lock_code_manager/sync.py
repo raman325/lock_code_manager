@@ -95,6 +95,11 @@ class SlotSyncManager:
         self._lock = lock
         self._slot_num = slot_num
 
+        self._log_prefix = (
+            f"{config_entry.entry_id} ({config_entry.title}): "
+            f"{lock.lock.entity_id} slot {slot_num}"
+        )
+
         # Unique ID components for entity discovery
         base_uid = f"{config_entry.entry_id}|{slot_num}"
         lock_entity_id = lock.lock.entity_id
@@ -189,14 +194,7 @@ class SlotSyncManager:
                 return False
             state = self._get_entity_state(key)
             if state is None or state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                _LOGGER.debug(
-                    "%s (%s): Waiting for %s state for %s slot %s",
-                    self._config_entry.entry_id,
-                    self._config_entry.title,
-                    key,
-                    self._lock.lock.entity_id,
-                    self._slot_num,
-                )
+                _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
         return True
 
@@ -219,10 +217,8 @@ class SlotSyncManager:
 
         if self._in_sync is None and int(self._slot_num) not in self._coordinator.data:
             _LOGGER.debug(
-                "%s (%s): Slot %s not yet in coordinator data, skipping",
-                self._config_entry.entry_id,
-                self._config_entry.title,
-                self._slot_num,
+                "%s: Slot not yet in coordinator data, skipping",
+                self._log_prefix,
             )
             return None
 
@@ -288,35 +284,16 @@ class SlotSyncManager:
                 # Only track set operations — clears always succeed and
                 # shouldn't count toward the sync failure limit
                 self._record_sync_attempt()
-                _LOGGER.debug(
-                    "%s (%s): Set usercode for %s slot %s",
-                    self._config_entry.entry_id,
-                    self._config_entry.title,
-                    self._lock.lock.entity_id,
-                    self._slot_num,
-                )
+                _LOGGER.debug("%s: Set usercode", self._log_prefix)
             else:
                 await self._lock.async_internal_clear_usercode(
                     int(self._slot_num), source="sync"
                 )
-                _LOGGER.debug(
-                    "%s (%s): Cleared usercode for %s slot %s",
-                    self._config_entry.entry_id,
-                    self._config_entry.title,
-                    self._lock.lock.entity_id,
-                    self._slot_num,
-                )
+                _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
             self._retry.cancel()
             return True
         except CodeRejectedError as err:
-            _LOGGER.error(
-                "%s (%s): Code rejected for %s slot %s: %s",
-                self._config_entry.entry_id,
-                self._config_entry.title,
-                self._lock.lock.entity_id,
-                self._slot_num,
-                err,
-            )
+            _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)
             await self._disable_slot(
                 f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
                 f"has been disabled. {err}\n\n"
@@ -326,12 +303,9 @@ class SlotSyncManager:
             return False
         except LockDisconnected as err:
             _LOGGER.debug(
-                "%s (%s): Unable to %s usercode for %s slot %s: %s",
-                self._config_entry.entry_id,
-                self._config_entry.title,
+                "%s: Unable to %s usercode: %s",
+                self._log_prefix,
                 "set" if slot_state.active_state == STATE_ON else "clear",
-                self._lock.lock.entity_id,
-                self._slot_num,
                 err,
             )
             self._retry.schedule()
@@ -410,22 +384,16 @@ class SlotSyncManager:
             if self._in_sync is None:
                 if slot_state.active_state not in (STATE_ON, STATE_OFF):
                     _LOGGER.debug(
-                        "%s (%s): Active entity for %s slot %s has invalid state '%s'",
-                        self._config_entry.entry_id,
-                        self._config_entry.title,
-                        self._lock.lock.entity_id,
-                        self._slot_num,
+                        "%s: Active entity has invalid state '%s'",
+                        self._log_prefix,
                         slot_state.active_state,
                     )
                     return
 
                 self._in_sync = expected_in_sync
                 _LOGGER.debug(
-                    "%s (%s): Initial state loaded for %s slot %s, in_sync=%s",
-                    self._config_entry.entry_id,
-                    self._config_entry.title,
-                    self._lock.lock.entity_id,
-                    self._slot_num,
+                    "%s: Initial state loaded, in_sync=%s",
+                    self._log_prefix,
                     expected_in_sync,
                 )
                 self._write_state()
@@ -442,12 +410,8 @@ class SlotSyncManager:
                     and self._sync_attempts_exceeded()
                 ):
                     _LOGGER.error(
-                        "%s (%s): Sync attempts exceeded for %s slot %s "
-                        "(%s attempts in %s window), disabling slot",
-                        self._config_entry.entry_id,
-                        self._config_entry.title,
-                        self._lock.lock.entity_id,
-                        self._slot_num,
+                        "%s: Sync attempts exceeded (%s in %s window), disabling slot",
+                        self._log_prefix,
                         self._sync_attempt_count,
                         SYNC_ATTEMPT_WINDOW,
                     )
@@ -469,12 +433,9 @@ class SlotSyncManager:
                         await self._coordinator.async_refresh()
                     except UpdateFailed as err:
                         _LOGGER.debug(
-                            "%s (%s): Coordinator refresh failed after sync for %s "
-                            "slot %s, scheduling retry: %s",
-                            self._config_entry.entry_id,
-                            self._config_entry.title,
-                            self._lock.lock.entity_id,
-                            self._slot_num,
+                            "%s: Coordinator refresh failed after sync, "
+                            "scheduling retry: %s",
+                            self._log_prefix,
                             err,
                         )
                         self._retry.schedule()
@@ -567,10 +528,6 @@ class SlotSyncManager:
             self._state_tracking_unsub = tracker.async_remove
             self._tracking_all_states = True
             _LOGGER.debug(
-                "%s (%s): Waiting for dependent entities for %s slot %s, "
-                "tracking all state changes",
-                self._config_entry.entry_id,
-                self._config_entry.title,
-                self._lock.lock.entity_id,
-                self._slot_num,
+                "%s: Waiting for dependent entities, tracking all state changes",
+                self._log_prefix,
             )
