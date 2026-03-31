@@ -33,14 +33,12 @@ from ..const import (
     ATTR_LOCK_CONFIG_ENTRY_ID,
     ATTR_NOTIFICATION_SOURCE,
     ATTR_TO,
-    CONF_LOCKS,
-    CONF_SLOTS,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
     PUSH_SUBSCRIBE_RETRY_DELAY,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
-from ..data import get_entry_data
+from ..data import build_slot_unique_id, find_entry_for_lock_slot
 from ..exceptions import (
     DuplicateCodeError,
     LockDisconnected,
@@ -229,6 +227,11 @@ class BaseLock:
         """Raise ProviderNotImplementedError for unimplemented methods."""
         raise ProviderNotImplementedError(self, method_name, guidance)
 
+    @property
+    def display_name(self) -> str:
+        """Return a human-readable name for this lock."""
+        return self.lock.name or self.lock.original_name or self.lock.entity_id
+
     def mask_pin(self, pin: str | None) -> str:
         """Return a masked representation of a PIN for logging."""
         return mask_pin(
@@ -248,10 +251,9 @@ class BaseLock:
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
         """Return whether a code slot is managed by any LCM config entry for this lock."""
-        return any(
-            self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
-            and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
+        return (
+            find_entry_for_lock_slot(self.hass, self.lock.entity_id, code_slot)
+            is not None
         )
 
     @final
@@ -886,32 +888,19 @@ class BaseLock:
         lock_device_id = self.lock.device_id
         config_entry_id: str | None = None
 
-        try:
-            config_entry = next(
-                config_entry
-                for config_entry in self.hass.config_entries.async_entries(DOMAIN)
-                if (
-                    self.lock.entity_id in get_entry_data(config_entry, CONF_LOCKS, [])
-                    and code_slot is not None
-                    and int(code_slot)
-                    in (
-                        int(slot)
-                        for slot in get_entry_data(config_entry, CONF_SLOTS, {})
-                    )
-                    and (
-                        name_entity_id := self.ent_reg.async_get_entity_id(
-                            TEXT_DOMAIN,
-                            DOMAIN,
-                            f"{config_entry.entry_id}|{code_slot}|{CONF_NAME}",
-                        )
-                    )
-                )
+        if code_slot is not None and (
+            config_entry := find_entry_for_lock_slot(
+                self.hass, lock_entity_id, int(code_slot)
             )
-        except StopIteration:
-            pass
-        else:
+        ):
             config_entry_id = config_entry.entry_id
-            name_state = self.hass.states.get(name_entity_id)
+            name_entity_id = self.ent_reg.async_get_entity_id(
+                TEXT_DOMAIN,
+                DOMAIN,
+                build_slot_unique_id(config_entry_id, int(code_slot), CONF_NAME),
+            )
+            if name_entity_id:
+                name_state = self.hass.states.get(name_entity_id)
 
         from_state: str | None = None
         to_state: str | None = None

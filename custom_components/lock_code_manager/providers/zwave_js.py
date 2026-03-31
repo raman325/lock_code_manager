@@ -53,7 +53,7 @@ from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from ..data import get_entry_data
+from ..data import find_entry_for_lock_slot, get_entry_data
 from ..exceptions import LockDisconnected
 from ..util import async_disable_slot
 from ._base import BaseLock
@@ -394,16 +394,8 @@ class ZWaveJSLock(BaseLock):
         self._set_in_progress_code_slot = None
         if code_slot is None:
             return
-        try:
-            # Only move forward if a config entry manages this lock and code slot - there
-            # can only be one due to our config entry uniqueness requirement.
-            entry = next(
-                entry
-                for entry in self.hass.config_entries.async_entries(DOMAIN)
-                if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
-                and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
-            )
-        except StopIteration:
+        entry = find_entry_for_lock_slot(self.hass, self.lock.entity_id, code_slot)
+        if entry is None:
             return
 
         entry_title = entry.title or entry.entry_id
@@ -428,7 +420,7 @@ class ZWaveJSLock(BaseLock):
             code_slot,
             reason=reason,
             title="Duplicate Lock Code Rejected",
-            lock_name=self.lock.name or self.lock.original_name,
+            lock_name=self.display_name,
             lock_entity_id=lock_ent_id,
         )
 

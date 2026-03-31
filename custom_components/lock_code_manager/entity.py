@@ -26,7 +26,7 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from .data import LockCodeManagerConfigEntry, get_slot_data
+from .data import LockCodeManagerConfigEntry, build_slot_unique_id, get_slot_data
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ class BaseLockCodeManagerEntity(Entity):
             via_device=(DOMAIN, self.entry_id),
         )
 
-        self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
+        self._attr_unique_id = build_slot_unique_id(self.base_unique_id, slot_num, key)
         self._attr_extra_state_attributes: dict[str, int | list[str]] = {
             ATTR_CODE_SLOT: int(slot_num)
         }
@@ -84,7 +84,9 @@ class BaseLockCodeManagerEntity(Entity):
     def _get_uid(self, key: str) -> str:
         """Get and cache unique id for a given key."""
         if key not in self._uid_cache:
-            self._uid_cache[key] = f"{self.base_unique_id}|{self.slot_num}|{key}"
+            self._uid_cache[key] = build_slot_unique_id(
+                self.base_unique_id, self.slot_num, key
+            )
         return self._uid_cache[key]
 
     @callback
@@ -272,8 +274,8 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
                 identifiers=lock.device_entry.identifiers,
             )
 
-        self._attr_unique_id = (
-            f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
+        self._attr_unique_id = build_slot_unique_id(
+            self.base_unique_id, slot_num, self.key, lock.lock.entity_id
         )
 
     def _get_removal_uid(self) -> str:

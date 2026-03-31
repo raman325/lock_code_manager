@@ -102,8 +102,9 @@ class SlotSyncManager:
         )
 
         # Unique ID components for entity discovery
-        base_uid = f"{config_entry.entry_id}|{slot_num}"
+        entry_id = config_entry.entry_id
         lock_entity_id = lock.lock.entity_id
+        base_uid = f"{entry_id}|{slot_num}"
         self._unique_ids: dict[str, tuple[str, str]] = {
             CONF_PIN: (TEXT_DOMAIN, f"{base_uid}|{CONF_PIN}"),
             CONF_NAME: (TEXT_DOMAIN, f"{base_uid}|{CONF_NAME}"),
@@ -332,7 +333,7 @@ class SlotSyncManager:
             self._slot_num,
             reason=reason,
             title=title,
-            lock_name=self._lock.lock.name or self._lock.lock.original_name,
+            lock_name=self._lock.display_name,
             lock_entity_id=self._lock.lock.entity_id,
         )
         self._reset_sync_tracker()

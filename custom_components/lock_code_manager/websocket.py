@@ -536,7 +536,7 @@ def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
         if friendly_name := state.attributes.get(ATTR_FRIENDLY_NAME):
             return friendly_name
     # Fall back to entity registry name/original_name
-    return lock.lock.name or lock.lock.original_name or lock.lock.entity_id
+    return lock.display_name
 
 
 def _serialize_lock_coordinator(
