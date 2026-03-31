@@ -56,6 +56,34 @@ _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
 }
 
 
+def _serialize_source_data(
+    source_data: Event | State | dict[str, Any] | None,
+) -> tuple[Literal["event", "state"] | None, dict[str, Any] | None]:
+    """Serialize an Event, State, or dict into notification_source and extra_data."""
+    if isinstance(source_data, Event):
+        return "event", {
+            "event_type": source_data.event_type,
+            "data": source_data.data,
+            "time_fired": source_data.time_fired.isoformat(),
+        }
+    if isinstance(source_data, State):
+        last_changed_isoformat = source_data.last_changed.isoformat()
+        if source_data.last_changed == source_data.last_updated:
+            last_updated_isoformat = last_changed_isoformat
+        else:
+            last_updated_isoformat = source_data.last_updated.isoformat()
+        return "state", {
+            "entity_id": source_data.entity_id,
+            "state": source_data.state,
+            "attributes": source_data.attributes,
+            "last_changed": last_changed_isoformat,
+            "last_updated": last_updated_isoformat,
+        }
+    if isinstance(source_data, dict):
+        return None, source_data
+    return None, None
+
+
 @dataclass(repr=False, eq=False)
 class BaseLock:
     """
@@ -577,21 +605,29 @@ class BaseLock:
     async def async_internal_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
         is_up = await self.async_is_integration_connected()
-        lock_entry = self.lock_config_entry
-        if self.supports_push and lock_entry:
-            # Only react to connection transitions when the config entry is loaded.
-            if lock_entry.state == ConfigEntryState.LOADED:
-                if self._last_connection_up is False and is_up:
-                    if self.coordinator:
-                        self.hass.async_create_task(
-                            self.coordinator.async_request_refresh(),
-                            f"Refresh coordinator for {self.lock.entity_id} after reconnect",
-                        )
-                    self.subscribe_push_updates()
-                elif self._last_connection_up is True and not is_up:
-                    self.unsubscribe_push_updates()
+        self._handle_connection_transition(is_up)
         self._last_connection_up = is_up
         return is_up
+
+    @final
+    @callback
+    def _handle_connection_transition(self, is_up: bool) -> None:
+        """Handle push subscribe/unsubscribe on connection state transitions."""
+        lock_entry = self.lock_config_entry
+        if not self.supports_push or not lock_entry:
+            return
+        # Only react to connection transitions when the config entry is loaded.
+        if lock_entry.state != ConfigEntryState.LOADED:
+            return
+        if self._last_connection_up is False and is_up:
+            if self.coordinator:
+                self.hass.async_create_task(
+                    self.coordinator.async_request_refresh(),
+                    f"Refresh coordinator for {self.lock.entity_id} after reconnect",
+                )
+            self.subscribe_push_updates()
+        elif self._last_connection_up is True and not is_up:
+            self.unsubscribe_push_updates()
 
     def hard_refresh_codes(self) -> dict[int, str | None]:
         """
@@ -911,31 +947,7 @@ class BaseLock:
             from_state = LockState.LOCKED
             to_state = LockState.UNLOCKED
 
-        notification_source: Literal["event", "state"] | None = None
-        extra_data: dict[str, Any] | None = None
-        if isinstance(source_data, Event):
-            notification_source = "event"
-            extra_data = {
-                "event_type": source_data.event_type,
-                "data": source_data.data,
-                "time_fired": source_data.time_fired.isoformat(),
-            }
-        elif isinstance(source_data, State):
-            notification_source = "state"
-            last_changed_isoformat = source_data.last_changed.isoformat()
-            if source_data.last_changed == source_data.last_updated:
-                last_updated_isoformat = last_changed_isoformat
-            else:
-                last_updated_isoformat = source_data.last_updated.isoformat()
-            extra_data = {
-                "entity_id": source_data.entity_id,
-                "state": source_data.state,
-                "attributes": source_data.attributes,
-                "last_changed": last_changed_isoformat,
-                "last_updated": last_updated_isoformat,
-            }
-        elif isinstance(source_data, dict):
-            extra_data = source_data
+        notification_source, extra_data = _serialize_source_data(source_data)
 
         event_data = {
             ATTR_NOTIFICATION_SOURCE: notification_source,
