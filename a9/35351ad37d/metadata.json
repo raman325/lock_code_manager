@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a935351ad37d",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase3-sync-manager",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a9/35351ad37d/0/metadata.json",
+      "transcript": "/a9/35351ad37d/0/full.jsonl",
+      "content_hash": "/a9/35351ad37d/0/content_hash.txt",
+      "prompt": "/a9/35351ad37d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2416,
+    "cache_creation_tokens": 1833013,
+    "cache_read_tokens": 213142660,
+    "output_tokens": 190993,
+    "api_call_count": 668
+  }
+}
