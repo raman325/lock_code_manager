@@ -165,3 +165,15 @@ or maybe not revert but remove it as part of our design
 ---
 
 I want to review the plan
+
+---
+
+the active plan is wrong
+
+---
+
+ignore me. Let's move forward with Phase 3, and we can do it one PR
+
+---
+
+are there any concerns with 2? Does it add complexity? Is it just leakage of the state domain into the sync domain? It already exists
