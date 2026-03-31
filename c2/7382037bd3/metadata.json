@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c27382037bd3",
+  "strategy": "manual-commit",
+  "branch": "resilience/phase3-sync-manager",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c2/7382037bd3/0/metadata.json",
+      "transcript": "/c2/7382037bd3/0/full.jsonl",
+      "content_hash": "/c2/7382037bd3/0/content_hash.txt",
+      "prompt": "/c2/7382037bd3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2264,
+    "cache_creation_tokens": 1184130,
+    "cache_read_tokens": 146668853,
+    "output_tokens": 161101,
+    "api_call_count": 542
+  }
+}
