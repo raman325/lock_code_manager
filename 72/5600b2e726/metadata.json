@@ -5,10 +5,6 @@
   "branch": "refactor/extract-reusable-helpers",
   "checkpoints_count": 7,
   "files_touched": [
-    "custom_components/lock_code_manager/providers/_base.py",
-    "custom_components/lock_code_manager/providers/zwave_js.py",
-    "custom_components/lock_code_manager/sync.py",
-    "custom_components/lock_code_manager/util.py",
     "custom_components/lock_code_manager/websocket.py"
   ],
   "sessions": [
@@ -26,10 +22,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 3926,
-    "cache_creation_tokens": 5357654,
-    "cache_read_tokens": 386910013,
-    "output_tokens": 328048,
-    "api_call_count": 1178
+    "input_tokens": 3928,
+    "cache_creation_tokens": 5359377,
+    "cache_read_tokens": 388154106,
+    "output_tokens": 328734,
+    "api_call_count": 1180
   }
 }
