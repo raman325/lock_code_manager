@@ -58,7 +58,7 @@ _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
 
 def _serialize_source_data(
     source_data: Event | State | dict[str, Any] | None,
-) -> tuple[str | None, dict[str, Any] | None]:
+) -> tuple[Literal["event", "state"] | None, dict[str, Any] | None]:
     """Serialize an Event, State, or dict into notification_source and extra_data."""
     if isinstance(source_data, Event):
         return "event", {
