@@ -497,14 +497,23 @@ class SlotSyncManager:
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        if self._in_sync is not None and not self._aio_lock.locked():
-            self._hass.async_create_task(
-                self._async_check_and_sync(),
-                name=(
-                    f"lcm_sync_check_{self._lock.lock.entity_id}_slot_{self._slot_num}"
-                ),
-            )
+        """Handle updated data from the coordinator.
+
+        Allows coordinator updates to trigger initial sync (when _in_sync is
+        None) if the slot data is available, so the entity doesn't get stuck
+        uninitialized when the initial async_start check fails.
+        """
+        if self._aio_lock.locked():
+            return
+        # Skip if not started or slot not yet in coordinator data
+        if not self._started:
+            return
+        if self._in_sync is None and int(self._slot_num) not in self._coordinator.data:
+            return
+        self._hass.async_create_task(
+            self._async_check_and_sync(),
+            name=(f"lcm_sync_check_{self._lock.lock.entity_id}_slot_{self._slot_num}"),
+        )
 
     def _setup_coordinator_listener(self) -> None:
         """Subscribe to coordinator updates."""
