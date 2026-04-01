@@ -140,6 +140,7 @@ class SlotSyncManager:
         if self._started:
             return
         self._started = True
+        self._faulted = False
         self._dirty = True
         self._setup_state_tracking()
         self._setup_coordinator_listener()
@@ -485,7 +486,10 @@ class SlotSyncManager:
         """Set up state change tracking for dependent entities.
 
         If all entity IDs are available, tracks only those specific entities.
-        Otherwise, tracks all state changes until entities become available.
+        Otherwise, tracks all state changes via a catch-all subscription that
+        filters by tracked entity IDs in _mark_dirty_if_relevant. The catch-all
+        is not upgraded to targeted tracking later (modifying subscriptions from
+        within a callback causes timing issues).
         """
         self._cleanup_state_tracking()
 

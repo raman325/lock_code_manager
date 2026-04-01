@@ -241,6 +241,7 @@ async def test_startup_no_code_flapping_when_synced(
     # Trigger a tick so the sync manager processes the calendar state change
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
+    assert in_sync_entity_obj is not None
     await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
@@ -446,6 +447,7 @@ async def test_startup_waits_for_valid_active_state(
     # Get the entity object
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
+    assert in_sync_entity_obj is not None
     assert in_sync_entity_obj
 
     # Reset to simulate pre-initial-load state
@@ -511,6 +513,7 @@ async def test_entities_track_availability(
     entity_component = hass.data["entity_components"]["binary_sensor"]
     active_entity_obj = entity_component.get_entity(SLOT_1_ACTIVE_ENTITY)
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
     assert active_entity_obj is not None
     assert in_sync_entity_obj is not None
 
@@ -572,6 +575,7 @@ async def test_handles_disconnected_lock_on_set(
 
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
 
     # Change PIN to trigger sync
     await hass.services.async_call(
@@ -648,6 +652,7 @@ async def test_handles_disconnected_lock_on_clear(
 
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
 
     # Directly trigger the update state method to perform sync
     await in_sync_entity_obj._sync_manager._async_tick()
@@ -674,6 +679,7 @@ async def test_coordinator_refresh_failure_schedules_retry(
 
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
 
     # Clear dirty flag to establish baseline
     in_sync_entity_obj._sync_manager._dirty = False
@@ -765,6 +771,7 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     # Trigger tick to detect mismatch and perform sync
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
+    assert in_sync_entity_obj is not None
     await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
@@ -904,6 +911,7 @@ async def test_sync_disables_slot_on_duplicate_code(
 
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+    assert in_sync_entity_obj is not None
 
     # Change PIN to trigger sync, and mock the provider to raise DuplicateCodeError
     with patch.object(
