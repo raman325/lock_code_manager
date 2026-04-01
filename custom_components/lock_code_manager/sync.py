@@ -414,6 +414,8 @@ class SlotSyncManager:
                 expected_in_sync,
             )
             self._write_state()
+            if not expected_in_sync:
+                self._dirty = True  # schedule sync on next tick
             return
 
         # Out of sync: perform sync
