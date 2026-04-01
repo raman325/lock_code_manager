@@ -1003,8 +1003,8 @@ async def test_sync_tracker_resets_when_back_in_sync(
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
     assert in_sync_entity_obj is not None
 
-    # Simulate some previous sync attempts (but below threshold)
-    in_sync_entity_obj._sync_manager._sync_attempt_count = 2
+    # Simulate a previous sync attempt (below threshold of MAX_SYNC_ATTEMPTS=3)
+    in_sync_entity_obj._sync_manager._sync_attempt_count = 1
     in_sync_entity_obj._sync_manager._sync_attempt_first = dt_util.utcnow()
 
     # Verify currently in sync

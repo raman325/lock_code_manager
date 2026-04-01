@@ -305,6 +305,9 @@ class SlotSyncManager:
                 self._log_prefix,
                 "set" if slot_state.active_state == STATE_ON else "clear",
             )
+            # Count toward circuit breaker so persistent errors eventually
+            # disable the slot instead of retrying forever
+            self._record_sync_attempt()
             self._dirty = True
             return False
 
@@ -401,6 +404,7 @@ class SlotSyncManager:
                     self._log_prefix,
                     slot_state.active_state,
                 )
+                self._dirty = True  # retry next tick
                 return
 
             self._in_sync = expected_in_sync
