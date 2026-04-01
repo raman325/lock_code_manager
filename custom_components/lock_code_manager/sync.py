@@ -338,7 +338,7 @@ class SlotSyncManager:
         self._sync_attempt_first = None
 
     def _record_sync_attempt(self) -> None:
-        """Record a sync attempt (provider call succeeded)."""
+        """Record a sync attempt (successful or failed, counts toward circuit breaker)."""
         now = dt_util.utcnow()
         if (
             self._sync_attempt_first is not None
