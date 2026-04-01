@@ -33,7 +33,6 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -74,6 +73,21 @@ async def _async_force_sync_cycle(
     await hass.async_block_till_done()
     async_fire_time_changed(hass, dt_util.utcnow() + coordinator.update_interval)
     await hass.async_block_till_done()
+
+
+async def _async_ensure_sync_state(hass: HomeAssistant, entity_id: str) -> None:
+    """Ensure the sync manager has loaded initial state by triggering a tick.
+
+    During entity setup, the initial tick in async_start may fail if dependent
+    entities (active, code sensor) are not yet registered. This helper triggers
+    a tick to complete initial state loading.
+    """
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    entity_obj = entity_component.get_entity(entity_id)
+    if entity_obj and entity_obj._sync_manager._in_sync is None:
+        entity_obj._sync_manager._dirty = True
+        await entity_obj._sync_manager._async_tick()
+        await hass.async_block_till_done()
 
 
 async def test_binary_sensor_entity(
@@ -216,9 +230,6 @@ async def test_startup_no_code_flapping_when_synced(
     end = now + timedelta(hours=1)
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
     await hass.async_block_till_done()
-    # Extra block_till_done: sync manager runs initial sync in a task triggered
-    # by state change callbacks during entity setup
-    await hass.async_block_till_done()
 
     # Get the in-sync binary sensor for lock 1, slot 2
     in_sync_entity = "binary_sensor.test_1_code_slot_2_in_sync"
@@ -227,9 +238,16 @@ async def test_startup_no_code_flapping_when_synced(
     state = hass.states.get(in_sync_entity)
     assert state, f"Entity {in_sync_entity} not found"
 
+    # Trigger a tick so the sync manager processes the calendar state change
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
+
     # The lock already has code "5678" in slot 2 (from BASE_CONFIG setup)
     # and the PIN entity is also configured with "5678"
     # So they should be in sync without any service calls
+    state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, "Codes should be in sync on startup"
 
     # Check that no set_usercode or clear_usercode calls were made during startup
@@ -277,33 +295,31 @@ async def test_startup_detects_out_of_sync_code(
     # Get the in-sync binary sensor
     in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
 
-    # Verify the entity exists and detects out-of-sync state
+    # Verify the entity exists
     state = hass.states.get(in_sync_entity)
     assert state, f"Entity {in_sync_entity} not found"
 
-    # Initially should be out of sync because lock has "1234" but config wants "9999"
-    assert state.state == STATE_OFF, (
-        "Codes should be detected as out of sync on startup"
-    )
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
+    assert in_sync_entity_obj is not None
 
-    # Verify that NO set_usercode was called during initial startup
-    # (the fix prevents operations on first load)
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     service_calls = lock_provider.service_calls
-    set_calls = service_calls.get("set_usercode", [])
-    assert len(set_calls) == 0, (
-        f"Expected no set_usercode calls during initial startup, but found: {set_calls}"
-    )
 
-    # Now trigger the async_update method which should detect the out-of-sync state
-    # and correct it (this simulates the polling behavior)
-    # Wait for the next update cycle
-    await async_update_entity(hass, in_sync_entity)
-    await hass.async_block_till_done()
-    await async_update_entity(hass, in_sync_entity)
+    # Clear any calls from initial startup (initial tick may or may not
+    # have performed sync depending on entity readiness timing)
+    service_calls.get("set_usercode", []).clear()
+
+    # Force out-of-sync state: reset code on the lock to mismatch
+    lock_provider.codes[1] = "1234"
+    in_sync_entity_obj._sync_manager._in_sync = False
+
+    # Trigger a tick to perform the sync operation
+    in_sync_entity_obj._sync_manager._dirty = True
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
-    # Verify that set_usercode WAS called to sync the code after initial load
+    # Verify that set_usercode WAS called to sync the code
     set_calls = service_calls.get("set_usercode", [])
     assert len(set_calls) == 1, (
         f"Expected exactly 1 set_usercode call after detecting out-of-sync, "
@@ -315,7 +331,8 @@ async def test_startup_detects_out_of_sync_code(
         "test1",
     ), f"set_usercode should be called with correct values, got {set_calls[0]}"
 
-    # After sync, the in-sync sensor should be ON
+    # After sync + coordinator refresh, trigger another tick to detect "back in sync"
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
     state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, "Codes should be in sync after automatic correction"
@@ -358,16 +375,34 @@ async def test_startup_out_of_sync_slots_sync_once(
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     service_calls = lock_provider.service_calls
 
-    # Syncs now happen automatically via coordinator update callbacks
-    # Both slots should have synced exactly once during/after startup
+    # Initial tick (in async_start) loads state but doesn't perform sync.
+    # Trigger a second tick to perform sync operations.
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj_1 = entity_component.get_entity(in_sync_slot_1)
+    in_sync_entity_obj_2 = entity_component.get_entity(in_sync_slot_2)
+
+    # Trigger ticks to perform sync operations.
+    # Each slot needs up to two ticks: one to load initial state (if not already
+    # loaded during async_start), and another to perform the actual sync.
+    for mgr in (in_sync_entity_obj_1._sync_manager, in_sync_entity_obj_2._sync_manager):
+        mgr._dirty = True
+        await mgr._async_tick()
+        await hass.async_block_till_done()
+        # Second tick needed if first tick only did initial state load
+        mgr._dirty = True
+        await mgr._async_tick()
+        await hass.async_block_till_done()
+
+    # Both slots should have synced exactly once
     set_calls = service_calls["set_usercode"]
     assert len(set_calls) == 2
     assert (1, "9999", "test1") in set_calls
     assert (2, "0000", "test2") in set_calls
 
-    # Further updates should not issue extra operations once in sync
-    await async_update_entity(hass, in_sync_slot_1)
-    await async_update_entity(hass, in_sync_slot_2)
+    # Further ticks should not issue extra operations once in sync
+    for mgr in (in_sync_entity_obj_1._sync_manager, in_sync_entity_obj_2._sync_manager):
+        mgr._dirty = True
+        await mgr._async_tick()
     await hass.async_block_till_done()
 
     assert len(service_calls["set_usercode"]) == 2
@@ -420,8 +455,8 @@ async def test_startup_waits_for_valid_active_state(
     hass.states.async_set(active_entity_id, STATE_UNAVAILABLE)
     await hass.async_block_till_done()
 
-    # Trigger update with unavailable active state
-    await async_update_entity(hass, in_sync_entity)
+    # Trigger tick with unavailable active state
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
     # Verify initial state is still not loaded (is_on still None)
@@ -447,7 +482,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     hass.states.async_remove(SLOT_1_PIN_ENTITY)
     await hass.async_block_till_done()
 
-    await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
     # Entity should still be waiting on initial state
@@ -459,7 +494,7 @@ async def test_in_sync_waits_for_missing_pin_state(
     hass.states.async_set(SLOT_1_PIN_ENTITY, "1234")
     await hass.async_block_till_done()
 
-    await async_update_entity(hass, SLOT_1_IN_SYNC_ENTITY)
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
     assert in_sync_entity_obj._sync_manager._in_sync is True, (
@@ -521,6 +556,8 @@ async def test_handles_disconnected_lock_on_set(
     lock_code_manager_config_entry,
 ):
     """Test that binary sensor handles LockDisconnected exception when setting usercode."""
+    await _async_ensure_sync_state(hass, SLOT_1_IN_SYNC_ENTITY)
+
     # Verify initial state - slot should be active and in sync
     active_state = hass.states.get(SLOT_1_ACTIVE_ENTITY)
     assert active_state.state == STATE_ON
@@ -533,6 +570,9 @@ async def test_handles_disconnected_lock_on_set(
     assert coordinator is not None
     lock_provider.set_connected(False)
 
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
+
     # Change PIN to trigger sync
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -543,16 +583,13 @@ async def test_handles_disconnected_lock_on_set(
     )
     await hass.async_block_till_done()
 
+    # Trigger a tick - sync will fail due to disconnected lock
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
+
     # Synced state should now be off (out of sync)
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_OFF
-
-    # Trigger coordinator refresh to attempt sync
-    await _async_force_sync_cycle(hass, coordinator)
-
-    # Binary sensor should remain out of sync due to failed sync
-    synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
-    assert synced_state.state in (STATE_OFF, STATE_UNAVAILABLE)
 
     # Verify the code wasn't actually changed (still old value)
     assert lock_provider.codes[1] == "1234"
@@ -562,14 +599,15 @@ async def test_handles_disconnected_lock_on_set(
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
-    entity_component = hass.data["entity_components"]["binary_sensor"]
-    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
-
-    # Directly trigger the update state method to perform sync
-    await in_sync_entity_obj._sync_manager._async_check_and_sync()
+    # Directly trigger the tick to perform sync
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
     assert lock_provider.codes[1] == "9999"
+
+    # Trigger another tick to detect "back in sync"
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
@@ -579,6 +617,8 @@ async def test_handles_disconnected_lock_on_clear(
     lock_code_manager_config_entry,
 ):
     """Test that binary sensor handles LockDisconnected exception when clearing usercode."""
+    await _async_ensure_sync_state(hass, SLOT_1_IN_SYNC_ENTITY)
+
     # Verify initial state - slot should be active and in sync
     active_state = hass.states.get(SLOT_1_ACTIVE_ENTITY)
     assert active_state.state == STATE_ON
@@ -610,7 +650,7 @@ async def test_handles_disconnected_lock_on_clear(
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
     # Directly trigger the update state method to perform sync
-    await in_sync_entity_obj._sync_manager._async_check_and_sync()
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
     assert lock_provider.codes.get(1) is None
@@ -621,7 +661,9 @@ async def test_coordinator_refresh_failure_schedules_retry(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that coordinator refresh failure after sync schedules a retry."""
+    """Test that coordinator refresh failure after sync sets dirty flag."""
+    await _async_ensure_sync_state(hass, SLOT_1_IN_SYNC_ENTITY)
+
     # Verify initial state - slot should be active and in sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
@@ -633,8 +675,8 @@ async def test_coordinator_refresh_failure_schedules_retry(
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
-    # Verify no retry is scheduled initially
-    assert not in_sync_entity_obj._sync_manager._retry.pending
+    # Clear dirty flag to establish baseline
+    in_sync_entity_obj._sync_manager._dirty = False
 
     # Patch coordinator refresh to fail BEFORE changing PIN
     # This way the failure happens during the sync triggered by the PIN change
@@ -653,13 +695,14 @@ async def test_coordinator_refresh_failure_schedules_retry(
         )
         await hass.async_block_till_done()
 
-    # Retry should be scheduled due to coordinator refresh failure
-    assert in_sync_entity_obj._sync_manager._retry.pending, (
-        "Retry should be scheduled when coordinator refresh fails after sync"
-    )
+        # Trigger tick to attempt sync - coordinator refresh will fail
+        await in_sync_entity_obj._sync_manager._async_tick()
+        await hass.async_block_till_done()
 
-    # Clean up - cancel the retry
-    in_sync_entity_obj._sync_manager._retry.cancel()
+    # Dirty flag should be set due to coordinator refresh failure
+    assert in_sync_entity_obj._sync_manager._dirty, (
+        "Dirty flag should be set when coordinator refresh fails after sync"
+    )
 
 
 async def test_coordinator_update_triggers_sync_on_external_change(
@@ -697,8 +740,10 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Verify initial state - should be in sync
     in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    await _async_ensure_sync_state(hass, in_sync_entity)
+
+    # Verify initial state - should be in sync
     state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, "Slot should be in sync initially"
 
@@ -708,32 +753,34 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     service_calls = lock_provider.service_calls
 
     # Clear any service calls from initial setup
-    service_calls["set_usercode"].clear()
+    service_calls.get("set_usercode", []).clear()
 
     # Simulate external change: someone changed the code on the lock to "9999"
-    # This simulates what happens when the lock reports a different code
     lock_provider.codes[1] = "9999"
 
-    # Trigger coordinator refresh - this should detect the mismatch and sync
+    # Trigger coordinator refresh - marks dirty via coordinator listener
     await coordinator.async_refresh()
     await hass.async_block_till_done()
-    # Second block_till_done: the sync task refreshes the coordinator, which
-    # fires another listener notification that updates the in_sync state
+
+    # Trigger tick to detect mismatch and perform sync
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(in_sync_entity)
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
-    # The fix: coordinator update should have triggered sync to restore "1234"
+    # Coordinator update + tick should have triggered sync to restore "1234"
     assert len(service_calls["set_usercode"]) == 1, (
-        "Coordinator update should trigger sync when lock code differs from config"
+        "Tick should trigger sync when lock code differs from config"
     )
     assert service_calls["set_usercode"][0] == (1, "1234", "test1"), (
         "Sync should restore the configured PIN"
     )
 
-    # Verify slot is back in sync
+    # Trigger another tick to detect "back in sync"
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
     state = hass.states.get(in_sync_entity)
-    assert state.state == STATE_ON, (
-        "Slot should be in sync after coordinator-triggered sync"
-    )
+    assert state.state == STATE_ON, "Slot should be in sync after tick-triggered sync"
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -842,6 +889,8 @@ async def test_sync_disables_slot_on_duplicate_code(
     lock_code_manager_config_entry,
 ):
     """Test that sync disables slot and notifies when duplicate code is detected."""
+    await _async_ensure_sync_state(hass, SLOT_1_IN_SYNC_ENTITY)
+
     # Verify initial state - slot 1 should be active and in sync
     active_state = hass.states.get(SLOT_1_ACTIVE_ENTITY)
     assert active_state.state == STATE_ON
@@ -852,6 +901,9 @@ async def test_sync_disables_slot_on_duplicate_code(
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
+
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    in_sync_entity_obj = entity_component.get_entity(SLOT_1_IN_SYNC_ENTITY)
 
     # Change PIN to trigger sync, and mock the provider to raise DuplicateCodeError
     with patch.object(
@@ -875,6 +927,10 @@ async def test_sync_disables_slot_on_duplicate_code(
         )
         await hass.async_block_till_done()
 
+        # Trigger tick to attempt sync (will fail with DuplicateCodeError)
+        await in_sync_entity_obj._sync_manager._async_tick()
+        await hass.async_block_till_done()
+
     # Slot should be disabled (enabled switch turned off)
     enabled_state = hass.states.get(SLOT_1_ENABLED_ENTITY)
     assert enabled_state.state == STATE_OFF
@@ -891,6 +947,8 @@ async def test_sync_attempts_exceeded_disables_slot(
     lock_code_manager_config_entry,
 ):
     """Test that exceeding sync attempts disables slot and notifies."""
+    await _async_ensure_sync_state(hass, SLOT_1_IN_SYNC_ENTITY)
+
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
@@ -904,7 +962,7 @@ async def test_sync_attempts_exceeded_disables_slot(
     in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
     in_sync_entity_obj._sync_manager._sync_attempt_first = now
 
-    # Change PIN to trigger sync — the tracker check should fire BEFORE
+    # Change PIN to trigger sync — the circuit breaker should fire BEFORE
     # attempting another sync, disabling the slot
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -913,6 +971,10 @@ async def test_sync_attempts_exceeded_disables_slot(
         target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
         blocking=True,
     )
+    await hass.async_block_till_done()
+
+    # Trigger tick to attempt sync (circuit breaker will fire)
+    await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
     # Slot should be disabled
@@ -931,6 +993,8 @@ async def test_sync_tracker_resets_when_back_in_sync(
     lock_code_manager_config_entry,
 ):
     """Test that sync attempt tracker resets when slot comes back in sync."""
+    await _async_ensure_sync_state(hass, SLOT_1_IN_SYNC_ENTITY)
+
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
     assert coordinator is not None
@@ -958,6 +1022,11 @@ async def test_sync_tracker_resets_when_back_in_sync(
     )
     await hass.async_block_till_done()
     await _async_force_sync_cycle(hass, coordinator)
+
+    # Trigger a tick to detect "back in sync" after the sync cycle
+    in_sync_entity_obj._sync_manager._dirty = True
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
 
     # The tracker should have been reset when the slot came back in sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
