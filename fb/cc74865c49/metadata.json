@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "fbcc74865c49",
+  "strategy": "manual-commit",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "custom_components/lock_code_manager/const.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fb/cc74865c49/0/metadata.json",
+      "transcript": "/fb/cc74865c49/0/full.jsonl",
+      "content_hash": "/fb/cc74865c49/0/content_hash.txt",
+      "prompt": "/fb/cc74865c49/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2748,
+    "cache_creation_tokens": 3736943,
+    "cache_read_tokens": 347691664,
+    "output_tokens": 245671,
+    "api_call_count": 896
+  }
+}
