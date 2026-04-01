@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8a7bdb5d1fa2",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-01T05:03:32.384292Z",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_binary_sensor.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "93f8b7aef38c",
+  "token_usage": {
+    "input_tokens": 2920,
+    "cache_creation_tokens": 5252166,
+    "cache_read_tokens": 452259148,
+    "output_tokens": 282329,
+    "api_call_count": 1044
+  },
+  "session_metrics": {
+    "turn_count": 90
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-01T05:03:28.760162Z",
+    "agent_lines": 0,
+    "human_added": 13,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 13,
+    "agent_percentage": 0
+  }
+}
