@@ -110,7 +110,6 @@ BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=5)
-RETRY_DELAY = timedelta(seconds=10)
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 PUSH_SUBSCRIBE_RETRY_DELAY = timedelta(seconds=10)

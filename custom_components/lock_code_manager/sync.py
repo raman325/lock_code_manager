@@ -26,7 +26,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     TrackStates,
@@ -361,6 +361,19 @@ class SlotSyncManager:
         """Mark slot as needing sync check on next tick."""
         self._dirty = True
 
+    @callback
+    def _mark_dirty_if_relevant(self, event: Event[EventStateChangedData]) -> None:
+        """Mark dirty only if the state change is for a tracked entity.
+
+        Used by the catch-all state tracking fallback to avoid setting dirty
+        on every HA state change. Falls back to always-dirty if entity IDs
+        haven't been discovered yet.
+        """
+        if not self._tracked_entity_ids or (
+            event.data["entity_id"] in self._tracked_entity_ids
+        ):
+            self._dirty = True
+
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
         if not self._dirty:
@@ -472,7 +485,7 @@ class SlotSyncManager:
             tracker = async_track_state_change_filtered(
                 self._hass,
                 TrackStates(True, set(), set()),
-                self._mark_dirty,
+                self._mark_dirty_if_relevant,
             )
             self._state_tracking_unsub = tracker.async_remove
             self._tracking_all_states = True

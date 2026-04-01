@@ -1023,7 +1023,12 @@ async def test_sync_tracker_resets_when_back_in_sync(
     await hass.async_block_till_done()
     await _async_force_sync_cycle(hass, coordinator)
 
-    # Trigger a tick to detect "back in sync" after the sync cycle
+    # First tick: performs the sync operation (sets code on lock)
+    in_sync_entity_obj._sync_manager._dirty = True
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
+
+    # Second tick: detects "back in sync" after coordinator refreshed
     in_sync_entity_obj._sync_manager._dirty = True
     await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
