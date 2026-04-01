@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "272ab318c4a6",
+  "strategy": "manual-commit",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_binary_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/27/2ab318c4a6/0/metadata.json",
+      "transcript": "/27/2ab318c4a6/0/full.jsonl",
+      "content_hash": "/27/2ab318c4a6/0/content_hash.txt",
+      "prompt": "/27/2ab318c4a6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2825,
+    "cache_creation_tokens": 4471569,
+    "cache_read_tokens": 394046836,
+    "output_tokens": 263389,
+    "api_call_count": 963
+  }
+}
