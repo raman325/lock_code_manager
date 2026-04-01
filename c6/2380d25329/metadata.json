@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c62380d25329",
+  "strategy": "manual-commit",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c6/2380d25329/0/metadata.json",
+      "transcript": "/c6/2380d25329/0/full.jsonl",
+      "content_hash": "/c6/2380d25329/0/content_hash.txt",
+      "prompt": "/c6/2380d25329/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2750,
+    "cache_creation_tokens": 3737637,
+    "cache_read_tokens": 349054166,
+    "output_tokens": 247461,
+    "api_call_count": 898
+  }
+}
