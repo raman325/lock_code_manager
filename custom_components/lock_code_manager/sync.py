@@ -117,7 +117,6 @@ class SlotSyncManager:
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
         self._dirty: bool = False
-        self._faulted: bool = False
 
         # Circuit breaker
         self._sync_attempt_count: int = 0
@@ -140,7 +139,6 @@ class SlotSyncManager:
         if self._started:
             return
         self._started = True
-        self._faulted = False
         self._dirty = True
         self._setup_state_tracking()
         self._setup_coordinator_listener()
@@ -313,12 +311,7 @@ class SlotSyncManager:
             return False
 
     async def _disable_slot(self, reason: str, title: str) -> None:
-        """Disable the slot and create a persistent notification.
-
-        Sets _faulted to stop sync attempts until the manager is restarted
-        (e.g., when the user re-enables the slot and the entity reloads).
-        """
-        self._faulted = True
+        """Disable the slot and create a persistent notification."""
         await async_disable_slot(
             self._hass,
             self._ent_reg,
@@ -386,7 +379,7 @@ class SlotSyncManager:
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
-        if not self._started or self._faulted or not self._dirty:
+        if not self._started or not self._dirty:
             return
         self._dirty = False
 

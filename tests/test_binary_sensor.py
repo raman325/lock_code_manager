@@ -380,7 +380,9 @@ async def test_startup_out_of_sync_slots_sync_once(
     # Trigger a second tick to perform sync operations.
     entity_component = hass.data["entity_components"]["binary_sensor"]
     in_sync_entity_obj_1 = entity_component.get_entity(in_sync_slot_1)
+    assert in_sync_entity_obj_1 is not None
     in_sync_entity_obj_2 = entity_component.get_entity(in_sync_slot_2)
+    assert in_sync_entity_obj_2 is not None
 
     # Trigger ticks to perform sync operations.
     # Each slot needs up to two ticks: one to load initial state (if not already
