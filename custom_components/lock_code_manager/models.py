@@ -52,3 +52,57 @@ class SlotState:
     name_state: str | None
     code_state: str
     coordinator_code: str | SlotCode | None
+
+
+@dataclass
+class SlotEntityIds:
+    """Entity IDs for a single slot's LCM entities."""
+
+    slot_num: int
+    config_entry_id: str | None = None
+    name: str | None = None
+    pin: str | None = None
+    active: str | None = None
+    enabled: str | None = None
+
+    def all_ids(self) -> list[str]:
+        """Return all non-None entity IDs."""
+        return [eid for eid in (self.name, self.pin, self.active, self.enabled) if eid]
+
+
+@dataclass
+class SlotMetadata:
+    """Metadata for a single slot from LCM entities."""
+
+    name: str | None = None
+    configured_pin: str | None = None
+    active: bool | None = None
+    enabled: bool | None = None
+
+
+@dataclass
+class SlotEntityData:
+    """Entity IDs and data for a single slot."""
+
+    slot_num: int
+    name_entity_id: str | None = None
+    pin_entity_id: str | None = None
+    enabled_entity_id: str | None = None
+    active_entity_id: str | None = None
+    number_of_uses_entity_id: str | None = None
+    event_entity_id: str | None = None
+
+    def all_entity_ids(self) -> list[str]:
+        """Return all non-None entity IDs for state tracking."""
+        return [
+            eid
+            for eid in (
+                self.name_entity_id,
+                self.pin_entity_id,
+                self.enabled_entity_id,
+                self.active_entity_id,
+                self.number_of_uses_entity_id,
+                self.event_entity_id,
+            )
+            if eid
+        ]
