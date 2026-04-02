@@ -96,6 +96,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
     EXCLUDED_CONDITION_PLATFORMS,
+    SlotCode,
 )
 from .data import get_entry_data
 from .providers import BaseLock
@@ -338,7 +339,7 @@ def _slot_sort_key(slot: Any) -> tuple[int, str]:
 
 def _serialize_slot(
     slot: Any,
-    code: str | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     name: str | None = None,
@@ -369,6 +370,23 @@ def _serialize_slot(
         result[CONF_ENABLED] = enabled
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
+
+    # Normalize SlotCode sentinels for serialization
+    if code is SlotCode.EMPTY:
+        code = None
+    elif code is SlotCode.UNKNOWN:
+        # Has a code but value is hidden; treat as having a code with unknown length
+        result[ATTR_CODE] = None
+        result[ATTR_CODE_LENGTH] = -1
+
+        # Configured code from LCM (desired state) - always include for managed slots
+        if configured_code is not None:
+            if reveal:
+                result[ATTR_CONFIGURED_CODE] = configured_code
+            else:
+                result[ATTR_CONFIGURED_CODE_LENGTH] = len(configured_code)
+
+        return result
 
     # Code on the lock (actual state)
     if reveal or code is None:
@@ -857,7 +875,12 @@ def _build_lock_status(
     code_length = None
     if coordinator and coordinator.data:
         raw_code = coordinator.data.get(slot_num)
-        if raw_code is not None:
+        if raw_code is SlotCode.EMPTY:
+            pass  # treat as no code (code_on_lock stays None)
+        elif raw_code is SlotCode.UNKNOWN:
+            # Has a code but value is hidden
+            code_length = -1
+        elif raw_code is not None:
             if reveal:
                 code_on_lock = raw_code
             else:

@@ -46,13 +46,14 @@ from .const import (
     MAX_SYNC_ATTEMPTS,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
+    SlotCode,
 )
 from .exceptions import CodeRejectedError, LockDisconnected
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
     from .coordinator import LockUsercodeUpdateCoordinator
-    from .data import LockCodeManagerConfigEntry
+    from .models import LockCodeManagerConfigEntry
     from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ class SlotState:
     pin_state: str
     name_state: str | None
     code_state: str
-    coordinator_code: str | None
+    coordinator_code: str | SlotCode | None
 
 
 class SlotSyncManager:
@@ -263,8 +264,13 @@ class SlotSyncManager:
             else slot_state.code_state
         )
         if slot_state.active_state == STATE_ON:
+            if lock_code is SlotCode.UNKNOWN:
+                return True  # can't compare, assume in sync
+            if lock_code is SlotCode.EMPTY:
+                return False  # need to set
             return slot_state.pin_state == lock_code
-        return lock_code == ""
+        # active_state == STATE_OFF
+        return lock_code is SlotCode.EMPTY or lock_code == ""
 
     # -- Sync execution ------------------------------------------------------
 
