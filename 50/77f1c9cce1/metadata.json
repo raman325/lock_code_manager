@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "5077f1c9cce1",
+  "strategy": "manual-commit",
+  "branch": "refactor/slot-code-enum",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/50/77f1c9cce1/0/metadata.json",
+      "transcript": "/50/77f1c9cce1/0/full.jsonl",
+      "content_hash": "/50/77f1c9cce1/0/content_hash.txt",
+      "prompt": "/50/77f1c9cce1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4161,
+    "cache_creation_tokens": 8376340,
+    "cache_read_tokens": 777268349,
+    "output_tokens": 425178,
+    "api_call_count": 1695
+  }
+}
