@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "65d9de54872a",
+  "strategy": "manual-commit",
+  "branch": "refactor/slot-code-enum",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/65/d9de54872a/0/metadata.json",
+      "transcript": "/65/d9de54872a/0/full.jsonl",
+      "content_hash": "/65/d9de54872a/0/content_hash.txt",
+      "prompt": "/65/d9de54872a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3882,
+    "cache_creation_tokens": 8015845,
+    "cache_read_tokens": 736837026,
+    "output_tokens": 369074,
+    "api_call_count": 1462
+  }
+}
