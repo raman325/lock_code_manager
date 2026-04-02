@@ -1,0 +1,41 @@
+does the docstring accurately reflect the class for the Slot Sync class?
+
+---
+
+yes
+
+---
+
+run the code review skill on this PR
+
+---
+
+fix all but don't commit
+
+---
+
+the try at L399 seems redundant. There's nothing to get an exception from, code seemed fine as is before
+
+---
+
+are all of these broken out exception handlers reallyl necessary? do we expect all of these conditions to occur in each of these places and should we instead handle them at an abstraction level above somewhere?
+
+---
+
+go for it but the try should only wrap things that will raiser  evyerthing else goes in else:
+
+---
+
+are we sure we are setting _dirty at the right place?
+
+---
+
+unstage everything for now so I can see all changes
+
+---
+
+L389 are we sure there's a need for this level of granularity? have we traced why we'd get to these states
+
+---
+
+are there any other YAGNI changes in this PR? let's start with what's unstaged then look at what's in the PR

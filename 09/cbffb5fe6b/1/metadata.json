@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "09cbffb5fe6b",
+  "session_id": "48741139-7324-4848-afb8-1f2ed5118058",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-02T02:46:03.036271Z",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 9,
+  "files_touched": [
+    ".github/hooks/entire.json",
+    ".opencode/plugins/entire.ts",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "05e4c4eedc77",
+  "token_usage": {
+    "input_tokens": 329951,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 12003840,
+    "output_tokens": 28803,
+    "api_call_count": 104
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-02T02:46:02.497346Z",
+    "agent_lines": 0,
+    "human_added": 248,
+    "human_modified": 86,
+    "human_removed": 0,
+    "total_committed": 281,
+    "agent_percentage": 0
+  }
+}
