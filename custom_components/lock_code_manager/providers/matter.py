@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -21,8 +20,6 @@ from ..exceptions import LockCodeManagerError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 
-_LOGGER = logging.getLogger(__name__)
-
 MATTER_DOMAIN = "matter"
 
 
@@ -31,7 +28,11 @@ async def _async_call_matter_service(
     service: str,
     service_data: dict[str, Any],
 ) -> dict[str, Any]:
-    """Call a Matter service and return the response, mapping errors to LCM exceptions."""
+    """Call a Matter service and return the per-entity response data.
+
+    Calls the service, validates the response contains data for this lock's
+    entity ID, and returns the per-entity dict directly.
+    """
     try:
         result = await lock.hass.services.async_call(
             MATTER_DOMAIN,
@@ -45,12 +46,12 @@ async def _async_call_matter_service(
             f"Matter service {MATTER_DOMAIN}.{service} failed for "
             f"{lock.lock.entity_id}: {err}"
         ) from err
-    if result is None:
+    if not isinstance(result, dict) or lock.lock.entity_id not in result:
         raise LockCodeManagerError(
             f"Matter service {MATTER_DOMAIN}.{service} returned no data for "
             f"{lock.lock.entity_id}"
         )
-    return result
+    return result[lock.lock.entity_id]
 
 
 @dataclass(repr=False, eq=False)
@@ -74,12 +75,11 @@ class MatterLock(BaseLock):
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Validate the lock supports Matter user management."""
-        result = await _async_call_matter_service(
+        lock_info = await _async_call_matter_service(
             self,
             "get_lock_info",
             {"entity_id": self.lock.entity_id},
         )
-        lock_info = result[self.lock.entity_id]
         if not lock_info.get("supports_user_management"):
             raise LockCodeManagerError(
                 f"Matter lock {self.lock.entity_id} does not support user management"
@@ -117,12 +117,11 @@ class MatterLock(BaseLock):
         if not code_slots:
             return {}
 
-        result = await _async_call_matter_service(
+        lock_data = await _async_call_matter_service(
             self,
             "get_lock_users",
             {"entity_id": self.lock.entity_id},
         )
-        lock_data = result[self.lock.entity_id]
         users: list[dict[str, Any]] = lock_data.get("users", [])
 
         # Build a set of credential indices that have PIN credentials
@@ -173,19 +172,15 @@ class MatterLock(BaseLock):
         Returns True if a credential was cleared, False if the slot was already empty.
         """
         # Check if credential exists before clearing
-        try:
-            result = await _async_call_matter_service(
-                self,
-                "get_lock_credential_status",
-                {
-                    "entity_id": self.lock.entity_id,
-                    "credential_type": "pin",
-                    "credential_index": code_slot,
-                },
-            )
-        except LockDisconnected:
-            raise
-        lock_data = result[self.lock.entity_id]
+        lock_data = await _async_call_matter_service(
+            self,
+            "get_lock_credential_status",
+            {
+                "entity_id": self.lock.entity_id,
+                "credential_type": "pin",
+                "credential_index": code_slot,
+            },
+        )
         if not lock_data.get("credential_exists"):
             return False
 
