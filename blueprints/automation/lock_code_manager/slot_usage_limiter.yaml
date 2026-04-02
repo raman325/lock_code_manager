@@ -8,6 +8,14 @@ blueprint:
     when the slot is re-enabled in Lock Code Manager.
 
 
+    **Special values**
+
+    - Set the counter to **-1** for unlimited uses (counter stays at -1,
+      slot is never disabled).
+
+    - Set the counter to **0** to immediately disable the slot on next use.
+
+
     **Requirements**
 
     This blueprint requires at least one lock that supports code slot events
@@ -18,7 +26,7 @@ blueprint:
     **Setup**
 
     1. Create an `input_number` helper (Settings → Devices & Services → Helpers)
-       with min=0, max=your desired limit, and step=1.
+       with min=-1, max=your desired limit, and step=1.
 
     2. Import this blueprint and configure it with the PIN used event entity,
        enabled switch entity, and the helper you just created.
@@ -47,8 +55,9 @@ blueprint:
     uses_counter:
       name: Uses counter
       description: >
-        An `input_number` helper that tracks remaining uses.
-        Create one via Settings → Devices & Services → Helpers.
+        An `input_number` helper that tracks remaining uses. Set to -1 for
+        unlimited uses. Create one via Settings → Devices & Services → Helpers
+        (set min to -1).
       selector:
         entity:
           domain: input_number
@@ -57,13 +66,22 @@ blueprint:
       description: >
         When greater than 0, the counter is automatically reset to this value
         each time the Lock Code Manager slot is re-enabled. Set to 0 to
-        disable auto-reset.
+        disable auto-reset. Set to -1 for unlimited uses on re-enable.
       default: 0
       selector:
         number:
-          min: 0
+          min: -1
           max: 999
           mode: box
+    notify_target:
+      name: Notification service (optional)
+      description: >
+        A notification service to call when uses are exhausted and the slot
+        is disabled (e.g. `notify.mobile_app_phone`). Leave empty to skip
+        notifications.
+      default: ""
+      selector:
+        text:
 
 mode: queued
 max: 10
@@ -80,6 +98,7 @@ triggers:
 variables:
   initial_uses: !input initial_uses
   uses_counter: !input uses_counter
+  notify_target: !input notify_target
 
 actions:
   - choose:
@@ -90,6 +109,13 @@ actions:
           - variables:
               current: >
                 {{ states(uses_counter) | int(0) }}
+          # -1 means unlimited — skip decrement and disable
+          - if:
+              - condition: template
+                value_template: "{{ current == -1 }}"
+            then:
+              - stop: "Unlimited uses — no action needed"
+          - variables:
               new_count: >
                 {{ [current - 1, 0] | max }}
           - action: input_number.set_value
@@ -104,11 +130,20 @@ actions:
               - action: switch.turn_off
                 target:
                   entity_id: !input enabled_switch
+              - if:
+                  - condition: template
+                    value_template: "{{ notify_target != '' }}"
+                then:
+                  - action: "{{ notify_target }}"
+                    data:
+                      title: Lock Code Manager
+                      message: >
+                        Code slot has been disabled — usage limit reached.
       - conditions:
           - condition: trigger
             id: slot_enabled
           - condition: template
-            value_template: "{{ initial_uses | int(0) > 0 }}"
+            value_template: "{{ initial_uses | int(0) != 0 }}"
         sequence:
           - action: input_number.set_value
             target:
