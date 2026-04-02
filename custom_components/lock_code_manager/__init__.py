@@ -411,7 +411,7 @@ async def async_unload_entry(
         _LOGGER.debug("Unload: removing slots %s", list(curr_slots))
         await asyncio.gather(
             *(
-                callbacks.invoke_entity_removers_for_slot(slot_num)
+                callbacks.invoke_entity_removers_for_slot(int(slot_num))
                 for slot_num in curr_slots
             )
         )
