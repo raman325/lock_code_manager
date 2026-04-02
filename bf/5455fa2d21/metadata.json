@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "bf5455fa2d21",
+  "strategy": "manual-commit",
+  "branch": "refactor/slot-code-enum",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/data.py",
+    "custom_components/lock_code_manager/entity.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/text.py",
+    "tests/common.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bf/5455fa2d21/0/metadata.json",
+      "transcript": "/bf/5455fa2d21/0/full.jsonl",
+      "content_hash": "/bf/5455fa2d21/0/content_hash.txt",
+      "prompt": "/bf/5455fa2d21/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3867,
+    "cache_creation_tokens": 8003103,
+    "cache_read_tokens": 735637719,
+    "output_tokens": 366371,
+    "api_call_count": 1449
+  }
+}
