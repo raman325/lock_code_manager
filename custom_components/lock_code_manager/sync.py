@@ -296,6 +296,7 @@ class SlotSyncManager:
             await self._lock.async_internal_clear_usercode(
                 self._slot_num, source="sync"
             )
+            self._last_set_pin = None
             _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
 
     async def _disable_slot(self, reason: str, title: str) -> None:
