@@ -1,5 +1,21 @@
 import { EntityRegistryEntry } from './ha_type_stubs';
 
+/** Sentinel code values from backend SlotCode enum */
+export const SLOT_CODE_EMPTY = 'empty';
+export const SLOT_CODE_UNKNOWN = 'unknown';
+
+/** True if code represents a cleared/empty slot */
+export function isSlotEmpty(code: number | string | null): boolean {
+    return code === null || code === '' || code === SLOT_CODE_EMPTY;
+}
+
+/** True if code represents an occupied slot (readable, masked, or unknown) */
+export function isSlotOccupied(code: number | string | null, codeLength?: number): boolean {
+    if (code === SLOT_CODE_UNKNOWN) return true;
+    if (isSlotEmpty(code)) return !!codeLength;
+    return true;
+}
+
 export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
     key: string;
     lockEntityId?: string;

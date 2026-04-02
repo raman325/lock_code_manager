@@ -1,8 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
-import { CodeDisplayMode, LockCoordinatorSlotData } from './types';
+import {
+    CodeDisplayMode,
+    LockCoordinatorSlotData,
+    SLOT_CODE_EMPTY,
+    SLOT_CODE_UNKNOWN,
+    isSlotEmpty,
+    isSlotOccupied
+} from './types';
 
 // Test the logic that can be unit tested without full component instantiation
+
+describe('SlotCode guard functions', () => {
+    describe('isSlotEmpty', () => {
+        it('returns true for null', () => expect(isSlotEmpty(null)).toBe(true));
+        it('returns true for empty string', () => expect(isSlotEmpty('')).toBe(true));
+        it('returns true for "empty" sentinel', () =>
+            expect(isSlotEmpty(SLOT_CODE_EMPTY)).toBe(true));
+        it('returns false for "unknown" sentinel', () =>
+            expect(isSlotEmpty(SLOT_CODE_UNKNOWN)).toBe(false));
+        it('returns false for a PIN string', () => expect(isSlotEmpty('1234')).toBe(false));
+        it('returns false for a numeric code', () => expect(isSlotEmpty(5678)).toBe(false));
+    });
+
+    describe('isSlotOccupied', () => {
+        it('returns false for null', () => expect(isSlotOccupied(null)).toBe(false));
+        it('returns false for empty string', () => expect(isSlotOccupied('')).toBe(false));
+        it('returns false for "empty" sentinel', () =>
+            expect(isSlotOccupied(SLOT_CODE_EMPTY)).toBe(false));
+        it('returns true for "unknown" sentinel', () =>
+            expect(isSlotOccupied(SLOT_CODE_UNKNOWN)).toBe(true));
+        it('returns true for a PIN string', () => expect(isSlotOccupied('1234')).toBe(true));
+        it('returns true for null with code_length', () =>
+            expect(isSlotOccupied(null, 4)).toBe(true));
+        it('returns true for "empty" with code_length', () =>
+            expect(isSlotOccupied(SLOT_CODE_EMPTY, 4)).toBe(true));
+    });
+});
 
 describe('LockCodesCard logic', () => {
     describe('shouldReveal logic', () => {
@@ -67,9 +101,7 @@ describe('LockCodesCard logic', () => {
         type SlotStatus = 'active' | 'inactive' | 'disabled' | 'empty';
 
         function getSlotStatus(slot: LockCoordinatorSlotData): SlotStatus {
-            const hasCode =
-                (slot.code !== null && slot.code !== '' && slot.code !== 'empty') ||
-                (slot.code_length ?? 0) > 0;
+            const hasCode = isSlotOccupied(slot.code, slot.code_length);
             const hasConfiguredCode =
                 slot.configured_code !== undefined || (slot.configured_code_length ?? 0) > 0;
 
@@ -135,8 +167,12 @@ describe('LockCodesCard logic', () => {
             type: 'code' | 'masked' | 'empty';
             value: string;
         } {
-            if (slot.code === 'empty') return { type: 'empty', value: '' };
-            if (slot.code === 'unknown') return { type: 'masked', value: '• • •' };
+            if (slot.code === SLOT_CODE_UNKNOWN) return { type: 'masked', value: '• • •' };
+            if (isSlotEmpty(slot.code)) {
+                if (slot.code_length)
+                    return { type: 'masked', value: '•'.repeat(slot.code_length) };
+                return { type: 'empty', value: '' };
+            }
             if (slot.code !== null) {
                 return { type: 'code', value: String(slot.code) };
             }
@@ -205,7 +241,7 @@ describe('LockCodesCard logic', () => {
             };
 
             for (const slot of slots) {
-                const hasCode = (slot.code !== null && slot.code !== 'empty') || slot.code_length;
+                const hasCode = isSlotOccupied(slot.code, slot.code_length);
                 if (hasCode) {
                     flushEmpty();
                     groups.push({ type: 'active', slots: [slot] });

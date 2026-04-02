@@ -10,7 +10,10 @@ import {
     CodeDisplayMode,
     LockCodesCardConfig,
     LockCoordinatorData,
-    LockCoordinatorSlotData
+    LockCoordinatorSlotData,
+    SLOT_CODE_UNKNOWN,
+    isSlotEmpty,
+    isSlotOccupied
 } from './types';
 
 const DEFAULT_TITLE = 'Lock Codes';
@@ -481,9 +484,7 @@ class LockCodesCard extends LockCodesCardBase {
         }
         // Get the current code value (if any); sentinels are not editable values
         const currentCode =
-            slot.code !== null && slot.code !== 'empty' && slot.code !== 'unknown'
-                ? String(slot.code)
-                : '';
+            isSlotOccupied(slot.code) && slot.code !== SLOT_CODE_UNKNOWN ? String(slot.code) : '';
         this._editValue = currentCode;
         this._editingSlot = slot.slot;
         // Focus input after render
@@ -890,10 +891,9 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
-        if (slot.code === 'empty') return 'no-code';
-        if (slot.code === 'unknown') return 'masked';
+        if (isSlotEmpty(slot.code) && !slot.code_length) return 'no-code';
+        if (slot.code === SLOT_CODE_UNKNOWN || slot.code_length) return 'masked';
         if (slot.code !== null && slot.code !== '') return '';
-        if (slot.code_length) return 'masked';
 
         // No active code - check for configured code (disabled LCM slot)
         if (slot.configured_code) {
@@ -913,13 +913,12 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
-        if (slot.code === 'empty') return '—';
-        if (slot.code === 'unknown') return '• • •';
-        if (slot.code !== null && slot.code !== '') {
+        if (slot.code === SLOT_CODE_UNKNOWN) return '• • •';
+        if (isSlotEmpty(slot.code)) {
+            if (slot.code_length) return '•'.repeat(slot.code_length);
+            // Fall through to configured code or dash below
+        } else if (slot.code !== null) {
             return shouldMask ? '•'.repeat(String(slot.code).length) : String(slot.code);
-        }
-        if (slot.code_length) {
-            return '•'.repeat(slot.code_length);
         }
 
         // Disabled LCM slot: show configured code (respect masking)
@@ -1039,9 +1038,7 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     private _hasCode(slot: LockCoordinatorSlotData): boolean {
-        if (slot.code === 'empty') return false;
-        if (slot.code !== null && slot.code !== '') return true;
-        return !!slot.code_length;
+        return isSlotOccupied(slot.code, slot.code_length);
     }
 }
 
