@@ -90,6 +90,10 @@ class MatterLock(BaseLock):
             raise LockCodeManagerError(
                 f"Matter lock {self.lock.entity_id} does not support user management"
             )
+        if "pin" not in (lock_info.get("supported_credential_types") or []):
+            raise LockCodeManagerError(
+                f"Matter lock {self.lock.entity_id} does not support PIN credentials"
+            )
         LOGGER.debug(
             "Matter lock %s setup complete: %s",
             self.lock.entity_id,

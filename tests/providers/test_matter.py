@@ -114,9 +114,11 @@ async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
 
 
 async def test_setup(
-    hass: HomeAssistant, matter_lock: MatterLock, matter_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+    lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that setup validates lock supports user management."""
+    """Test that setup validates lock supports user management and PIN credentials."""
     mock_response = {
         LOCK_ENTITY_ID: {
             "supports_user_management": True,
@@ -126,12 +128,14 @@ async def test_setup(
     handler = AsyncMock(return_value=mock_response)
     _register_matter_service(hass, "get_lock_info", handler)
 
-    await matter_lock.async_setup(matter_config_entry)
+    await matter_lock.async_setup(lcm_config_entry)
     assert handler.call_count == 1
 
 
 async def test_setup_unsupported_lock(
-    hass: HomeAssistant, matter_lock: MatterLock, matter_config_entry: MockConfigEntry
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+    lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock does not support user management."""
     mock_response = {
@@ -143,7 +147,26 @@ async def test_setup_unsupported_lock(
     _register_matter_service(hass, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support user management"):
-        await matter_lock.async_setup(matter_config_entry)
+        await matter_lock.async_setup(lcm_config_entry)
+
+
+async def test_setup_no_pin_support(
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test that setup raises when lock supports users but not PIN credentials."""
+    mock_response = {
+        LOCK_ENTITY_ID: {
+            "supports_user_management": True,
+            "supported_credential_types": ["rfid"],
+        },
+    }
+    handler = AsyncMock(return_value=mock_response)
+    _register_matter_service(hass, "get_lock_info", handler)
+
+    with pytest.raises(LockCodeManagerError, match="does not support PIN credentials"):
+        await matter_lock.async_setup(lcm_config_entry)
 
 
 async def test_is_integration_connected_not_loaded(
