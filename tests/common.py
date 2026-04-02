@@ -18,6 +18,7 @@ from custom_components.lock_code_manager.const import (
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
+    SlotCode,
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -85,7 +86,7 @@ class MockLCMLock(BaseLock):
         """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
-    def hard_refresh_codes(self) -> dict[int, str | None]:
+    def hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """
         Perform hard refresh all codes.
 
@@ -121,7 +122,7 @@ class MockLCMLock(BaseLock):
         self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    def get_usercodes(self) -> dict[int, str | None]:
+    def get_usercodes(self) -> dict[int, str | SlotCode]:
         """
         Get dictionary of code slots and usercodes.
 

@@ -9,7 +9,7 @@ from typing import TypedDict
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
-from ..const import DOMAIN
+from ..const import DOMAIN, SlotCode
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ class VirtualLock(BaseLock):
         """Return whether the integration is connected."""
         return True
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """
         Perform hard refresh and return all codes.
 
@@ -94,7 +94,7 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
-    async def async_get_usercodes(self) -> dict[int, str | None]:
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
         return {
             int(slot_num): str(code_slot["code"])

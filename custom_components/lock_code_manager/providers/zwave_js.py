@@ -52,7 +52,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN, SlotCode
 from ..data import find_entry_for_lock_slot, get_entry_data
 from ..exceptions import LockDisconnected
 from ..util import async_disable_slot
@@ -465,7 +465,7 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """
         Perform hard refresh and return all codes.
 
@@ -580,7 +580,7 @@ class ZWaveJSLock(BaseLock):
         except Exception as err:
             raise LockDisconnected from err
 
-    async def async_get_usercodes(self) -> dict[int, str | None]:
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
         code_slots = {
             int(code_slot)
@@ -588,7 +588,7 @@ class ZWaveJSLock(BaseLock):
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
-        data: dict[int, str | None] = {}
+        data: dict[int, str | SlotCode] = {}
 
         if not await self.async_is_integration_connected():
             raise LockDisconnected

@@ -68,6 +68,8 @@
 - Upgrade catch-all state tracking to targeted once entities are discovered
   (currently deferred — modifying subscriptions from within a callback causes
   timing issues)
+- Consider coordinator owning sync managers instead of binary sensor entities
+  (manager lifecycle would survive entity recreation during config updates)
 
 ### Convert Config and Internal Dicts to Dataclasses
 
@@ -80,32 +82,49 @@ improves type safety, IDE autocompletion, and code readability.
 **Why not Voluptuous?** Voluptuous is for validation, not object instantiation.
 Other options like `dacite` or Pydantic add dependencies.
 
-### Handle Disabled Lock Slots
+### SlotCode Enum (in progress)
 
-**Context:** Z-Wave locks have `userIdStatus` which can be `Enabled`, `Available`,
-or `Disabled`. Currently the coordinator only stores the code value, not the status.
+Replace `dict[int, str | None]` coordinator data with `dict[int, str | SlotCode]`
+where `SlotCode.EMPTY` = cleared, `SlotCode.UNKNOWN` = occupied but unreadable.
+Enables Matter support and simplifies masked PIN handling. See design doc:
+`docs/plans/2026-04-02-slot-code-enum-design.md`
 
-**Investigation Needed:**
+### Add Slot Status Enum (deferred, depends on SlotCode)
 
-1. Test what happens when LCM tries to set a user code on a slot with
-   `userIdStatus=Disabled`
-2. Determine if we need to explicitly enable the slot before setting a code
-3. Check if different lock brands handle disabled slots differently
+Z-Wave has `userIdStatus` (Enabled/Available/Disabled), Matter has `UserStatus`
+(Available/OccupiedEnabled/OccupiedDisabled). A slot can be firmware-disabled
+independently of LCM's enabled/disabled state. Currently ignored.
 
-**Related:** See "Enhance Coordinator Data Model" below.
+Add a `SlotStatus` enum as a separate concern from `SlotCode` (code value vs
+slot capability). Could be part of a `SlotData` dataclass holding both code
+and status. Investigate:
 
-### Enhance Coordinator Data Model with Slot Status
+1. What happens when LCM sets a code on a firmware-disabled slot
+2. Whether the lock needs explicit slot enable before setting a code
+3. Per-lock-brand differences in disabled slot behavior
 
-**Current State:** Coordinator stores `{slot: code}` mapping only.
+### Simplify `expected_codes` (deferred, depends on SlotCode)
 
-**Proposed Change:** Store `{slot: {code, status}}` where status is a generic
-LCM enum that providers map to.
+After the SlotCode enum is implemented, `coordinator.expected_codes` is only
+used by:
 
-**Related: Formalize lock/user/PIN data model with Matter in mind.** Matter
-introduces a richer credential model (users, credentials, credential types)
-that goes beyond simple slot→PIN mappings. When designing the enhanced data
-model, study Matter's DoorLock cluster credential management as a reference
-architecture.
+1. The code sensor — to resolve `SlotCode.UNKNOWN` → configured PIN for display
+2. `_slot_expects_pin` in zwave_js.py — to filter stale Z-Wave events
+
+Consider moving the resolution to the sensor layer and simplifying or removing
+`expected_codes` from the coordinator.
+
+### Rewrite Matter Provider (depends on SlotCode)
+
+Rewrite PR #741 using the `SlotCode.UNKNOWN` model. The Matter provider:
+
+- Returns `SlotCode.UNKNOWN` for occupied slots (PINs are write-only)
+- Returns `SlotCode.EMPTY` for cleared slots
+- Handles user/credential mapping internally (SetUser + SetCredential)
+- Uses HA's `matter.set_lock_credential` / `matter.clear_lock_credential` services
+- No `_resolve_pin_if_masked` — sync handles `UNKNOWN` natively
+
+See Matter DoorLock cluster research in design doc.
 
 ### Add Optional Flags to `get_config_entry_data` Websocket Command
 
