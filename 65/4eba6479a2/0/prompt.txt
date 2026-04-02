@@ -2642,3 +2642,11 @@ remove eroneous logging statement I added before the no coordinator data check
 ---
 
 so it works, but now, after going out of sync, the card sensor shows the new PIN, but the checkmark doesn't change to green until seconds later. I imagine this has to do with the tick but I wonder if the tick should just be about sync statements, everything else should be instanct
+
+---
+
+create a PR using the template
+
+---
+
+CI failure
