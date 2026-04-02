@@ -85,16 +85,14 @@ max: 10
 trigger_variables:
   _config_entry: !input config_entry
   _slot: !input slot_number
-  _title: >
-    {{ config_entry_attr(_config_entry, 'title') }}
-  _all_entities: >
-    {{ integration_entities(_title) }}
   pin_used_entity: >
-    {{ _all_entities
+    {% set entities = integration_entities(config_entry_attr(_config_entry, 'title')) %}
+    {{ entities
        | select('match', 'event\\..*_code_slot_' ~ _slot ~ '_pin_used')
        | first | default('') }}
   enabled_switch: >
-    {{ _all_entities
+    {% set entities = integration_entities(config_entry_attr(_config_entry, 'title')) %}
+    {{ entities
        | select('match', 'switch\\..*_code_slot_' ~ _slot ~ '_enabled')
        | first | default('') }}
 
