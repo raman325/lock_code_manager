@@ -18,8 +18,8 @@ from custom_components.lock_code_manager.const import (
     CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
-    SlotCode,
 )
+from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers import BaseLock
 
 LOCK_1_ENTITY_ID = "lock.test_1"

@@ -11,8 +11,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
+from .models import LockCodeManagerConfigEntry
 from .util import async_disable_slot
 
 _LOGGER = logging.getLogger(__name__)

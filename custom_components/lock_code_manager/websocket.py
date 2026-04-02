@@ -96,9 +96,9 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
     EXCLUDED_CONDITION_PLATFORMS,
-    SlotCode,
 )
 from .data import get_entry_data
+from .models import SlotCode
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

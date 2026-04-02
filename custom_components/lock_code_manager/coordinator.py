@@ -21,10 +21,10 @@ from .const import (
     BACKOFF_MAX_SECONDS,
     CONF_SLOTS,
     DOMAIN,
-    SlotCode,
 )
 from .data import get_entry_data
 from .exceptions import LockCodeManagerError
+from .models import SlotCode
 
 if TYPE_CHECKING:
     from .providers import BaseLock

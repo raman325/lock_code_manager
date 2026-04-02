@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from enum import StrEnum
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
@@ -114,17 +113,6 @@ TICK_INTERVAL = timedelta(seconds=5)
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 PUSH_SUBSCRIBE_RETRY_DELAY = timedelta(seconds=10)
-
-
-class SlotCode(StrEnum):
-    """Sentinel values for slot codes in coordinator data.
-
-    Used alongside str values: a readable code is a plain string,
-    while EMPTY and UNKNOWN represent non-string slot states.
-    """
-
-    EMPTY = "empty"
-    UNKNOWN = "unknown"
 
 
 # Defaults

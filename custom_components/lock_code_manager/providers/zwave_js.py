@@ -52,9 +52,10 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN, SlotCode
+from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import find_entry_for_lock_slot, get_entry_data
 from ..exceptions import LockDisconnected
+from ..models import SlotCode
 from ..util import async_disable_slot
 from ._base import BaseLock
 

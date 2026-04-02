@@ -9,7 +9,8 @@ from typing import TypedDict
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
-from ..const import DOMAIN, SlotCode
+from ..const import DOMAIN
+from ..models import SlotCode
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

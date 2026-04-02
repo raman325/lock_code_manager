@@ -13,7 +13,6 @@ Extracted from binary_sensor.py to separate domain logic from entity state displ
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime
 import logging
 from typing import TYPE_CHECKING, Any
@@ -46,9 +45,9 @@ from .const import (
     MAX_SYNC_ATTEMPTS,
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
-    SlotCode,
 )
 from .exceptions import CodeRejectedError, LockDisconnected
+from .models import SlotCode, SlotState
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
@@ -57,17 +56,6 @@ if TYPE_CHECKING:
     from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class SlotState:
-    """Snapshot of entity states for a slot on a specific lock."""
-
-    active_state: str
-    pin_state: str
-    name_state: str | None
-    code_state: str
-    coordinator_code: str | SlotCode | None
 
 
 class SlotSyncManager:

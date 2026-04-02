@@ -11,10 +11,10 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import ATTR_CODE, SlotCode
+from .const import ATTR_CODE
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
+from .models import LockCodeManagerConfigEntry, SlotCode
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

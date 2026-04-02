@@ -36,7 +36,6 @@ from ..const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
     PUSH_SUBSCRIBE_RETRY_DELAY,
-    SlotCode,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import build_slot_unique_id, find_entry_for_lock_slot
@@ -45,6 +44,7 @@ from ..exceptions import (
     LockDisconnected,
     ProviderNotImplementedError,
 )
+from ..models import SlotCode
 from ..util import OneShotRetry, mask_pin
 from .const import LOGGER
 
