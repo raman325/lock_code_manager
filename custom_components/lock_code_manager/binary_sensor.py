@@ -42,8 +42,9 @@ from .const import (
     EVENT_PIN_USED,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import LockCodeManagerConfigEntry, get_slot_data
+from .data import get_slot_data
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
+from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 from .sync import SlotSyncManager
 

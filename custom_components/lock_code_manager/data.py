@@ -2,34 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
-import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .callbacks import EntityCallbackRegistry
 from .const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-
-if TYPE_CHECKING:
-    from .providers import BaseLock
-
-_LOGGER = logging.getLogger(__name__)
-
-
-@dataclass
-class LockCodeManagerConfigEntryData:
-    """Runtime data for a Lock Code Manager config entry."""
-
-    locks: dict[str, BaseLock] = field(default_factory=dict)
-    setup_tasks: dict[str | Platform, asyncio.Task[Any]] = field(default_factory=dict)
-    callbacks: EntityCallbackRegistry = field(default_factory=EntityCallbackRegistry)
-
-
-type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]
 
 
 def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:

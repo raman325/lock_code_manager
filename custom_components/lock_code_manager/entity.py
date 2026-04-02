@@ -26,7 +26,8 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from .data import LockCodeManagerConfigEntry, build_slot_unique_id, get_slot_data
+from .data import build_slot_unique_id, get_slot_data
+from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

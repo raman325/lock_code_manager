@@ -64,12 +64,9 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import (
-    LockCodeManagerConfigEntry,
-    LockCodeManagerConfigEntryData,
-    get_entry_data,
-)
+from .data import get_entry_data
 from .helpers import async_create_lock_instance, get_locks_from_targets
+from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryData
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
