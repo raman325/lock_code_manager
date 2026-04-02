@@ -12,7 +12,6 @@ Extracted from binary_sensor.py to separate domain logic from entity state displ
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -127,7 +126,6 @@ class SlotSyncManager:
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
         self._dirty: bool = False
-        self._tick_lock = asyncio.Lock()
 
         # Circuit breaker
         self._sync_attempt_count: int = 0
@@ -224,7 +222,7 @@ class SlotSyncManager:
         # timing issues. The catch-all has early-return guards that skip irrelevant
         # entities, so the performance impact is minimal.
 
-        if int(self._slot_num) not in self._coordinator.data:
+        if self._slot_num not in self._coordinator.data:
             _LOGGER.debug(
                 "%s: Slot not in coordinator data, skipping",
                 self._log_prefix,
@@ -234,15 +232,13 @@ class SlotSyncManager:
         if not self._ensure_entities_ready():
             return None
 
-        active_state = self._get_entity_state(ATTR_ACTIVE)
-        pin_state = self._get_entity_state(CONF_PIN)
+        # States are guaranteed non-None here — _ensure_entities_ready just
+        # verified all four exist with valid states on this event loop tick.
+        active_state: str = self._get_entity_state(ATTR_ACTIVE)  # type: ignore[assignment]
+        pin_state: str = self._get_entity_state(CONF_PIN)  # type: ignore[assignment]
         name_state = self._get_entity_state(CONF_NAME)
-        code_state = self._get_entity_state(ATTR_CODE)
-
-        if active_state is None or pin_state is None or code_state is None:
-            return None
-
-        coordinator_code = self._coordinator.data.get(int(self._slot_num))
+        code_state: str = self._get_entity_state(ATTR_CODE)  # type: ignore[assignment]
+        coordinator_code = self._coordinator.data.get(self._slot_num)
         return SlotState(
             active_state=active_state,
             pin_state=pin_state,
@@ -279,7 +275,7 @@ class SlotSyncManager:
         """
         if slot_state.active_state == STATE_ON:
             await self._lock.async_internal_set_usercode(
-                int(self._slot_num),
+                self._slot_num,
                 slot_state.pin_state,
                 slot_state.name_state,
                 source="sync",
@@ -290,7 +286,7 @@ class SlotSyncManager:
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
         else:
             await self._lock.async_internal_clear_usercode(
-                int(self._slot_num), source="sync"
+                self._slot_num, source="sync"
             )
             _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
 
@@ -347,8 +343,7 @@ class SlotSyncManager:
 
     def _write_state(self) -> None:
         """Notify the entity to write its Home Assistant state."""
-        if self._started:
-            self._state_writer()
+        self._state_writer()
 
     @callback
     def _mark_dirty(self, *_args: Any) -> None:
@@ -374,11 +369,7 @@ class SlotSyncManager:
             return
 
         self._dirty = False
-
-        async with self._tick_lock:
-            if not self._started:
-                return
-            await self._async_tick_impl()
+        await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:
         """Core tick logic - executed under lock."""
