@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2fd56c807500",
+  "session_id": "48741139-7324-4848-afb8-1f2ed5118058",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-02T04:33:17.085325Z",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5f369fcc173d",
+  "token_usage": {
+    "input_tokens": 925243,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 40189696,
+    "output_tokens": 82546,
+    "api_call_count": 331
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-02T04:33:15.261793Z",
+    "agent_lines": 0,
+    "human_added": 12,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 12,
+    "agent_percentage": 0
+  }
+}

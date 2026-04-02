@@ -3,7 +3,7 @@
   "checkpoint_id": "2fd56c807500",
   "strategy": "manual-commit",
   "branch": "refactor/tick-based-sync",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "custom_components/lock_code_manager/sync.py"
   ],
@@ -13,13 +13,19 @@
       "transcript": "/2f/d56c807500/0/full.jsonl",
       "content_hash": "/2f/d56c807500/0/content_hash.txt",
       "prompt": "/2f/d56c807500/0/prompt.txt"
+    },
+    {
+      "metadata": "/2f/d56c807500/1/metadata.json",
+      "transcript": "/2f/d56c807500/1/full.jsonl",
+      "content_hash": "/2f/d56c807500/1/content_hash.txt",
+      "prompt": "/2f/d56c807500/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 2990,
+    "input_tokens": 928233,
     "cache_creation_tokens": 6825981,
-    "cache_read_tokens": 491849488,
-    "output_tokens": 292767,
-    "api_call_count": 1102
+    "cache_read_tokens": 532039184,
+    "output_tokens": 375313,
+    "api_call_count": 1433
   }
 }
