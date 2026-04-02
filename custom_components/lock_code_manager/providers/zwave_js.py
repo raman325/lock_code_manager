@@ -1,7 +1,7 @@
 """Z-Wave JS lock provider.
 
-Handles push updates, masked PIN resolution, duplicate code detection, and rate-limited
-set/clear operations. See ARCHITECTURE.md for the provider's role in the data flow.
+Handles push updates, duplicate code detection, and rate-limited set/clear operations.
+See ARCHITECTURE.md for the provider's role in the data flow.
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ from homeassistant.core import Event, callback
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import find_entry_for_lock_slot, get_entry_data
 from ..exceptions import LockDisconnected
+from ..models import SlotCode
 from ..util import async_disable_slot
 from ._base import BaseLock
 
@@ -180,42 +181,6 @@ class ZWaveJSLock(BaseLock):
             return False
         return bool(self.coordinator.expected_codes.get(code_slot))
 
-    def _resolve_pin_if_masked(self, value: str, code_slot: int) -> str | None:
-        """
-        Resolve a PIN value, looking up expected PIN if masked.
-
-        Some locks return masked values (all asterisks) instead of the actual PIN.
-        This method returns the value as-is if not masked, or looks up the expected
-        PIN from coordinator.expected_codes if masked.
-        """
-        slot_in_use = self.code_slot_in_use(code_slot)
-
-        if value == "0" * len(value) and slot_in_use is False:
-            # Some locks return all zeros instead of a blank value when cleared - treat
-            # as unmasked cleared value
-            return ""
-
-        # If not masked, return as-is
-        if not value or not (value == "*" * len(value) and slot_in_use):
-            return value
-
-        # Masked - look up expected PIN from coordinator
-        if not self.coordinator:
-            return None
-
-        expected_pin = self.coordinator.expected_codes.get(code_slot)
-        if expected_pin:
-            _LOGGER.debug(
-                "PIN is masked for lock %s code slot %s, resolving from expected codes",
-                self.lock.entity_id,
-                code_slot,
-            )
-            return expected_pin
-
-        # Slot has no expected PIN (disabled or no PIN configured) — return masked
-        # value as-is so sync logic sees that the lock has *something* set
-        return value
-
     @callback
     def _handle_usercode_status_update(self, code_slot: int, status: Any) -> None:
         """Handle userIdStatus value update for a code slot."""
@@ -233,33 +198,34 @@ class ZWaveJSLock(BaseLock):
                 return
 
             # Slot was cleared - update coordinator if needed
-            if self.coordinator and self.coordinator.data.get(code_slot) != "":
+            if (
+                self.coordinator
+                and self.coordinator.data.get(code_slot) is not SlotCode.EMPTY
+            ):
                 _LOGGER.debug(
                     "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
                     self.lock.entity_id,
                     code_slot,
                 )
-                self.coordinator.push_update({code_slot: ""})
+                self.coordinator.push_update({code_slot: SlotCode.EMPTY})
 
     @callback
     def _handle_usercode_value_update(self, code_slot: int, new_value: Any) -> None:
         """Handle userCode value update for a code slot."""
-        # Treat empty, None, or all-zeros as cleared
-        if not new_value or (isinstance(new_value, str) and new_value.strip("0") == ""):
-            value = ""
+        # Determine the resolved value as a SlotCode or plain string
+        if not new_value:
+            resolved: str | SlotCode = SlotCode.EMPTY
         else:
             value = str(new_value)
-
-        # Resolve masked codes (all asterisks) to expected PIN
-        # This prevents infinite sync loops when locks return masked values
-        resolved = self._resolve_pin_if_masked(value, code_slot)
-        if resolved is None:
-            _LOGGER.debug(
-                "Lock %s: skipping masked code update for slot %s (unable to resolve)",
-                self.lock.entity_id,
-                code_slot,
-            )
-            return
+            slot_in_use = self.code_slot_in_use(code_slot)
+            if value == "*" * len(value) and slot_in_use is not False:
+                # Masked code: treat as UNKNOWN whether in_use is True or None
+                resolved = SlotCode.UNKNOWN
+            elif value.strip("0") == "" and slot_in_use is False:
+                # All-zeros with slot explicitly not in use means cleared
+                resolved = SlotCode.EMPTY
+            else:
+                resolved = value
 
         # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
         if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
@@ -269,7 +235,7 @@ class ZWaveJSLock(BaseLock):
             "Lock %s received push update for slot %s: %s",
             self.lock.entity_id,
             code_slot,
-            "****" if resolved else "(cleared)",
+            "****" if not isinstance(resolved, SlotCode) else f"({resolved})",
         )
 
         # Push update to coordinator
@@ -465,7 +431,7 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """
         Perform hard refresh and return all codes.
 
@@ -488,8 +454,8 @@ class ZWaveJSLock(BaseLock):
         try:
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
-                # Resolve masked codes and compare
-                if usercode == self._resolve_pin_if_masked(current_code, code_slot):
+                # If masked (all asterisks), skip duplicate check since we cannot compare
+                if current_code != "*" * len(current_code) and usercode == current_code:
                     _LOGGER.debug(
                         "Lock %s slot %s already has this PIN, skipping set",
                         self.lock.entity_id,
@@ -563,7 +529,7 @@ class ZWaveJSLock(BaseLock):
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
         if self.coordinator:
-            self.coordinator.push_update({code_slot: ""})
+            self.coordinator.push_update({code_slot: SlotCode.EMPTY})
         return True
 
     def _get_usercodes_from_cache(self) -> list[dict[str, Any]]:
@@ -580,7 +546,7 @@ class ZWaveJSLock(BaseLock):
         except Exception as err:
             raise LockDisconnected from err
 
-    async def async_get_usercodes(self) -> dict[int, str | None]:
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
         code_slots = {
             int(code_slot)
@@ -588,7 +554,7 @@ class ZWaveJSLock(BaseLock):
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
-        data: dict[int, str | None] = {}
+        data: dict[int, str | SlotCode] = {}
 
         if not await self.async_is_integration_connected():
             raise LockDisconnected
@@ -619,19 +585,25 @@ class ZWaveJSLock(BaseLock):
             in_use: bool | None = slot["in_use"]
 
             if not in_use:
-                data[code_slot] = ""
-            # Resolve PIN (handles masked codes), skip if unresolvable
-            elif resolved := self._resolve_pin_if_masked(usercode, code_slot):
-                data[code_slot] = resolved
+                data[code_slot] = SlotCode.EMPTY
+            elif not usercode:
+                # in_use but no code content (cache partially populated); skip
+                continue
+            elif usercode == "*" * len(usercode):
+                # Masked code (all asterisks with slot in use)
+                data[code_slot] = SlotCode.UNKNOWN
+            else:
+                # Unmasked code
+                data[code_slot] = usercode
 
-        slots_with_pin = [s for s, v in data.items() if v]
-        slots_not_enabled = [s for s, v in data.items() if not v]
+        slots_with_pin = [s for s, v in data.items() if v is not SlotCode.EMPTY]
+        slots_empty = [s for s, v in data.items() if v is SlotCode.EMPTY]
         _LOGGER.debug(
-            "Lock %s: %s slots with PIN %s, %s slots not enabled %s",
+            "Lock %s: %s slots with PIN %s, %s slots empty %s",
             self.lock.entity_id,
             len(slots_with_pin),
             slots_with_pin,
-            len(slots_not_enabled),
-            slots_not_enabled,
+            len(slots_empty),
+            slots_empty,
         )
         return data

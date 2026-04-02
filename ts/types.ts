@@ -107,8 +107,12 @@ export interface LockCoordinatorSlotData {
      * True = active, False = inactive (conditions blocking), undefined = unknown
      */
     active?: boolean;
+    /**
+     * Code on the lock. Values: actual PIN string/number, null (no data),
+     * "empty" (slot cleared), "unknown" (code exists but unreadable)
+     */
     code: number | string | null;
-    /** Present when masked (code is null but slot has a code) */
+    /** Present when masked (code is null but slot has a readable code) */
     code_length?: number;
     /** Config entry ID of the LCM instance managing this slot (for navigation) */
     config_entry_id?: string;
@@ -170,9 +174,9 @@ export interface LockCodeManagerSlotCardConfig {
 }
 
 export interface SlotCardLockStatus {
-    /** Current code on the lock */
+    /** Code on the lock: actual PIN, null, "empty" (cleared), or "unknown" (unreadable) */
     code: string | null;
-    /** Code length when masked */
+    /** Code length when masked (readable code, not revealed) */
     code_length?: number;
     entity_id: string;
     /** Whether code is synced to lock */

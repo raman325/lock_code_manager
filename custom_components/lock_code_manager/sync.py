@@ -47,7 +47,7 @@ from .const import (
     TICK_INTERVAL,
 )
 from .exceptions import CodeRejectedError, LockDisconnected
-from .models import SlotState
+from .models import SlotCode, SlotState
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
@@ -252,8 +252,16 @@ class SlotSyncManager:
             else slot_state.code_state
         )
         if slot_state.active_state == STATE_ON:
+            if lock_code is SlotCode.UNKNOWN:
+                return True  # can't compare, assume in sync
+            if lock_code is SlotCode.EMPTY:
+                return False  # need to set
             return slot_state.pin_state == lock_code
-        return lock_code == ""
+        # active_state == STATE_OFF: slot should be cleared
+        # The "" check covers the fallback path where coordinator_code is None
+        # and lock_code comes from the code sensor entity state (which returns ""
+        # for SlotCode.EMPTY).
+        return lock_code is SlotCode.EMPTY or lock_code == ""
 
     # -- Sync execution ------------------------------------------------------
 

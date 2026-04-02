@@ -232,4 +232,76 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(el._error).toBe('Subscription failed');
         });
     });
+
+    describe('SlotCode sentinel handling', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
+        it('_formatLockCode returns null for "empty" sentinel', () => {
+            const lock = {
+                code: 'empty',
+                entityId: 'lock.test',
+                inSync: true,
+                lockEntityId: 'lock.test',
+                name: 'Test'
+            };
+            expect((card as any)._formatLockCode(lock)).toBeNull();
+        });
+
+        it('_formatLockCode returns spaced bullets for "unknown" sentinel', () => {
+            const lock = {
+                code: 'unknown',
+                entityId: 'lock.test',
+                inSync: true,
+                lockEntityId: 'lock.test',
+                name: 'Test'
+            };
+            expect((card as any)._formatLockCode(lock)).toBe('• • •');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+
+        it('stores "empty" and "unknown" lock codes in _data', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            const card2 = document.createElement('lcm-slot') as SlotCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            card2.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card2.hass = hass;
+            container.appendChild(card2);
+            await flush();
+
+            capturedCallback!(
+                makeSlotCardData({
+                    locks: [
+                        {
+                            code: 'unknown',
+                            entity_id: 'lock.test_1',
+                            in_sync: true,
+                            name: 'Masked Lock'
+                        },
+                        {
+                            code: 'empty',
+                            entity_id: 'lock.test_2',
+                            in_sync: true,
+                            name: 'Empty Lock'
+                        }
+                    ]
+                })
+            );
+
+            expect(card2._data?.locks[0].code).toBe('unknown');
+            expect(card2._data?.locks[1].code).toBe('empty');
+        });
+    });
 });

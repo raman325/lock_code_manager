@@ -1,13 +1,14 @@
 """Data model types for lock_code_manager.
 
-Canonical home for dataclasses, type aliases, and structured data types used
-across the integration. Enums like SlotCode should migrate here in the future.
+Canonical home for dataclasses, type aliases, enums, and structured data types
+used across the integration.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -17,6 +18,17 @@ from .callbacks import EntityCallbackRegistry
 
 if TYPE_CHECKING:
     from .providers import BaseLock
+
+
+class SlotCode(StrEnum):
+    """Sentinel values for slot codes in coordinator data.
+
+    Used alongside str values: a readable code is a plain string,
+    while EMPTY and UNKNOWN represent non-string slot states.
+    """
+
+    EMPTY = "empty"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -39,4 +51,4 @@ class SlotState:
     pin_state: str
     name_state: str | None
     code_state: str
-    coordinator_code: str | None
+    coordinator_code: str | SlotCode | None

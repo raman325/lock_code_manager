@@ -24,6 +24,7 @@ from .const import (
 )
 from .data import get_entry_data
 from .exceptions import LockCodeManagerError
+from .models import SlotCode
 
 if TYPE_CHECKING:
     from .providers import BaseLock
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]):
+class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCode]]):
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
@@ -50,7 +51,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
             update_interval=update_interval,
             config_entry=config_entry,
         )
-        self.data: dict[int, str | None] = {}
+        self.data: dict[int, str | SlotCode] = {}
         self._config_entry = config_entry
         self._consecutive_failures: int = 0
         self._original_update_interval: timedelta | None = update_interval
@@ -93,7 +94,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
         }
 
     @callback
-    def push_update(self, updates: dict[int, str | None]) -> None:
+    def push_update(self, updates: dict[int, str | SlotCode]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
@@ -150,7 +151,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | None]]
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
 
-    async def async_get_usercodes(self) -> dict[int, str | None]:
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Update usercodes."""
         try:
             data = await self._lock.async_internal_get_usercodes()

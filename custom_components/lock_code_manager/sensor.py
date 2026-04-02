@@ -14,7 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import ATTR_CODE
 from .coordinator import LockUsercodeUpdateCoordinator
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
-from .models import LockCodeManagerConfigEntry
+from .models import LockCodeManagerConfigEntry, SlotCode
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,9 +86,12 @@ class LockCodeManagerCodeSlotSensorEntity(
     @property
     def native_value(self) -> str | None:
         """Return native value."""
-        return self.coordinator.data.get(
-            self.slot_num, self.coordinator.data.get(int(self.slot_num))
-        )
+        code = self.coordinator.data.get(int(self.slot_num))
+        if code is SlotCode.EMPTY:
+            return ""
+        if code is SlotCode.UNKNOWN:
+            return self.coordinator.expected_codes.get(int(self.slot_num)) or None
+        return code
 
     @property
     def available(self) -> bool:

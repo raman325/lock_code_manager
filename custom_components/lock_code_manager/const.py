@@ -114,6 +114,7 @@ MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 PUSH_SUBSCRIBE_RETRY_DELAY = timedelta(seconds=10)
 
+
 # Defaults
 DEFAULT_NUM_SLOTS = 3
 DEFAULT_START = 1

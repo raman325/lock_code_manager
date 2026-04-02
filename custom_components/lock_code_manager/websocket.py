@@ -98,6 +98,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
+from .models import SlotCode
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -338,7 +339,7 @@ def _slot_sort_key(slot: Any) -> tuple[int, str]:
 
 def _serialize_slot(
     slot: Any,
-    code: str | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     name: str | None = None,
@@ -370,8 +371,11 @@ def _serialize_slot(
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
 
-    # Code on the lock (actual state)
-    if reveal or code is None:
+    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unknown"),
+    # regular codes are masked or revealed, None stays None.
+    if isinstance(code, SlotCode):
+        result[ATTR_CODE] = str(code)
+    elif reveal or code is None:
         result[ATTR_CODE] = code
     else:
         # Masked: send code_length instead of actual code
@@ -851,13 +855,15 @@ def _build_lock_status(
     in_sync = _get_bool_state(hass, in_sync_entity_id)
     last_synced = _get_last_changed(hass, in_sync_entity_id)
 
-    # Get code from coordinator
+    # Get code from coordinator — SlotCode sentinels pass through as strings
     coordinator = lock.coordinator
-    code_on_lock = None
-    code_length = None
+    code_on_lock: str | None = None
+    code_length: int | None = None
     if coordinator and coordinator.data:
         raw_code = coordinator.data.get(slot_num)
-        if raw_code is not None:
+        if isinstance(raw_code, SlotCode):
+            code_on_lock = str(raw_code)
+        elif raw_code is not None:
             if reveal:
                 code_on_lock = raw_code
             else:
@@ -870,7 +876,7 @@ def _build_lock_status(
     }
     if last_synced:
         lock_status[ATTR_LAST_SYNCED] = last_synced
-    if reveal and code_on_lock is not None:
+    if code_on_lock is not None:
         lock_status[ATTR_CODE] = code_on_lock
     elif code_length is not None:
         lock_status[ATTR_CODE] = None

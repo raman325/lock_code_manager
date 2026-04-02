@@ -479,8 +479,11 @@ class LockCodesCard extends LockCodesCardBase {
             this._unsubscribe();
             void this._subscribe();
         }
-        // Get the current code value (if any)
-        const currentCode = slot.code !== null ? String(slot.code) : '';
+        // Get the current code value (if any); sentinels are not editable values
+        const currentCode =
+            slot.code !== null && slot.code !== 'empty' && slot.code !== 'unknown'
+                ? String(slot.code)
+                : '';
         this._editValue = currentCode;
         this._editingSlot = slot.slot;
         // Focus input after render
@@ -887,6 +890,8 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
+        if (slot.code === 'empty') return 'no-code';
+        if (slot.code === 'unknown') return 'masked';
         if (slot.code !== null && slot.code !== '') return '';
         if (slot.code_length) return 'masked';
 
@@ -908,6 +913,8 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
+        if (slot.code === 'empty') return '—';
+        if (slot.code === 'unknown') return '• • •';
         if (slot.code !== null && slot.code !== '') {
             return shouldMask ? '•'.repeat(String(slot.code).length) : String(slot.code);
         }
@@ -1032,13 +1039,9 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     private _hasCode(slot: LockCoordinatorSlotData): boolean {
-        if (slot.code_length) {
-            return true;
-        }
-        if (slot.code === null || slot.code === '') {
-            return false;
-        }
-        return true;
+        if (slot.code === 'empty') return false;
+        if (slot.code !== null && slot.code !== '') return true;
+        return !!slot.code_length;
     }
 }
 
