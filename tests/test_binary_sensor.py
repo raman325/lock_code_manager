@@ -1097,32 +1097,30 @@ async def test_unexpected_error_during_sync_disables_slot(
     in_sync_entity_obj._sync_manager._in_sync = True
 
     # Mock _perform_sync to raise an unexpected exception
-    original_perform_sync = in_sync_entity_obj._sync_manager._perform_sync
-
     async def mock_perform_sync_unexpected_error(*args, **kwargs):
         # Raise a generic exception (not CodeRejectedError or LockDisconnected)
         raise ValueError("Unexpected programming error")
 
-    in_sync_entity_obj._sync_manager._perform_sync = mock_perform_sync_unexpected_error
+    with patch.object(
+        in_sync_entity_obj._sync_manager,
+        "_perform_sync",
+        new=mock_perform_sync_unexpected_error,
+    ):
+        # Change PIN to trigger sync cycle
+        await hass.services.async_call(
+            TEXT_DOMAIN,
+            TEXT_SERVICE_SET_VALUE,
+            service_data={ATTR_VALUE: "9999"},
+            target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+        await _async_force_sync_cycle(hass, coordinator)
 
-    # Change PIN to trigger sync cycle
-    await hass.services.async_call(
-        TEXT_DOMAIN,
-        TEXT_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "9999"},
-        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-    await _async_force_sync_cycle(hass, coordinator)
+        # Trigger tick to attempt sync (which will fail with unexpected error)
+        in_sync_entity_obj._sync_manager._dirty = True
+        await in_sync_entity_obj._sync_manager._async_tick()
+        await hass.async_block_till_done()
 
-    # Trigger tick to attempt sync (which will fail with unexpected error)
-    in_sync_entity_obj._sync_manager._dirty = True
-    await in_sync_entity_obj._sync_manager._async_tick()
-    await hass.async_block_till_done()
-
-    # Verify that the slot was disabled (in_sync set to False due to error)
-    assert in_sync_entity_obj._sync_manager._in_sync is False
-
-    # Restore original method
-    in_sync_entity_obj._sync_manager._perform_sync = original_perform_sync
+        # Verify that the slot was disabled (in_sync set to False due to error)
+        assert in_sync_entity_obj._sync_manager._in_sync is False
