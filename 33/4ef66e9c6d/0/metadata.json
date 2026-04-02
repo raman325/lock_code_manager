@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "334ef66e9c6d",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-02T13:41:56.165791Z",
+  "branch": "refactor/slot-code-enum",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/sensor.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/providers/test_zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "320c47d1a113",
+  "token_usage": {
+    "input_tokens": 3567,
+    "cache_creation_tokens": 7891682,
+    "cache_read_tokens": 712560536,
+    "output_tokens": 351194,
+    "api_call_count": 1356
+  },
+  "session_metrics": {
+    "turn_count": 44
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-02T13:41:51.883699Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 60,
+    "human_removed": 24,
+    "total_committed": 20,
+    "agent_percentage": 0
+  }
+}
