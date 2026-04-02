@@ -3,20 +3,20 @@
   "checkpoint_id": "654eba6479a2",
   "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
   "strategy": "manual-commit",
-  "created_at": "2026-04-02T06:18:29.829186Z",
+  "created_at": "2026-04-02T06:19:53.812524Z",
   "branch": "fix/sync-always-retry-on-resolve-failure",
   "checkpoints_count": 1,
   "files_touched": [],
   "agent": "Claude Code",
-  "turn_id": "ed4168640325",
+  "turn_id": "e8c2ceacb5bc",
   "token_usage": {
-    "input_tokens": 3354,
-    "cache_creation_tokens": 6897440,
-    "cache_read_tokens": 577059523,
-    "output_tokens": 314590,
-    "api_call_count": 1205
+    "input_tokens": 3360,
+    "cache_creation_tokens": 6898704,
+    "cache_read_tokens": 580509784,
+    "output_tokens": 315091,
+    "api_call_count": 1209
   },
   "session_metrics": {
-    "turn_count": 15
+    "turn_count": 16
   }
 }

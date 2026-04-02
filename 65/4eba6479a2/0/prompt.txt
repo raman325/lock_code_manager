@@ -2634,3 +2634,7 @@ no, for now, figure out why syncs aren't happening. With the latest code, I enab
 ---
 
 I think there's a casting issue. Follow slot number everywhere it's referenced. Note that in config entries they're stored as strings because keys have to be strings. THat's why we have the mismatch
+
+---
+
+remove eroneous logging statement I added before the no coordinator data check
