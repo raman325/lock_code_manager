@@ -375,9 +375,9 @@ def _serialize_slot(
     if code is SlotCode.EMPTY:
         code = None
     elif code is SlotCode.UNKNOWN:
-        # Has a code but value is hidden; treat as having a code with unknown length
+        # Has a code but value is hidden; omit code_length so frontend does not
+        # attempt String.repeat() with a negative value
         result[ATTR_CODE] = None
-        result[ATTR_CODE_LENGTH] = -1
 
         # Configured code from LCM (desired state) - always include for managed slots
         if configured_code is not None:
@@ -878,8 +878,7 @@ def _build_lock_status(
         if raw_code is SlotCode.EMPTY:
             pass  # treat as no code (code_on_lock stays None)
         elif raw_code is SlotCode.UNKNOWN:
-            # Has a code but value is hidden
-            code_length = -1
+            pass  # has a code but value is hidden; leave code_length as None
         elif raw_code is not None:
             if reveal:
                 code_on_lock = raw_code

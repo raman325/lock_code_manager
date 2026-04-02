@@ -231,9 +231,7 @@ class ZWaveJSLock(BaseLock):
             "Lock %s received push update for slot %s: %s",
             self.lock.entity_id,
             code_slot,
-            "****"
-            if resolved not in (SlotCode.EMPTY, SlotCode.UNKNOWN)
-            else f"({resolved})",
+            "****" if not isinstance(resolved, SlotCode) else f"({resolved})",
         )
 
         # Push update to coordinator
@@ -591,9 +589,7 @@ class ZWaveJSLock(BaseLock):
                 # Unmasked code
                 data[code_slot] = usercode
 
-        slots_with_pin = [
-            s for s, v in data.items() if v not in (SlotCode.EMPTY, SlotCode.UNKNOWN)
-        ]
+        slots_with_pin = [s for s, v in data.items() if not isinstance(v, SlotCode)]
         slots_not_enabled = [s for s, v in data.items() if v is SlotCode.EMPTY]
         _LOGGER.debug(
             "Lock %s: %s slots with PIN %s, %s slots not enabled %s",
