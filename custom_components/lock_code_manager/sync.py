@@ -232,12 +232,14 @@ class SlotSyncManager:
         if not self._ensure_entities_ready():
             return None
 
-        # States are guaranteed non-None here — _ensure_entities_ready just
-        # verified all four exist with valid states on this event loop tick.
-        active_state: str = self._get_entity_state(ATTR_ACTIVE)  # type: ignore[assignment]
-        pin_state: str = self._get_entity_state(CONF_PIN)  # type: ignore[assignment]
+        active_state = self._get_entity_state(ATTR_ACTIVE)
+        pin_state = self._get_entity_state(CONF_PIN)
         name_state = self._get_entity_state(CONF_NAME)
-        code_state: str = self._get_entity_state(ATTR_CODE)  # type: ignore[assignment]
+        code_state = self._get_entity_state(ATTR_CODE)
+
+        if active_state is None or pin_state is None or code_state is None:
+            return None
+
         coordinator_code = self._coordinator.data.get(self._slot_num)
         return SlotState(
             active_state=active_state,
