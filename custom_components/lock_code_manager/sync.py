@@ -374,7 +374,7 @@ class SlotSyncManager:
         await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:
-        """Core tick logic - executed under lock."""
+        """Core tick logic — called from _async_tick after dirty check."""
         slot_state = self._resolve_slot_state()
         if slot_state is None:
             # State resolution failed - _resolve_slot_state logs details.
