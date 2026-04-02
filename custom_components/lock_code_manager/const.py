@@ -84,7 +84,6 @@ CONF_START_SLOT = "start_slot"
 # Additional entity keys
 ATTR_ACTIVE = "active"
 ATTR_CODE = "code"
-ATTR_HAS_CODE = "has_code"
 ATTR_IN_SYNC = "in_sync"
 
 # Code slot properties

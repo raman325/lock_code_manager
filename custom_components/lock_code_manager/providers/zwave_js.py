@@ -213,13 +213,17 @@ class ZWaveJSLock(BaseLock):
     def _handle_usercode_value_update(self, code_slot: int, new_value: Any) -> None:
         """Handle userCode value update for a code slot."""
         # Determine the resolved value as a SlotCode or plain string
-        if not new_value or (isinstance(new_value, str) and new_value.strip("0") == ""):
+        if not new_value:
             resolved: str | SlotCode = SlotCode.EMPTY
         else:
             value = str(new_value)
-            code_slot_in_use = self.code_slot_in_use(code_slot)
-            if value == "*" * len(value) and code_slot_in_use:
+            slot_in_use = self.code_slot_in_use(code_slot)
+            if value == "*" * len(value) and slot_in_use is not False:
+                # Masked code: treat as UNKNOWN whether in_use is True or None
                 resolved = SlotCode.UNKNOWN
+            elif value.strip("0") == "" and slot_in_use is False:
+                # All-zeros with slot explicitly not in use means cleared
+                resolved = SlotCode.EMPTY
             else:
                 resolved = value
 

@@ -73,7 +73,6 @@ from .const import (
     ATTR_CONFIGURED_CODE,
     ATTR_CONFIGURED_CODE_LENGTH,
     ATTR_EVENT_ENTITY_ID,
-    ATTR_HAS_CODE,
     ATTR_IN_SYNC,
     ATTR_LAST_SYNCED,
     ATTR_LAST_USED,
@@ -372,26 +371,11 @@ def _serialize_slot(
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
 
-    # Normalize SlotCode sentinels for serialization
-    if code is SlotCode.EMPTY:
-        code = None
-    elif code is SlotCode.UNKNOWN:
-        # Has a code but value is hidden; omit code_length so frontend does not
-        # attempt String.repeat() with a negative value
-        result[ATTR_CODE] = None
-        result[ATTR_HAS_CODE] = True
-
-        # Configured code from LCM (desired state) - always include for managed slots
-        if configured_code is not None:
-            if reveal:
-                result[ATTR_CONFIGURED_CODE] = configured_code
-            else:
-                result[ATTR_CONFIGURED_CODE_LENGTH] = len(configured_code)
-
-        return result
-
-    # Code on the lock (actual state)
-    if reveal or code is None:
+    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unknown"),
+    # regular codes are masked or revealed, None stays None.
+    if isinstance(code, SlotCode):
+        result[ATTR_CODE] = str(code)
+    elif reveal or code is None:
         result[ATTR_CODE] = code
     else:
         # Masked: send code_length instead of actual code
@@ -871,19 +855,15 @@ def _build_lock_status(
     in_sync = _get_bool_state(hass, in_sync_entity_id)
     last_synced = _get_last_changed(hass, in_sync_entity_id)
 
-    # Get code from coordinator
+    # Get code from coordinator — SlotCode sentinels pass through as strings
     coordinator = lock.coordinator
-    code_on_lock = None
-    code_length = None
-    has_code = False
+    code_on_lock: str | None = None
+    code_length: int | None = None
     if coordinator and coordinator.data:
         raw_code = coordinator.data.get(slot_num)
-        if raw_code is SlotCode.EMPTY:
-            pass  # treat as no code
-        elif raw_code is SlotCode.UNKNOWN:
-            has_code = True  # code exists but value is hidden
+        if isinstance(raw_code, SlotCode):
+            code_on_lock = str(raw_code)
         elif raw_code is not None:
-            has_code = True
             if reveal:
                 code_on_lock = raw_code
             else:
@@ -896,15 +876,13 @@ def _build_lock_status(
     }
     if last_synced:
         lock_status[ATTR_LAST_SYNCED] = last_synced
-    if reveal and code_on_lock is not None:
+    if code_on_lock is not None:
         lock_status[ATTR_CODE] = code_on_lock
     elif code_length is not None:
         lock_status[ATTR_CODE] = None
         lock_status[ATTR_CODE_LENGTH] = code_length
     else:
         lock_status[ATTR_CODE] = None
-    if has_code:
-        lock_status[ATTR_HAS_CODE] = True
 
     return lock_status
 

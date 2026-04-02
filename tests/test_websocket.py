@@ -2925,24 +2925,23 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
 
 
 class TestSerializeSlotWithSlotCode:
-    """Test _serialize_slot handles SlotCode sentinels correctly."""
+    """Test _serialize_slot passes SlotCode sentinels through as strings."""
 
-    def test_empty_code_serializes_as_none(self) -> None:
-        """SlotCode.EMPTY should serialize code as None with no code_length."""
+    def test_empty_code_passes_through(self) -> None:
+        """SlotCode.EMPTY should serialize as the string "empty"."""
         result = _serialize_slot(1, SlotCode.EMPTY, reveal=False)
-        assert result[ATTR_CODE] is None
+        assert result[ATTR_CODE] == "empty"
         assert ATTR_CODE_LENGTH not in result
 
-    def test_empty_code_revealed_serializes_as_none(self) -> None:
-        """SlotCode.EMPTY with reveal=True should still be None."""
+    def test_empty_code_revealed_passes_through(self) -> None:
+        """SlotCode.EMPTY with reveal=True should still be "empty"."""
         result = _serialize_slot(1, SlotCode.EMPTY, reveal=True)
-        assert result[ATTR_CODE] is None
+        assert result[ATTR_CODE] == "empty"
 
-    def test_unknown_code_serializes_with_has_code(self) -> None:
-        """SlotCode.UNKNOWN should set has_code=True and code=None."""
+    def test_unknown_code_passes_through(self) -> None:
+        """SlotCode.UNKNOWN should serialize as the string "unknown"."""
         result = _serialize_slot(1, SlotCode.UNKNOWN, reveal=False)
-        assert result[ATTR_CODE] is None
-        assert result["has_code"] is True
+        assert result[ATTR_CODE] == "unknown"
         assert ATTR_CODE_LENGTH not in result
 
     def test_unknown_code_includes_configured_code_when_revealed(self) -> None:
@@ -2950,8 +2949,7 @@ class TestSerializeSlotWithSlotCode:
         result = _serialize_slot(
             1, SlotCode.UNKNOWN, reveal=True, configured_code="1234"
         )
-        assert result[ATTR_CODE] is None
-        assert result["has_code"] is True
+        assert result[ATTR_CODE] == "unknown"
         assert result["configured_code"] == "1234"
 
     def test_unknown_code_includes_configured_code_length_when_masked(self) -> None:
@@ -2959,7 +2957,7 @@ class TestSerializeSlotWithSlotCode:
         result = _serialize_slot(
             1, SlotCode.UNKNOWN, reveal=False, configured_code="1234"
         )
-        assert result[ATTR_CODE] is None
+        assert result[ATTR_CODE] == "unknown"
         assert result["configured_code_length"] == 4
 
     def test_regular_code_revealed(self) -> None:
