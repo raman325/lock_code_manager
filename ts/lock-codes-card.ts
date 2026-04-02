@@ -1039,10 +1039,9 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     private _hasCode(slot: LockCoordinatorSlotData): boolean {
-        if (slot.code === 'empty' || slot.code === null || slot.code === '') {
-            return false;
-        }
-        return true;
+        if (slot.code === 'empty') return false;
+        if (slot.code !== null && slot.code !== '') return true;
+        return !!slot.code_length;
     }
 }
 
