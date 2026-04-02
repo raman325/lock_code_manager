@@ -169,17 +169,14 @@ class ZWaveJSLock(BaseLock):
             return None
 
     def _slot_expects_pin(self, code_slot: int) -> bool:
-        """
-        Check if LCM expects a PIN on this slot (enabled with PIN configured).
+        """Check if LCM expects a PIN on this slot (enabled with PIN configured).
 
-        Uses coordinator.expected_codes instead of entity state so this works
-        during startup before entities are populated. Used to ignore stale
-        userIdStatus=AVAILABLE events from locks that report old status after a
-        code was successfully set.
+        Used to ignore stale userIdStatus=AVAILABLE events from locks that
+        report old status after a code was successfully set.
         """
         if not self.coordinator:
             return False
-        return bool(self.coordinator.expected_codes.get(code_slot))
+        return self.coordinator.slot_expects_pin(code_slot)
 
     @callback
     def _handle_usercode_status_update(self, code_slot: int, status: Any) -> None:

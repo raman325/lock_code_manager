@@ -90,7 +90,7 @@ class LockCodeManagerCodeSlotSensorEntity(
         if code is SlotCode.EMPTY:
             return ""
         if code is SlotCode.UNKNOWN:
-            return self.coordinator.expected_codes.get(int(self.slot_num)) or None
+            return self.coordinator.get_expected_pin(int(self.slot_num))
         return code
 
     @property

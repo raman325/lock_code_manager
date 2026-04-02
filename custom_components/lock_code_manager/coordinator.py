@@ -77,21 +77,18 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         """Return the lock."""
         return self._lock
 
-    @property
-    def expected_codes(self) -> dict[int, str]:
-        """Return expected codes from current config entry data.
+    def get_expected_pin(self, slot_num: int) -> str | None:
+        """Return configured PIN for a slot, or None if disabled/unconfigured."""
+        slot_data = get_entry_data(self._config_entry, CONF_SLOTS, {}).get(
+            str(slot_num), {}
+        )
+        if not slot_data.get(CONF_ENABLED):
+            return None
+        return slot_data.get(CONF_PIN) or None
 
-        For each managed slot, returns the configured PIN if the slot is enabled
-        and has a PIN, or empty string otherwise. Computed on access so it
-        always reflects the latest config entry state.
-        """
-        slots = get_entry_data(self._config_entry, CONF_SLOTS, {})
-        return {
-            int(slot_num): slot_data.get(CONF_PIN, "")
-            if slot_data.get(CONF_ENABLED)
-            else ""
-            for slot_num, slot_data in slots.items()
-        }
+    def slot_expects_pin(self, slot_num: int) -> bool:
+        """Return whether LCM expects a PIN on this slot (enabled with PIN)."""
+        return self.get_expected_pin(slot_num) is not None
 
     @callback
     def push_update(self, updates: dict[int, str | SlotCode]) -> None:
