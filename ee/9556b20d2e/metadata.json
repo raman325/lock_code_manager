@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ee9556b20d2e",
+  "strategy": "manual-commit",
+  "branch": "refactor/slot-code-enum",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/providers/test_base.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ee/9556b20d2e/0/metadata.json",
+      "transcript": "/ee/9556b20d2e/0/full.jsonl",
+      "content_hash": "/ee/9556b20d2e/0/content_hash.txt",
+      "prompt": "/ee/9556b20d2e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3958,
+    "cache_creation_tokens": 8070766,
+    "cache_read_tokens": 744964757,
+    "output_tokens": 384165,
+    "api_call_count": 1524
+  }
+}
