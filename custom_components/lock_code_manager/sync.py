@@ -12,6 +12,7 @@ Extracted from binary_sensor.py to separate domain logic from entity state displ
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -126,6 +127,7 @@ class SlotSyncManager:
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
         self._dirty: bool = False
+        self._tick_lock = asyncio.Lock()
 
         # Circuit breaker
         self._sync_attempt_count: int = 0
@@ -369,8 +371,14 @@ class SlotSyncManager:
         """Periodic reconciliation tick."""
         if not self._started or not self._dirty:
             return
+
         self._dirty = False
 
+        async with self._tick_lock:
+            await self._async_tick_impl()
+
+    async def _async_tick_impl(self) -> None:
+        """Core tick logic - executed under lock."""
         slot_state = self._resolve_slot_state()
         if slot_state is None:
             # State resolution failed - _resolve_slot_state logs details.
