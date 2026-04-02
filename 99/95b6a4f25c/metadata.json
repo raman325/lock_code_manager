@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9995b6a4f25c",
+  "strategy": "manual-commit",
+  "branch": "refactor/remove-number-of-uses",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/99/95b6a4f25c/0/metadata.json",
+      "transcript": "/99/95b6a4f25c/0/full.jsonl",
+      "content_hash": "/99/95b6a4f25c/0/content_hash.txt",
+      "prompt": "/99/95b6a4f25c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4717,
+    "cache_creation_tokens": 9553543,
+    "cache_read_tokens": 946943542,
+    "output_tokens": 526486,
+    "api_call_count": 2139
+  }
+}

@@ -1,0 +1,25 @@
+ok now create a new branch off main that deprecates CONF_NUMBER_OF_USES. We do a config entry migration and chop it off and send a persistent notification if we do directing users to the blueprint page (only one notification regarldess of the number of entries this is chopped from). Either that or we create a repair issue -> can the repair issue import the blueprint and create the input helper? that would be cool
+
+---
+
+persistent notification and remove
+
+---
+
+did we already get rid of CONF_CALENDAR?
+
+---
+
+too bad there's no clean migration for number ofu ses
+
+---
+
+check review comments
+
+---
+
+CI failures
+
+---
+
+check latest review comments
