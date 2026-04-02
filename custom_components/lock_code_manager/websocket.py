@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
 import copy
-from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
 import logging
@@ -95,8 +94,10 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
+    EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
+from .models import SlotCode, SlotEntityData, SlotEntityIds, SlotMetadata
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -152,16 +153,7 @@ def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
 def _get_last_changed(
     hass: HomeAssistant, entity_id: str | None, require_valid_state: bool = False
 ) -> str | None:
-    """Get last_changed timestamp as ISO string.
-
-    Args:
-        hass: Home Assistant instance.
-        entity_id: Entity ID to get last_changed from.
-        require_valid_state: If True, only return timestamp if state is not
-            unknown/unavailable. Useful for event entities where last_changed
-            only matters if the event has actually fired.
-
-    """
+    """Get last_changed timestamp as ISO string."""
     if not entity_id:
         return None
     if state := hass.states.get(entity_id):
@@ -287,7 +279,8 @@ async def get_config_entry_data(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Return complete config entry data for Lock Code Manager.
+    """
+    Return complete config entry data for Lock Code Manager.
 
     This is the primary data-fetching command for the frontend. It returns all
     static configuration and entity registry data needed to render the dashboard.
@@ -299,7 +292,7 @@ async def get_config_entry_data(
     - dashboard-strategy.ts: Fetches data for dashboard view generation
     - view-strategy.ts: Fetches config entry and entities for view rendering
 
-    Returns:
+    Sends:
         config_entry: The config entry JSON fragment (entry_id, title, etc.)
         entities: List of entity registry entries for this config entry
         locks: List of lock objects with entity_id and friendly name
@@ -345,7 +338,7 @@ def _slot_sort_key(slot: Any) -> tuple[int, str]:
 
 def _serialize_slot(
     slot: Any,
-    code: int | str | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     name: str | None = None,
@@ -355,7 +348,8 @@ def _serialize_slot(
     enabled: bool | None = None,
     config_entry_id: str | None = None,
 ) -> dict[str, Any]:
-    """Serialize a single slot, optionally masking the code.
+    """
+    Serialize a single slot, optionally masking the code.
 
     - code/code_length: What's actually on the lock (actual state)
     - configured_code/configured_code_length: What LCM has configured (desired state)
@@ -376,13 +370,16 @@ def _serialize_slot(
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
 
-    # Code on the lock (actual state)
-    if reveal or code is None:
+    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unknown"),
+    # regular codes are masked or revealed, None stays None.
+    if isinstance(code, SlotCode):
+        result[ATTR_CODE] = str(code)
+    elif reveal or code is None:
         result[ATTR_CODE] = code
     else:
         # Masked: send code_length instead of actual code
         result[ATTR_CODE] = None
-        result[ATTR_CODE_LENGTH] = len(str(code))
+        result[ATTR_CODE_LENGTH] = len(code)
 
     # Configured code from LCM (desired state) - always include for managed slots
     if configured_code is not None:
@@ -418,36 +415,11 @@ def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
     return managed_slots
 
 
-@dataclass
-class SlotEntityIds:
-    """Entity IDs for a single slot's LCM entities."""
-
-    slot_num: int
-    config_entry_id: str | None = None
-    name: str | None = None
-    pin: str | None = None
-    active: str | None = None
-    enabled: str | None = None
-
-    def all_ids(self) -> list[str]:
-        """Return all non-None entity IDs."""
-        return [eid for eid in (self.name, self.pin, self.active, self.enabled) if eid]
-
-
-@dataclass
-class SlotMetadata:
-    """Metadata for a single slot from LCM entities."""
-
-    name: str | None = None
-    configured_pin: str | None = None
-    active: bool | None = None
-    enabled: bool | None = None
-
-
 def _get_slot_entity_ids(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotEntityIds]:
-    """Get entity IDs for all slots managed by LCM for a lock.
+    """
+    Get entity IDs for all slots managed by LCM for a lock.
 
     Returns a dict mapping slot number to SlotEntityIds containing the entity IDs
     for name, PIN, active, and enabled entities.
@@ -489,7 +461,8 @@ def _get_slot_entity_ids(
 def _get_slot_metadata(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotMetadata]:
-    """Get all slot metadata from LCM entities for a lock in one pass.
+    """
+    Get all slot metadata from LCM entities for a lock in one pass.
 
     Returns a dict mapping slot number to SlotMetadata containing:
     - name: From text entity
@@ -510,7 +483,8 @@ def _get_slot_metadata(
 
 
 def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list[str]:
-    """Get entity IDs for slot state tracking (enabled, active, name, PIN).
+    """
+    Get entity IDs for slot state tracking (enabled, active, name, PIN).
 
     Returns the specific LCM entity IDs whose state changes should trigger
     websocket subscription updates for this lock's slots.
@@ -529,7 +503,7 @@ def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
         if friendly_name := state.attributes.get(ATTR_FRIENDLY_NAME):
             return friendly_name
     # Fall back to entity registry name/original_name
-    return lock.lock.name or lock.lock.original_name or lock.lock.entity_id
+    return lock.display_name
 
 
 def _serialize_lock_coordinator(
@@ -590,7 +564,8 @@ async def subscribe_lock_codes(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Subscribe to coordinator data and LCM entity state updates for a lock.
+    """
+    Subscribe to coordinator data and LCM entity state updates for a lock.
 
     Triggers updates when:
     - Lock coordinator data changes (codes on lock)
@@ -609,15 +584,41 @@ async def subscribe_lock_codes(
 
     coordinator = lock.coordinator
 
+    # Mutable container for the current state tracking unsubscribe callback,
+    # allowing it to be replaced when tracked entities change
+    unsub_state_ref: list[Callable[[], None]] = []
+    tracked_set: set[str] = set()
+
+    @callback
+    def _refresh_lock_state_tracking() -> None:
+        """Re-subscribe to state changes if the tracked entity set has changed."""
+        new_ids = set(_get_slot_state_entity_ids(hass, lock_entity_id))
+        if new_ids == tracked_set:
+            return
+        tracked_set.clear()
+        tracked_set.update(new_ids)
+        # Unsubscribe from previous tracking
+        if unsub_state_ref:
+            unsub_state_ref[0]()
+            unsub_state_ref.clear()
+        # Subscribe to new set
+        if new_ids:
+            unsub_state_ref.append(
+                async_track_state_change_event(hass, list(new_ids), _on_state_change)
+            )
+
     @callback
     def _send_update() -> None:
         connection.send_event(
             msg["id"], _serialize_lock_coordinator(hass, lock, reveal=reveal)
         )
+        # Re-resolve tracked entities to pick up entities created after
+        # subscription was established
+        _refresh_lock_state_tracking()
 
     @callback
     def _on_state_change(event: Event[EventStateChangedData]) -> None:
-        """Handle LCM entity state changes."""
+        """Handle Lock Code Manager entity state changes."""
         old_state = event.data.get("old_state")
         new_state = event.data.get("new_state")
 
@@ -625,54 +626,31 @@ async def subscribe_lock_codes(
         if old_state is None or new_state is None or old_state.state != new_state.state:
             _send_update()
 
-    # Track coordinator updates (lock code changes)
+    # Track coordinator updates (lock code changes).
+    # Note: if coordinator is None AND the initial entity set is empty, nothing
+    # drives re-resolution of entities. This is acceptable because coordinators
+    # are always present for real lock providers; None only occurs in degenerate
+    # test scenarios where no actual lock hardware is involved.
     unsub_coordinator = (
         coordinator.async_add_listener(_send_update) if coordinator else lambda: None
     )
 
-    # Track LCM entity state changes (enabled, active, name, PIN)
+    # Track Lock Code Manager entity state changes (enabled, active, name, PIN)
     slot_entity_ids = _get_slot_state_entity_ids(hass, lock_entity_id)
-    unsub_state = (
-        async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
-        if slot_entity_ids
-        else lambda: None
-    )
+    tracked_set.update(slot_entity_ids)
+    if slot_entity_ids:
+        unsub_state_ref.append(
+            async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
+        )
 
     def _unsub_all() -> None:
         unsub_coordinator()
-        unsub_state()
+        if unsub_state_ref:
+            unsub_state_ref[0]()
 
     connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
     _send_update()
-
-
-@dataclass
-class SlotEntityData:
-    """Entity IDs and data for a single slot."""
-
-    slot_num: int
-    name_entity_id: str | None = None
-    pin_entity_id: str | None = None
-    enabled_entity_id: str | None = None
-    active_entity_id: str | None = None
-    number_of_uses_entity_id: str | None = None
-    event_entity_id: str | None = None
-
-    def all_entity_ids(self) -> list[str]:
-        """Return all non-None entity IDs for state tracking."""
-        return [
-            eid
-            for eid in (
-                self.name_entity_id,
-                self.pin_entity_id,
-                self.enabled_entity_id,
-                self.active_entity_id,
-                self.number_of_uses_entity_id,
-                self.event_entity_id,
-            )
-            if eid
-        ]
 
 
 def _get_slot_entity_data(
@@ -700,7 +678,8 @@ def _get_slot_entity_data(
 def _get_slot_in_sync_entity_ids(
     hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int
 ) -> dict[str, str]:
-    """Get in_sync entity IDs for each lock for a specific slot.
+    """
+    Get in_sync entity IDs for each lock for a specific slot.
 
     Returns dict mapping lock_entity_id to in_sync_entity_id.
     """
@@ -722,7 +701,8 @@ def _get_slot_in_sync_entity_ids(
 def _get_condition_entity_data(
     hass: HomeAssistant, condition_entity_id: str | None
 ) -> dict[str, Any] | None:
-    """Get condition entity data from entity state.
+    """
+    Get condition entity data from entity state.
 
     Returns dict with entity info and domain-specific data.
     For calendar entities, includes event details (summary, end_time).
@@ -775,10 +755,88 @@ def _get_condition_entity_data(
     return result
 
 
+def _get_last_used_info(
+    hass: HomeAssistant, event_entity_id: str | None
+) -> tuple[str | None, str | None]:
+    """
+    Get last-used timestamp and lock name from an event entity.
+
+    Returns a tuple of (last_used_timestamp, last_used_lock_name).
+    The event entity's state is the ISO timestamp of the last event,
+    and its event_type attribute is the lock entity ID where the PIN was used.
+    """
+    if not event_entity_id:
+        return None, None
+    event_state = hass.states.get(event_entity_id)
+    if not event_state or event_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+        return None, None
+    last_used = event_state.state
+    last_used_lock_name: str | None = None
+    if last_used_lock_id := event_state.attributes.get("event_type"):
+        if lock_state := hass.states.get(last_used_lock_id):
+            last_used_lock_name = lock_state.attributes.get(
+                ATTR_FRIENDLY_NAME, last_used_lock_id
+            )
+    return last_used, last_used_lock_name
+
+
+def _build_lock_status(
+    hass: HomeAssistant,
+    lock: BaseLock,
+    slot_num: int,
+    in_sync_map: dict[str, str],
+    *,
+    reveal: bool,
+) -> dict[str, Any]:
+    """
+    Build the per-lock status dict for a slot card.
+
+    Includes lock name, in-sync state, last synced time, and the code on the lock
+    (masked or revealed depending on the reveal flag).
+    """
+    lock_entity_id = lock.lock.entity_id
+    lock_name = _get_lock_friendly_name(hass, lock)
+    in_sync_entity_id = in_sync_map.get(lock_entity_id)
+    in_sync = _get_bool_state(hass, in_sync_entity_id)
+    last_synced = _get_last_changed(hass, in_sync_entity_id)
+
+    # Get code from coordinator — SlotCode sentinels pass through as strings
+    coordinator = lock.coordinator
+    code_on_lock: str | None = None
+    code_length: int | None = None
+    if coordinator and coordinator.data:
+        raw_code = coordinator.data.get(slot_num)
+        if isinstance(raw_code, SlotCode):
+            code_on_lock = str(raw_code)
+        elif raw_code is not None:
+            if reveal:
+                code_on_lock = raw_code
+            else:
+                code_length = len(raw_code)
+
+    lock_status: dict[str, Any] = {
+        ATTR_ENTITY_ID: lock_entity_id,
+        CONF_NAME: lock_name,
+        ATTR_IN_SYNC: in_sync,
+    }
+    if last_synced:
+        lock_status[ATTR_LAST_SYNCED] = last_synced
+    if code_on_lock is not None:
+        lock_status[ATTR_CODE] = code_on_lock
+    elif code_length is not None:
+        lock_status[ATTR_CODE] = None
+        lock_status[ATTR_CODE_LENGTH] = code_length
+    else:
+        lock_status[ATTR_CODE] = None
+
+    return lock_status
+
+
 async def _get_next_calendar_event(
     hass: HomeAssistant, calendar_entity_id: str
 ) -> dict[str, Any] | None:
-    """Fetch the next upcoming event from a calendar entity.
+    """
+    Fetch the next upcoming event from a calendar entity.
 
     Returns dict with start_time and summary, or None if no upcoming events.
     """
@@ -817,7 +875,7 @@ async def _get_next_calendar_event(
 
         return next_event_data if next_event_data else None
 
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - Catch-all: calendar fetch is best-effort
         _LOGGER.debug("Failed to fetch next calendar event for %s", calendar_entity_id)
         return None
 
@@ -840,72 +898,28 @@ def _serialize_slot_card_data(
     active = _get_bool_state(hass, slot_entities.active_entity_id)
     number_of_uses = _get_number_state(hass, slot_entities.number_of_uses_entity_id)
 
-    # Get last_used from event entity state
-    # EventEntity's state IS the timestamp (ISO format) of when the last event fired
-    # - If state is "unknown" or "unavailable", no event has ever fired
-    # - Otherwise, the state value is the ISO timestamp
-    # The event_type attribute is the lock entity ID where the PIN was last used
-    last_used: str | None = None
-    last_used_lock_name: str | None = None
-    if slot_entities.event_entity_id:
-        if event_state := hass.states.get(slot_entities.event_entity_id):
-            if event_state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-                # The state IS the timestamp
-                last_used = event_state.state
-                # Get the friendly name of the lock where PIN was last used
-                # event_type is now the lock entity ID (instead of ATTR_LOCK_ENTITY_ID)
-                if last_used_lock_id := event_state.attributes.get("event_type"):
-                    if lock_state := hass.states.get(last_used_lock_id):
-                        last_used_lock_name = lock_state.attributes.get(
-                            "friendly_name", last_used_lock_id
-                        )
+    last_used, last_used_lock_name = _get_last_used_info(
+        hass, slot_entities.event_entity_id
+    )
 
     # Get condition entity from config using helper
     condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
 
     # Build per-lock status
-    locks_data: list[dict[str, Any]] = []
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
     entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
 
-    for lock_entity_id in entry_lock_ids:
-        lock = all_locks.get(lock_entity_id)
-        if not lock:
-            continue
-
-        lock_name = _get_lock_friendly_name(hass, lock)
-        in_sync_entity_id = in_sync_map.get(lock_entity_id)
-        in_sync = _get_bool_state(hass, in_sync_entity_id)
-        last_synced = _get_last_changed(hass, in_sync_entity_id)
-
-        # Get code from coordinator
-        coordinator = lock.coordinator
-        code_on_lock = None
-        code_length = None
-        if coordinator and coordinator.data:
-            raw_code = coordinator.data.get(slot_num)
-            if raw_code is not None:
-                if reveal:
-                    code_on_lock = str(raw_code)
-                else:
-                    code_length = len(str(raw_code))
-
-        lock_status: dict[str, Any] = {
-            ATTR_ENTITY_ID: lock_entity_id,
-            CONF_NAME: lock_name,
-            ATTR_IN_SYNC: in_sync,
-        }
-        if last_synced:
-            lock_status[ATTR_LAST_SYNCED] = last_synced
-        if reveal and code_on_lock is not None:
-            lock_status[ATTR_CODE] = code_on_lock
-        elif code_length is not None:
-            lock_status[ATTR_CODE] = None
-            lock_status[ATTR_CODE_LENGTH] = code_length
-        else:
-            lock_status[ATTR_CODE] = None
-
-        locks_data.append(lock_status)
+    locks_data: list[dict[str, Any]] = [
+        _build_lock_status(
+            hass,
+            lock,
+            slot_num,
+            in_sync_map,
+            reveal=reveal,
+        )
+        for lock_entity_id in entry_lock_ids
+        if (lock := all_locks.get(lock_entity_id))
+    ]
 
     # Build result
     result: dict[str, Any] = {
@@ -980,7 +994,8 @@ async def subscribe_code_slot(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Subscribe to slot data for a specific slot in a config entry.
+    """
+    Subscribe to slot data for a specific slot in a config entry.
 
     Provides real-time updates when:
     - Slot entities change (name, PIN, enabled, active, number_of_uses)
@@ -1001,10 +1016,19 @@ async def subscribe_code_slot(
         )
         return
 
-    # Get entity data
-    slot_entities = _get_slot_entity_data(hass, config_entry, slot_num)
-    in_sync_map = _get_slot_in_sync_entity_ids(hass, config_entry, slot_num)
-    condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
+    # Re-resolve entity IDs on each update to handle entities created after
+    # subscription (for example, during initial config setup when entities may
+    # not exist yet). These are lightweight entity registry lookups.
+    def _resolve_entity_ids() -> tuple[SlotEntityData, dict[str, str], str | None]:
+        """Resolve current entity IDs for this slot from the entity registry."""
+        return (
+            _get_slot_entity_data(hass, config_entry, slot_num),
+            _get_slot_in_sync_entity_ids(hass, config_entry, slot_num),
+            _get_slot_condition_entity_id(config_entry, slot_num),
+        )
+
+    # Initial resolution for state tracking setup
+    slot_entities, in_sync_map, condition_entity_id = _resolve_entity_ids()
 
     # Fetch next calendar event if condition is a calendar
     calendar_next_event: dict[str, Any] | None = None
@@ -1014,28 +1038,36 @@ async def subscribe_code_slot(
     ):
         calendar_next_event = await _get_next_calendar_event(hass, condition_entity_id)
 
+    # Mutable container for the current state tracking unsubscribe callback,
+    # allowing it to be replaced when tracked entities change
+    unsub_state_ref: list[Callable[[], None]] = []
+
     @callback
     def _send_update(next_event: dict[str, Any] | None = None) -> None:
+        # Re-resolve entity IDs each time to pick up entities created after
+        # subscription was established
+        current_entities, current_in_sync, current_condition = _resolve_entity_ids()
         connection.send_event(
             msg["id"],
             _serialize_slot_card_data(
                 hass,
                 config_entry,
                 slot_num,
-                slot_entities,
-                in_sync_map,
+                current_entities,
+                current_in_sync,
                 reveal=reveal,
                 calendar_next_event=next_event,
             ),
         )
+        # Update state tracking if the set of tracked entities has changed
+        _refresh_state_tracking(current_entities, current_in_sync, current_condition)
 
     async def _async_send_update_with_calendar() -> None:
         """Fetch next calendar event and send update (for state changes)."""
         next_event = None
-        if condition_entity_id and condition_entity_id.startswith(
-            f"{CALENDAR_DOMAIN}."
-        ):
-            next_event = await _get_next_calendar_event(hass, condition_entity_id)
+        current_condition = _get_slot_condition_entity_id(config_entry, slot_num)
+        if current_condition and current_condition.startswith(f"{CALENDAR_DOMAIN}."):
+            next_event = await _get_next_calendar_event(hass, current_condition)
         _send_update(next_event)
 
     @callback
@@ -1046,25 +1078,50 @@ async def subscribe_code_slot(
 
         # Only send update if actual state value changed
         if old_state is None or new_state is None or old_state.state != new_state.state:
+            # Re-resolve condition entity identifier for calendar check
+            current_condition = _get_slot_condition_entity_id(config_entry, slot_num)
             # For calendar entities, fetch next event asynchronously
             if (
-                event.data.get("entity_id") == condition_entity_id
-                and condition_entity_id
-                and split_entity_id(condition_entity_id)[0] == CALENDAR_DOMAIN
+                event.data.get("entity_id") == current_condition
+                and current_condition
+                and split_entity_id(current_condition)[0] == CALENDAR_DOMAIN
             ):
                 hass.async_create_task(_async_send_update_with_calendar())
             else:
                 _send_update()
 
-    # Track slot entity state changes (including condition entity for state updates)
-    tracked_entities = slot_entities.all_entity_ids() + list(in_sync_map.values())
-    if condition_entity_id:
-        tracked_entities.append(condition_entity_id)
-    unsub_state = (
-        async_track_state_change_event(hass, tracked_entities, _on_state_change)
-        if tracked_entities
-        else lambda: None
-    )
+    # Keep track of which entity IDs are currently being tracked so we can
+    # detect when the set changes and re-subscribe
+    tracked_set: set[str] = set()
+
+    @callback
+    def _refresh_state_tracking(
+        current_entities: SlotEntityData,
+        current_in_sync: dict[str, str],
+        current_condition: str | None = None,
+    ) -> None:
+        """Re-subscribe to state changes if the tracked entity set has changed."""
+        new_ids = set(current_entities.all_entity_ids()) | set(current_in_sync.values())
+        if current_condition:
+            new_ids.add(current_condition)
+
+        if new_ids == tracked_set:
+            return
+
+        tracked_set.clear()
+        tracked_set.update(new_ids)
+        # Unsubscribe from previous tracking
+        if unsub_state_ref:
+            unsub_state_ref[0]()
+            unsub_state_ref.clear()
+        # Subscribe to new set
+        if new_ids:
+            unsub_state_ref.append(
+                async_track_state_change_event(hass, list(new_ids), _on_state_change)
+            )
+
+    # Initial state tracking setup (reuse _refresh_state_tracking to avoid duplication)
+    _refresh_state_tracking(slot_entities, in_sync_map, condition_entity_id)
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
@@ -1077,7 +1134,8 @@ async def subscribe_code_slot(
             unsub_coordinators.append(lock.coordinator.async_add_listener(_send_update))
 
     def _unsub_all() -> None:
-        unsub_state()
+        if unsub_state_ref:
+            unsub_state_ref[0]()
         for unsub in unsub_coordinators:
             unsub()
 
@@ -1100,7 +1158,8 @@ async def set_lock_usercode(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Set or clear a usercode on a lock slot.
+    """
+    Set or clear a usercode on a lock slot.
 
     If usercode is provided, sets the code. If usercode is empty or not provided,
     clears the code slot.
@@ -1129,7 +1188,7 @@ async def set_lock_usercode(
             # Clear the usercode
             await lock.async_internal_clear_usercode(code_slot)
         connection.send_result(msg["id"], {"success": True})
-    except Exception as err:  # noqa: BLE001
+    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_UNKNOWN_ERROR,
@@ -1171,7 +1230,8 @@ async def update_slot_condition(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Update condition settings for a slot.
+    """
+    Update condition settings for a slot.
 
     Allows adding, changing, or removing:
     - entity_id: Condition entity (calendar, schedule, binary_sensor, switch, input_boolean)
@@ -1202,6 +1262,21 @@ async def update_slot_condition(
             f"Entity {entity_id} not found",
         )
         return
+
+    # Check for excluded platforms with a single registry lookup
+    if entity_id is not None:
+        ent_reg = er.async_get(hass)
+        entity_entry = ent_reg.async_get(entity_id)
+        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
+            connection.send_error(
+                msg["id"],
+                websocket_api.const.ERR_NOT_SUPPORTED,
+                f"Entities from the '{entity_entry.platform}' integration are not "
+                "supported as condition entities. See the wiki for details: "
+                "https://github.com/raman325/lock_code_manager/wiki/"
+                "Unsupported-Condition-Entity-Integrations",
+            )
+            return
 
     # Update config entry data
     data = copy.deepcopy(dict(config_entry.data))

@@ -1,3 +1,4 @@
+/* eslint-disable line-comment-position */
 import { vi } from 'vitest';
 
 import { HomeAssistant } from '../ha_type_stubs';
@@ -42,6 +43,42 @@ export function createMockHass(options: MockHassOptions = {}): HomeAssistant {
             state: options.configState ?? 'RUNNING'
         },
         states: options.states ?? {}
+    } as unknown as HomeAssistant;
+}
+
+/**
+ * Creates a mock HomeAssistant object with a connection that supports subscribeMessage.
+ *
+ * Use this when testing components that use WebSocket subscriptions (for example,
+ * the subscription mixin). The `onSubscribe` callback receives the subscription
+ * callback and message, letting tests push data or simulate errors.
+ *
+ * @example
+ * ```ts
+ * const hass = createMockHassWithConnection({
+ *     onSubscribe: (callback, msg) => {
+ *         callback({ slot_num: 1, name: 'Test' });
+ *     }
+ * });
+ * ```
+ */
+export function createMockHassWithConnection(options?: {
+    callWS?: CallWSHandler;
+    onSubscribe?: (callback: (data: unknown) => void, msg: unknown) => void;
+    states?: Record<string, { attributes?: Record<string, unknown>; state: string }>;
+}): HomeAssistant {
+    const subscribeMessageMock = vi
+        .fn()
+        .mockImplementation((callback: (data: unknown) => void, msg: unknown) => {
+            options?.onSubscribe?.(callback, msg);
+            return Promise.resolve(() => {}); // unsubscribe function
+        });
+    return {
+        ...createMockHass({
+            callWS: options?.callWS,
+            states: options?.states
+        }),
+        connection: { subscribeMessage: subscribeMessageMock }
     } as unknown as HomeAssistant;
 }
 

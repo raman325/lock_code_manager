@@ -19,6 +19,7 @@ import {
 import { slugify } from './slugify';
 import {
     ConfigEntryJSONFragment,
+    GenerateViewOptions,
     LockCodeManagerConfigEntryDataResponse,
     LockCodeManagerEntityEntry,
     SlotMapping
@@ -28,15 +29,18 @@ import { capitalize } from './util';
 export async function generateView(
     hass: HomeAssistant,
     configEntry: ConfigEntryJSONFragment,
-    show_code_sensors: boolean,
-    show_lock_sync: boolean,
-    show_lock_cards: boolean,
-    code_display: string,
-    use_slot_cards: boolean,
-    show_conditions = true,
-    show_lock_status = true,
-    collapsed_sections?: ('conditions' | 'lock_status')[]
+    options: GenerateViewOptions
 ): Promise<LovelaceViewConfig> {
+    const {
+        showCodeSensors: show_code_sensors,
+        showLockSync: show_lock_sync,
+        showLockCards: show_lock_cards,
+        codeDisplay: code_display,
+        useSlotCards: use_slot_cards,
+        showConditions: show_conditions = true,
+        showLockStatus: show_lock_status = true,
+        collapsedSections: collapsed_sections
+    } = options;
     const configEntryData = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
         config_entry_id: configEntry.entry_id,
         type: 'lock_code_manager/get_config_entry_data'

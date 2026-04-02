@@ -19,9 +19,8 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers import BaseLock
-
-LOCK_DATA = f"mock_{DOMAIN}"
 
 LOCK_1_ENTITY_ID = "lock.test_1"
 LOCK_2_ENTITY_ID = "lock.test_2"
@@ -41,6 +40,7 @@ BASE_CONFIG = {
 }
 
 SLOT_1_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_1_active"
+SLOT_1_ENABLED_ENTITY = "switch.mock_title_code_slot_1_enabled"
 SLOT_1_EVENT_ENTITY = "event.mock_title_code_slot_1"
 SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
 SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
@@ -62,6 +62,8 @@ class MockLCMLock(BaseLock):
         """Initialize mock lock."""
         super().__init__(*args, **kwargs)
         self._connected = True
+        self.codes: dict[int, str] = {1: "1234", 2: "5678"}
+        self.service_calls: defaultdict[str, list] = defaultdict(list)
 
     @property
     def domain(self) -> str:
@@ -71,71 +73,56 @@ class MockLCMLock(BaseLock):
     @callback
     def setup(self) -> None:
         """Set up lock."""
-        self.hass.data.setdefault(LOCK_DATA, {}).setdefault(
-            self.lock.entity_id,
-            {"codes": {1: "1234", 2: "5678"}, "service_calls": defaultdict(list)},
-        )
 
     @callback
     def unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
-        self.hass.data[LOCK_DATA].pop(self.lock.entity_id)
-        if not self.hass.data[LOCK_DATA]:
-            self.hass.data.pop(LOCK_DATA)
 
     def set_connected(self, connected: bool) -> None:
         """Set connection state for testing."""
         self._connected = connected
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
-    def hard_refresh_codes(self) -> None:
+    def hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """
         Perform hard refresh all codes.
 
-        Needed for integraitons where usercodes are cached and may get out of sync with
-        the lock.
+        Needed for integrations where usercodes are cached and may get out of sync
+        with the lock.
         """
-        self.hass.data[LOCK_DATA][self.lock.entity_id]["service_calls"][
-            "hard_refresh_codes"
-        ].append(())
+        self.service_calls["hard_refresh_codes"].append(())
+        return self.get_usercodes()
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
-        """Set a usercode on a code slot.
+        """
+        Set a usercode on a code slot.
 
         Returns True if the value was changed, False if already set to this value.
         """
-        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
-        if lock_data:
-            # Check if value already matches
-            if lock_data["codes"].get(code_slot) == usercode:
-                return False
-            lock_data["codes"][code_slot] = usercode
-            lock_data["service_calls"]["set_usercode"].append(
-                (code_slot, usercode, name)
-            )
-            return True
+        if self.codes.get(code_slot) == usercode:
+            return False
+        self.codes[code_slot] = usercode
+        self.service_calls["set_usercode"].append((code_slot, usercode, name))
         return True
 
     def clear_usercode(self, code_slot: int) -> bool:
-        """Clear a usercode on a code slot.
+        """
+        Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
         """
-        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
-        if lock_data:
-            if code_slot not in lock_data["codes"]:
-                return False
-            lock_data["codes"].pop(code_slot, None)
-            lock_data["service_calls"]["clear_usercode"].append((code_slot,))
-            return True
+        if code_slot not in self.codes:
+            return False
+        self.codes.pop(code_slot, None)
+        self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | SlotCode]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -147,12 +134,9 @@ class MockLCMLock(BaseLock):
             'B': '5678',
         }
         """
-        lock_data = self.hass.data.get(LOCK_DATA, {}).get(self.lock.entity_id)
-        if not lock_data:
-            return {}
-        codes = lock_data["codes"]
-        lock_data["service_calls"]["get_usercodes"].append(codes)
-        return codes
+        snapshot = self.codes.copy()
+        self.service_calls["get_usercodes"].append(snapshot)
+        return snapshot
 
 
 class MockLockEntity(LockEntity):

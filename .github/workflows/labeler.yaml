@@ -1,6 +1,7 @@
 ---
 name: Labeler
 
+# GHA requires bare `on:` which yamllint sees as boolean
 # yamllint disable-line rule:truthy
 on:
   pull_request_target:

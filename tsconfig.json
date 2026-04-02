@@ -2,6 +2,7 @@
   "compilerOptions": {
     "baseUrl": ".",
     "experimentalDecorators": true,
+    "ignoreDeprecations": "6.0",
     "module": "ESNext",
     "moduleResolution": "node",
     "paths": {

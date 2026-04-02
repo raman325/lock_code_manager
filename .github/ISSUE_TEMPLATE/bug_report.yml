@@ -8,6 +8,10 @@ body:
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
+
+        For guidance on gathering the information below, see the
+        [Troubleshooting](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting)
+        wiki page.
   - type: textarea
     id: what-happened
     attributes:
@@ -58,16 +62,78 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## Additional details
+        ## Diagnostics & Logs
+
+        Debug logs and device diagnostics are the two most important pieces of
+        information for diagnosing issues. See the
+        [Troubleshooting](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting)
+        wiki for detailed instructions on gathering both.
   - type: textarea
     id: logs
     attributes:
-      label: Relevant log output
+      label: Debug logs (paste)
       description: >
-        Please set the log level for the integration to debug, reproduce the issue,
-        and copy and paste any relevant log output. This will be automatically
-        formatted into code, so no need for backticks.
+        Enable debug logging by adding
+        `custom_components.lock_code_manager: debug` and
+        `homeassistant.components.zwave_js: debug` (replace `zwave_js` with
+        your lock integration's domain if not Z-Wave) under `logger > logs` in
+        your
+        `configuration.yaml`, restart, reproduce the issue, then paste the
+        relevant log lines here. See the
+        [Debug Logs](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Debug-Logs)
+        wiki page for detailed instructions. This field is automatically
+        formatted as code.
       render: shell
+  - type: upload
+    id: logs-upload
+    attributes:
+      label: Debug logs (upload)
+      description: >
+        Alternatively, upload a log file here. You can download the full log
+        from Settings → System → Logs → Download full log.
+  - type: upload
+    id: diagnostics
+    attributes:
+      label: Device diagnostics (upload)
+      description: >
+        Download diagnostics for your lock device from
+        Settings → Devices & Services → [your lock integration] → [lock device]
+        → ⋮ → Download diagnostics, then upload the JSON file here. See the
+        [Device Diagnostics](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Device-Diagnostics)
+        wiki page for detailed instructions.
+  - type: textarea
+    id: diagnostics-paste
+    attributes:
+      label: Device diagnostics (paste)
+      description: >
+        Alternatively, paste the diagnostics JSON here. This field is
+        automatically formatted as JSON.
+      render: json
+  - type: markdown
+    attributes:
+      value: |
+        ## Frontend Issues
+
+        If your issue involves the dashboard, cards, or UI, include browser
+        console logs. See the
+        [Browser Console Logs](https://github.com/raman325/lock_code_manager/wiki/Troubleshooting-Browser-Console-Logs)
+        wiki page for instructions on opening the console in your browser.
+  - type: textarea
+    id: console-logs
+    attributes:
+      label: Browser console logs (paste)
+      description: >
+        Open the browser console (F12 → Console tab) before reproducing the
+        issue, then paste the output here. This field is automatically formatted
+        as code.
+      render: shell
+  - type: upload
+    id: console-logs-upload
+    attributes:
+      label: Browser console logs (upload)
+      description: >
+        Alternatively, right-click in the console and select "Save as..." to
+        download the log, then upload it here.
   - type: textarea
     id: screenshots
     attributes:

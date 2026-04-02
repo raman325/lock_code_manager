@@ -18,6 +18,7 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
     CONF_URL,
+    EVENT_HOMEASSISTANT_STARTED,
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
@@ -40,7 +41,6 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
-    LOCK_DATA,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,10 +98,9 @@ async def test_entry_setup_and_unload(
     assert resources.loaded
     assert any(data[CONF_URL] == STRATEGY_PATH for data in resources.async_items())
 
+    locks = lock_code_manager_config_entry.runtime_data.locks
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
-        assert not hass.data[LOCK_DATA][lock_entity_id]["service_calls"][
-            "hard_refresh_codes"
-        ]
+        assert not locks[lock_entity_id].service_calls["hard_refresh_codes"]
 
     await hass.services.async_call(
         DOMAIN,
@@ -109,10 +108,8 @@ async def test_entry_setup_and_unload(
         {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
         blocking=True,
     )
-    assert hass.data[LOCK_DATA][LOCK_1_ENTITY_ID]["service_calls"]["hard_refresh_codes"]
-    assert not hass.data[LOCK_DATA][LOCK_2_ENTITY_ID]["service_calls"][
-        "hard_refresh_codes"
-    ]
+    assert locks[LOCK_1_ENTITY_ID].service_calls["hard_refresh_codes"]
+    assert not locks[LOCK_2_ENTITY_ID].service_calls["hard_refresh_codes"]
 
     new_config = copy.deepcopy(BASE_CONFIG)
     new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
@@ -386,7 +383,7 @@ async def test_resource_not_loaded_on_unload(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert DOMAIN not in hass.data
+    assert not hass.data[DOMAIN].get(CONF_LOCKS)
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -429,7 +426,7 @@ async def test_resource_reregistered_after_unload_and_new_entry(
     await hass.config_entries.async_remove(config_entry_2.entry_id)
     await hass.async_block_till_done()
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert DOMAIN not in hass.data
+    assert not hass.data[DOMAIN].get(CONF_LOCKS)
 
     # Set up a new config entry - resource should be re-registered
     config_entry_3 = MockConfigEntry(
@@ -525,3 +522,139 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)
+
+
+async def test_overlapping_locks_both_entries_get_entities(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Test two config entries sharing a lock both create entities."""
+    # First entry is already set up via fixture with slots 1-2 and both locks.
+    # Add a second entry that shares the same locks but uses slot 3.
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS] = {
+        3: {CONF_NAME: "entry2_slot3", CONF_PIN: "0123", CONF_ENABLED: True},
+    }
+    entry_2 = MockConfigEntry(
+        domain=DOMAIN,
+        data=new_config,
+        unique_id="Overlap Test 2",
+        title="Overlap Test 2",
+    )
+    entry_2.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry_2.entry_id)
+    await hass.async_block_till_done()
+
+    # The second entry reuses existing lock instances — verify no warnings
+    assert "Coordinator missing" not in caplog.text
+
+    # Both entries should have created their entities
+    ent_reg = er.async_get(hass)
+    entry_1_entities = er.async_entries_for_config_entry(
+        ent_reg, lock_code_manager_config_entry.entry_id
+    )
+    entry_2_entities = er.async_entries_for_config_entry(ent_reg, entry_2.entry_id)
+    assert len(entry_1_entities) > 0
+    assert len(entry_2_entities) > 0
+
+    # Reused locks should have a coordinator (setup completed before entity creation)
+    for lock in entry_2.runtime_data.locks.values():
+        assert lock.coordinator is not None
+
+    await hass.config_entries.async_unload(entry_2.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_reload_after_started_no_listener_error(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Test that unloading after started event fires does not log listener error."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=BASE_CONFIG,
+        unique_id="Listener Test",
+        title="Listener Test",
+    )
+    config_entry.add_to_hass(hass)
+
+    # Setup while HA is "starting" so _on_started listener is registered
+    with patch.object(hass, "state", CoreState.starting):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Fire the started event — listener auto-removes itself
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+    await hass.async_block_till_done()
+
+    # Unload — _safe_unsub should skip unsub since event already fired
+    await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert "Unable to remove unknown job" not in caplog.text
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
+
+
+async def test_coordinator_exists_after_setup(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that coordinator is created after async_setup completes."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        assert lock.coordinator is not None
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_lovelace_updated_on_structural_change(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test lovelace_updated event fires when slots are added or removed."""
+    events = []
+    hass.bus.async_listen("lovelace_updated", events.append)
+
+    # Add a new slot (structural change)
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][3] = {
+        CONF_NAME: "test3",
+        CONF_PIN: "4321",
+        CONF_ENABLED: True,
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_config
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data == {"url_path": None}
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_lovelace_not_updated_on_non_structural_change(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test lovelace_updated event does not fire on non-structural changes."""
+    events = []
+    hass.bus.async_listen("lovelace_updated", events.append)
+
+    # Change a PIN (non-structural change — same slots and locks)
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][1][CONF_PIN] = "9999"
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_config
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 0

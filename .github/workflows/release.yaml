@@ -1,6 +1,7 @@
 ---
 name: Release
 
+# GHA requires bare `on:` which yamllint sees as boolean
 # yamllint disable-line rule:truthy
 on:
   release:
@@ -20,6 +21,7 @@ jobs:
         env:
           VERSION: ${{ steps.get_version.outputs.VERSION }}
           WORKSPACE: ${{ github.workspace }}
+        # sed commands with long paths are clearer on one line
         # yamllint disable rule:line-length
         run: |
           sed -i "/VERSION = /c\VERSION = \"${VERSION}\"" "${WORKSPACE}/custom_components/lock_code_manager/const.py"

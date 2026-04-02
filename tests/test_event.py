@@ -128,7 +128,8 @@ async def test_event_entity_unavailable_when_no_supported_locks(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Test that event entity is unavailable when no locks support code slot events.
+    """
+    Test that event entity is unavailable when no locks support code slot events.
 
     Note: When the entity is unavailable, extra_state_attributes (including
     unsupported_locks) won't be visible in the state.
@@ -160,7 +161,8 @@ async def test_event_without_lock_entity_id_logs_warning(
     lock_code_manager_config_entry,
     caplog,
 ):
-    """Test that event without lock entity ID logs a warning.
+    """
+    Test that event without lock entity ID logs a warning.
 
     Note: We call _handle_event directly because the event filter accesses
     ATTR_ENTITY_ID directly (would raise KeyError before reaching handler).

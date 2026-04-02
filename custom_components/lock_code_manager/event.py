@@ -12,8 +12,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
-from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
+from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,7 +49,8 @@ async def async_setup_entry(
 
 
 class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity):
-    """Code slot event entity for lock code manager.
+    """
+    Code slot event entity for lock code manager.
 
     The event_types are the lock entity IDs that support code slot events.
     When a PIN is used, the event type is the lock entity ID where it was used.
@@ -84,7 +85,8 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
     @property
     def available(self) -> bool:
-        """Return True if entity is available.
+        """
+        Return True if entity is available.
 
         The event entity is unavailable if no locks support code slot events.
         """
@@ -94,7 +96,8 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return extra state attributes.
+        """
+        Return extra state attributes.
 
         Includes unsupported_locks list for locks that can't fire code slot events.
         Computed dynamically to reflect any changes in lock capabilities.
@@ -111,7 +114,8 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
 
     @callback
     def _handle_event(self, event: Event) -> None:
-        """Handle event.
+        """
+        Handle event.
 
         The event type is the lock entity ID where the PIN was used.
         _trigger_event stores the event type internally in EventEntity.

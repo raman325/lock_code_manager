@@ -5,13 +5,14 @@
       "locks_updated": "The locks for your config entry have been updated."
     },
     "error": {
+      "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "PIN must be set if slot is enabled.",
       "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}"
     },
     "step": {
       "choose_path": {
-        "description": "Choose whether you want to configure each slot via the UI or if you want to configure all slots in a YAML config.",
+        "description": "Some locks mask stored PINs, making them invisible to external tools. Once LCM is managing your locks, do not set codes using other tools or manually at the lock. Clear all slots before setup. For permanent access codes, configure them through LCM without a condition entity.\n\nChoose whether you want to configure each slot via the UI or if you want to configure all slots in a YAML config.",
         "menu_options": {
           "ui": "UI",
           "yaml": "YAML"
@@ -41,7 +42,7 @@
           "num_slots": "Number of slots",
           "start_slot": "Start from slot #"
         },
-        "description": "You should only configure the slots you are ready to set up right now. You can easily add and remove slots later using the integration provided services. Existing user codes for the slot range specified will be removed.",
+        "description": "Configure slots for all codes you want on the lock (existing user codes for the slot range specified will be cleared). You can add and remove slots later using the integration services.",
         "title": "How Many Slots?"
       },
       "user": {

@@ -15,3 +15,7 @@ coverage
 htmlcov
 node_modules
 .ha
+docs/
+.serena/
+.github/hooks/
+.opencode/
