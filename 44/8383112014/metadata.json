@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "448383112014",
+  "strategy": "manual-commit",
+  "branch": "feat/matter-provider",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/8383112014/0/metadata.json",
+      "transcript": "/44/8383112014/0/full.jsonl",
+      "content_hash": "/44/8383112014/0/content_hash.txt",
+      "prompt": "/44/8383112014/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4523,
+    "cache_creation_tokens": 8952242,
+    "cache_read_tokens": 869745456,
+    "output_tokens": 494205,
+    "api_call_count": 1978
+  }
+}
