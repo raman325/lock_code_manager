@@ -34,8 +34,10 @@ import {
     CodeDisplayMode,
     ConditionEntityInfo,
     LockCodeManagerSlotCardConfig,
+    SLOT_CODE_UNKNOWN,
     SlotCardConditions,
-    SlotCardData
+    SlotCardData,
+    isSlotEmpty
 } from './types';
 
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
@@ -1636,8 +1638,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
-        if (lock.code === 'empty') return null;
-        if (lock.code === 'unknown') return '• • •';
+        if (isSlotEmpty(lock.code)) return null;
+        if (lock.code === SLOT_CODE_UNKNOWN) return '• • •';
         if (lock.code !== null && lock.code !== '') {
             return shouldMask ? '•'.repeat(String(lock.code).length) : String(lock.code);
         }
