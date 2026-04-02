@@ -17,3 +17,5 @@ node_modules
 .ha
 docs/
 .serena/
+.github/hooks/
+.opencode/

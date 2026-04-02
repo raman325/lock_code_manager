@@ -3,6 +3,10 @@
 LockCodeManagerActiveEntity: PIN active status (enabled + conditions met).
 LockCodeManagerCodeSlotInSyncEntity: Per-lock sync status — thin observer
     that delegates all sync logic to SlotSyncManager.
+
+Sync logic (state comparison, set/clear operations, circuit breaking) is
+implemented in SlotSyncManager (sync.py) to separate domain logic from
+entity state display.
 """
 
 from __future__ import annotations
