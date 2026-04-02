@@ -370,6 +370,7 @@ class SlotSyncManager:
             self._dirty = True
             self._update_in_sync_display()
 
+    @callback
     def _update_in_sync_display(self) -> None:
         """Update the in_sync display state immediately if it changed.
 
