@@ -116,6 +116,15 @@ class SlotSyncManager:
         self._tracked_entity_ids: set[str] = set()
         self._dirty: bool = False
 
+        # Track the last PIN we successfully set, so we can detect when the
+        # configured PIN changes while the lock code is UNKNOWN (masked/write-only).
+        # This is in-memory only — on restart, _last_set_pin is None, which means
+        # UNKNOWN slots will be treated as out-of-sync and re-set. This is the
+        # safest behavior: it guarantees the lock has the correct PIN even if the
+        # config changed while HA was down, at the cost of one extra set per
+        # masked/write-only slot on every restart.
+        self._last_set_pin: str | None = None
+
         # Circuit breaker
         self._sync_attempt_count: int = 0
         self._sync_attempt_first: datetime | None = None
@@ -235,12 +244,16 @@ class SlotSyncManager:
 
     # -- Sync calculation ----------------------------------------------------
 
-    @staticmethod
-    def calculate_in_sync(slot_state: SlotState) -> bool:
+    def calculate_in_sync(self, slot_state: SlotState) -> bool:
         """Calculate whether slot should be in sync.
 
         Active (state=ON): PIN should match code on lock.
         Inactive (state=OFF): Code on lock should be empty.
+
+        For UNKNOWN codes (masked/write-only): in sync only if the configured
+        PIN matches what we last successfully set. This ensures that PIN
+        changes trigger a re-set even when the lock code is unreadable, and
+        that taking over a slot with an existing masked code triggers a set.
         """
         lock_code = (
             slot_state.coordinator_code
@@ -249,7 +262,7 @@ class SlotSyncManager:
         )
         if slot_state.active_state == STATE_ON:
             if lock_code is SlotCode.UNKNOWN:
-                return True  # can't compare, assume in sync
+                return slot_state.pin_state == self._last_set_pin
             if lock_code is SlotCode.EMPTY:
                 return False  # need to set
             return slot_state.pin_state == lock_code
@@ -274,6 +287,7 @@ class SlotSyncManager:
                 slot_state.name_state,
                 source="sync",
             )
+            self._last_set_pin = slot_state.pin_state
             # Track set operations toward circuit breaker. Clear operations
             # don't increment the counter (expected to always succeed).
             self._record_sync_attempt()
