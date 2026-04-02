@@ -187,3 +187,71 @@ async def lock_code_manager_config_entry_fixture(hass: HomeAssistant):
     yield config_entry
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):
+    """Get the in-sync entity object for a given entity ID.
+
+    Returns the entity object from the entity component registry.
+    """
+    entity_component = hass.data["entity_components"]["binary_sensor"]
+    entity_obj = entity_component.get_entity(entity_id)
+    assert entity_obj is not None
+    return entity_obj
+
+
+async def async_trigger_sync_tick(
+    hass: HomeAssistant, entity_id: str, set_dirty: bool = True
+) -> None:
+    """Manually trigger a sync tick for an in-sync entity.
+
+    Args:
+        hass: Home Assistant instance
+        entity_id: Entity ID to trigger tick for
+        set_dirty: Whether to mark entity dirty before triggering tick (default: True)
+
+    This helper encapsulates the pattern of marking an entity dirty and triggering
+    an immediate tick, which is useful for testing tick-based sync behavior without
+    waiting for the natural 5-second tick interval.
+
+    """
+    entity_obj = get_in_sync_entity_obj(hass, entity_id)
+    if set_dirty:
+        entity_obj._sync_manager._dirty = True
+    await entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
+
+
+async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
+    """Trigger initial tick for entity setup.
+
+    During entity setup, the initial tick in async_start may fail if dependent
+    entities (active, code sensor) are not yet registered. This helper triggers
+    a tick to complete initial state loading, but only if the entity hasn't
+    been initialized yet (_in_sync is None).
+    """
+    entity_obj = get_in_sync_entity_obj(hass, entity_id)
+    if entity_obj._sync_manager._in_sync is None:
+        entity_obj._sync_manager._dirty = True
+        await entity_obj._sync_manager._async_tick()
+        await hass.async_block_till_done()
+
+
+async def async_trigger_sync_tick_for_manager(
+    hass: HomeAssistant, sync_manager, set_dirty: bool = True
+) -> None:
+    """Manually trigger a sync tick for a sync manager object.
+
+    Args:
+        hass: Home Assistant instance
+        sync_manager: SlotSyncManager instance
+        set_dirty: Whether to mark entity dirty before triggering tick (default: True)
+
+    This is useful when you already have the entity object or need to trigger
+    ticks on multiple managers in a loop.
+
+    """
+    if set_dirty:
+        sync_manager._dirty = True
+    await sync_manager._async_tick()
+    await hass.async_block_till_done()
