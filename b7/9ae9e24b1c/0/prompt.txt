@@ -4104,3 +4104,11 @@ yes and yes, two separate branches and PRs. Subagent drive them in parallel
 ---
 
 in 961 should we remove per slot things before we remove lock things?
+
+---
+
+ok everything appears to be working. Question - how do we handle unknowns when the PIN changes? so PIN 1234 -> lock is synced but is ****s so we pretend its 1234 -> PIN 2345 -> now what?
+
+---
+
+A
