@@ -1331,7 +1331,7 @@ async def test_push_update_user_id_status_available_clears_slot(
     # Set up a mock coordinator with existing data
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: "1234"}  # Slot has a PIN
-    mock_coordinator.expected_codes = {}  # No expected PIN (slot not enabled)
+    mock_coordinator.slot_expects_pin.return_value = False  # No expected PIN
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -1507,7 +1507,7 @@ async def test_slot_expects_pin_by_config(
     slot_config: dict,
     expected: bool,
 ) -> None:
-    """Test _slot_expects_pin based on coordinator.expected_codes from config entry."""
+    """Test _slot_expects_pin based on coordinator.slot_expects_pin from config entry."""
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={

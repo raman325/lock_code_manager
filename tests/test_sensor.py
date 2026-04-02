@@ -67,7 +67,7 @@ async def test_sensor_native_value_with_slot_code(
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
-            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
         },
     }
 
