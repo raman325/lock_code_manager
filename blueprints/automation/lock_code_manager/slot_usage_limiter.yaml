@@ -76,12 +76,12 @@ blueprint:
     notify_target:
       name: Notification service (optional)
       description: >
-        A notification service to call when uses are exhausted and the slot
-        is disabled (e.g. `notify.mobile_app_phone`). Leave empty to skip
-        notifications.
+        A notify entity to send a message to when uses are exhausted and the
+        slot is disabled. Leave empty to skip notifications.
       default: ""
       selector:
-        text:
+        entity:
+          domain: notify
 
 mode: queued
 max: 10
@@ -134,7 +134,9 @@ actions:
                   - condition: template
                     value_template: "{{ notify_target != '' }}"
                 then:
-                  - action: "{{ notify_target }}"
+                  - action: notify.send_message
+                    target:
+                      entity_id: "{{ notify_target }}"
                     data:
                       title: Lock Code Manager
                       message: >
