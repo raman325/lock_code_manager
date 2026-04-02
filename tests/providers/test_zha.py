@@ -19,6 +19,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zha import ZHALock
 
 
@@ -84,13 +85,13 @@ async def test_hard_refresh_interval_when_programming_events_not_supported(
 # =============================================================================
 
 
-async def test_is_connection_up_when_available(
+async def test_is_integration_connected_when_available(
     hass: HomeAssistant,
     zha_lock: ZHALock,
 ) -> None:
     """Test connection is up when device is available."""
     # The mock device should be available by default
-    assert await zha_lock.async_is_connection_up() is True
+    assert await zha_lock.async_is_integration_connected() is True
 
 
 # =============================================================================
@@ -167,7 +168,7 @@ async def test_get_usercodes(
     codes = await zha_lock.async_get_usercodes()
 
     assert codes[1] == "1234"
-    assert codes[2] == ""
+    assert codes[2] is SlotCode.EMPTY
 
     await zha_lock.async_unload(False)
 
@@ -245,12 +246,14 @@ async def test_subscribe_push_updates(
     lcm_entry.add_to_hass(hass)
     await zha_lock.async_setup(lcm_entry)
 
-    # Subscribe to push updates
+    # Subscribe to push updates (BaseLock.subscribe_push_updates calls
+    # setup_push_subscription internally)
     zha_lock.subscribe_push_updates()
 
     assert zha_lock._cluster_listener_unsub is not None
 
-    # Unsubscribe
+    # Unsubscribe (BaseLock.unsubscribe_push_updates calls
+    # teardown_push_subscription internally)
     zha_lock.unsubscribe_push_updates()
     assert zha_lock._cluster_listener_unsub is None
 

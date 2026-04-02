@@ -17,6 +17,7 @@ from homeassistant.core import callback
 from ...const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ...data import get_entry_data
 from ...exceptions import LockDisconnected
+from ...models import SlotCode
 from .._base import BaseLock
 from .const import OPERATION_SOURCE_NAMES, OPERATION_TO_LOCKED
 from .helpers import get_zha_gateway
@@ -133,13 +134,13 @@ class ZHALock(BaseLock):
         if not cluster:
             raise LockDisconnected("Door Lock cluster not available")
 
-        if not await self.async_is_connection_up():
+        if not await self.async_is_integration_connected():
             raise LockDisconnected("Lock not connected")
 
         return cluster
 
-    async def async_is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    async def async_is_integration_connected(self) -> bool:
+        """Return whether the ZHA integration is connected and device is available."""
         gateway = get_zha_gateway(self.hass)
         if not gateway:
             return False
@@ -155,7 +156,7 @@ class ZHALock(BaseLock):
         # Check if device is available
         return device_proxy.device.available
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
         cluster = await self._get_connected_cluster()
 
@@ -167,7 +168,7 @@ class ZHALock(BaseLock):
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
 
-        data: dict[int, int | str] = {}
+        data: dict[int, str | SlotCode] = {}
 
         for slot_num in code_slots:
             try:
@@ -196,7 +197,7 @@ class ZHALock(BaseLock):
                         slot_num,
                         result,
                     )
-                    data[slot_num] = ""
+                    data[slot_num] = SlotCode.EMPTY
                     continue
 
                 # Check if slot is in use
@@ -204,9 +205,9 @@ class ZHALock(BaseLock):
                     # Convert bytes to string if needed
                     if isinstance(pin_code, bytes):
                         pin_code = pin_code.decode("utf-8", errors="ignore")
-                    data[slot_num] = str(pin_code) if pin_code else ""
+                    data[slot_num] = str(pin_code) if pin_code else SlotCode.EMPTY
                 else:
-                    data[slot_num] = ""
+                    data[slot_num] = SlotCode.EMPTY
 
             except Exception as err:
                 _LOGGER.debug(
@@ -216,12 +217,12 @@ class ZHALock(BaseLock):
                     err,
                 )
                 # Fall back to assuming empty if we can't read
-                data[slot_num] = ""
+                data[slot_num] = SlotCode.EMPTY
 
         return data
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
         cluster = await self._get_connected_cluster()
@@ -308,7 +309,7 @@ class ZHALock(BaseLock):
             )
             raise LockDisconnected(f"Failed to clear PIN: {err}") from err
 
-    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """Perform hard refresh and return all codes.
 
         For ZHA, we just re-read all codes from the lock.
@@ -365,7 +366,7 @@ class ZHALock(BaseLock):
         return False
 
     @callback
-    def subscribe_push_updates(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to push-based value updates via zigpy cluster listener."""
         if self._cluster_listener_unsub is not None:
             return  # Already subscribed
@@ -376,7 +377,9 @@ class ZHALock(BaseLock):
                 "Lock %s: cannot subscribe to push updates - cluster not available",
                 self.lock.entity_id,
             )
-            return
+            raise LockDisconnected(
+                "Door Lock cluster not available for push subscription"
+            )
 
         # Check programming event support if not already done
         if self._supports_programming_events is None:
@@ -408,7 +411,7 @@ class ZHALock(BaseLock):
             )
 
     @callback
-    def unsubscribe_push_updates(self) -> None:
+    def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates."""
         if self._cluster_listener_unsub is not None:
             self._cluster_listener_unsub()
