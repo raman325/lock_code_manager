@@ -64,10 +64,9 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCode, SlotEntityData
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
-    SlotEntityData,
     _find_config_entry_by_title,
     _get_bool_state,
     _get_condition_entity_data,

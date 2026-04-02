@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
 import copy
-from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
 import logging
@@ -98,7 +97,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
-from .models import SlotCode
+from .models import SlotCode, SlotEntityData, SlotEntityIds, SlotMetadata
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -416,32 +415,6 @@ def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
     return managed_slots
 
 
-@dataclass
-class SlotEntityIds:
-    """Entity IDs for a single slot's LCM entities."""
-
-    slot_num: int
-    config_entry_id: str | None = None
-    name: str | None = None
-    pin: str | None = None
-    active: str | None = None
-    enabled: str | None = None
-
-    def all_ids(self) -> list[str]:
-        """Return all non-None entity IDs."""
-        return [eid for eid in (self.name, self.pin, self.active, self.enabled) if eid]
-
-
-@dataclass
-class SlotMetadata:
-    """Metadata for a single slot from LCM entities."""
-
-    name: str | None = None
-    configured_pin: str | None = None
-    active: bool | None = None
-    enabled: bool | None = None
-
-
 def _get_slot_entity_ids(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotEntityIds]:
@@ -678,34 +651,6 @@ async def subscribe_lock_codes(
     connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
     _send_update()
-
-
-@dataclass
-class SlotEntityData:
-    """Entity IDs and data for a single slot."""
-
-    slot_num: int
-    name_entity_id: str | None = None
-    pin_entity_id: str | None = None
-    enabled_entity_id: str | None = None
-    active_entity_id: str | None = None
-    number_of_uses_entity_id: str | None = None
-    event_entity_id: str | None = None
-
-    def all_entity_ids(self) -> list[str]:
-        """Return all non-None entity IDs for state tracking."""
-        return [
-            eid
-            for eid in (
-                self.name_entity_id,
-                self.pin_entity_id,
-                self.enabled_entity_id,
-                self.active_entity_id,
-                self.number_of_uses_entity_id,
-                self.event_entity_id,
-            )
-            if eid
-        ]
 
 
 def _get_slot_entity_data(
