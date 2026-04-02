@@ -1,0 +1,5 @@
+for the new pattern, do we need a helper for tests?
+
+---
+
+we don't add methods to the code for test purposes. We need to either override the class or do something else
