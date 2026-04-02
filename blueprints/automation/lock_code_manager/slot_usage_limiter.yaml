@@ -20,44 +20,30 @@ blueprint:
     1. Create an `input_number` helper (Settings → Devices & Services → Helpers)
        with min=0, max=your desired limit, and step=1.
 
-    2. Import this blueprint and configure it with your Lock Code Manager config
-       entry, slot number, and the helper you just created.
-
-
-    **Template debugging**
-
-    To test entity resolution, go to Developer Tools → Template and paste:
-
-    ```
-
-    {% set title = config_entry_attr('YOUR_CONFIG_ENTRY_ID', 'title') %}
-
-    {% set all = integration_entities(title) %}
-
-    {{ all | select('match', 'event\\..*_code_slot_1_pin_used') | list }}
-
-    ```
-
-    Replace YOUR_CONFIG_ENTRY_ID with your LCM config entry ID and 1 with your
-    slot number.
+    2. Import this blueprint and configure it with the PIN used event entity,
+       enabled switch entity, and the helper you just created.
   domain: automation
   # yamllint disable-line rule:line-length
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_limiter.yaml
   input:
-    config_entry:
-      name: Lock Code Manager config entry
-      description: The Lock Code Manager config entry that manages your lock(s).
+    pin_used_entity:
+      name: PIN used event entity
+      description: >
+        The Lock Code Manager event entity that fires when the PIN is used
+        (e.g. `event.front_door_code_slot_1_pin_used`).
       selector:
-        config_entry:
+        entity:
+          domain: event
           integration: lock_code_manager
-    slot_number:
-      name: Code slot number
-      description: The Lock Code Manager code slot number to monitor.
+    enabled_switch:
+      name: Slot enabled switch
+      description: >
+        The Lock Code Manager switch entity that enables/disables the code
+        slot (e.g. `switch.front_door_code_slot_1_enabled`).
       selector:
-        number:
-          min: 1
-          max: 999
-          mode: box
+        entity:
+          domain: switch
+          integration: lock_code_manager
     uses_counter:
       name: Uses counter
       description: >
@@ -82,26 +68,12 @@ blueprint:
 mode: queued
 max: 10
 
-trigger_variables:
-  _config_entry: !input config_entry
-  _slot: !input slot_number
-  pin_used_entity: >
-    {% set entities = integration_entities(config_entry_attr(_config_entry, 'title')) %}
-    {{ entities
-       | select('match', 'event\\..*_code_slot_' ~ _slot ~ '_pin_used')
-       | first | default('') }}
-  enabled_switch: >
-    {% set entities = integration_entities(config_entry_attr(_config_entry, 'title')) %}
-    {{ entities
-       | select('match', 'switch\\..*_code_slot_' ~ _slot ~ '_enabled')
-       | first | default('') }}
-
 triggers:
   - trigger: state
-    entity_id: "{{ pin_used_entity }}"
+    entity_id: !input pin_used_entity
     id: pin_used
   - trigger: state
-    entity_id: "{{ enabled_switch }}"
+    entity_id: !input enabled_switch
     id: slot_enabled
     to: "on"
 
@@ -131,7 +103,7 @@ actions:
             then:
               - action: switch.turn_off
                 target:
-                  entity_id: "{{ enabled_switch }}"
+                  entity_id: !input enabled_switch
       - conditions:
           - condition: trigger
             id: slot_enabled
