@@ -1,0 +1,17 @@
+remove args from docstrings, we don't include those by convention
+
+---
+
+it's something HA passes so we can't not include it
+
+---
+
+I am specifically talking about the list of arguments listed in docstrings. Remove them from any docstrings in this PR. If there are others including outside this PR, remove them anywayu
+
+---
+
+I am specifically talking about the list of arguments listed in docstrings. Remove them from any docstrings in this PR. If there are others including outside this PR, remove them anywayu. in places where you remove args, if theres only one line left, convert multiline to singleline docstring
+
+---
+
+see the review comments copilot just posted

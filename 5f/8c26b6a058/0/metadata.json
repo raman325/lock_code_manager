@@ -1,0 +1,22 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "5f8c26b6a058",
+  "session_id": "48741139-7324-4848-afb8-1f2ed5118058",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-02T03:44:23.796571Z",
+  "branch": "refactor/tick-based-sync",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e98dcd7cc601",
+  "token_usage": {
+    "input_tokens": 920796,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 39077504,
+    "output_tokens": 79500,
+    "api_call_count": 324
+  },
+  "session_metrics": {
+    "turn_count": 6
+  }
+}
