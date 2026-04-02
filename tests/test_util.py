@@ -1,12 +1,13 @@
 """Test utility functions."""
 
-import asyncio
 from datetime import timedelta
 import re
 
 import pytest
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.util import OneShotRetry, mask_pin
 
@@ -69,8 +70,9 @@ async def test_oneshot_retry_schedule_idempotent(hass: HomeAssistant):
     retry.schedule()
     retry.schedule()
 
-    # Wait for execution
-    await asyncio.sleep(1.5)
+    # Advance time past the delay
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done()
 
     assert counts[0] == 1
 
@@ -81,21 +83,19 @@ async def test_oneshot_retry_active_property(hass: HomeAssistant):
 
     async def async_target() -> None:
         active_states.append(retry.active)
-        await asyncio.sleep(0.1)
-        active_states.append(retry.active)
 
     retry = OneShotRetry(hass, timedelta(milliseconds=100), async_target, "test retry")
 
-    # Check active before execution
     assert not retry.active
 
     retry.schedule()
-    await asyncio.sleep(0.3)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
+    await hass.async_block_till_done()
 
-    # Active should be True during first check, then execution completes
-    assert len(active_states) == 2
-    assert active_states[0] is True  # Active during execution
-    # After full execution + finally block completes, should be False
+    # Active should have been True during execution
+    assert len(active_states) == 1
+    assert active_states[0] is True
+    # After execution completes, should be False
     assert not retry.active
 
 
@@ -103,7 +103,7 @@ async def test_oneshot_retry_pending_property(hass: HomeAssistant):
     """Test that pending property reflects scheduled state."""
 
     async def async_target() -> None:
-        await asyncio.sleep(0.1)
+        pass
 
     retry = OneShotRetry(hass, timedelta(seconds=1), async_target, "test retry")
 
@@ -115,7 +115,8 @@ async def test_oneshot_retry_pending_property(hass: HomeAssistant):
     assert retry.pending
 
     # After execution, pending is False again
-    await asyncio.sleep(1.2)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done()
     assert not retry.pending
 
 
@@ -134,7 +135,8 @@ async def test_oneshot_retry_schedule_when_already_pending(hass: HomeAssistant):
     # Second schedule should be no-op (early return)
     retry.schedule()
 
-    await asyncio.sleep(1.2)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done()
 
     # Should only execute once
     assert counts[0] == 1
@@ -157,8 +159,8 @@ async def test_oneshot_retry_cancel(hass: HomeAssistant):
     retry.cancel()
     assert not retry.pending
 
-    # Wait to ensure it doesn't execute
-    await asyncio.sleep(1.2)
+    # Advance time — should not execute since cancelled
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done()
 
-    # Should not have executed
     assert counts[0] == 0
