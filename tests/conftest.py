@@ -205,15 +205,9 @@ async def async_trigger_sync_tick(
 ) -> None:
     """Manually trigger a sync tick for an in-sync entity.
 
-    Args:
-        hass: Home Assistant instance
-        entity_id: Entity ID to trigger tick for
-        set_dirty: Whether to mark entity dirty before triggering tick (default: True)
-
-    This helper encapsulates the pattern of marking an entity dirty and triggering
-    an immediate tick, which is useful for testing tick-based sync behavior without
+    Encapsulates the pattern of marking an entity dirty and triggering an
+    immediate tick, useful for testing tick-based sync behavior without
     waiting for the natural 5-second tick interval.
-
     """
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
     if set_dirty:
@@ -242,14 +236,8 @@ async def async_trigger_sync_tick_for_manager(
 ) -> None:
     """Manually trigger a sync tick for a sync manager object.
 
-    Args:
-        hass: Home Assistant instance
-        sync_manager: SlotSyncManager instance
-        set_dirty: Whether to mark entity dirty before triggering tick (default: True)
-
-    This is useful when you already have the entity object or need to trigger
+    Useful when you already have the entity object or need to trigger
     ticks on multiple managers in a loop.
-
     """
     if set_dirty:
         sync_manager._dirty = True

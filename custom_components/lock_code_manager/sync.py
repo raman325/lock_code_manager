@@ -347,7 +347,8 @@ class SlotSyncManager:
 
     def _write_state(self) -> None:
         """Notify the entity to write its Home Assistant state."""
-        self._state_writer()
+        if self._started:
+            self._state_writer()
 
     @callback
     def _mark_dirty(self, *_args: Any) -> None:
@@ -398,9 +399,8 @@ class SlotSyncManager:
             if slot_state.active_state not in (STATE_ON, STATE_OFF):
                 self._invalid_state_count += 1
 
-                if (
-                    self._invalid_state_count > MAX_SYNC_ATTEMPTS
-                ):  # 15 seconds (3 ticks * 5 seconds)
+                if self._invalid_state_count == MAX_SYNC_ATTEMPTS + 1:
+                    # Log warning once after threshold, then stay silent
                     _LOGGER.warning(
                         "%s: Active entity has invalid state '%s' for %s consecutive checks. "
                         "Entity may be unavailable or misconfigured. Check that the active "
@@ -409,7 +409,7 @@ class SlotSyncManager:
                         slot_state.active_state,
                         self._invalid_state_count,
                     )
-                else:
+                elif self._invalid_state_count <= MAX_SYNC_ATTEMPTS:
                     _LOGGER.debug(
                         "%s: Active entity has invalid state '%s' (attempt %s), waiting...",
                         self._log_prefix,

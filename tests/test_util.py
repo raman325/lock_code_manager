@@ -57,11 +57,10 @@ def test_mask_pin_empty(pin: str | None, expected: str):
 
 async def test_oneshot_retry_schedule_idempotent(hass: HomeAssistant):
     """Test that calling schedule() multiple times is idempotent."""
-    call_count = 0
+    counts = [0]
 
     def sync_target() -> None:
-        nonlocal call_count
-        call_count += 1
+        counts[0] += 1
 
     retry = OneShotRetry(hass, timedelta(seconds=1), sync_target, "test retry")
 
@@ -73,7 +72,7 @@ async def test_oneshot_retry_schedule_idempotent(hass: HomeAssistant):
     # Wait for execution
     await asyncio.sleep(1.5)
 
-    assert call_count == 1
+    assert counts[0] == 1
 
 
 async def test_oneshot_retry_active_property(hass: HomeAssistant):
@@ -122,11 +121,10 @@ async def test_oneshot_retry_pending_property(hass: HomeAssistant):
 
 async def test_oneshot_retry_schedule_when_already_pending(hass: HomeAssistant):
     """Test that schedule() is no-op when retry is already pending."""
-    schedule_count = 0
+    counts = [0]
 
     def sync_target() -> None:
-        nonlocal schedule_count
-        schedule_count += 1
+        counts[0] += 1
 
     retry = OneShotRetry(hass, timedelta(seconds=1), sync_target, "test retry")
 
@@ -139,16 +137,15 @@ async def test_oneshot_retry_schedule_when_already_pending(hass: HomeAssistant):
     await asyncio.sleep(1.2)
 
     # Should only execute once
-    assert schedule_count == 1
+    assert counts[0] == 1
 
 
 async def test_oneshot_retry_cancel(hass: HomeAssistant):
     """Test that cancel() prevents scheduled retry."""
-    call_count = 0
+    counts = [0]
 
     def sync_target() -> None:
-        nonlocal call_count
-        call_count += 1
+        counts[0] += 1
 
     retry = OneShotRetry(hass, timedelta(seconds=1), sync_target, "test retry")
 
@@ -164,4 +161,4 @@ async def test_oneshot_retry_cancel(hass: HomeAssistant):
     await asyncio.sleep(1.2)
 
     # Should not have executed
-    assert call_count == 0
+    assert counts[0] == 0
