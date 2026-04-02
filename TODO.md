@@ -82,16 +82,6 @@ improves type safety, IDE autocompletion, and code readability.
 **Why not Voluptuous?** Voluptuous is for validation, not object instantiation.
 Other options like `dacite` or Pydantic add dependencies.
 
-### Simplify `expected_codes`
-
-`coordinator.expected_codes` is only used by:
-
-1. The code sensor — to resolve `SlotCode.UNKNOWN` → configured PIN for display
-2. `_slot_expects_pin` in zwave_js.py — to filter stale Z-Wave events
-
-Consider moving the resolution to the sensor layer and simplifying or removing
-`expected_codes` from the coordinator.
-
 ### Rewrite Matter Provider
 
 Rewrite PR #741 using the `SlotCode.UNKNOWN` model. The Matter provider:
