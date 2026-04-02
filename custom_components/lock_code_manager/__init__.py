@@ -393,9 +393,40 @@ async def async_unload_lock(
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
-    """Handle removal of an entry."""
+    """Handle removal of an entry.
+
+    Routes through the same lock-removed and slot-removed callbacks that
+    async_update_listener uses, so that entities are notified symmetrically
+    on unload just as they are during a config update that removes all
+    slots and locks.
+    """
     hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
+    callbacks = runtime_data.callbacks
+    entry_id = config_entry.entry_id
+
+    # Fire lock-removed callbacks so entities react to lock removal before
+    # the platforms are torn down (mirrors async_update_listener behavior)
+    for lock_entity_id in list(runtime_data.locks):
+        _LOGGER.debug(
+            "%s (%s): Unload - firing lock-removed callback for %s",
+            entry_id,
+            config_entry.title,
+            lock_entity_id,
+        )
+        callbacks.invoke_lock_removed_handlers(lock_entity_id)
+
+    # Fire slot entity removal callbacks so per-slot entities clean up
+    # (mirrors async_update_listener behavior for removed slots)
+    curr_slots: dict[int, Any] = {**config_entry.data.get(CONF_SLOTS, {})}
+    for slot_num in curr_slots:
+        _LOGGER.debug(
+            "%s (%s): Unload - firing slot-removed callback for slot %s",
+            entry_id,
+            config_entry.title,
+            slot_num,
+        )
+        await callbacks.invoke_entity_removers_for_slot(slot_num)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry,

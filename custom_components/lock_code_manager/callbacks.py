@@ -267,8 +267,12 @@ class EntityCallbackRegistry:
 
     @callback
     def invoke_lock_removed_handlers(self, lock_entity_id: str) -> None:
-        """Invoke lock-removed callbacks."""
-        for cb in self.lock_removed:
+        """Invoke lock-removed callbacks.
+
+        Iterates a snapshot of the handler list because handlers may
+        unregister themselves (or other handlers) during invocation.
+        """
+        for cb in list(self.lock_removed):
             try:
                 cb(lock_entity_id)
             except Exception:
