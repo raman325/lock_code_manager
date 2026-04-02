@@ -257,7 +257,10 @@ class SlotSyncManager:
             if lock_code is SlotCode.EMPTY:
                 return False  # need to set
             return slot_state.pin_state == lock_code
-        # active_state == STATE_OFF
+        # active_state == STATE_OFF: slot should be cleared
+        # The "" check covers the fallback path where coordinator_code is None
+        # and lock_code comes from the code sensor entity state (which returns ""
+        # for SlotCode.EMPTY).
         return lock_code is SlotCode.EMPTY or lock_code == ""
 
     # -- Sync execution ------------------------------------------------------

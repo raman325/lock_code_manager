@@ -582,21 +582,24 @@ class ZWaveJSLock(BaseLock):
 
             if not in_use:
                 data[code_slot] = SlotCode.EMPTY
-            elif usercode == "*" * len(usercode) and in_use:
+            elif not usercode:
+                # in_use but no code content (cache partially populated); skip
+                continue
+            elif usercode == "*" * len(usercode):
                 # Masked code (all asterisks with slot in use)
                 data[code_slot] = SlotCode.UNKNOWN
-            elif usercode:
+            else:
                 # Unmasked code
                 data[code_slot] = usercode
 
-        slots_with_pin = [s for s, v in data.items() if not isinstance(v, SlotCode)]
-        slots_not_enabled = [s for s, v in data.items() if v is SlotCode.EMPTY]
+        slots_with_pin = [s for s, v in data.items() if v is not SlotCode.EMPTY]
+        slots_empty = [s for s, v in data.items() if v is SlotCode.EMPTY]
         _LOGGER.debug(
-            "Lock %s: %s slots with PIN %s, %s slots not enabled %s",
+            "Lock %s: %s slots with PIN %s, %s slots empty %s",
             self.lock.entity_id,
             len(slots_with_pin),
             slots_with_pin,
-            len(slots_not_enabled),
-            slots_not_enabled,
+            len(slots_empty),
+            slots_empty,
         )
         return data

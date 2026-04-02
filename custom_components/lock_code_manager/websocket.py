@@ -73,6 +73,7 @@ from .const import (
     ATTR_CONFIGURED_CODE,
     ATTR_CONFIGURED_CODE_LENGTH,
     ATTR_EVENT_ENTITY_ID,
+    ATTR_HAS_CODE,
     ATTR_IN_SYNC,
     ATTR_LAST_SYNCED,
     ATTR_LAST_USED,
@@ -378,6 +379,7 @@ def _serialize_slot(
         # Has a code but value is hidden; omit code_length so frontend does not
         # attempt String.repeat() with a negative value
         result[ATTR_CODE] = None
+        result[ATTR_HAS_CODE] = True
 
         # Configured code from LCM (desired state) - always include for managed slots
         if configured_code is not None:
@@ -873,13 +875,15 @@ def _build_lock_status(
     coordinator = lock.coordinator
     code_on_lock = None
     code_length = None
+    has_code = False
     if coordinator and coordinator.data:
         raw_code = coordinator.data.get(slot_num)
         if raw_code is SlotCode.EMPTY:
-            pass  # treat as no code (code_on_lock stays None)
+            pass  # treat as no code
         elif raw_code is SlotCode.UNKNOWN:
-            pass  # has a code but value is hidden; leave code_length as None
+            has_code = True  # code exists but value is hidden
         elif raw_code is not None:
+            has_code = True
             if reveal:
                 code_on_lock = raw_code
             else:
@@ -899,6 +903,8 @@ def _build_lock_status(
         lock_status[ATTR_CODE_LENGTH] = code_length
     else:
         lock_status[ATTR_CODE] = None
+    if has_code:
+        lock_status[ATTR_HAS_CODE] = True
 
     return lock_status
 

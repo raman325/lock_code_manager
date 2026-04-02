@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
 )
+from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 
@@ -752,6 +753,8 @@ async def test_execute_rate_limited_raises_when_device_not_available(
         ("", True),
         ("****", True),
         ("*", True),
+        (SlotCode.EMPTY, True),
+        (SlotCode.UNKNOWN, True),
         ("1234", False),
         ("12*4", False),
         ("0", False),
