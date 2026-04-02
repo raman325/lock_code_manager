@@ -9,6 +9,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
+from homeassistant.components.persistent_notification import (
+    _async_get_or_create_notifications,
+)
 from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import (
     ATTR_CODE,
@@ -29,7 +32,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
     CONF_CALENDAR,
     CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -79,8 +81,6 @@ async def test_entry_setup_and_unload(
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
-    unique_ids.add(f"{lcm_entry_id}|2|{CONF_NUMBER_OF_USES}")
-
     assert unique_ids == {
         entity.unique_id
         for entity in er.async_entries_for_config_entry(ent_reg, lcm_entry_id)
@@ -112,8 +112,6 @@ async def test_entry_setup_and_unload(
     assert not locks[LOCK_2_ENTITY_ID].service_calls["hard_refresh_codes"]
 
     new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
-    new_config[CONF_SLOTS][2].pop(CONF_NUMBER_OF_USES)
     new_config[CONF_SLOTS][3] = {
         CONF_NAME: "test3",
         ATTR_CODE: "4321",
@@ -139,8 +137,6 @@ async def test_entry_setup_and_unload(
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
-
-    unique_ids.add(f"{lcm_entry_id}|1|{CONF_NUMBER_OF_USES}")
 
     assert unique_ids == {
         entity.unique_id
@@ -181,8 +177,6 @@ async def test_entry_setup_and_unload(
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
-
-    unique_ids.add(f"{lcm_entry_id}|1|{CONF_NUMBER_OF_USES}")
 
     assert unique_ids == {
         entity.unique_id
@@ -506,8 +500,8 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Verify migration happened
-    assert config_entry.version == 2
+    # Verify migration happened (v1 -> v2 -> v3)
+    assert config_entry.version == 3
 
     # Get the migrated data (should be in .data after setup moves options to data)
     migrated_data = config_entry.data
@@ -686,3 +680,95 @@ async def test_unload_fires_lock_removed_callbacks(
 
     # Both locks should have had their removed callbacks fired
     assert set(removed_locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_migration_v2_to_v3_removes_number_of_uses(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test migration from v2 to v3 strips number_of_uses and creates notification."""
+    v2_config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "test1",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+            },
+            2: {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                "number_of_uses": 5,
+            },
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=v2_config,
+        unique_id="Migration V2 Test",
+        version=2,
+    )
+    config_entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify migration happened
+    assert config_entry.version == 3
+
+    # Verify number_of_uses was stripped from slot 2
+    migrated_data = config_entry.data
+    assert "number_of_uses" not in migrated_data[CONF_SLOTS][2]
+
+    # Slot 1 should be unchanged
+    assert "number_of_uses" not in migrated_data[CONF_SLOTS][1]
+
+    # Verify persistent notification was created
+    notifications = _async_get_or_create_notifications(hass)
+    assert "lcm_number_of_uses_removed" in notifications
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.config_entries.async_remove(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_migration_v2_to_v3_no_notification_when_no_uses(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test v2 to v3 migration does not create notification when no slots had number_of_uses."""
+    v2_config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "test1",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+            },
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=v2_config,
+        unique_id="Migration V2 No Uses Test",
+        version=2,
+    )
+    config_entry.add_to_hass(hass)
+
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert config_entry.version == 3
+
+    # No notification should be created
+    notifications = _async_get_or_create_notifications(hass)
+    assert "lcm_number_of_uses_removed" not in notifications
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.config_entries.async_remove(config_entry.entry_id)

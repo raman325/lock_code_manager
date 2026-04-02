@@ -89,7 +89,6 @@ class SlotEntityData:
     pin_entity_id: str | None = None
     enabled_entity_id: str | None = None
     active_entity_id: str | None = None
-    number_of_uses_entity_id: str | None = None
     event_entity_id: str | None = None
 
     def all_entity_ids(self) -> list[str]:
@@ -101,7 +100,6 @@ class SlotEntityData:
                 self.pin_entity_id,
                 self.enabled_entity_id,
                 self.active_entity_id,
-                self.number_of_uses_entity_id,
                 self.event_entity_id,
             )
             if eid

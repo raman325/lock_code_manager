@@ -10,11 +10,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from homeassistant.components.number import (
-    ATTR_VALUE,
-    DOMAIN as NUMBER_DOMAIN,
-    SERVICE_SET_VALUE as NUMBER_SERVICE_SET_VALUE,
-)
+from homeassistant.components.number import ATTR_VALUE
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
@@ -58,7 +54,6 @@ from .common import (
     SLOT_1_PIN_ENTITY,
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
-    SLOT_2_NUMBER_OF_USES_ENTITY,
     SLOT_2_PIN_ENTITY,
 )
 from .conftest import (
@@ -119,33 +114,6 @@ async def test_binary_sensor_entity(
 
     # Adding another event turns it back on
     calendar_1.create_event(dtstart=start, dtend=end, summary="test")
-    await hass.async_block_till_done()
-
-    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
-    assert state
-    assert state.state == STATE_ON
-
-    # Exhaust uses and then restore them
-    await hass.services.async_call(
-        NUMBER_DOMAIN,
-        NUMBER_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: 0},
-        target={ATTR_ENTITY_ID: SLOT_2_NUMBER_OF_USES_ENTITY},
-        blocking=True,
-    )
-    await hass.async_block_till_done()
-
-    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
-    assert state
-    assert state.state == STATE_OFF
-
-    await hass.services.async_call(
-        NUMBER_DOMAIN,
-        NUMBER_SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: 5},
-        target={ATTR_ENTITY_ID: SLOT_2_NUMBER_OF_USES_ENTITY},
-        blocking=True,
-    )
     await hass.async_block_till_done()
 
     state = hass.states.get(SLOT_2_ACTIVE_ENTITY)

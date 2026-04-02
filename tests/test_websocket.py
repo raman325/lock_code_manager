@@ -58,7 +58,6 @@ from custom_components.lock_code_manager.const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_NAME,
-    CONF_NUMBER_OF_USES,
     CONF_PIN,
     CONF_SLOTS,
     DOMAIN,
@@ -72,7 +71,6 @@ from custom_components.lock_code_manager.websocket import (
     _get_condition_entity_data,
     _get_last_changed,
     _get_next_calendar_event,
-    _get_number_state,
     _get_slot_condition_entity_id,
     _get_slot_entity_data,
     _get_slot_state_entity_ids,
@@ -124,7 +122,7 @@ async def test_get_config_entry_data(
     assert config_entry["title"] == "Mock Title"
 
     # Verify entities
-    assert len(result[CONF_ENTITIES]) == 19
+    assert len(result[CONF_ENTITIES]) == 18
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
@@ -1350,7 +1348,6 @@ async def test_subscribe_code_slot_response_shape(
         ATTR_ACTIVE,
         CONF_ENABLED,
         CONF_NAME,
-        CONF_NUMBER_OF_USES,
         CONF_PIN,
     }
     assert expected_entity_keys == set(entities.keys())
@@ -1511,39 +1508,6 @@ class TestGetBoolState:
     async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
         """Test returns None when entity_id is None."""
         assert _get_bool_state(hass, None) is None
-
-
-class TestGetNumberState:
-    """Tests for _get_number_state helper."""
-
-    async def test_returns_integer(self, hass: HomeAssistant) -> None:
-        """Test returns integer for valid number."""
-        hass.states.async_set("number.test", "42")
-        assert _get_number_state(hass, "number.test") == 42
-
-    async def test_returns_integer_from_float(self, hass: HomeAssistant) -> None:
-        """Test converts float to integer."""
-        hass.states.async_set("number.test", "3.14")
-        assert _get_number_state(hass, "number.test") == 3
-
-    async def test_returns_none_for_invalid(self, hass: HomeAssistant) -> None:
-        """Test returns None for non-numeric value."""
-        hass.states.async_set("number.test", "not_a_number")
-        assert _get_number_state(hass, "number.test") is None
-
-    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
-        """Test returns None for unknown state."""
-        hass.states.async_set("number.test", STATE_UNKNOWN)
-        assert _get_number_state(hass, "number.test") is None
-
-    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
-        """Test returns None for unavailable state."""
-        hass.states.async_set("number.test", STATE_UNAVAILABLE)
-        assert _get_number_state(hass, "number.test") is None
-
-    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
-        """Test returns None when entity_id is None."""
-        assert _get_number_state(hass, None) is None
 
 
 class TestGetLastChanged:
@@ -2115,112 +2079,6 @@ class TestUpdateSlotCondition:
         # Verify entity_id was removed from config
         assert "entity_id" not in lock_code_manager_config_entry.data[CONF_SLOTS][2]
 
-    async def test_update_number_of_uses(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test updating number_of_uses for a slot."""
-        ws_client = await hass_ws_client(hass)
-
-        # Update slot 1's number_of_uses
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: 10,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify config entry was updated
-        assert (
-            lock_code_manager_config_entry.data[CONF_SLOTS][1][CONF_NUMBER_OF_USES]
-            == 10
-        )
-
-    async def test_clear_number_of_uses(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test clearing number_of_uses for a slot (disables tracking)."""
-        ws_client = await hass_ws_client(hass)
-
-        # First set number_of_uses
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: 5,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Now clear it
-        await ws_client.send_json(
-            {
-                "id": 2,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: None,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify number_of_uses was removed
-        assert (
-            CONF_NUMBER_OF_USES
-            not in lock_code_manager_config_entry.data[CONF_SLOTS][1]
-        )
-
-    async def test_update_both_conditions(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test updating both entity_id and number_of_uses in one call."""
-        ws_client = await hass_ws_client(hass)
-
-        # Create a test entity
-        hass.states.async_set(
-            SCHEDULE_TEST_ENTITY_ID, STATE_ON, {"friendly_name": "Test Schedule"}
-        )
-        await hass.async_block_till_done()
-
-        # Update both conditions for slot 1
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                "entity_id": SCHEDULE_TEST_ENTITY_ID,
-                CONF_NUMBER_OF_USES: 3,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify both were updated
-        slot_config = lock_code_manager_config_entry.data[CONF_SLOTS][1]
-        assert slot_config["entity_id"] == SCHEDULE_TEST_ENTITY_ID
-        assert slot_config[CONF_NUMBER_OF_USES] == 3
-
     async def test_invalid_slot(
         self,
         hass: HomeAssistant,
@@ -2293,29 +2151,6 @@ class TestUpdateSlotCondition:
         msg = await ws_client.receive_json()
         assert not msg["success"]
         assert "not found" in msg["error"]["message"].lower()
-
-    async def test_invalid_number_of_uses(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test error when number_of_uses is not positive."""
-        ws_client = await hass_ws_client(hass)
-
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: 0,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert not msg["success"]
-        assert "at least 1" in msg["error"]["message"].lower()
 
     async def test_with_config_entry_title(
         self,
@@ -2390,50 +2225,6 @@ class TestUpdateSlotCondition:
             )
             msg = await ws_client.receive_json()
             assert msg["success"], f"Failed for domain {domain}: {msg}"
-
-    async def test_number_entity_created_on_add(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test that number entity is created when adding number_of_uses."""
-        ws_client = await hass_ws_client(hass)
-        ent_reg = er.async_get(hass)
-        entry_id = lock_code_manager_config_entry.entry_id
-
-        # Entity ID uses the config entry title (slugified)
-        number_entity_id = "number.mock_title_code_slot_1_number_of_uses"
-
-        # Verify no number entity exists for slot 1 before the update
-        assert ent_reg.async_get(number_entity_id) is None
-
-        # Add number_of_uses to slot 1
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: 10,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Wait for entity creation
-        await hass.async_block_till_done()
-
-        # Verify number entity was created
-        entity_entry = ent_reg.async_get(number_entity_id)
-        assert entity_entry is not None, "Number entity was not created"
-        assert entity_entry.config_entry_id == entry_id
-
-        # Verify entity has the correct state
-        state = hass.states.get(number_entity_id)
-        assert state is not None, "Number entity state not found"
-        assert float(state.state) == 10
 
     async def test_reject_scheduler_condition_entity(
         self,
@@ -2661,7 +2452,6 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
             pin_entity_id=real_entity_data.pin_entity_id,
             enabled_entity_id=real_entity_data.enabled_entity_id,
             active_entity_id=real_entity_data.active_entity_id,
-            number_of_uses_entity_id=real_entity_data.number_of_uses_entity_id,
             event_entity_id=real_entity_data.event_entity_id,
         )
 

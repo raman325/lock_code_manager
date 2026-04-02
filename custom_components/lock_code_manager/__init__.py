@@ -18,6 +18,7 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
+from homeassistant.components.persistent_notification import async_create
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -53,7 +54,6 @@ from homeassistant.helpers import (
 from .const import (
     CONF_CALENDAR,
     CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -109,6 +109,50 @@ async def async_migrate_entry(
         )
         _LOGGER.info(
             "%s (%s): Migration to version 2 complete",
+            config_entry.entry_id,
+            config_entry.title,
+        )
+
+    if config_entry.version == 2:
+        _LOGGER.debug(
+            "%s (%s): Migrating from version 2 to 3",
+            config_entry.entry_id,
+            config_entry.title,
+        )
+
+        # Remove number_of_uses from all slot configs
+        new_data = {**config_entry.data}
+        new_options = {**config_entry.options}
+        any_removed = False
+
+        for data_dict in (new_data, new_options):
+            if CONF_SLOTS in data_dict:
+                new_slots = {}
+                for slot_num, slot_config in data_dict[CONF_SLOTS].items():
+                    new_slot = {**slot_config}
+                    if "number_of_uses" in new_slot:
+                        new_slot.pop("number_of_uses")
+                        any_removed = True
+                    new_slots[slot_num] = new_slot
+                data_dict[CONF_SLOTS] = new_slots
+
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options, version=3
+        )
+
+        if any_removed:
+            async_create(
+                hass,
+                "The **Number of Uses** feature has been removed from Lock Code Manager. "
+                "Use the [Slot Usage Limiter blueprint]"
+                "(https://github.com/raman325/lock_code_manager/wiki/Blueprints#slot-usage-limiter) "
+                "for equivalent functionality with more flexibility.",
+                title="Lock Code Manager: Number of Uses Removed",
+                notification_id="lcm_number_of_uses_removed",
+            )
+
+        _LOGGER.info(
+            "%s (%s): Migration to version 3 complete",
             config_entry.entry_id,
             config_entry.title,
         )
@@ -528,47 +572,7 @@ async def _async_reconcile_slot_entities(
     ent_reg: er.EntityRegistry,
 ) -> None:
     """Reconcile entities for a slot whose configuration has changed."""
-    entry_id = config_entry.entry_id
-    entry_title = config_entry.title
-    entities_to_remove: set[str] = set()
-    entities_to_add: set[str] = set()
-
-    # Check if number of uses has changed
-    old_val = old_config.get(CONF_NUMBER_OF_USES)
-    new_val = new_config.get(CONF_NUMBER_OF_USES)
-
-    # If number of uses value hasn't changed, skip
-    if old_val == new_val:
-        return
-
-    # If number of uses value has been removed, fire a signal to remove
-    # corresponding entity
-    if old_val not in (None, "") and new_val in (None, ""):
-        entities_to_remove.add(CONF_NUMBER_OF_USES)
-    # If number of uses value has been added, fire a signal to add
-    # corresponding entity
-    elif old_val in (None, "") and new_val not in (None, ""):
-        entities_to_add.add(CONF_NUMBER_OF_USES)
-
-    for key in entities_to_remove:
-        _LOGGER.debug(
-            "%s (%s): Removing %s entity for slot %s due to changed configuration",
-            entry_id,
-            entry_title,
-            key,
-            slot_num,
-        )
-        await callbacks.invoke_entity_removers_for_key(slot_num, key)
-
-    for key in entities_to_add:
-        _LOGGER.debug(
-            "%s (%s): Adding %s entity for slot %s due to changed configuration",
-            entry_id,
-            entry_title,
-            key,
-            slot_num,
-        )
-        callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
+    # Currently a no-op; retained for future per-slot entity reconciliation needs
 
 
 async def async_update_listener(
@@ -672,10 +676,6 @@ async def async_update_listener(
             CONF_PIN,
             EVENT_PIN_USED,
         }
-
-        # Check if we need to add a number of uses entity
-        if slot_config.get(CONF_NUMBER_OF_USES) not in (None, ""):
-            entities_to_add.add(CONF_NUMBER_OF_USES)
 
         _LOGGER.debug(
             "%s (%s): Adding PIN enabled binary sensor for slot %s",

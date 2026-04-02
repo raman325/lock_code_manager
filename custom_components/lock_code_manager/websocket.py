@@ -19,7 +19,6 @@ from homeassistant.components.calendar import (
 )
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
-from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.schedule import (
     ATTR_NEXT_EVENT as SCHEDULE_ATTR_NEXT_EVENT,
     DOMAIN as SCHEDULE_DOMAIN,
@@ -90,7 +89,6 @@ from .const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_NAME,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -134,19 +132,6 @@ def _get_bool_state(hass: HomeAssistant, entity_id: str | None) -> bool | None:
             return True
         if state.state == STATE_OFF:
             return False
-    return None
-
-
-def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
-    """Get integer state from a number entity, returning None if unavailable."""
-    if not entity_id:
-        return None
-    if state := hass.states.get(entity_id):
-        if state.state and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            try:
-                return int(float(state.state))
-            except (ValueError, TypeError):
-                return None
     return None
 
 
@@ -670,7 +655,6 @@ def _get_slot_entity_data(
         pin_entity_id=_get_entity_id(TEXT_DOMAIN, CONF_PIN),
         enabled_entity_id=_get_entity_id(SWITCH_DOMAIN, CONF_ENABLED),
         active_entity_id=_get_entity_id(BINARY_SENSOR_DOMAIN, ATTR_ACTIVE),
-        number_of_uses_entity_id=_get_entity_id(NUMBER_DOMAIN, CONF_NUMBER_OF_USES),
         event_entity_id=_get_entity_id(EVENT_DOMAIN, EVENT_PIN_USED),
     )
 
@@ -896,7 +880,6 @@ def _serialize_slot_card_data(
     pin = _get_text_state(hass, slot_entities.pin_entity_id)
     enabled = _get_bool_state(hass, slot_entities.enabled_entity_id)
     active = _get_bool_state(hass, slot_entities.active_entity_id)
-    number_of_uses = _get_number_state(hass, slot_entities.number_of_uses_entity_id)
 
     last_used, last_used_lock_name = _get_last_used_info(
         hass, slot_entities.event_entity_id
@@ -933,7 +916,6 @@ def _serialize_slot_card_data(
             ATTR_ACTIVE: slot_entities.active_entity_id,
             CONF_ENABLED: slot_entities.enabled_entity_id,
             CONF_NAME: slot_entities.name_entity_id,
-            CONF_NUMBER_OF_USES: slot_entities.number_of_uses_entity_id,
             CONF_PIN: slot_entities.pin_entity_id,
         },
         CONF_LOCKS: locks_data,
@@ -960,8 +942,6 @@ def _serialize_slot_card_data(
         result[CONF_PIN] = None
 
     # Conditions
-    if number_of_uses is not None:
-        result[CONF_CONDITIONS][CONF_NUMBER_OF_USES] = number_of_uses
     if condition_entity_id:
         # Include condition entity data (handles both calendar and non-calendar entities)
         if condition_data := _get_condition_entity_data(hass, condition_entity_id):
@@ -998,7 +978,7 @@ async def subscribe_code_slot(
     Subscribe to slot data for a specific slot in a config entry.
 
     Provides real-time updates when:
-    - Slot entities change (name, PIN, enabled, active, number_of_uses)
+    - Slot entities change (name, PIN, enabled, active)
     - Lock coordinator data changes (codes on locks)
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
@@ -1217,9 +1197,6 @@ CONDITION_ENTITY_DOMAINS = frozenset(
         vol.Optional(CONF_ENTITY_ID): vol.Any(
             cv.entity_domain(CONDITION_ENTITY_DOMAINS), None
         ),
-        vol.Optional(CONF_NUMBER_OF_USES): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=1)), None
-        ),
     }
 )
 @websocket_api.async_response
@@ -1235,7 +1212,6 @@ async def update_slot_condition(
 
     Allows adding, changing, or removing:
     - entity_id: Condition entity (calendar, schedule, binary_sensor, switch, input_boolean)
-    - number_of_uses: Usage tracking (positive int to enable, None to disable)
 
     Only fields present in the message are updated. To remove a field, pass None/null.
     """
@@ -1290,15 +1266,6 @@ async def update_slot_condition(
             slot_config.pop(CONF_ENTITY_ID, None)
         else:
             slot_config[CONF_ENTITY_ID] = entity_id
-
-    # Update number_of_uses if present in message
-    if CONF_NUMBER_OF_USES in msg:
-        num_uses = msg[CONF_NUMBER_OF_USES]
-        if num_uses is None:
-            # Remove the key entirely (disables tracking, removes entity)
-            slot_config.pop(CONF_NUMBER_OF_USES, None)
-        else:
-            slot_config[CONF_NUMBER_OF_USES] = num_uses
 
     data[CONF_SLOTS][slot_key] = slot_config
 

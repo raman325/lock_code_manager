@@ -15,7 +15,6 @@ from homeassistant.util import slugify
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
 )
@@ -33,7 +32,6 @@ BASE_CONFIG = {
             CONF_NAME: "test2",
             CONF_PIN: "5678",
             CONF_ENABLED: True,
-            CONF_NUMBER_OF_USES: 5,
             CONF_ENTITY_ID: "calendar.test_1",
         },
     },
@@ -46,7 +44,6 @@ SLOT_1_PIN_ENTITY = "text.mock_title_code_slot_1_pin"
 SLOT_1_IN_SYNC_ENTITY = "binary_sensor.test_1_code_slot_1_in_sync"
 
 SLOT_2_ENABLED_ENTITY = "switch.mock_title_code_slot_2_enabled"
-SLOT_2_NUMBER_OF_USES_ENTITY = "number.mock_title_code_slot_2_number_of_uses"
 SLOT_2_ACTIVE_ENTITY = "binary_sensor.mock_title_code_slot_2_active"
 SLOT_2_EVENT_ENTITY = "event.mock_title_code_slot_2"
 SLOT_2_PIN_ENTITY = "text.mock_title_code_slot_2_pin"

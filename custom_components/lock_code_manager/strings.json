@@ -24,10 +24,9 @@
           "entity_id": "Condition Entity",
           "enabled": "Enabled",
           "name": "Name",
-          "number_of_uses": "Number of Uses",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:** A slot is active when all conditions are met: the condition entity (if configured) is 'on', and Number of Uses (if configured) is greater than 0. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
+        "description": "**Configure slot {slot_num}:** You can link a slot to a condition entity (calendar, binary_sensor, switch, schedule, or input_boolean). When linked, the slot will only be active when the entity is 'on' (for calendars, this means an event is in progress).",
         "title": "Configure Slot {slot_num}"
       },
       "reauth": {
@@ -80,11 +79,6 @@
             }
           }
         }
-      }
-    },
-    "number": {
-      "number_of_uses": {
-        "name": "number of uses"
       }
     },
     "sensor": {

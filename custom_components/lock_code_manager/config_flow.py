@@ -27,7 +27,6 @@ from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
     CONF_NUM_SLOTS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     CONF_START_SLOT,
     DEFAULT_NUM_SLOTS,
@@ -47,15 +46,10 @@ UI_CODE_SLOT_SCHEMA = vol.Schema(
         vol.Optional(CONF_ENTITY_ID): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
         ),
-        vol.Optional(CONF_NUMBER_OF_USES): sel.TextSelector(
-            sel.TextSelectorConfig(type=sel.TextSelectorType.NUMBER)
-        ),
     }
 )
 
-CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA.extend(
-    {vol.Optional(CONF_NUMBER_OF_USES): vol.Coerce(int)}
-)
+CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA
 
 
 def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
@@ -119,7 +113,7 @@ def _check_common_slots(
 class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for Lock Code Manager."""
 
-    VERSION = 2
+    VERSION = 3
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self) -> None:
