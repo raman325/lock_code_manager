@@ -102,7 +102,7 @@ class SlotSyncManager:
         self._config_entry = config_entry
         self._coordinator = coordinator
         self._lock = lock
-        self._slot_num = slot_num
+        self._slot_num = int(slot_num)
         self._state_writer = state_writer
 
         self._log_prefix = (
@@ -221,7 +221,6 @@ class SlotSyncManager:
         # here. Modifying subscriptions from within a state change callback causes
         # timing issues. The catch-all has early-return guards that skip irrelevant
         # entities, so the performance impact is minimal.
-
         if self._slot_num not in self._coordinator.data:
             _LOGGER.debug(
                 "%s: Slot not in coordinator data, skipping",
@@ -349,8 +348,13 @@ class SlotSyncManager:
 
     @callback
     def _mark_dirty(self, *_args: Any) -> None:
-        """Mark slot as needing sync check on next tick."""
+        """Mark slot as needing sync check on next tick.
+
+        Also immediately updates the display state (in_sync) if it changed,
+        so the UI reflects changes without waiting for the next tick.
+        """
         self._dirty = True
+        self._update_in_sync_display()
 
     @callback
     def _mark_dirty_if_relevant(self, event: Event[EventStateChangedData]) -> None:
@@ -364,6 +368,27 @@ class SlotSyncManager:
             event.data["entity_id"] in self._tracked_entity_ids
         ):
             self._dirty = True
+            self._update_in_sync_display()
+
+    @callback
+    def _update_in_sync_display(self) -> None:
+        """Update the in_sync display state immediately if it changed.
+
+        This is a read-only check — no sync operations are performed.
+        Allows the UI to reflect state changes instantly while the tick
+        handles actual sync operations.
+        """
+        if self._in_sync is None:
+            return
+        slot_state = self._resolve_slot_state()
+        if slot_state is None:
+            return
+        expected = self.calculate_in_sync(slot_state)
+        if expected != self._in_sync:
+            self._in_sync = expected
+            if expected:
+                self._reset_sync_tracker()
+            self._write_state()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
@@ -377,11 +402,10 @@ class SlotSyncManager:
         """Core tick logic — called from _async_tick after dirty check."""
         slot_state = self._resolve_slot_state()
         if slot_state is None:
-            # State resolution failed - _resolve_slot_state logs details.
-            # Only retry during initial load. After initial load, state change
-            # callbacks will trigger retries when something actually changes.
-            if self._in_sync is None:
-                self._dirty = True  # retry next tick
+            # State resolution failed — retry on next tick. We always retry
+            # (not just during initial load) because the coordinator may not
+            # have data yet for a newly enabled slot.
+            self._dirty = True
             return
 
         expected_in_sync = self.calculate_in_sync(slot_state)
