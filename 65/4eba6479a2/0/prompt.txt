@@ -2620,3 +2620,17 @@ are there any other places where we could reduce complexity and make code easier
 ---
 
 no, for now, figure out why syncs aren't happening. With the latest code, I enabled a slot, it shows its not in sync, but its not doing anything about it
+
+---
+
+026-04-02 02:11:28.917 DEBUG (MainThread) [custom_components.lock_code_manager.sync] 01KF26NPKFPBF77YR5FBP4N0A6 (test): lock.basement_door_lock slot 12: Slot not in coordinator data, skipping
+2026-04-02 02:11:30.913 DEBUG (MainThread) [custom_components.lock_code_manager.sync] 01KF26NPKFPBF77YR5FBP4N0A6 (test): lock.basement_door_lock slot 11: Slot not in coordinator data, skipping
+2026-04-02 02:11:33.918 DEBUG (MainThread) [custom_components.lock_code_manager.sync] 01KF26NPKFPBF77YR5FBP4N0A6 (test): lock.basement_door_lock slot 12: Slot not in coordinator data, skipping
+2026-04-02 02:11:35.914 DEBUG (MainThread) [custom_components.lock_code_manager.sync] 01KF26NPKFPBF77YR5FBP4N0A6 (test): lock.basement_door_lock slot 11: Slot not in coordinator data, skipping
+2026-04-02 02:11:36.962 INFO (SyncWorker_3) [homeassistant.loader] Loaded ipp from homeassistant.components.ipp
+2026-04-02 02:11:36.963 INFO (SyncWorker_6) [homeassistant.loader] Loaded brother from homeassistant.components.brother
+2026-04-02 02:11:36.963 INFO (SyncWorker_5) [homeassistant.util.pa
+
+---
+
+I think there's a casting issue. Follow slot number everywhere it's referenced. Note that in config entries they're stored as strings because keys have to be strings. THat's why we have the mismatch
