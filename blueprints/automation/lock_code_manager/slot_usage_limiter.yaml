@@ -34,6 +34,14 @@ blueprint:
   # yamllint disable-line rule:line-length
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_limiter.yaml
   input:
+    config_entry:
+      name: Lock Code Manager config entry
+      description: >
+        The Lock Code Manager config entry that manages your lock(s).
+        Used to identify the setup in notifications.
+      selector:
+        config_entry:
+          integration: lock_code_manager
     pin_used_entity:
       name: PIN used event entity
       description: >
@@ -99,7 +107,9 @@ variables:
   initial_uses: !input initial_uses
   uses_counter: !input uses_counter
   notify_target: !input notify_target
-  _pin_used_entity: !input pin_used_entity
+  _config_entry: !input config_entry
+  _config_entry_title: >
+    {{ config_entry_attr(_config_entry, 'title') }}
   _enabled_switch: !input enabled_switch
 
 actions:
@@ -140,12 +150,12 @@ actions:
                     target:
                       entity_id: "{{ notify_target }}"
                     data:
-                      title: Lock Code Manager — Usage Limit Reached
+                      title: "{{ _config_entry_title }} — Usage Limit Reached"
                       message: >
                         {{ state_attr(_enabled_switch, 'friendly_name')
                            | default(_enabled_switch) }}
-                        has been disabled after reaching the usage limit.
-                        Last used at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}.
+                        has been disabled after reaching the usage limit
+                        ({{ now().strftime('%Y-%m-%d %H:%M:%S') }}).
       - conditions:
           - condition: trigger
             id: slot_enabled
