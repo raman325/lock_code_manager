@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "cb8c9a28aa97",
+  "strategy": "manual-commit",
+  "branch": "fix/sync-always-retry-on-resolve-failure",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/cb/8c9a28aa97/0/metadata.json",
+      "transcript": "/cb/8c9a28aa97/0/full.jsonl",
+      "content_hash": "/cb/8c9a28aa97/0/content_hash.txt",
+      "prompt": "/cb/8c9a28aa97/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3407,
+    "cache_creation_tokens": 6918385,
+    "cache_read_tokens": 616281558,
+    "output_tokens": 323864,
+    "api_call_count": 1250
+  }
+}
