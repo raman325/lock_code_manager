@@ -1,0 +1,45 @@
+check latest review comments from copilot
+
+---
+
+you are looking at the wrong comment
+
+---
+
+you are looking at the wrong review comments. Copilot just posted 3 comments in a review
+
+---
+
+_async_tick can run concurrently with itself: it’s scheduled by async_track_time_interval() and can be re-entered while a previous tick is still awaiting I/O (e.g., async_internal_set_usercode() / coordinator.async_refresh()). If a state change marks _dirty=True during an in-flight tick, the next interval can start a second tick that performs another sync concurrently, reintroducing the concurrency hazards this refactor aims to remove. Add a simple re-entrancy guard (e.g., an asyncio.Lock, an in-flight task handle, or a _tick_running flag that preserves _dirty when already running) so only one tick can execute sync logic at a time.
+
+---
+
+use a lock, it's more pythonic
+
+---
+
+put the actual code being run in the lock in a new function so we don't have to unnecessarily indent and we can preserve the diff. Don't commit yet
+
+---
+
+continue
+
+---
+
+continue, but put all the logic under the async with lock in a new method so we don't have to indent everything
+
+---
+
+could that cause a backlog of ticks? Do we record state at tick time so we that ticks aren't crossing boundaries? If we aren't doing all those things, the second tick effectively becomes a no-op
+
+---
+
+is it more correct? or is it just more correct more quickly?
+
+---
+
+why do we use a custom class for this? couldn't we just create a coordinator that does this? does that help us at all?
+
+---
+
+I'm confused. So the current tick process already reset dirty to false and now its true. So rather than wait for the queued tick to tackle it, the current one will? Why not just wait?
