@@ -620,16 +620,13 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            false,
-            'unmasked',
-            // use legacy entities cards for test
-            false
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: false
+        });
 
         expect(result.title).toBe('Test Lock');
         expect(result.path).toBe('test-lock');
@@ -676,16 +673,13 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            false,
-            'unmasked',
-            // use legacy entities cards for test
-            false
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: false
+        });
 
         // Should only have entity badges for locks (no template badges)
         const entityBadges = result.badges.filter(
@@ -729,16 +723,13 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            false,
-            'unmasked',
-            // use legacy entities cards for test
-            false
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: false
+        });
 
         expect(result.sections).toHaveLength(3);
     });
@@ -763,16 +754,13 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            true,
-            false,
-            'unmasked',
-            // use legacy entities cards for test
-            false
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: true,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: false
+        });
 
         // Verify the section strategy is configured for legacy mode
         const [strategy] = result.sections.map((s) => s.strategy) as Array<{
@@ -808,16 +796,13 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            false,
-            'unmasked',
-            // use legacy entities cards for test
-            false
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: false
+        });
 
         // Lock badges are now entity objects, not strings
         const lockBadges = result.badges.filter(
@@ -851,16 +836,13 @@ describe('generateView', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            true,
-            false,
-            'masked_with_reveal',
-            // use_slot_cards = true
-            true
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: true,
+            showLockCards: false,
+            codeDisplay: 'masked_with_reveal',
+            useSlotCards: true
+        });
 
         expect(result.sections).toHaveLength(2);
         // Verify sections use slot section strategies
@@ -920,16 +902,13 @@ describe('generateView lock codes cards', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            // show_lock_cards
-            true,
-            'unmasked',
-            true
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: true,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
 
         // Should have 1 slot section + 2 lock sections
         expect(result.sections).toHaveLength(3);
@@ -975,16 +954,13 @@ describe('generateView lock codes cards', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            // show_lock_cards
-            true,
-            'unmasked',
-            true
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: true,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
 
         // Extract lock strategies from sections (skip the slot strategy at index 0)
         const lockStrategies = result.sections
@@ -1020,16 +996,13 @@ describe('generateView lock codes cards', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            // show_lock_cards
-            true,
-            'masked_with_reveal',
-            true
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: true,
+            codeDisplay: 'masked_with_reveal',
+            useSlotCards: true
+        });
 
         // Extract lock strategy from sections
         const lockStrategy = result.sections
@@ -1064,16 +1037,13 @@ describe('generateView lock codes cards', () => {
             }
         });
 
-        const result = await generateView(
-            hass,
-            testConfigEntry,
-            false,
-            false,
-            // show_lock_cards = false
-            false,
-            'unmasked',
-            true
-        );
+        const result = await generateView(hass, testConfigEntry, {
+            showCodeSensors: false,
+            showLockSync: false,
+            showLockCards: false,
+            codeDisplay: 'unmasked',
+            useSlotCards: true
+        });
 
         // Should only have 1 slot section, no lock sections
         expect(result.sections).toHaveLength(1);

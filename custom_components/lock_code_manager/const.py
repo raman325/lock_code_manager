@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, Platform
 
 DOMAIN = "lock_code_manager"
@@ -96,6 +98,22 @@ CONDITION_ENTITY_DOMAINS = [
     "schedule",
     "input_boolean",
 ]
+
+# Platforms (integrations) excluded from being condition entities
+# These create switch/binary_sensor entities but their states don't map to access control
+EXCLUDED_CONDITION_PLATFORMS = frozenset({"scheduler"})
+
+# Coordinator backoff
+BACKOFF_FAILURE_THRESHOLD: int = 3
+BACKOFF_INITIAL_SECONDS: int = 60
+BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
+
+# Sync timing
+TICK_INTERVAL = timedelta(seconds=5)
+MAX_SYNC_ATTEMPTS = 3
+SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
+PUSH_SUBSCRIBE_RETRY_DELAY = timedelta(seconds=10)
+
 
 # Defaults
 DEFAULT_NUM_SLOTS = 3

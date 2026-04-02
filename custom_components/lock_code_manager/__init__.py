@@ -29,6 +29,7 @@ from homeassistant.const import (
     CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
+    EVENT_LOVELACE_UPDATED,
 )
 from homeassistant.core import (
     CoreState,
@@ -46,6 +47,7 @@ from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
+    instance_id,
 )
 
 from .const import (
@@ -62,12 +64,9 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import (
-    LockCodeManagerConfigEntry,
-    LockCodeManagerConfigEntryData,
-    get_entry_data,
-)
+from .data import get_entry_data
 from .helpers import async_create_lock_instance, get_locks_from_targets
+from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryData
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -115,6 +114,21 @@ async def async_migrate_entry(
         )
 
     return True
+
+
+@callback
+def _async_notify_lovelace_dashboards(hass: HomeAssistant) -> None:
+    """Fire lovelace_updated for each registered dashboard.
+
+    This triggers the "Configuration changed" toast in the Home Assistant
+    frontend, prompting users to refresh the dashboard so the strategy
+    re-generates cards for any added or removed slots/locks.
+    """
+    lovelace_data = hass.data.get(LL_DOMAIN)
+    if not lovelace_data:
+        return
+    for url_path in lovelace_data.dashboards:
+        hass.bus.async_fire(EVENT_LOVELACE_UPDATED, {"url_path": url_path})
 
 
 def _get_lovelace_resources(
@@ -209,6 +223,7 @@ async def _async_cleanup_strategy_resource(
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
+    hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
         [
@@ -327,20 +342,19 @@ async def async_setup_entry(
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
     else:
-        # One-time listeners auto-remove when they fire, so unsubscribing
-        # during unload may fail if the event already fired. Ignore that error.
+        started = [False]
+
         @callback
         def _on_started(event: Event) -> None:
+            started[0] = True
             _setup_entry_after_start(hass, config_entry, event)
 
         unsub = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
 
         @callback
         def _safe_unsub() -> None:
-            try:
+            if not started[0]:
                 unsub()
-            except ValueError:
-                pass  # Listener already removed when event fired
 
         config_entry.async_on_unload(_safe_unsub)
 
@@ -394,13 +408,141 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_lock(hass, config_entry)
 
-    if {k: v for k, v in hass_data.items() if k != "resources"} == {
-        CONF_LOCKS: {},
-    }:
+    if not hass_data.get(CONF_LOCKS):
         await _async_cleanup_strategy_resource(hass, hass_data)
-        hass.data.pop(DOMAIN)
 
     return unload_ok
+
+
+async def _async_setup_new_locks(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    locks_to_add: list[str],
+    new_slots: dict[int, Any],
+    callbacks: Any,
+    ent_reg: er.EntityRegistry,
+) -> None:
+    """Set up newly added locks and create per-slot entities for them."""
+    entry_id = config_entry.entry_id
+    entry_title = config_entry.title
+    hass_data = hass.data[DOMAIN]
+    runtime_data = config_entry.runtime_data
+
+    _LOGGER.debug(
+        "%s (%s): Adding following locks: %s",
+        entry_id,
+        entry_title,
+        locks_to_add,
+    )
+    added_locks: list[BaseLock] = []
+    for lock_entity_id in locks_to_add:
+        if lock_entity_id in hass_data[CONF_LOCKS]:
+            _LOGGER.debug(
+                "%s (%s): Reusing lock instance for lock %s",
+                entry_id,
+                entry_title,
+                hass_data[CONF_LOCKS][lock_entity_id],
+            )
+            lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
+                lock_entity_id
+            ]
+            await lock.async_wait_for_setup()
+        else:
+            lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
+                lock_entity_id
+            ] = async_create_lock_instance(
+                hass,
+                dr.async_get(hass),
+                ent_reg,
+                config_entry,
+                lock_entity_id,
+            )
+            _LOGGER.debug(
+                "%s (%s): Creating lock instance for lock %s",
+                entry_id,
+                entry_title,
+                lock,
+            )
+            await lock.async_setup_internal(config_entry)
+
+        added_locks.append(lock)
+
+        # Check if lock is connected (but don't wait - entity creation doesn't require it)
+        if not await lock.async_internal_is_integration_connected():
+            _LOGGER.debug(
+                "%s (%s): Lock %s is not connected yet. Entities will be created "
+                "but will be unavailable until the lock comes online. This is normal "
+                "during startup if Z-Wave JS is still initializing.",
+                entry_id,
+                entry_title,
+                lock.lock.entity_id,
+            )
+
+        for slot_num in new_slots:
+            _LOGGER.debug(
+                "%s (%s): Adding lock %s slot %s sensor and event entity",
+                entry_id,
+                entry_title,
+                lock_entity_id,
+                slot_num,
+            )
+            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
+
+    # Notify existing entities about the new locks
+    if added_locks:
+        callbacks.invoke_lock_added_handlers(added_locks)
+
+
+async def _async_reconcile_slot_entities(
+    config_entry: LockCodeManagerConfigEntry,
+    slot_num: int,
+    old_config: dict[str, Any],
+    new_config: dict[str, Any],
+    callbacks: Any,
+    ent_reg: er.EntityRegistry,
+) -> None:
+    """Reconcile entities for a slot whose configuration has changed."""
+    entry_id = config_entry.entry_id
+    entry_title = config_entry.title
+    entities_to_remove: set[str] = set()
+    entities_to_add: set[str] = set()
+
+    # Check if number of uses has changed
+    old_val = old_config.get(CONF_NUMBER_OF_USES)
+    new_val = new_config.get(CONF_NUMBER_OF_USES)
+
+    # If number of uses value hasn't changed, skip
+    if old_val == new_val:
+        return
+
+    # If number of uses value has been removed, fire a signal to remove
+    # corresponding entity
+    if old_val not in (None, "") and new_val in (None, ""):
+        entities_to_remove.add(CONF_NUMBER_OF_USES)
+    # If number of uses value has been added, fire a signal to add
+    # corresponding entity
+    elif old_val in (None, "") and new_val not in (None, ""):
+        entities_to_add.add(CONF_NUMBER_OF_USES)
+
+    for key in entities_to_remove:
+        _LOGGER.debug(
+            "%s (%s): Removing %s entity for slot %s due to changed configuration",
+            entry_id,
+            entry_title,
+            key,
+            slot_num,
+        )
+        await callbacks.invoke_entity_removers_for_key(slot_num, key)
+
+    for key in entities_to_add:
+        _LOGGER.debug(
+            "%s (%s): Adding %s entity for slot %s due to changed configuration",
+            entry_id,
+            entry_title,
+            key,
+            slot_num,
+        )
+        callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
 
 
 async def async_update_listener(
@@ -412,11 +554,8 @@ async def async_update_listener(
     if not config_entry.options:
         return
 
-    hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
     ent_reg = er.async_get(hass)
-    entities_to_remove: set[str] = set()
-    entities_to_add: set[str] = set()
 
     entry_id = config_entry.entry_id
     entry_title = config_entry.title
@@ -477,68 +616,9 @@ async def async_update_listener(
     # Notify any existing entities that additional locks have been added then create
     # slot PIN sensors for the new locks
     if locks_to_add:
-        _LOGGER.debug(
-            "%s (%s): Adding following locks: %s",
-            entry_id,
-            entry_title,
-            locks_to_add,
+        await _async_setup_new_locks(
+            hass, config_entry, locks_to_add, new_slots, callbacks, ent_reg
         )
-        added_locks: list[BaseLock] = []
-        for lock_entity_id in locks_to_add:
-            if lock_entity_id in hass_data[CONF_LOCKS]:
-                _LOGGER.debug(
-                    "%s (%s): Reusing lock instance for lock %s",
-                    entry_id,
-                    entry_title,
-                    hass_data[CONF_LOCKS][lock_entity_id],
-                )
-                lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
-                    lock_entity_id
-                ]
-            else:
-                lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
-                    lock_entity_id
-                ] = async_create_lock_instance(
-                    hass,
-                    dr.async_get(hass),
-                    ent_reg,
-                    config_entry,
-                    lock_entity_id,
-                )
-                _LOGGER.debug(
-                    "%s (%s): Creating lock instance for lock %s",
-                    entry_id,
-                    entry_title,
-                    lock,
-                )
-                await lock.async_setup(config_entry)
-
-            added_locks.append(lock)
-
-            # Check if lock is connected (but don't wait - entity creation doesn't require it)
-            if not await lock.async_internal_is_connection_up():
-                _LOGGER.debug(
-                    "%s (%s): Lock %s is not connected yet. Entities will be created "
-                    "but will be unavailable until the lock comes online. This is normal "
-                    "during startup if Z-Wave JS is still initializing.",
-                    entry_id,
-                    entry_title,
-                    lock.lock.entity_id,
-                )
-
-            for slot_num in new_slots:
-                _LOGGER.debug(
-                    "%s (%s): Adding lock %s slot %s sensor and event entity",
-                    entry_id,
-                    entry_title,
-                    lock_entity_id,
-                    slot_num,
-                )
-                callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-
-        # Notify existing entities about the new locks
-        if added_locks:
-            callbacks.invoke_lock_added_handlers(added_locks)
 
     # Remove slot sensors that are no longer in the config
     for slot_num in slots_to_remove.keys():
@@ -551,10 +631,9 @@ async def async_update_listener(
     # add slot sensors for existing locks only since new locks were already set up
     # above.
     for slot_num, slot_config in slots_to_add.items():
-        entities_to_remove.clear()
-        # First we store the set of entities we are adding so we can track when they are
-        # done
-        entities_to_add = {
+        # First we store the set of entities we are adding so we can track when they
+        # are done
+        entities_to_add: set[str] = {
             CONF_ENABLED,
             CONF_NAME,
             CONF_PIN,
@@ -598,44 +677,14 @@ async def async_update_listener(
     # For all slots that are in both the old and new config, check if any of the
     # configuration options have changed
     for slot_num in set(curr_slots).intersection(new_slots):
-        entities_to_remove.clear()
-        entities_to_add.clear()
-        # Check if number of uses has changed
-        old_val = curr_slots[slot_num].get(CONF_NUMBER_OF_USES)
-        new_val = new_slots[slot_num].get(CONF_NUMBER_OF_USES)
-
-        # If number of uses value hasn't changed, skip
-        if old_val == new_val:
-            continue
-
-        # If number of uses value has been removed, fire a signal to remove
-        # corresponding entity
-        if old_val not in (None, "") and new_val in (None, ""):
-            entities_to_remove.add(CONF_NUMBER_OF_USES)
-        # If number of uses value has been added, fire a signal to add
-        # corresponding entity
-        elif old_val in (None, "") and new_val not in (None, ""):
-            entities_to_add.add(CONF_NUMBER_OF_USES)
-
-        for key in entities_to_remove:
-            _LOGGER.debug(
-                "%s (%s): Removing %s entity for slot %s due to changed configuration",
-                entry_id,
-                entry_title,
-                key,
-                slot_num,
-            )
-            await callbacks.invoke_entity_removers_for_key(slot_num, key)
-
-        for key in entities_to_add:
-            _LOGGER.debug(
-                "%s (%s): Adding %s entity for slot %s due to changed configuration",
-                entry_id,
-                entry_title,
-                key,
-                slot_num,
-            )
-            callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
+        await _async_reconcile_slot_entities(
+            config_entry,
+            slot_num,
+            curr_slots[slot_num],
+            new_slots[slot_num],
+            callbacks,
+            ent_reg,
+        )
 
     # Existing entities will listen to updates and act on it
     new_data = {CONF_LOCKS: new_locks, CONF_SLOTS: new_slots}
@@ -643,3 +692,8 @@ async def async_update_listener(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
     hass.config_entries.async_update_entry(config_entry, data=new_data, options={})
+
+    # Notify Lovelace dashboards to re-render when structure changes
+    # (slots or locks added/removed), so strategy-generated cards update
+    if slots_to_add or slots_to_remove or locks_to_add or locks_to_remove:
+        _async_notify_lovelace_dashboards(hass)

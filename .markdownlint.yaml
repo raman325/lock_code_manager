@@ -1,0 +1,7 @@
+---
+# MD013 - Line length (max 120 chars)
+MD013:
+  line_length: 120
+  code_blocks: false   # Code blocks often have long lines (URLs, commands)
+  tables: false        # Tables need wide columns for readability
+  headings: false      # Headings should be descriptive without line wrapping

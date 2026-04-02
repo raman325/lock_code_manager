@@ -4,13 +4,20 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import (
+    BACKOFF_FAILURE_THRESHOLD,
+    BACKOFF_INITIAL_SECONDS,
+    BACKOFF_MAX_SECONDS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
@@ -36,20 +43,20 @@ class MockLockWithHardRefresh(BaseLock):
         """Return configurable hard refresh interval."""
         return self._hard_refresh_interval
 
-    def is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    def is_integration_connected(self) -> bool:
+        """Return whether the integration's client/driver/broker is connected."""
         return self._is_connected
 
-    def hard_refresh_codes(self) -> dict[int, int | str]:
+    def hard_refresh_codes(self) -> dict[int, str | None]:
         """Perform hard refresh and return all codes."""
         return self.get_usercodes()
 
-    def get_usercodes(self) -> dict[int, int | str]:
+    def get_usercodes(self) -> dict[int, str | None]:
         """Get dictionary of code slots and usercodes."""
         return {}
 
     def set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
         return True
@@ -72,11 +79,11 @@ class MockLockWithPush(MockLockWithHardRefresh):
         """Return whether this lock supports push-based updates."""
         return self._supports_push
 
-    def subscribe_push_updates(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to push-based value updates."""
         self._subscribe_called = True
 
-    def unsubscribe_push_updates(self) -> None:
+    def teardown_push_subscription(self) -> None:
         """Unsubscribe from push-based value updates."""
         self._unsubscribe_called = True
 
@@ -330,12 +337,11 @@ async def test_push_update_notifies_listeners(
     coordinator.data = {1: "1111"}
 
     # Track listener callbacks
-    listener_called = False
+    listener_called = [False]
 
     @callback
     def listener():
-        nonlocal listener_called
-        listener_called = True
+        listener_called[0] = True
 
     coordinator.async_add_listener(listener)
 
@@ -343,7 +349,7 @@ async def test_push_update_notifies_listeners(
     coordinator.push_update({1: "9999"})
 
     # Verify listener was called
-    assert listener_called
+    assert listener_called[0]
 
 
 async def test_subscribe_push_updates_called_during_setup(
@@ -382,7 +388,7 @@ async def test_subscribe_push_updates_called_during_setup(
         ),
     ):
         assert not lock._subscribe_called
-        await lock.async_setup(mock_lock_config_entry)
+        await lock.async_setup_internal(mock_lock_config_entry)
         assert lock._subscribe_called
 
 
@@ -420,7 +426,7 @@ async def test_unsubscribe_push_updates_called_during_unload(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        await lock.async_setup(config_entry)
+        await lock.async_setup_internal(config_entry)
 
     # Unload
     assert not lock._unsubscribe_called
@@ -464,7 +470,7 @@ async def test_subscribe_push_not_called_for_non_push_lock(
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
-        await lock.async_setup(config_entry)
+        await lock.async_setup_internal(config_entry)
         # subscribe_push_updates should NOT have been called
         assert not lock._subscribe_called
 
@@ -641,3 +647,321 @@ async def test_drift_check_handles_hard_refresh_error(
 
         # Data should remain unchanged
         assert coordinator.data == {1: "1234"}
+
+
+# --- Backoff tests ---
+
+
+def _create_poll_coordinator(
+    hass: HomeAssistant,
+) -> tuple[LockUsercodeUpdateCoordinator, MockLockWithHardRefresh]:
+    """Create a coordinator with a poll-based (non-push) lock."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
+    lock = MockLockWithHardRefresh(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    return coordinator, lock
+
+
+def _create_push_coordinator(
+    hass: HomeAssistant,
+) -> tuple[LockUsercodeUpdateCoordinator, MockLockWithPush]:
+    """Create a coordinator with a push-based lock."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock",
+        config_entry=config_entry,
+    )
+
+    lock = MockLockWithPush(
+        hass,
+        dr.async_get(hass),
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+    lock._hard_refresh_interval = timedelta(hours=1)
+
+    coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
+    return coordinator, lock
+
+
+async def test_backoff_failure_counter_increments(hass: HomeAssistant) -> None:
+    """Test that consecutive failure counter increments on each failure."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    # Simulate that we previously had a successful update so UpdateFailed is raised
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        for i in range(1, 4):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+            assert coordinator._consecutive_failures == i
+
+
+async def test_backoff_first_failure_returns_empty_dict(
+    hass: HomeAssistant,
+) -> None:
+    """Test that first failure returns empty dict when no prior success."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    # No successful update yet
+    coordinator.last_update_success = False
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        result = await coordinator.async_get_usercodes()
+
+    assert result == {}
+    assert coordinator._consecutive_failures == 1
+
+
+async def test_backoff_subsequent_failure_raises_update_failed(
+    hass: HomeAssistant,
+) -> None:
+    """Test that subsequent failures raise UpdateFailed after prior success."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        with pytest.raises(UpdateFailed):
+            await coordinator.async_get_usercodes()
+
+    assert coordinator._consecutive_failures == 1
+
+
+async def test_backoff_activates_after_threshold(hass: HomeAssistant) -> None:
+    """Test that backoff activates after BACKOFF_FAILURE_THRESHOLD failures."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    original_interval = coordinator.update_interval
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        # Failures below threshold should not change interval
+        for _ in range(BACKOFF_FAILURE_THRESHOLD - 1):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+        assert coordinator.update_interval == original_interval
+
+        # Failure at threshold should activate backoff
+        with pytest.raises(UpdateFailed):
+            await coordinator.async_get_usercodes()
+
+        assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD
+        expected_backoff = timedelta(
+            seconds=BACKOFF_INITIAL_SECONDS * 2**0  # 2^(3-3) = 1
+        )
+        assert coordinator.update_interval == expected_backoff
+
+
+async def test_backoff_interval_increases_exponentially(
+    hass: HomeAssistant,
+) -> None:
+    """Test that update_interval increases exponentially for poll-based providers."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        # Reach threshold + additional failures
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 3):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    # After threshold+3 failures, exponent = 3, backoff = 60 * 2^3 = 480s
+    expected_backoff = timedelta(seconds=BACKOFF_INITIAL_SECONDS * 2**3)
+    assert coordinator.update_interval == expected_backoff
+
+
+async def test_backoff_caps_at_max(hass: HomeAssistant) -> None:
+    """Test that backoff interval is capped at BACKOFF_MAX_SECONDS."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        # Many failures to exceed max
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 20):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    assert coordinator.update_interval == timedelta(seconds=BACKOFF_MAX_SECONDS)
+
+
+async def test_backoff_resets_on_success(hass: HomeAssistant) -> None:
+    """Test that counters and interval reset on success."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    original_interval = coordinator.update_interval
+    coordinator.last_update_success = True
+
+    mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get_fail):
+        # Accumulate failures past threshold
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 1):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1
+    assert coordinator.update_interval != original_interval
+
+    # Now succeed
+    mock_get_success = AsyncMock(return_value={1: "1234"})
+    with patch.object(lock, "async_internal_get_usercodes", mock_get_success):
+        result = await coordinator.async_get_usercodes()
+
+    assert result == {1: "1234"}
+    assert coordinator._consecutive_failures == 0
+    assert coordinator.update_interval == original_interval
+
+
+async def test_backoff_no_reset_when_no_prior_failures(
+    hass: HomeAssistant,
+) -> None:
+    """Test that success with no prior failures does not modify interval."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    original_interval = coordinator.update_interval
+
+    mock_get = AsyncMock(return_value={1: "1234"})
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        result = await coordinator.async_get_usercodes()
+
+    assert result == {1: "1234"}
+    assert coordinator._consecutive_failures == 0
+    assert coordinator.update_interval == original_interval
+
+
+async def test_drift_check_skipped_during_backoff(hass: HomeAssistant) -> None:
+    """Test that drift check is skipped when in backoff."""
+    coordinator, lock = _create_push_coordinator(hass)
+    coordinator.last_update_success = True
+    coordinator._consecutive_failures = BACKOFF_FAILURE_THRESHOLD
+
+    mock_hard_refresh = AsyncMock()
+    with patch.object(lock, "async_internal_hard_refresh_codes", mock_hard_refresh):
+        await coordinator._async_drift_check(dt_util.utcnow())
+
+        # Hard refresh should NOT be called during backoff
+        mock_hard_refresh.assert_not_called()
+
+
+async def test_drift_check_runs_below_backoff_threshold(
+    hass: HomeAssistant,
+) -> None:
+    """Test that drift check runs when failures are below threshold."""
+    coordinator, lock = _create_push_coordinator(hass)
+    coordinator.last_update_success = True
+    coordinator._consecutive_failures = BACKOFF_FAILURE_THRESHOLD - 1
+
+    mock_hard_refresh = AsyncMock(return_value={1: "1234"})
+    with patch.object(lock, "async_internal_hard_refresh_codes", mock_hard_refresh):
+        await coordinator._async_drift_check(dt_util.utcnow())
+
+        # Hard refresh SHOULD be called below threshold
+        mock_hard_refresh.assert_called_once()
+
+
+async def test_backoff_push_provider_does_not_change_interval(
+    hass: HomeAssistant,
+) -> None:
+    """Test that push-based providers do not modify update_interval during backoff."""
+    coordinator, lock = _create_push_coordinator(hass)
+    # Push providers have update_interval=None
+    assert coordinator.update_interval is None
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 2):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    # update_interval should remain None for push providers
+    assert coordinator.update_interval is None
+    # But failure counter should still be tracked
+    assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 2
+
+
+async def test_backoff_init_stores_original_interval(
+    hass: HomeAssistant,
+) -> None:
+    """Test that __init__ stores the original update interval."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    assert coordinator._original_update_interval == lock.usercode_scan_interval
+    assert coordinator._consecutive_failures == 0
+
+
+async def test_backoff_init_push_stores_none_interval(
+    hass: HomeAssistant,
+) -> None:
+    """Test that __init__ stores None for push-based providers."""
+    coordinator, _ = _create_push_coordinator(hass)
+    assert coordinator._original_update_interval is None
+    assert coordinator._consecutive_failures == 0
+
+
+async def test_push_update_resets_backoff(hass: HomeAssistant) -> None:
+    """Test that push_update resets backoff state when data changes."""
+    coordinator, lock = _create_push_coordinator(hass)
+    coordinator.last_update_success = True
+
+    # Simulate failures past threshold
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 2):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 2
+
+    # Push update with new data should reset backoff
+    coordinator.data = {1: "old"}
+    coordinator.push_update({1: "1234"})
+
+    assert coordinator._consecutive_failures == 0
+
+
+async def test_push_update_no_reset_when_data_unchanged(
+    hass: HomeAssistant,
+) -> None:
+    """Test that push_update does not reset backoff when data is unchanged."""
+    coordinator, lock = _create_push_coordinator(hass)
+    coordinator.last_update_success = True
+
+    # Simulate failures past threshold
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(BACKOFF_FAILURE_THRESHOLD + 1):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1
+
+    # Push update with same data should NOT reset backoff
+    coordinator.data = {1: "1234"}
+    coordinator.push_update({1: "1234"})
+
+    assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1

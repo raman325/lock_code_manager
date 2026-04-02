@@ -26,7 +26,8 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from .data import LockCodeManagerConfigEntry, get_slot_data
+from .data import build_slot_unique_id, get_slot_data
+from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ class BaseLockCodeManagerEntity(Entity):
             via_device=(DOMAIN, self.entry_id),
         )
 
-        self._attr_unique_id = f"{self.base_unique_id}|{slot_num}|{key}"
+        self._attr_unique_id = build_slot_unique_id(self.base_unique_id, slot_num, key)
         self._attr_extra_state_attributes: dict[str, int | list[str]] = {
             ATTR_CODE_SLOT: int(slot_num)
         }
@@ -84,7 +85,9 @@ class BaseLockCodeManagerEntity(Entity):
     def _get_uid(self, key: str) -> str:
         """Get and cache unique id for a given key."""
         if key not in self._uid_cache:
-            self._uid_cache[key] = f"{self.base_unique_id}|{self.slot_num}|{key}"
+            self._uid_cache[key] = build_slot_unique_id(
+                self.base_unique_id, self.slot_num, key
+            )
         return self._uid_cache[key]
 
     @callback
@@ -149,7 +152,8 @@ class BaseLockCodeManagerEntity(Entity):
         self.locks.extend(locks)
 
     def _get_removal_uid(self) -> str:
-        """Get unique ID for removal callback registration.
+        """
+        Get unique ID for removal callback registration.
 
         Override in subclasses for different UID formats.
         """
@@ -157,7 +161,8 @@ class BaseLockCodeManagerEntity(Entity):
 
     @callback
     def _register_callbacks(self) -> None:
-        """Register entity with callback registry.
+        """
+        Register entity with callback registry.
 
         Can be overwritten by platforms if necessary.
         """
@@ -270,8 +275,8 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
                 identifiers=lock.device_entry.identifiers,
             )
 
-        self._attr_unique_id = (
-            f"{self.base_unique_id}|{slot_num}|{self.key}|{lock.lock.entity_id}"
+        self._attr_unique_id = build_slot_unique_id(
+            self.base_unique_id, slot_num, self.key, lock.lock.entity_id
         )
 
     def _get_removal_uid(self) -> str:

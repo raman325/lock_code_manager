@@ -9,7 +9,9 @@ from typing import TypedDict
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
-from ..const import DOMAIN
+from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from ..data import get_entry_data
+from ..models import SlotCode
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 class CodeSlotData(TypedDict):
     """Type for code slot data."""
 
-    code: int | str
+    code: str
     name: str | None
 
 
@@ -40,12 +42,11 @@ class VirtualLock(BaseLock):
         return False
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Set up lock."""
+        """Set up lock by provider."""
         self._store = Store(
             self.hass, 1, f"{self.domain}_{DOMAIN}_{self.lock.entity_id}"
         )
         await self.async_hard_refresh_codes()
-        await super().async_setup(config_entry)
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
@@ -54,11 +55,11 @@ class VirtualLock(BaseLock):
         else:
             await self._store.async_save(self._data)
 
-    async def async_is_connection_up(self) -> bool:
-        """Return whether connection to lock is up."""
+    async def async_is_integration_connected(self) -> bool:
+        """Return whether the integration is connected."""
         return True
 
-    async def async_hard_refresh_codes(self) -> dict[int, int | str]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """
         Perform hard refresh and return all codes.
 
@@ -69,7 +70,7 @@ class VirtualLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: int | str, name: str | None = None
+        self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -95,9 +96,19 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
-    async def async_get_usercodes(self) -> dict[int, int | str]:
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
-        return {
-            int(slot_num): code_slot["code"]
-            for slot_num, code_slot in self._data.items()
+        code_slots = {
+            int(code_slot)
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            for code_slot in get_entry_data(entry, CONF_SLOTS, {})
+            if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
+        data: dict[int, str | SlotCode] = {}
+        for slot_num in code_slots:
+            slot_key = str(slot_num)
+            if slot_key in self._data:
+                data[slot_num] = str(self._data[slot_key]["code"])
+            else:
+                data[slot_num] = SlotCode.EMPTY
+        return data
