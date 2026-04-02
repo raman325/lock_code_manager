@@ -385,7 +385,14 @@ class SlotSyncManager:
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
-        if not self._started or not self._dirty:
+        if not self._started:
+            return
+
+        # Try upgrading before the dirty check — catch-all mode may prevent
+        # dirty from being set for entities not yet in _tracked_entity_ids
+        self._try_upgrade_state_tracking()
+
+        if not self._dirty:
             return
 
         self._dirty = False
@@ -393,7 +400,6 @@ class SlotSyncManager:
 
     async def _async_tick_impl(self) -> None:
         """Core tick logic — called from _async_tick after dirty check."""
-        self._try_upgrade_state_tracking()
         slot_state = self._resolve_slot_state()
         if slot_state is None:
             # State resolution failed — retry on next tick. We always retry
