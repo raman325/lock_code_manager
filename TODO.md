@@ -82,31 +82,9 @@ improves type safety, IDE autocompletion, and code readability.
 **Why not Voluptuous?** Voluptuous is for validation, not object instantiation.
 Other options like `dacite` or Pydantic add dependencies.
 
-### SlotCode Enum (in progress)
+### Simplify `expected_codes`
 
-Replace `dict[int, str | None]` coordinator data with `dict[int, str | SlotCode]`
-where `SlotCode.EMPTY` = cleared, `SlotCode.UNKNOWN` = occupied but unreadable.
-Enables Matter support and simplifies masked PIN handling. See design doc:
-`docs/plans/2026-04-02-slot-code-enum-design.md`
-
-### Add Slot Status Enum (deferred, depends on SlotCode)
-
-Z-Wave has `userIdStatus` (Enabled/Available/Disabled), Matter has `UserStatus`
-(Available/OccupiedEnabled/OccupiedDisabled). A slot can be firmware-disabled
-independently of LCM's enabled/disabled state. Currently ignored.
-
-Add a `SlotStatus` enum as a separate concern from `SlotCode` (code value vs
-slot capability). Could be part of a `SlotData` dataclass holding both code
-and status. Investigate:
-
-1. What happens when LCM sets a code on a firmware-disabled slot
-2. Whether the lock needs explicit slot enable before setting a code
-3. Per-lock-brand differences in disabled slot behavior
-
-### Simplify `expected_codes` (deferred, depends on SlotCode)
-
-After the SlotCode enum is implemented, `coordinator.expected_codes` is only
-used by:
+`coordinator.expected_codes` is only used by:
 
 1. The code sensor — to resolve `SlotCode.UNKNOWN` → configured PIN for display
 2. `_slot_expects_pin` in zwave_js.py — to filter stale Z-Wave events
@@ -114,7 +92,7 @@ used by:
 Consider moving the resolution to the sensor layer and simplifying or removing
 `expected_codes` from the coordinator.
 
-### Rewrite Matter Provider (depends on SlotCode)
+### Rewrite Matter Provider
 
 Rewrite PR #741 using the `SlotCode.UNKNOWN` model. The Matter provider:
 
@@ -122,9 +100,11 @@ Rewrite PR #741 using the `SlotCode.UNKNOWN` model. The Matter provider:
 - Returns `SlotCode.EMPTY` for cleared slots
 - Handles user/credential mapping internally (SetUser + SetCredential)
 - Uses HA's `matter.set_lock_credential` / `matter.clear_lock_credential` services
-- No `_resolve_pin_if_masked` — sync handles `UNKNOWN` natively
+- Sync handles `UNKNOWN` natively (no special resolution needed)
 
-See Matter DoorLock cluster research in design doc.
+HA core Matter lock services: `set_lock_user`, `clear_lock_user`,
+`set_lock_credential`, `clear_lock_credential`, `get_lock_users`,
+`get_lock_credential_status`, `get_lock_info`.
 
 ### Add Optional Flags to `get_config_entry_data` Websocket Command
 
