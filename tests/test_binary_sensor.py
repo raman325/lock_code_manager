@@ -988,9 +988,11 @@ async def test_sync_tracker_resets_when_back_in_sync(
     await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
-    # Slot should be back in sync after the sync operation
+    # Slot should be back in sync after the sync operation, and the
+    # tracker should not be at the circuit breaker threshold
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
+    assert not in_sync_entity_obj._sync_manager._sync_attempts_exceeded()
 
 
 async def test_sync_tracker_expired_window_resets(
@@ -1114,3 +1116,18 @@ async def test_unexpected_error_during_sync_disables_slot(
 
         # Verify that the slot was disabled (in_sync set to False due to error)
         assert in_sync_entity_obj._sync_manager._in_sync is False
+
+
+async def test_sync_manager_handles_string_slot_num(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Regression test: slot_num from config entry is a string, coordinator keys are int."""
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    manager = in_sync_entity_obj._sync_manager
+
+    # Config entry stores slot numbers as strings (JSON keys), but
+    # coordinator.data uses int keys. The sync manager must cast to int.
+    assert isinstance(manager._slot_num, int)
+    assert manager._slot_num in manager._coordinator.data
