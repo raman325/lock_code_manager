@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ba482cf485d6",
+  "strategy": "manual-commit",
+  "branch": "fix/unknown-pin-change-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/482cf485d6/0/metadata.json",
+      "transcript": "/ba/482cf485d6/0/full.jsonl",
+      "content_hash": "/ba/482cf485d6/0/content_hash.txt",
+      "prompt": "/ba/482cf485d6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4465,
+    "cache_creation_tokens": 8915541,
+    "cache_read_tokens": 853699152,
+    "output_tokens": 482453,
+    "api_call_count": 1940
+  }
+}

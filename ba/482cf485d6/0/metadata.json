@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ba482cf485d6",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-02T19:00:31.922859Z",
+  "branch": "fix/unknown-pin-change-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "d41ee58df709",
+  "token_usage": {
+    "input_tokens": 4465,
+    "cache_creation_tokens": 8915541,
+    "cache_read_tokens": 853699152,
+    "output_tokens": 482453,
+    "api_call_count": 1940
+  },
+  "session_metrics": {
+    "turn_count": 89
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-02T19:00:25.52437Z",
+    "agent_lines": 0,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 0
+  }
+}
