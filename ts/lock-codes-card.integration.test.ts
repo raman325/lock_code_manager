@@ -240,4 +240,95 @@ describe('LockCodesCard integration', () => {
             expect(el._error).toBeUndefined();
         });
     });
+
+    describe('SlotCode sentinel handling', () => {
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
+        it('_hasCode returns false for "empty" sentinel', () => {
+            expect((card as any)._hasCode({ slot: 1, code: 'empty' })).toBe(false);
+        });
+
+        it('_hasCode returns true for "unknown" sentinel', () => {
+            expect((card as any)._hasCode({ slot: 1, code: 'unknown' })).toBe(true);
+        });
+
+        it('_hasCode returns true for code_length with null code', () => {
+            expect((card as any)._hasCode({ slot: 1, code: null, code_length: 4 })).toBe(true);
+        });
+
+        it('_getCodeClass returns "no-code" for "empty" sentinel', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
+        });
+
+        it('_getCodeClass returns "masked" for "unknown" sentinel', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: 'unknown' })).toBe('masked');
+        });
+
+        it('_formatCode returns dash for "empty" sentinel', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'empty' })).toBe('—');
+        });
+
+        it('_formatCode returns spaced bullets for "unknown" sentinel', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'unknown' })).toBe('• • •');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+
+        it('stores "empty" and "unknown" codes in _data', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            const card2 = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            card2.setConfig({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            card2.hass = hass;
+            container.appendChild(card2);
+            await flush();
+
+            capturedCallback!(
+                makeLockCoordinatorData({
+                    slots: [
+                        {
+                            slot: 1,
+                            code: '1234',
+                            managed: true,
+                            enabled: true,
+                            active: true,
+                            name: 'Active'
+                        },
+                        {
+                            slot: 2,
+                            code: 'unknown',
+                            managed: true,
+                            enabled: true,
+                            active: true,
+                            name: 'Masked'
+                        },
+                        { slot: 3, code: 'empty', managed: false }
+                    ]
+                })
+            );
+
+            expect(card2._data?.slots[0].code).toBe('1234');
+            expect(card2._data?.slots[1].code).toBe('unknown');
+            expect(card2._data?.slots[2].code).toBe('empty');
+        });
+    });
 });
