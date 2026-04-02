@@ -1,0 +1,15 @@
+coverage:
+  status:
+    patch:
+      default:
+        target: 90%
+      python:
+        target: 90%
+        flags:
+          - python
+      typescript:
+        # Lit component render methods can't be exercised in jsdom;
+        # unit/integration tests cover logic methods but not templates
+        target: 50%
+        flags:
+          - typescript
