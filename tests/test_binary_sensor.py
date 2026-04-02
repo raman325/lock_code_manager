@@ -687,11 +687,12 @@ async def test_coordinator_update_triggers_sync_on_external_change(
     lock (or the lock reports a different code), and the integration should
     automatically sync to restore the configured code.
 
-    Before the fix: coordinator updates only called async_write_ha_state(),
-    which updated the display but didn't trigger sync operations.
+    With the tick-based design:
+    1. Coordinator updates trigger _mark_dirty() via the coordinator listener
+    2. The next periodic tick performs reconciliation and syncs if needed
 
-    After the fix: _handle_coordinator_update() triggers _async_update_state()
-    which performs sync operations when out of sync.
+    This test verifies that the dirty flag is set on coordinator updates and
+    the subsequent tick detects the mismatch and performs the sync operation.
     """
     # Use config without calendar so both slots are active
     config = {
@@ -1051,3 +1052,77 @@ async def test_clear_operation_does_not_increment_tracker(
 
     # Clear operation should NOT have incremented the tracker
     assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0
+
+
+async def test_invalid_active_state_during_initial_load(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that invalid active state during initial load triggers warning after threshold."""
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    # Reset to simulate pre-initial-load state
+    in_sync_entity_obj._sync_manager._in_sync = None
+    in_sync_entity_obj._sync_manager._invalid_state_count = 0
+
+    # Set active entity to an invalid state (not ON, OFF, or UNAVAILABLE)
+    hass.states.async_set(SLOT_1_ACTIVE_ENTITY, "unknown_invalid_state")
+    await hass.async_block_till_done()
+
+    # Trigger multiple ticks to exceed MAX_SYNC_ATTEMPTS threshold
+    for _ in range(MAX_SYNC_ATTEMPTS + 1):
+        in_sync_entity_obj._sync_manager._dirty = True
+        await in_sync_entity_obj._sync_manager._async_tick()
+        await hass.async_block_till_done()
+
+    # Verify that invalid_state_count was incremented
+    assert in_sync_entity_obj._sync_manager._invalid_state_count > MAX_SYNC_ATTEMPTS
+
+    # Verify that initial state is still not loaded due to invalid state
+    assert in_sync_entity_obj._sync_manager._in_sync is None
+
+
+async def test_unexpected_error_during_sync_disables_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that unexpected errors during sync operation disable the slot."""
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+
+    # Reset to simulate out-of-sync state
+    in_sync_entity_obj._sync_manager._in_sync = True
+
+    # Mock _perform_sync to raise an unexpected exception
+    original_perform_sync = in_sync_entity_obj._sync_manager._perform_sync
+
+    async def mock_perform_sync_unexpected_error(*args, **kwargs):
+        # Raise a generic exception (not CodeRejectedError or LockDisconnected)
+        raise ValueError("Unexpected programming error")
+
+    in_sync_entity_obj._sync_manager._perform_sync = mock_perform_sync_unexpected_error
+
+    # Change PIN to trigger sync cycle
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "9999"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    await _async_force_sync_cycle(hass, coordinator)
+
+    # Trigger tick to attempt sync (which will fail with unexpected error)
+    in_sync_entity_obj._sync_manager._dirty = True
+    await in_sync_entity_obj._sync_manager._async_tick()
+    await hass.async_block_till_done()
+
+    # Verify that the slot was disabled (in_sync set to False due to error)
+    assert in_sync_entity_obj._sync_manager._in_sync is False
+
+    # Restore original method
+    in_sync_entity_obj._sync_manager._perform_sync = original_perform_sync
