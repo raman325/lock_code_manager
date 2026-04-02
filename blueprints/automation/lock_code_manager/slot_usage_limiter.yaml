@@ -42,6 +42,14 @@ blueprint:
       selector:
         config_entry:
           integration: lock_code_manager
+    slot_number:
+      name: Code slot number
+      description: The Lock Code Manager code slot number.
+      selector:
+        number:
+          min: 1
+          max: 999
+          mode: box
     pin_used_entity:
       name: PIN used event entity
       description: >
@@ -110,7 +118,7 @@ variables:
   _config_entry: !input config_entry
   _config_entry_title: >
     {{ config_entry_attr(_config_entry, 'title') }}
-  _enabled_switch: !input enabled_switch
+  _slot_number: !input slot_number
 
 actions:
   - choose:
@@ -152,9 +160,8 @@ actions:
                     data:
                       title: "{{ _config_entry_title }} — Usage Limit Reached"
                       message: >
-                        {{ state_attr(_enabled_switch, 'friendly_name')
-                           | default(_enabled_switch) }}
-                        has been disabled after reaching the usage limit
+                        Code slot {{ _slot_number }} has been disabled after
+                        reaching the usage limit
                         ({{ now().strftime('%Y-%m-%d %H:%M:%S') }}).
       - conditions:
           - condition: trigger
