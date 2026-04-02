@@ -658,3 +658,31 @@ async def test_lovelace_not_updated_on_non_structural_change(
     await hass.async_block_till_done()
 
     assert len(events) == 0
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_unload_fires_lock_removed_callbacks(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that unloading an entry fires lock-removed callbacks for each lock.
+
+    Before the symmetric-unload refactor, async_unload_entry bypassed
+    the update listener path, so lock-removed callbacks never fired.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    callbacks = runtime_data.callbacks
+
+    removed_locks: list[str] = []
+    callbacks.register_lock_removed_handler(removed_locks.append)
+
+    # Verify locks are present before unload
+    assert set(runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Both locks should have had their removed callbacks fired
+    assert set(removed_locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
