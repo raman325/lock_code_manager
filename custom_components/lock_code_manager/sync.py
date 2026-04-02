@@ -376,6 +376,8 @@ class SlotSyncManager:
         self._dirty = False
 
         async with self._tick_lock:
+            if not self._started:
+                return
             await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:

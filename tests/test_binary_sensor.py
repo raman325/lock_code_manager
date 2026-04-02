@@ -1059,7 +1059,7 @@ async def test_invalid_active_state_during_initial_load(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that invalid active state during initial load triggers warning after threshold."""
+    """Test that invalid active state during initial load is tracked and prevents initial sync."""
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Reset to simulate pre-initial-load state
