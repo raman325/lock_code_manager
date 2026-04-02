@@ -3,12 +3,16 @@
 LockCodeManagerActiveEntity: PIN active status (enabled + conditions met).
 LockCodeManagerCodeSlotInSyncEntity: Per-lock sync status — thin observer
     that delegates all sync logic to SlotSyncManager.
+
+Sync logic (state comparison, set/clear operations, circuit breaking) is
+implemented in SlotSyncManager (sync.py) to separate domain logic from
+entity state display.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -44,7 +48,6 @@ from .providers import BaseLock
 from .sync import SlotSyncManager
 
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(seconds=30)
 
 
 async def async_setup_entry(
@@ -271,29 +274,11 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
 
     @property
-    def should_poll(self) -> bool:
-        """Return whether entity should poll."""
-        return True
-
-    @property
     def available(self) -> bool:
         """Return whether binary sensor is available or not."""
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
             int(self.slot_num) in self.coordinator.data
         )
-
-    async def async_update(self) -> None:
-        """Poll-driven sync check."""
-        await self._sync_manager._async_poll_sync()
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator.
-
-        The sync manager has its own coordinator listener, but we still need
-        the CoordinatorEntity base class to update availability.
-        """
-        super()._handle_coordinator_update()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
