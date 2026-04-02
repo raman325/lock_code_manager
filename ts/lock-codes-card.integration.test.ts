@@ -284,6 +284,24 @@ describe('LockCodesCard integration', () => {
         it('_formatCode returns spaced bullets for "unknown" sentinel', () => {
             expect((card as any)._formatCode({ slot: 1, code: 'unknown' })).toBe('• • •');
         });
+        it('_startEditing clears edit value for "empty" sentinel', () => {
+            const mockEvent = { stopPropagation: () => {} };
+            (card as any)._startEditing(mockEvent, { slot: 1, code: 'empty' });
+            expect((card as any)._editValue).toBe('');
+            expect((card as any)._editingSlot).toBe(1);
+        });
+
+        it('_startEditing clears edit value for "unknown" sentinel', () => {
+            const mockEvent = { stopPropagation: () => {} };
+            (card as any)._startEditing(mockEvent, { slot: 2, code: 'unknown' });
+            expect((card as any)._editValue).toBe('');
+        });
+
+        it('_startEditing prefills edit value for regular code', () => {
+            const mockEvent = { stopPropagation: () => {} };
+            (card as any)._startEditing(mockEvent, { slot: 3, code: '9876' });
+            expect((card as any)._editValue).toBe('9876');
+        });
         /* eslint-enable @typescript-eslint/no-explicit-any */
 
         it('stores "empty" and "unknown" codes in _data', async () => {
