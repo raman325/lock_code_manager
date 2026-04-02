@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ab5ec8cea065",
+  "strategy": "manual-commit",
+  "branch": "fix/sync-always-retry-on-resolve-failure",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_binary_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ab/5ec8cea065/0/metadata.json",
+      "transcript": "/ab/5ec8cea065/0/full.jsonl",
+      "content_hash": "/ab/5ec8cea065/0/content_hash.txt",
+      "prompt": "/ab/5ec8cea065/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3428,
+    "cache_creation_tokens": 6926212,
+    "cache_read_tokens": 628694877,
+    "output_tokens": 326498,
+    "api_call_count": 1264
+  }
+}
