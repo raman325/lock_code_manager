@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "95578daef8b2",
+  "strategy": "manual-commit",
+  "branch": "refactor/move-websocket-models",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/models.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/578daef8b2/0/metadata.json",
+      "transcript": "/95/578daef8b2/0/full.jsonl",
+      "content_hash": "/95/578daef8b2/0/content_hash.txt",
+      "prompt": "/95/578daef8b2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4309,
+    "cache_creation_tokens": 8452256,
+    "cache_read_tokens": 811739798,
+    "output_tokens": 450618,
+    "api_call_count": 1823
+  }
+}
