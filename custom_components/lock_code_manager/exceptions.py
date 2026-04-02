@@ -76,15 +76,7 @@ class ProviderNotImplementedError(LockCodeManagerError, NotImplementedError):
     """
 
     def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
-        """
-        Initialize the error.
-
-        Args:
-            provider: The provider instance (self).
-            method_name: Name of the method that needs to be implemented.
-            guidance: Optional guidance on how to implement the method.
-
-        """
+        """Initialize the error."""
         message = f"{provider.__class__.__name__} does not implement {method_name}()."
         if guidance:
             message = f"{message} {guidance}"

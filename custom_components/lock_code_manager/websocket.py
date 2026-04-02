@@ -153,17 +153,7 @@ def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
 def _get_last_changed(
     hass: HomeAssistant, entity_id: str | None, require_valid_state: bool = False
 ) -> str | None:
-    """
-    Get last_changed timestamp as ISO string.
-
-    Args:
-        hass: Home Assistant instance.
-        entity_id: Entity ID to get last_changed from.
-        require_valid_state: If True, only return timestamp if state is not
-            unknown/unavailable. Useful for event entities where last_changed
-            only matters if the event has actually fired.
-
-    """
+    """Get last_changed timestamp as ISO string."""
     if not entity_id:
         return None
     if state := hass.states.get(entity_id):
