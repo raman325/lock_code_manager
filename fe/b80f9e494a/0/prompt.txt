@@ -3,3 +3,15 @@ ok now create a new branch off main that deprecates CONF_NUMBER_OF_USES. We do a
 ---
 
 persistent notification and remove
+
+---
+
+did we already get rid of CONF_CALENDAR?
+
+---
+
+too bad there's no clean migration for number ofu ses
+
+---
+
+check review comments
