@@ -393,9 +393,35 @@ async def async_unload_lock(
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
-    """Handle removal of an entry."""
+    """Handle removal of an entry.
+
+    Routes through the same lock-removed and slot-removed callbacks that
+    async_update_listener uses, so that entities are notified symmetrically
+    on unload just as they are during a config update that removes all
+    slots and locks.
+    """
     hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
+    callbacks = runtime_data.callbacks
+
+    # Fire slot entity removal callbacks first so per-slot entities (which
+    # reference locks) clean up before the locks are torn down
+    curr_slots = config_entry.data.get(CONF_SLOTS, {})
+    if curr_slots:
+        _LOGGER.debug("Unload: removing slots %s", list(curr_slots))
+        await asyncio.gather(
+            *(
+                callbacks.invoke_entity_removers_for_slot(int(slot_num))
+                for slot_num in curr_slots
+            )
+        )
+
+    # Fire lock-removed callbacks so per-lock entities are notified
+    lock_ids = list(runtime_data.locks)
+    if lock_ids:
+        _LOGGER.debug("Unload: removing locks %s", lock_ids)
+        for lock_entity_id in lock_ids:
+            callbacks.invoke_lock_removed_handlers(lock_entity_id)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry,
@@ -597,11 +623,25 @@ async def async_update_listener(
 
     callbacks = runtime_data.callbacks
 
-    # Remove old lock entities (slot sensors)
-    for lock_entity_id in locks_to_remove:
+    # Remove slot entities first so per-slot entities (which reference locks)
+    # clean up before the locks are torn down
+    if slots_to_remove:
         _LOGGER.debug(
-            "%s (%s): Removing lock %s entities", entry_id, entry_title, lock_entity_id
+            "%s (%s): Removing slots %s", entry_id, entry_title, list(slots_to_remove)
         )
+        await asyncio.gather(
+            *(
+                callbacks.invoke_entity_removers_for_slot(slot_num)
+                for slot_num in slots_to_remove
+            )
+        )
+
+    # Remove old lock entities
+    if locks_to_remove:
+        _LOGGER.debug(
+            "%s (%s): Removing locks %s", entry_id, entry_title, locks_to_remove
+        )
+    for lock_entity_id in locks_to_remove:
         callbacks.invoke_lock_removed_handlers(lock_entity_id)
         lock: BaseLock = hass.data[DOMAIN][CONF_LOCKS][lock_entity_id]
         if lock.device_entry:
@@ -619,13 +659,6 @@ async def async_update_listener(
         await _async_setup_new_locks(
             hass, config_entry, locks_to_add, new_slots, callbacks, ent_reg
         )
-
-    # Remove slot sensors that are no longer in the config
-    for slot_num in slots_to_remove.keys():
-        _LOGGER.debug(
-            "%s (%s): Removing slot %s sensors", entry_id, entry_title, slot_num
-        )
-        await callbacks.invoke_entity_removers_for_slot(slot_num)
 
     # For each new slot, add standard entities and configuration entities. We also
     # add slot sensors for existing locks only since new locks were already set up
