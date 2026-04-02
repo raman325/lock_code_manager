@@ -130,8 +130,7 @@ async def async_migrate_entry(
                 new_slots = {}
                 for slot_num, slot_config in data_dict[CONF_SLOTS].items():
                     new_slot = {**slot_config}
-                    if "number_of_uses" in new_slot:
-                        new_slot.pop("number_of_uses")
+                    if new_slot.pop("number_of_uses", None):
                         any_removed = True
                     new_slots[slot_num] = new_slot
                 data_dict[CONF_SLOTS] = new_slots
