@@ -64,6 +64,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntityData,
@@ -77,6 +78,7 @@ from custom_components.lock_code_manager.websocket import (
     _get_slot_entity_data,
     _get_slot_state_entity_ids,
     _get_text_state,
+    _serialize_slot,
 )
 
 from .common import (
@@ -2915,3 +2917,63 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
     # With empty unsub_state_ref, the guard should prevent an IndexError.
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
+
+
+# =============================================================================
+# _serialize_slot SlotCode tests
+# =============================================================================
+
+
+class TestSerializeSlotWithSlotCode:
+    """Test _serialize_slot handles SlotCode sentinels correctly."""
+
+    def test_empty_code_serializes_as_none(self) -> None:
+        """SlotCode.EMPTY should serialize code as None with no code_length."""
+        result = _serialize_slot(1, SlotCode.EMPTY, reveal=False)
+        assert result[ATTR_CODE] is None
+        assert ATTR_CODE_LENGTH not in result
+
+    def test_empty_code_revealed_serializes_as_none(self) -> None:
+        """SlotCode.EMPTY with reveal=True should still be None."""
+        result = _serialize_slot(1, SlotCode.EMPTY, reveal=True)
+        assert result[ATTR_CODE] is None
+
+    def test_unknown_code_serializes_with_has_code(self) -> None:
+        """SlotCode.UNKNOWN should set has_code=True and code=None."""
+        result = _serialize_slot(1, SlotCode.UNKNOWN, reveal=False)
+        assert result[ATTR_CODE] is None
+        assert result["has_code"] is True
+        assert ATTR_CODE_LENGTH not in result
+
+    def test_unknown_code_includes_configured_code_when_revealed(self) -> None:
+        """SlotCode.UNKNOWN with configured_code and reveal should include it."""
+        result = _serialize_slot(
+            1, SlotCode.UNKNOWN, reveal=True, configured_code="1234"
+        )
+        assert result[ATTR_CODE] is None
+        assert result["has_code"] is True
+        assert result["configured_code"] == "1234"
+
+    def test_unknown_code_includes_configured_code_length_when_masked(self) -> None:
+        """SlotCode.UNKNOWN without reveal should include configured_code_length."""
+        result = _serialize_slot(
+            1, SlotCode.UNKNOWN, reveal=False, configured_code="1234"
+        )
+        assert result[ATTR_CODE] is None
+        assert result["configured_code_length"] == 4
+
+    def test_regular_code_revealed(self) -> None:
+        """Regular string code with reveal=True should include the code."""
+        result = _serialize_slot(1, "1234", reveal=True)
+        assert result[ATTR_CODE] == "1234"
+
+    def test_regular_code_masked(self) -> None:
+        """Regular string code with reveal=False should include code_length."""
+        result = _serialize_slot(1, "1234", reveal=False)
+        assert result[ATTR_CODE] is None
+        assert result[ATTR_CODE_LENGTH] == 4
+
+    def test_none_code(self) -> None:
+        """None code should serialize as code=None."""
+        result = _serialize_slot(1, None, reveal=False)
+        assert result[ATTR_CODE] is None
