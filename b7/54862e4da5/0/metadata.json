@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "b754862e4da5",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-02T16:31:08.567566Z",
+  "branch": "refactor/simplify-expected-codes",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "TODO.md",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/sensor.py",
+    "tests/test_sensor.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "04c1b24d7dd5",
+  "token_usage": {
+    "input_tokens": 4283,
+    "cache_creation_tokens": 8434169,
+    "cache_read_tokens": 804532945,
+    "output_tokens": 445921,
+    "api_call_count": 1799
+  },
+  "session_metrics": {
+    "turn_count": 74
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-02T16:31:02.981307Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 19,
+    "human_removed": 4,
+    "total_committed": 3,
+    "agent_percentage": 0
+  }
+}
