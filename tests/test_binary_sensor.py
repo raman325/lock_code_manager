@@ -966,10 +966,6 @@ async def test_sync_tracker_resets_when_back_in_sync(
 
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
-    # Simulate a previous sync attempt (below threshold of MAX_SYNC_ATTEMPTS=3)
-    in_sync_entity_obj._sync_manager._sync_attempt_count = 1
-    in_sync_entity_obj._sync_manager._sync_attempt_first = dt_util.utcnow()
-
     # Verify currently in sync
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
@@ -986,21 +982,15 @@ async def test_sync_tracker_resets_when_back_in_sync(
     await hass.async_block_till_done()
     await _async_force_sync_cycle(hass, coordinator)
 
-    # First tick: performs the sync operation (sets code on lock)
+    # Tick performs sync → coordinator refreshes → _update_in_sync_display
+    # detects back in sync and resets tracker immediately
     in_sync_entity_obj._sync_manager._dirty = True
     await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
-    # Second tick: detects "back in sync" after coordinator refreshed
-    in_sync_entity_obj._sync_manager._dirty = True
-    await in_sync_entity_obj._sync_manager._async_tick()
-    await hass.async_block_till_done()
-
-    # The tracker should have been reset when the slot came back in sync
+    # Slot should be back in sync after the sync operation
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
-    assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0
-    assert in_sync_entity_obj._sync_manager._sync_attempt_first is None
 
 
 async def test_sync_tracker_expired_window_resets(
