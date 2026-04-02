@@ -563,18 +563,6 @@ async def _async_setup_new_locks(
         callbacks.invoke_lock_added_handlers(added_locks)
 
 
-async def _async_reconcile_slot_entities(
-    config_entry: LockCodeManagerConfigEntry,
-    slot_num: int,
-    old_config: dict[str, Any],
-    new_config: dict[str, Any],
-    callbacks: Any,
-    ent_reg: er.EntityRegistry,
-) -> None:
-    """Reconcile entities for a slot whose configuration has changed."""
-    # Currently a no-op; retained for future per-slot entity reconciliation needs
-
-
 async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
@@ -706,18 +694,6 @@ async def async_update_listener(
                 slot_num,
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-
-    # For all slots that are in both the old and new config, check if any of the
-    # configuration options have changed
-    for slot_num in set(curr_slots).intersection(new_slots):
-        await _async_reconcile_slot_entities(
-            config_entry,
-            slot_num,
-            curr_slots[slot_num],
-            new_slots[slot_num],
-            callbacks,
-            ent_reg,
-        )
 
     # Existing entities will listen to updates and act on it
     new_data = {CONF_LOCKS: new_locks, CONF_SLOTS: new_slots}

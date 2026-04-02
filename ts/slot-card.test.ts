@@ -474,32 +474,6 @@ describe('LockCodeManagerSlotCard logic', () => {
         });
     });
 
-    describe('condition counting', () => {
-        function countConditions(conditions: { number_of_uses?: number }): number {
-            let count = 0;
-            if (conditions.number_of_uses !== undefined && conditions.number_of_uses !== null) {
-                count += 1;
-            }
-            return count;
-        }
-
-        it('returns 0 when no conditions', () => {
-            expect(countConditions({})).toBe(0);
-        });
-
-        it('returns 1 when number_of_uses is set', () => {
-            expect(countConditions({ number_of_uses: 5 })).toBe(1);
-        });
-
-        it('returns 1 when number_of_uses is 0', () => {
-            expect(countConditions({ number_of_uses: 0 })).toBe(1);
-        });
-
-        it('returns 0 when number_of_uses is undefined', () => {
-            expect(countConditions({ number_of_uses: undefined })).toBe(0);
-        });
-    });
-
     describe('SlotCardData transformation', () => {
         function transformLocks(
             locks: SlotCardData['locks']

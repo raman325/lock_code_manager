@@ -4,10 +4,9 @@ export const ACTIVE_KEY = 'active';
 export const IN_SYNC_KEY = 'in_sync';
 
 // Condition keys
-export const CONDITION_NUMBER_OF_USES = 'number_of_uses';
 export const CONDITION_CALENDAR = 'calendar';
 export const CONDITION_ENTITY = 'condition_entity';
-export const CONDITION_KEYS = [CONDITION_NUMBER_OF_USES, CONDITION_CALENDAR, CONDITION_ENTITY];
+export const CONDITION_KEYS = [CONDITION_CALENDAR, CONDITION_ENTITY];
 
 // Supported condition entity domains
 export const CONDITION_ENTITY_DOMAINS = [
