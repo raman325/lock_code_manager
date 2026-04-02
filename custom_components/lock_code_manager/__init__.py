@@ -407,16 +407,21 @@ async def async_unload_entry(
     # Fire slot entity removal callbacks first so per-slot entities (which
     # reference locks) clean up before the locks are torn down
     curr_slots = config_entry.data.get(CONF_SLOTS, {})
-    await asyncio.gather(
-        *(
-            callbacks.invoke_entity_removers_for_slot(slot_num)
-            for slot_num in curr_slots
+    if curr_slots:
+        _LOGGER.debug("Unload: removing slots %s", list(curr_slots))
+        await asyncio.gather(
+            *(
+                callbacks.invoke_entity_removers_for_slot(slot_num)
+                for slot_num in curr_slots
+            )
         )
-    )
 
     # Fire lock-removed callbacks so per-lock entities are notified
-    for lock_entity_id in list(runtime_data.locks):
-        callbacks.invoke_lock_removed_handlers(lock_entity_id)
+    lock_ids = list(runtime_data.locks)
+    if lock_ids:
+        _LOGGER.debug("Unload: removing locks %s", lock_ids)
+        for lock_entity_id in lock_ids:
+            callbacks.invoke_lock_removed_handlers(lock_entity_id)
 
     unload_ok = await hass.config_entries.async_unload_platforms(
         config_entry,
@@ -620,18 +625,23 @@ async def async_update_listener(
 
     # Remove slot entities first so per-slot entities (which reference locks)
     # clean up before the locks are torn down
-    await asyncio.gather(
-        *(
-            callbacks.invoke_entity_removers_for_slot(slot_num)
-            for slot_num in slots_to_remove
+    if slots_to_remove:
+        _LOGGER.debug(
+            "%s (%s): Removing slots %s", entry_id, entry_title, list(slots_to_remove)
         )
-    )
+        await asyncio.gather(
+            *(
+                callbacks.invoke_entity_removers_for_slot(slot_num)
+                for slot_num in slots_to_remove
+            )
+        )
 
     # Remove old lock entities
-    for lock_entity_id in locks_to_remove:
+    if locks_to_remove:
         _LOGGER.debug(
-            "%s (%s): Removing lock %s entities", entry_id, entry_title, lock_entity_id
+            "%s (%s): Removing locks %s", entry_id, entry_title, locks_to_remove
         )
+    for lock_entity_id in locks_to_remove:
         callbacks.invoke_lock_removed_handlers(lock_entity_id)
         lock: BaseLock = hass.data[DOMAIN][CONF_LOCKS][lock_entity_id]
         if lock.device_entry:
