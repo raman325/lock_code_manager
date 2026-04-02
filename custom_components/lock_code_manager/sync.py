@@ -206,10 +206,6 @@ class SlotSyncManager:
         if not self._build_entity_id_map():
             return None
 
-        # NOTE: We intentionally don't upgrade from catch-all to targeted tracking
-        # here. Modifying subscriptions from within a state change callback causes
-        # timing issues. The catch-all has early-return guards that skip irrelevant
-        # entities, so the performance impact is minimal.
         if self._slot_num not in self._coordinator.data:
             _LOGGER.debug(
                 "%s: Slot not in coordinator data, skipping",
@@ -389,7 +385,14 @@ class SlotSyncManager:
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
-        if not self._started or not self._dirty:
+        if not self._started:
+            return
+
+        # Try upgrading before the dirty check — catch-all mode may prevent
+        # dirty from being set for entities not yet in _tracked_entity_ids
+        self._try_upgrade_state_tracking()
+
+        if not self._dirty:
             return
 
         self._dirty = False
@@ -550,14 +553,37 @@ class SlotSyncManager:
             self._tracking_all_states = False
 
     @callback
+    def _try_upgrade_state_tracking(self) -> None:
+        """Upgrade catch-all state tracking to targeted if entities are now available.
+
+        Called at the start of each tick (outside any callback), so it is safe
+        to modify subscriptions here without timing issues.
+        """
+        if not self._tracking_all_states or not self._build_entity_id_map():
+            return
+
+        assert self._state_tracking_unsub is not None
+        self._state_tracking_unsub()
+        self._state_tracking_unsub = async_track_state_change_event(
+            self._hass,
+            self._tracked_entity_ids,
+            self._mark_dirty,
+        )
+        self._tracking_all_states = False
+        _LOGGER.debug(
+            "%s: Upgraded from catch-all to targeted state tracking",
+            self._log_prefix,
+        )
+
+    @callback
     def _setup_state_tracking(self) -> None:
         """Set up state change tracking for dependent entities.
 
         If all entity IDs are available, tracks only those specific entities.
         Otherwise, tracks all state changes via a catch-all subscription that
         filters by tracked entity IDs in _mark_dirty_if_relevant. The catch-all
-        is not upgraded to targeted tracking later (modifying subscriptions from
-        within a callback causes timing issues).
+        is upgraded to targeted tracking in _try_upgrade_state_tracking(), which
+        runs at the start of each tick (safe because it's outside a callback).
         """
         self._cleanup_state_tracking()
 
