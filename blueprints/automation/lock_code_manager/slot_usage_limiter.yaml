@@ -2,9 +2,10 @@
 blueprint:
   name: "Lock Code Manager: Slot Usage Limiter"
   description: >
-    Decrements an `input_number` helper each time a code slot PIN is used.
-    When the counter reaches 0 the slot is automatically disabled.
-    Optionally resets the counter when the slot is re-enabled.
+    Decrements an `input_number` helper each time a Lock Code Manager code
+    slot PIN is used on the lock. When the counter reaches 0, the Lock Code
+    Manager slot is automatically disabled. Optionally resets the counter
+    when the slot is re-enabled in Lock Code Manager.
 
 
     **Requirements**
@@ -51,7 +52,7 @@ blueprint:
           integration: lock_code_manager
     slot_number:
       name: Code slot number
-      description: The code slot number to monitor.
+      description: The Lock Code Manager code slot number to monitor.
       selector:
         number:
           min: 1
@@ -69,7 +70,8 @@ blueprint:
       name: Initial uses on re-enable
       description: >
         When greater than 0, the counter is automatically reset to this value
-        each time the slot is re-enabled. Set to 0 to disable auto-reset.
+        each time the Lock Code Manager slot is re-enabled. Set to 0 to
+        disable auto-reset.
       default: 0
       selector:
         number:
