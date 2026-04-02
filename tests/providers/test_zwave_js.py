@@ -1043,6 +1043,40 @@ async def test_get_usercodes_masked_pin_returns_unknown(
     await zwave_js_lock.async_unload(False)
 
 
+async def test_get_usercodes_empty_usercode_in_use_skipped(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that in_use=True with empty usercode is skipped (partially populated cache)."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}, "3": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    # Slot 2: in_use=True but empty usercode (cache not populated yet)
+    # Slot 3: normal code
+    slots = [
+        {"code_slot": 2, "usercode": "", "in_use": True},
+        {"code_slot": 3, "usercode": "5678", "in_use": True},
+    ]
+
+    with patch.object(zwave_js_lock, "_get_usercodes_from_cache", return_value=slots):
+        codes = await zwave_js_lock.async_get_usercodes()
+
+        # Slot 2 should be skipped (not in result)
+        assert 2 not in codes
+        # Slot 3 should have its code
+        assert codes[3] == "5678"
+
+    await zwave_js_lock.async_unload(False)
+
+
 async def test_push_update_masked_code_sends_unknown(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -1094,6 +1128,180 @@ async def test_push_update_masked_code_sends_unknown(
         await hass.async_block_till_done()
 
         # Coordinator should receive SlotCode.UNKNOWN for masked codes
+        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.UNKNOWN})
+
+
+async def test_push_update_falsy_value_sends_empty(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that push updates with falsy values send SlotCode.EMPTY."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}
+    zwave_js_lock.coordinator = mock_coordinator
+    zwave_js_lock.subscribe_push_updates()
+
+    # Simulate a value update with empty string (falsy)
+    event = ZwaveEvent(
+        type="value updated",
+        data={
+            "source": "node",
+            "event": "value updated",
+            "nodeId": lock_schlage_be469.node_id,
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": "userCode",
+                "propertyKey": 2,
+                "newValue": "",
+            },
+        },
+    )
+    lock_schlage_be469.receive_event(event)
+    await hass.async_block_till_done()
+
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+
+
+async def test_push_update_all_zeros_not_in_use_sends_empty(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that all-zeros with slot_in_use=False sends SlotCode.EMPTY."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}
+    zwave_js_lock.coordinator = mock_coordinator
+    zwave_js_lock.subscribe_push_updates()
+
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=False):
+        event = ZwaveEvent(
+            type="value updated",
+            data={
+                "source": "node",
+                "event": "value updated",
+                "nodeId": lock_schlage_be469.node_id,
+                "args": {
+                    "commandClass": CommandClass.USER_CODE,
+                    "property": "userCode",
+                    "propertyKey": 2,
+                    "newValue": "0000",
+                },
+            },
+        )
+        lock_schlage_be469.receive_event(event)
+        await hass.async_block_till_done()
+
+        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+
+
+async def test_push_update_duplicate_value_skipped(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that duplicate push updates are silently skipped."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}  # Already has this value
+    zwave_js_lock.coordinator = mock_coordinator
+    zwave_js_lock.subscribe_push_updates()
+
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=True):
+        event = ZwaveEvent(
+            type="value updated",
+            data={
+                "source": "node",
+                "event": "value updated",
+                "nodeId": lock_schlage_be469.node_id,
+                "args": {
+                    "commandClass": CommandClass.USER_CODE,
+                    "property": "userCode",
+                    "propertyKey": 2,
+                    "newValue": "1234",
+                },
+            },
+        )
+        lock_schlage_be469.receive_event(event)
+        await hass.async_block_till_done()
+
+        # push_update should NOT be called (duplicate)
+        mock_coordinator.push_update.assert_not_called()
+
+
+async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """Test that masked codes with slot_in_use=None still send UNKNOWN."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    zwave_js_lock.coordinator = mock_coordinator
+    zwave_js_lock.subscribe_push_updates()
+
+    # slot_in_use returns None (indeterminate) — should still treat masked as UNKNOWN
+    with patch.object(zwave_js_lock, "code_slot_in_use", return_value=None):
+        event = ZwaveEvent(
+            type="value updated",
+            data={
+                "source": "node",
+                "event": "value updated",
+                "nodeId": lock_schlage_be469.node_id,
+                "args": {
+                    "commandClass": CommandClass.USER_CODE,
+                    "property": "userCode",
+                    "propertyKey": 2,
+                    "newValue": "****",
+                },
+            },
+        )
+        lock_schlage_be469.receive_event(event)
+        await hass.async_block_till_done()
+
         mock_coordinator.push_update.assert_called_once_with({2: SlotCode.UNKNOWN})
 
 
