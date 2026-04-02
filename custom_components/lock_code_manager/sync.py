@@ -52,7 +52,7 @@ from .util import async_disable_slot
 
 if TYPE_CHECKING:
     from .coordinator import LockUsercodeUpdateCoordinator
-    from .data import LockCodeManagerConfigEntry
+    from .models import LockCodeManagerConfigEntry
     from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

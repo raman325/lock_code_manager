@@ -12,8 +12,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import EVENT_LOCK_STATE_CHANGED, EVENT_PIN_USED
-from .data import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
+from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

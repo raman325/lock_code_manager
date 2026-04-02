@@ -8,10 +8,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from .models import (  # noqa: F401  # re-exported for backwards compatibility
-    LockCodeManagerConfigEntry,
-    LockCodeManagerConfigEntryData,
-)
 
 
 def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
