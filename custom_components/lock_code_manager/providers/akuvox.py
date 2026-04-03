@@ -19,12 +19,12 @@ from datetime import timedelta
 import re
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
-from ..exceptions import LockDisconnected
+from ..exceptions import LockCodeManagerError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
@@ -51,7 +51,7 @@ _LOCAL_USER_TYPE = "-1"
 def _is_local_user(user: dict[str, Any]) -> bool:
     """Return True if *user* was created locally on the device."""
     source_type = user.get("source_type")
-    if source_type is not None:
+    if source_type:
         return str(source_type) == _LOCAL_SOURCE_TYPE
     # source_type absent -- fall back to user_type (X916 pattern)
     return str(user.get("user_type", "")) == _LOCAL_USER_TYPE
@@ -138,13 +138,19 @@ class AkuvoxLock(BaseLock):
             ) from err
 
         if not isinstance(response, dict):
-            return []
+            raise LockCodeManagerError(
+                f"Malformed list_users response from {entity_id}: "
+                f"expected dict, got {type(response).__name__}"
+            )
 
         # Platform entity services wrap the response per entity_id.
         entity_response = response.get(entity_id, response)
-        if isinstance(entity_response, dict):
-            return entity_response.get("users", [])
-        return []
+        if not isinstance(entity_response, dict):
+            raise LockCodeManagerError(
+                f"Malformed list_users entity response from {entity_id}: "
+                f"expected dict, got {type(entity_response).__name__}"
+            )
+        return entity_response.get("users", [])
 
     async def _async_add_user(self, name: str, pin: str) -> None:
         """Add a new user with the given name and PIN."""
@@ -222,6 +228,89 @@ class AkuvoxLock(BaseLock):
         }
 
     # ------------------------------------------------------------------
+    # Setup and refresh
+    # ------------------------------------------------------------------
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Set up lock by tagging any pre-existing unmanaged users."""
+        await super().async_setup(config_entry)
+        await self._async_tag_unmanaged_users()
+
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+        """Re-tag unmanaged users, then return all codes."""
+        await self._async_tag_unmanaged_users()
+        return await self.async_get_usercodes()
+
+    # ------------------------------------------------------------------
+    # Auto-tagging
+    # ------------------------------------------------------------------
+
+    async def _async_tag_unmanaged_users(self) -> None:
+        """Discover untagged local users and tag them with a slot number.
+
+        Untagged local users that have a PIN are assigned to the next
+        available managed slot and their names are updated on the device
+        to include the ``[LCM:<slot>]`` tag via ``modify_user``.
+        """
+        managed_slots = self._get_managed_slots()
+        if not managed_slots:
+            return
+
+        users = await self._async_list_users()
+
+        assigned_slots: set[int] = set()
+        # (device_user_id, pin, original_name) for untagged users needing assignment
+        untagged: list[tuple[str, str, str]] = []
+
+        for user in users:
+            if not _is_local_user(user):
+                continue
+            name = user.get("name", "")
+            pin = user.get("private_pin", "")
+            device_id = str(user.get("id", ""))
+            slot_num, _ = _parse_tag(name)
+
+            if slot_num is not None:
+                assigned_slots.add(slot_num)
+            elif pin:
+                untagged.append((device_id, pin, name))
+
+        available = sorted(managed_slots - assigned_slots)
+        avail_iter = iter(available)
+        for device_id, _pin, original_name in untagged:
+            slot_num = next(avail_iter, None)
+            if slot_num is None:
+                LOGGER.debug(
+                    "Lock %s: no managed slot available for untagged user '%s'; "
+                    "leaving untouched",
+                    self.lock.entity_id,
+                    original_name,
+                )
+                break
+
+            tagged_name = _make_tagged_name(slot_num, original_name)
+            try:
+                await self._async_modify_user(device_id, name=tagged_name)
+            except LockDisconnected:
+                LOGGER.error(
+                    "Lock %s: failed to tag user '%s' for slot %d",
+                    self.lock.entity_id,
+                    original_name,
+                    slot_num,
+                )
+                continue
+
+            assigned_slots.add(slot_num)
+            LOGGER.debug(
+                "Lock %s: tagged user '%s' (id=%s) as slot %d: '%s'",
+                self.lock.entity_id,
+                original_name,
+                device_id,
+                slot_num,
+                tagged_name,
+            )
+
+    # ------------------------------------------------------------------
     # Code slot operations
     # ------------------------------------------------------------------
 
@@ -229,9 +318,9 @@ class AkuvoxLock(BaseLock):
         """Get dictionary of code slots and usercodes.
 
         Users already bearing a ``[LCM:<slot>]`` tag in their name are
-        mapped to the embedded slot number. Untagged local users that have a
-        PIN are assigned to the next available slot and their names are
-        updated on the device to include the tag (via ``modify_user``).
+        mapped to the embedded slot number. Only reads and classifies;
+        auto-tagging of unmanaged users is handled separately by
+        ``_async_tag_unmanaged_users()``.
 
         Only codes whose slot numbers fall within the managed set are returned.
         """
@@ -246,63 +335,15 @@ class AkuvoxLock(BaseLock):
             slot: SlotCode.EMPTY for slot in managed_slots
         }
 
-        assigned_slots: set[int] = set()
-        # (device_user_id, pin, original_name) for untagged users needing assignment
-        untagged: list[tuple[str, str, str]] = []
-
         for user in users:
-            # Skip cloud-provisioned users -- we can only manage local ones
             if not _is_local_user(user):
                 continue
             name = user.get("name", "")
             pin = user.get("private_pin", "")
-            device_id = str(user.get("id", ""))
-            slot_num, friendly_name = _parse_tag(name)
+            slot_num, _ = _parse_tag(name)
 
-            if slot_num is not None:
-                assigned_slots.add(slot_num)
-                if slot_num in managed_slots:
-                    result[slot_num] = pin if pin else SlotCode.EMPTY
-            elif pin:
-                # Only track untagged users that have a PIN set
-                untagged.append((device_id, pin, name))
-
-        # Assign virtual slots to untagged users and tag them on the device
-        available = sorted(managed_slots - assigned_slots)
-        avail_iter = iter(available)
-        for device_id, pin, original_name in untagged:
-            slot_num = next(avail_iter, None)
-            if slot_num is None:
-                LOGGER.debug(
-                    "Lock %s: no managed slot available for untagged user '%s'; "
-                    "leaving untouched",
-                    self.lock.entity_id,
-                    original_name,
-                )
-                break
-
-            assigned_slots.add(slot_num)
-            tagged_name = _make_tagged_name(slot_num, original_name)
-            try:
-                await self._async_modify_user(device_id, name=tagged_name)
-            except LockDisconnected:
-                LOGGER.error(
-                    "Lock %s: failed to tag user '%s' for slot %d",
-                    self.lock.entity_id,
-                    original_name,
-                    slot_num,
-                )
-                continue
-
-            LOGGER.debug(
-                "Lock %s: tagged user '%s' (id=%s) as slot %d: '%s'",
-                self.lock.entity_id,
-                original_name,
-                device_id,
-                slot_num,
-                tagged_name,
-            )
-            result[slot_num] = pin
+            if slot_num is not None and slot_num in managed_slots:
+                result[slot_num] = pin if pin else SlotCode.EMPTY
 
         LOGGER.debug(
             "Lock %s: %s managed slots, %s occupied",

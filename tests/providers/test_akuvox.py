@@ -22,7 +22,10 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    LockCodeManagerError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
@@ -176,6 +179,11 @@ class TestHelperFunctions:
         """Missing source_type key falls back to user_type."""
         assert _is_local_user({"user_type": "-1"}) is True
 
+    def test_is_local_user_empty_string_source_type(self) -> None:
+        """Empty string source_type falls through to user_type check."""
+        assert _is_local_user({"source_type": "", "user_type": "-1"}) is True
+        assert _is_local_user({"source_type": "", "user_type": "0"}) is False
+
     def test_is_local_user_missing_both(self) -> None:
         """Missing both fields is not local."""
         assert _is_local_user({}) is False
@@ -301,13 +309,13 @@ class TestGetUsercodes:
         codes = await akuvox_lock.async_get_usercodes()
         assert codes == {}
 
-    async def test_get_usercodes_auto_tags_untagged_users(
+    async def test_get_usercodes_does_not_auto_tag(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that untagged local users with PINs are auto-tagged."""
+        """Test that async_get_usercodes does not auto-tag untagged users."""
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -318,24 +326,11 @@ class TestGetUsercodes:
         list_handler = AsyncMock(return_value=mock_response)
         _register_akuvox_service(hass, "list_users", list_handler)
 
-        modify_calls: list[dict[str, Any]] = []
-
-        async def _capture_modify(call):
-            modify_calls.append(dict(call.data))
-
-        _register_akuvox_service(
-            hass, "modify_user", AsyncMock(side_effect=_capture_modify)
-        )
-
         codes = await akuvox_lock.async_get_usercodes()
 
-        # Untagged user should be assigned to slot 1 (first available)
-        assert codes[1] == "9999"
+        # Untagged user should NOT appear in results (no auto-tagging)
+        assert codes[1] is SlotCode.EMPTY
         assert codes[2] is SlotCode.EMPTY
-        # modify_user should have been called to tag the user
-        assert len(modify_calls) == 1
-        assert modify_calls[0]["id"] == "200"
-        assert modify_calls[0]["name"] == "[LCM:1] Visitor"
 
     async def test_get_usercodes_skips_cloud_users(
         self,
@@ -619,7 +614,7 @@ class TestListUsersErrors:
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that an invalid service response raises LockDisconnected.
+        """Test that a non-dict service response raises LockDisconnected.
 
         Home Assistant's service layer rejects non-dict return values when
         return_response=True, so the service call itself raises HomeAssistantError
@@ -631,3 +626,148 @@ class TestListUsersErrors:
 
         with pytest.raises(LockDisconnected, match="Failed to list users"):
             await akuvox_lock.async_get_usercodes()
+
+    async def test_list_users_malformed_entity_response(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test that a malformed entity-level response raises LockCodeManagerError."""
+        # Response is a dict but the entity key maps to a non-dict value
+        _register_akuvox_service(
+            hass,
+            "list_users",
+            AsyncMock(return_value={LOCK_ENTITY_ID: "not a dict"}),
+        )
+
+        with pytest.raises(
+            LockCodeManagerError, match="Malformed list_users entity response"
+        ):
+            await akuvox_lock.async_get_usercodes()
+
+
+# ---------------------------------------------------------------------------
+# Auto-tagging
+# ---------------------------------------------------------------------------
+
+
+class TestAutoTagging:
+    """Tests for _async_tag_unmanaged_users."""
+
+    async def test_tags_untagged_users(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test that untagged local users with PINs are auto-tagged."""
+        mock_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    _make_user("200", "Visitor", "9999"),
+                ],
+            },
+        }
+        list_handler = AsyncMock(return_value=mock_response)
+        _register_akuvox_service(hass, "list_users", list_handler)
+
+        modify_calls: list[dict[str, Any]] = []
+
+        async def _capture_modify(call):
+            modify_calls.append(dict(call.data))
+
+        _register_akuvox_service(
+            hass, "modify_user", AsyncMock(side_effect=_capture_modify)
+        )
+
+        await akuvox_lock._async_tag_unmanaged_users()
+
+        assert len(modify_calls) == 1
+        assert modify_calls[0]["id"] == "200"
+        assert modify_calls[0]["name"] == "[LCM:1] Visitor"
+
+    async def test_failed_modify_does_not_consume_slot(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test that a failed modify does not consume a slot number."""
+        mock_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    _make_user("200", "Visitor A", "1111"),
+                    _make_user("201", "Visitor B", "2222"),
+                ],
+            },
+        }
+        _register_akuvox_service(
+            hass, "list_users", AsyncMock(return_value=mock_response)
+        )
+
+        modify_calls: list[dict[str, Any]] = []
+        call_tracker: list[int] = []
+
+        async def _failing_then_ok(call):
+            call_tracker.append(1)
+            if len(call_tracker) == 1:
+                raise HomeAssistantError("device busy")
+            modify_calls.append(dict(call.data))
+
+        _register_akuvox_service(
+            hass, "modify_user", AsyncMock(side_effect=_failing_then_ok)
+        )
+
+        await akuvox_lock._async_tag_unmanaged_users()
+
+        # First modify failed so slot 1 should be reused for the second user
+        assert len(modify_calls) == 1
+        assert modify_calls[0]["id"] == "201"
+        assert modify_calls[0]["name"] == "[LCM:2] Visitor B"
+
+    async def test_no_managed_slots_is_noop(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+    ) -> None:
+        """Test that auto-tagging is a no-op when no slots are managed."""
+        # No LCM config entry means no managed slots
+        await akuvox_lock._async_tag_unmanaged_users()
+        # No service calls should have been made (no list_users registered)
+
+
+# ---------------------------------------------------------------------------
+# Hard refresh
+# ---------------------------------------------------------------------------
+
+
+class TestHardRefresh:
+    """Tests for async_hard_refresh_codes."""
+
+    async def test_hard_refresh_tags_then_reads(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test that hard refresh auto-tags first, then reads codes."""
+        # First call returns untagged user, second call returns tagged user
+        untagged_response = {
+            LOCK_ENTITY_ID: {
+                "users": [_make_user("200", "Visitor", "9999")],
+            },
+        }
+        tagged_response = {
+            LOCK_ENTITY_ID: {
+                "users": [_make_user("200", "[LCM:1] Visitor", "9999")],
+            },
+        }
+        list_handler = AsyncMock(side_effect=[untagged_response, tagged_response])
+        _register_akuvox_service(hass, "list_users", list_handler)
+        _register_akuvox_service(hass, "modify_user", AsyncMock())
+
+        codes = await akuvox_lock.async_hard_refresh_codes()
+
+        assert codes[1] == "9999"
+        assert codes[2] is SlotCode.EMPTY
