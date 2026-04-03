@@ -614,3 +614,34 @@ Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock
 ---
 
 both are merged. FF main, then see if there are opportunities to parameterize tests. If so, createa a new branch and PR to parametrize as many as you can within reason. Goal is sto reduce repeat logic not to have the least LoC (although that is nice too)
+
+---
+
+do we need to use pytest.param and especify ids?
+
+---
+
+its fine
+
+---
+
+merged, ff main and delete stale branches and worktrees
+
+---
+
+see review comments on 975. Do we need to address any of them?
+
+---
+
+lets make sure all the things from the TODO here are addressed, if not, create corresponding PRs, and remove them from our TODOs:
+Testing
+Strategy UI module has unit tests in ts/*.test.ts and Python tests for resource registration/unload in tests/test_init.py; still need end-to-end UI coverage (Lovelace resource registration + reload in a real frontend).
+Test rate limiting and connection failure timing in live environment.
+Extract shared base provider tests (every provider implements the same BaseLock interface — common tests should be shared, with provider-specific tests layered on).
+Refactors and Maintenance
+Simplify Tests
+Consolidate duplicate test setup code in tests/common.py into shared fixtures
+Consider parametrized tests where multiple similar tests exist
+Reduce test boilerplate with helper functions
+
+type checking can now be removed right?
