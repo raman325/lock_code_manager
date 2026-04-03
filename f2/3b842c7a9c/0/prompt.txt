@@ -3,3 +3,10 @@ for 964, let's make this a repair issue. So, the repair issue points users to th
 ---
 
 we shouldn't strip the data. The whole point is to make this a repair warning to start. No persistent message, just the repair
+
+---
+
+1. during the config flow, if the user uses the advanced flow (non-UI), they can still add number_of_uses
+2. in an options update, the user can still manually add number_of_uses
+
+is there any way to prevent these? I think 2 is doable since we have the before and after. Theoretically the same logic could work for 1 since the before is just empty
