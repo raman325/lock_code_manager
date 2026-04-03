@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -31,6 +30,12 @@ from custom_components.lock_code_manager.providers.schlage import (
     SchlageLock,
     _make_tagged_name,
     _parse_tag,
+)
+
+from .service_provider_tests import (
+    ServiceProviderConnectionTests,
+    ServiceProviderDeviceAvailabilityTests,
+    register_mock_service,
 )
 
 LOCK_ENTITY_ID = "lock.schlage_test_schlage_lock"
@@ -81,22 +86,31 @@ async def lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
-def _register_schlage_service(
-    hass: HomeAssistant,
-    service_name: str,
-    handler: AsyncMock,
-) -> None:
-    """Register a mock Schlage service that returns responses."""
+# --- Alias fixtures for shared test mixins ---
 
-    async def _service_handler(call):
-        return await handler(call)
 
-    hass.services.async_register(
-        SCHLAGE_DOMAIN,
-        service_name,
-        _service_handler,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
+@pytest.fixture
+def provider_lock(schlage_lock: SchlageLock) -> SchlageLock:
+    """Alias schlage_lock for shared test mixins."""
+    return schlage_lock
+
+
+@pytest.fixture
+def provider_config_entry(schlage_config_entry: MockConfigEntry) -> MockConfigEntry:
+    """Alias schlage_config_entry for shared test mixins."""
+    return schlage_config_entry
+
+
+@pytest.fixture
+def provider_domain() -> str:
+    """Return the provider integration domain."""
+    return SCHLAGE_DOMAIN
+
+
+@pytest.fixture
+def provider_lock_class() -> type[SchlageLock]:
+    """Return the provider lock class."""
+    return SchlageLock
 
 
 # ---------------------------------------------------------------------------
@@ -161,67 +175,18 @@ async def test_usercode_scan_interval(schlage_lock: SchlageLock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Connection and availability tests
+# Connection and availability tests (shared)
 # ---------------------------------------------------------------------------
 
 
-async def test_is_integration_connected_not_loaded(
-    hass: HomeAssistant, schlage_lock: SchlageLock
-) -> None:
-    """Test integration not connected when config entry is not loaded."""
-    assert await schlage_lock.async_is_integration_connected() is False
+class TestConnection(ServiceProviderConnectionTests):
+    """Connection tests for Schlage provider using shared mixin."""
 
 
-async def test_is_integration_connected_loaded(
-    hass: HomeAssistant, schlage_lock: SchlageLock
-) -> None:
-    """Test integration connected when config entry is loaded."""
-    mock_entry = MagicMock()
-    mock_entry.state = ConfigEntryState.LOADED
-    schlage_lock.lock_config_entry = mock_entry
-    assert await schlage_lock.async_is_integration_connected() is True
+class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
+    """Device availability tests for Schlage provider using shared mixin."""
 
-
-async def test_is_integration_connected_no_config_entry(
-    hass: HomeAssistant, schlage_config_entry: MockConfigEntry
-) -> None:
-    """Test integration not connected when lock has no config entry."""
-    entity_reg = er.async_get(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "schlage",
-        "test_schlage_lock_no_entry",
-        config_entry=schlage_config_entry,
-    )
-    lock = SchlageLock(
-        hass,
-        dr.async_get(hass),
-        entity_reg,
-        None,
-        lock_entity,
-    )
-    assert await lock.async_is_integration_connected() is False
-
-
-async def test_is_device_available_success(
-    hass: HomeAssistant, schlage_lock: SchlageLock
-) -> None:
-    """Test device availability returns True when get_codes succeeds."""
-    mock_response = {LOCK_ENTITY_ID: {}}
-    handler = AsyncMock(return_value=mock_response)
-    _register_schlage_service(hass, "get_codes", handler)
-
-    assert await schlage_lock.async_is_device_available() is True
-
-
-async def test_is_device_available_error(
-    hass: HomeAssistant, schlage_lock: SchlageLock
-) -> None:
-    """Test device availability returns False when service call fails."""
-    handler = AsyncMock(side_effect=HomeAssistantError("device offline"))
-    _register_schlage_service(hass, "get_codes", handler)
-
-    assert await schlage_lock.async_is_device_available() is False
+    availability_service = "get_codes"
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +206,7 @@ async def test_get_usercodes_tagged_codes(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     codes = await schlage_lock.async_get_usercodes()
 
@@ -257,7 +222,7 @@ async def test_get_usercodes_no_codes(
     """Test get_usercodes when no codes exist on the lock."""
     mock_response = {LOCK_ENTITY_ID: {}}
     handler = AsyncMock(return_value=mock_response)
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     codes = await schlage_lock.async_get_usercodes()
 
@@ -287,8 +252,8 @@ async def test_get_usercodes_does_not_auto_tag(
     }
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
     codes = await schlage_lock.async_get_usercodes()
 
@@ -313,7 +278,7 @@ async def test_get_usercodes_duplicate_tag_uses_first(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     codes = await schlage_lock.async_get_usercodes()
 
@@ -333,7 +298,7 @@ async def test_get_usercodes_ignores_tags_outside_managed_range(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     codes = await schlage_lock.async_get_usercodes()
 
@@ -360,9 +325,9 @@ async def test_tag_unmanaged_codes(
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
     delete_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     await schlage_lock._async_tag_unmanaged_codes()
 
@@ -391,8 +356,8 @@ async def test_tag_unmanaged_codes_skips_masked_pin(
     }
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
     await schlage_lock._async_tag_unmanaged_codes()
 
@@ -415,9 +380,9 @@ async def test_tag_unmanaged_codes_rollback_on_delete_failure(
     add_handler = AsyncMock(return_value=None)
     # delete_code fails (will be called for both original delete and rollback)
     delete_handler = AsyncMock(side_effect=HomeAssistantError("delete failed"))
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     await schlage_lock._async_tag_unmanaged_codes()
 
@@ -433,7 +398,7 @@ async def test_tag_unmanaged_codes_no_managed_slots(
 ) -> None:
     """Test that tagging is a no-op when no slots are configured."""
     add_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
     await schlage_lock._async_tag_unmanaged_codes()
 
@@ -451,8 +416,8 @@ async def test_set_usercode(hass: HomeAssistant, schlage_lock: SchlageLock) -> N
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
     result = await schlage_lock.async_set_usercode(1, "1234", "Guest")
 
@@ -475,9 +440,9 @@ async def test_set_usercode_replaces_existing(
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
     delete_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     result = await schlage_lock.async_set_usercode(1, "5678", "New Name")
 
@@ -507,9 +472,9 @@ async def test_set_usercode_preserves_existing_name(
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
     delete_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     # Track call order to verify delete happens before add
     call_order: list[str] = []
@@ -537,8 +502,8 @@ async def test_set_usercode_service_failure(
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
     with pytest.raises(LockDisconnected, match="connection lost"):
         await schlage_lock.async_set_usercode(1, "1234")
@@ -558,8 +523,8 @@ async def test_clear_usercode(hass: HomeAssistant, schlage_lock: SchlageLock) ->
     }
     get_handler = AsyncMock(return_value=get_response)
     delete_handler = AsyncMock(return_value=None)
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     result = await schlage_lock.async_clear_usercode(1)
 
@@ -575,7 +540,7 @@ async def test_clear_usercode_already_empty(
     """Test clear_usercode returns False when no code exists for the slot."""
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
-    _register_schlage_service(hass, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
 
     result = await schlage_lock.async_clear_usercode(1)
 
@@ -593,8 +558,8 @@ async def test_clear_usercode_service_failure(
     }
     get_handler = AsyncMock(return_value=get_response)
     delete_handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     with pytest.raises(LockDisconnected, match="connection lost"):
         await schlage_lock.async_clear_usercode(1)
@@ -617,7 +582,7 @@ async def test_hard_refresh_codes(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with patch.object(schlage_lock, "_async_tag_unmanaged_codes") as mock_tag:
         codes = await schlage_lock.async_hard_refresh_codes()
@@ -639,7 +604,7 @@ async def test_get_codes_service_failure(
 ) -> None:
     """Test that get_usercodes raises LockDisconnected on service failure."""
     handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with pytest.raises(LockDisconnected, match="connection lost"):
         await schlage_lock.async_get_usercodes()
@@ -652,7 +617,7 @@ async def test_get_codes_service_validation_error(
 ) -> None:
     """Test that get_usercodes raises LockDisconnected on ServiceValidationError."""
     handler = AsyncMock(side_effect=ServiceValidationError("invalid entity"))
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with pytest.raises(LockDisconnected, match="invalid entity"):
         await schlage_lock.async_get_usercodes()
@@ -666,7 +631,7 @@ async def test_get_codes_malformed_entity_response(
     """Test that get_codes raises LockCodeManagerError on malformed entity response."""
     # Return a valid dict at the top level, but the entity sub-key is not a dict
     handler = AsyncMock(return_value={LOCK_ENTITY_ID: "not a dict"})
-    _register_schlage_service(hass, "get_codes", handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with pytest.raises(LockCodeManagerError, match="malformed entity response"):
         await schlage_lock.async_get_usercodes()
