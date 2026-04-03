@@ -1,0 +1,136 @@
+---
+blueprint:
+  name: "Lock Code Manager: Calendar Condition"
+  description: >
+    Creates a binary sensor that turns ON when a calendar event is active and
+    an optional condition template is truthy. Assign the resulting binary sensor
+    as the condition entity for a Lock Code Manager code slot.
+
+
+    **Available template variables**
+
+    Your condition template can use these variables:
+
+    - `message` — calendar event summary/title
+
+    - `description` — calendar event description
+
+    - `location` — calendar event location
+
+    - `start_time` — event start time
+
+    - `end_time` — event end time
+
+    - `all_day` — whether the event is an all-day event
+
+    - `slot_number` — the resolved slot number
+
+    - `config_entry_title` — the LCM config entry title
+
+    - `name_state` — the current name of the code slot
+
+    - `lock_entity_ids` — list of lock entity IDs that support code slot events for this slot
+
+
+    **Example condition templates**
+
+    - Allow when event title contains "Guest": `{{ 'Guest' in message }}`
+
+    - Allow only for a specific lock: `{{ 'lock.front_door' in lock_entity_ids }}`
+
+
+    **Note:** The condition template and calendar attributes are evaluated when the
+    sensor is first loaded and when Home Assistant reloads template entities. For
+    the default `{{ true }}`, the sensor dynamically tracks the calendar on/off
+    state. For conditions that reference event attributes, reload template entities
+    after calendar event changes to re-evaluate.
+
+
+    **Template debugging**
+
+    To test your condition template, go to Developer Tools → Template and paste:
+
+    ```
+
+    {% set message = state_attr('calendar.YOUR_CALENDAR', 'message') | default('', true) %}
+
+    {% set description = state_attr('calendar.YOUR_CALENDAR', 'description') | default('', true) %}
+
+    {% set location = state_attr('calendar.YOUR_CALENDAR', 'location') | default('', true) %}
+
+    {{ YOUR_CONDITION_TEMPLATE_HERE }}
+
+    ```
+  domain: template
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/template/lock_code_manager/calendar_condition.yaml
+  input:
+    config_entry:
+      name: Lock Code Manager config entry
+      description: The Lock Code Manager config entry that manages your lock(s).
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    slot_number:
+      name: Slot number
+      description: >
+        The code slot number. Can be a static number (e.g. `3`) or a Jinja2
+        template that resolves to a number using calendar event attributes
+        (e.g. `{{ description | regex_findall('slot (\d+)') | first }}`).
+      selector:
+        template:
+    calendar_entity:
+      name: Calendar entity
+      description: The calendar entity whose events control this condition.
+      selector:
+        entity:
+          domain: calendar
+    condition_template:
+      name: Condition template
+      description: >
+        A Jinja2 template that must evaluate to truthy for the sensor to turn
+        ON (in addition to the calendar being active). Leave as `{{ true }}`
+        to activate whenever the calendar event is active.
+      default: "{{ true }}"
+      selector:
+        template:
+
+variables:
+  config_entry: !input config_entry
+  calendar_entity: !input calendar_entity
+  config_entry_title: >
+    {{ config_entry_attr(config_entry, 'title') }}
+  _all_entities: >
+    {{ integration_entities(config_entry_title) }}
+  message: >
+    {{ state_attr(calendar_entity, 'message') | default('', true) }}
+  description: >
+    {{ state_attr(calendar_entity, 'description') | default('', true) }}
+  location: >
+    {{ state_attr(calendar_entity, 'location') | default('', true) }}
+  start_time: >
+    {{ state_attr(calendar_entity, 'start_time') | default('', true) }}
+  end_time: >
+    {{ state_attr(calendar_entity, 'end_time') | default('', true) }}
+  all_day: >
+    {{ state_attr(calendar_entity, 'all_day') | default(false, true) }}
+  slot_number: !input slot_number
+  _name_entity: >
+    {{ _all_entities
+       | select('match', 'text\\..*_code_slot_' ~ slot_number ~ '_name')
+       | first | default('') }}
+  name_state: >
+    {{ states(_name_entity) if _name_entity else '' }}
+  _event_entity: >
+    {{ _all_entities
+       | select('match', 'event\\..*_code_slot_' ~ slot_number ~ '_pin_used')
+       | first | default('') }}
+  lock_entity_ids: >
+    {{ state_attr(_event_entity, 'event_types') | default([]) }}
+  _condition_result: !input condition_template
+
+binary_sensor:
+  state: >
+    {{ is_state(calendar_entity, 'on') and _condition_result }}
+  availability: >
+    {{ states(calendar_entity) not in ('unknown', 'unavailable') }}
