@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "91e2b589cc1d",
+  "strategy": "manual-commit",
+  "branch": "raman325-patch-1",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/91/e2b589cc1d/0/metadata.json",
+      "transcript": "/91/e2b589cc1d/0/full.jsonl",
+      "content_hash": "/91/e2b589cc1d/0/content_hash.txt",
+      "prompt": "/91/e2b589cc1d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5217,
+    "cache_creation_tokens": 11634205,
+    "cache_read_tokens": 1199847566,
+    "output_tokens": 606808,
+    "api_call_count": 2531
+  }
+}
