@@ -17,18 +17,23 @@ Features:
 
 Locks from the following integrations are currently supported:
 
+**Core integrations:**
+
 - [Matter][wiki-matter]
 - [Schlage WiFi][wiki-schlage]
 - [Z-Wave](https://www.home-assistant.io/integrations/zwave_js/)
-- [Akuvox][wiki-akuvox]
-  (via [Local Akuvox](https://github.com/pjaudiomv/hass-local-akuvox) custom integration)
-- [Virtual][wiki-virtual]
-  (via [hass-virtual](https://github.com/twrecked/hass-virtual) custom integration, for testing)
+
+**Custom integrations:**
+
+- [Akuvox][wiki-akuvox] (via [Local Akuvox][local-akuvox])
+- [Virtual][wiki-virtual] (via [hass-virtual][hass-virtual])
 
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
 [wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
 [wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
+[local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
+[hass-virtual]: https://github.com/twrecked/hass-virtual
 
 The code was written to make it (I think) easy to add support for locks in other
 integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you
