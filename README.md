@@ -108,10 +108,7 @@ possible for most of `keymaster`'s life. I briefly considered implementing this 
    fragile to changes in HA Core or even changes in the codebase.
 3. It would be impossible to seamlessly migrate users from the current implementation of
    `keymaster` to this integration's implementation. Rewriting `keymaster` to do this
-   would have been the equivalent of creating a new integration anyway, and since it's a
-   separate integration, users have a choice of what implementation they want to use.
-   Additionally, you can install the integrations side by side and slowly migrate your
-   locks over in either direction as needed.
+   would have been the equivalent of creating a new integration anyway.
 
 ## Thanks
 
