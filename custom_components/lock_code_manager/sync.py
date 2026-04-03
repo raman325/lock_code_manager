@@ -299,15 +299,14 @@ class SlotSyncManager:
             self._last_set_pin = None
             _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
 
-    async def _disable_slot(self, reason: str, title: str) -> None:
-        """Disable the slot and create a persistent notification."""
+    async def _disable_slot(self, reason: str) -> None:
+        """Disable the slot and create a repair issue."""
         await async_disable_slot(
             self._hass,
             self._ent_reg,
             self._config_entry.entry_id,
             self._slot_num,
             reason=reason,
-            title=title,
             lock_name=self._lock.display_name,
             lock_entity_id=self._lock.lock.entity_id,
         )
@@ -484,7 +483,6 @@ class SlotSyncManager:
                     f"The lock may be rejecting the code silently. "
                     f"Slot {self._slot_num} has been disabled. Check the "
                     f"code and re-enable the slot.",
-                    title="Lock Code Sync Failed",
                 )
                 return
 
@@ -497,7 +495,6 @@ class SlotSyncManager:
                     f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
                     f"has been disabled. {err}\n\n"
                     f"Fix the issue and re-enable the slot.",
-                    title="Lock Code Rejected",
                 )
                 return
             except LockDisconnected as err:
@@ -525,7 +522,6 @@ class SlotSyncManager:
                     f"encountered an unexpected error during sync. This may indicate a bug "
                     f"in the lock code manager integration. Check logs for details and "
                     f"report this issue.\n\nError: {type(err).__name__}: {err}",
-                    title="Lock Code Sync Error",
                 )
                 return
             else:

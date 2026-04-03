@@ -13,6 +13,11 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -21,6 +26,7 @@ from .const import (
     BACKOFF_MAX_SECONDS,
     CONF_SLOTS,
     DOMAIN,
+    POLL_FAILURE_ALERT_THRESHOLD,
 )
 from .data import get_entry_data
 from .exceptions import LockCodeManagerError
@@ -136,9 +142,25 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                     self._lock.lock.entity_id,
                 )
 
+        if self._consecutive_failures == POLL_FAILURE_ALERT_THRESHOLD:
+            async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"lock_offline_{self._lock.lock.entity_id}",
+                is_fixable=False,
+                is_persistent=False,
+                severity=IssueSeverity.WARNING,
+                translation_key="lock_offline",
+                translation_placeholders={
+                    "lock_entity_id": self._lock.lock.entity_id,
+                    "failure_count": str(self._consecutive_failures),
+                },
+            )
+
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""
         if self._consecutive_failures > 0:
+            had_alert = self._consecutive_failures >= POLL_FAILURE_ALERT_THRESHOLD
             _LOGGER.info(
                 "Lock %s recovered after %d consecutive failures",
                 self._lock.lock.entity_id,
@@ -147,6 +169,12 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             self._consecutive_failures = 0
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
+            if had_alert:
+                async_delete_issue(
+                    self.hass,
+                    DOMAIN,
+                    f"lock_offline_{self._lock.lock.entity_id}",
+                )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Update usercodes."""

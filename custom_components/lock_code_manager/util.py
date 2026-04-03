@@ -9,12 +9,12 @@ import logging
 from typing import Any
 import zlib
 
-from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
 from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
 from .const import DOMAIN
 from .data import build_slot_unique_id
@@ -43,15 +43,14 @@ async def async_disable_slot(
     slot_num: int,
     *,
     reason: str | None = None,
-    title: str = "Lock Code Manager: Slot Disabled",
     lock_name: str | None = None,
     lock_entity_id: str | None = None,
 ) -> bool:
-    """Disable a slot via the enabled switch and optionally create a notification.
+    """Disable a slot via the enabled switch and optionally create a repair issue.
 
     Returns True if the switch was found and turned off, False otherwise.
-    When reason is provided, a persistent notification is created with the
-    given title.
+    When reason is provided, a repair issue is created so the user can
+    acknowledge it through the Home Assistant repairs dashboard.
     """
     enabled_entity_id = ent_reg.async_get_entity_id(
         SWITCH_DOMAIN,
@@ -75,11 +74,21 @@ async def async_disable_slot(
     )
 
     if reason:
-        async_create(
+        issue_id = (
+            f"slot_disabled_{config_entry_id}_{slot_num}_{lock_entity_id or 'unknown'}"
+        )
+        async_create_issue(
             hass,
-            reason,
-            title=title,
-            notification_id=f"{DOMAIN}_{config_entry_id}_{slot_num}_slot_disabled",
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            is_persistent=True,
+            severity=IssueSeverity.WARNING,
+            translation_key="slot_disabled",
+            translation_placeholders={
+                "slot_num": str(slot_num),
+                "reason": reason,
+            },
         )
 
     return True

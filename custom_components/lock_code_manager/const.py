@@ -108,6 +108,9 @@ BACKOFF_FAILURE_THRESHOLD: int = 3
 BACKOFF_INITIAL_SECONDS: int = 60
 BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 
+# Poll failure alerting
+POLL_FAILURE_ALERT_THRESHOLD: int = 12
+
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=5)
 MAX_SYNC_ATTEMPTS = 3

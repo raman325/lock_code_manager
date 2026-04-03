@@ -9,6 +9,18 @@ from homeassistant.core import HomeAssistant
 from .const import CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN
 
 
+class AcknowledgeRepairFlow(RepairsFlow):
+    """Simple repair flow that just acknowledges the issue."""
+
+    async def async_step_init(
+        self, user_input: dict[str, str] | None = None
+    ) -> data_entry_flow.FlowResult:
+        """Handle the confirm step."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data={})
+        return self.async_show_form(step_id="init")
+
+
 class NumberOfUsesDeprecatedFlow(RepairsFlow):
     """Handler for the number_of_uses deprecation repair.
 
@@ -54,4 +66,6 @@ async def async_create_fix_flow(
     """Create a fix flow for a repair issue."""
     if issue_id == "number_of_uses_deprecated":
         return NumberOfUsesDeprecatedFlow()
+    if issue_id.startswith("slot_disabled_") or issue_id.startswith("pin_required_"):
+        return AcknowledgeRepairFlow()
     raise ValueError(f"Unknown issue: {issue_id}")

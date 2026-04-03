@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components.persistent_notification import async_create
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import CONF_ENABLED, CONF_PIN, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
 from .const import DOMAIN
 from .entity import BaseLockCodeManagerEntity
@@ -64,14 +64,18 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
             and (state := self.hass.states.get(self._pin_entity_id))
             and state.state in (None, "", STATE_UNKNOWN)
         ):
-            async_create(
+            async_create_issue(
                 self.hass,
-                (
-                    f"PIN is required to enable slot {self.slot_num} on the lock "
-                    f"configuration {self.config_entry.title}."
-                ),
-                "Problem with Lock Code Manager",
-                f"{DOMAIN}_{self.config_entry.entry_id}_{self.slot_num}_pin_required",
+                DOMAIN,
+                f"pin_required_{self.config_entry.entry_id}_{self.slot_num}",
+                is_fixable=True,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key="pin_required",
+                translation_placeholders={
+                    "slot_num": str(self.slot_num),
+                    "config_entry_title": self.config_entry.title,
+                },
             )
             return
         self._update_config_entry(True)
