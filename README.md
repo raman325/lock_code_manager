@@ -18,6 +18,7 @@ Features:
 Locks from the following integrations are currently supported:
 
 - Z-Wave
+- Matter
 - [Virtual](https://github.com/twrecked/hass-virtual) custom integration. See the
   [Wiki page on this integration](https://github.com/raman325/lock_code_manager/wiki/Virtual-integration)
   for more details on why it was built and how it works.
