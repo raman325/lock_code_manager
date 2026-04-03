@@ -1,19 +1,22 @@
 # Lock Code Manager
 
-Lock Code Manager is a Home Assistant integration that allows you to more easily manage
-your usercodes on your locks. Once you have configured it, the integration will set and
-clear codes on your locks as needed depending on how you decide to configure them.
+Lock Code Manager is a Home Assistant integration that keeps PIN codes in sync
+across one or more locks, even across different lock providers (e.g. Z-Wave and
+Matter locks sharing the same codes). Define your codes once and Lock Code
+Manager handles setting, clearing, and monitoring them on every lock.
 
 Features:
 
-- Synchronize multiple locks with a single set of codes
-- Optionally use a condition entity to control when a code is active. Supported entity types:
-  - `calendar` - code is active when an event is in progress
-  - `binary_sensor` - code is active when the sensor is `on`
-  - `switch` - code is active when the switch is `on`
-  - `schedule` - code is active when the schedule is `on`
-  - `input_boolean` - code is active when the input boolean is `on`
-- Optionally define a maximum number of uses for a code before the code is disabled
+- Synchronize PIN codes across multiple locks and providers
+- Automatic sync — codes are set and cleared as needed, with retry and
+  drift detection
+- Condition entities control when a code is active:
+  - `calendar` — active during events
+  - `binary_sensor` / `switch` / `input_boolean` — active when on
+  - `schedule` — active during scheduled times
+- [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
+  for usage limiting, calendar-driven PINs, and more
+- Dashboard cards for managing codes and viewing lock status
 
 Locks from the following integrations are currently supported:
 
