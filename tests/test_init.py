@@ -40,7 +40,10 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
 )
-from custom_components.lock_code_manager.repairs import NumberOfUsesDeprecatedFlow
+from custom_components.lock_code_manager.repairs import (
+    NumberOfUsesDeprecatedFlow,
+    async_create_fix_flow,
+)
 
 from .common import (
     BASE_CONFIG,
@@ -794,3 +797,29 @@ async def test_number_of_uses_repair_flow_strips_data(
     assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS]["1"]
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_repair_flow_shows_form(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that the repair flow shows a form on initial step."""
+    flow = NumberOfUsesDeprecatedFlow()
+    flow.hass = hass
+    result = await flow.async_step_init(user_input=None)
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+
+
+async def test_async_create_fix_flow():
+    """Test async_create_fix_flow returns the correct flow."""
+    flow = await async_create_fix_flow(None, "number_of_uses_deprecated", None)
+    assert isinstance(flow, NumberOfUsesDeprecatedFlow)
+
+
+async def test_async_create_fix_flow_unknown():
+    """Test async_create_fix_flow raises for unknown issue."""
+    with pytest.raises(ValueError, match="Unknown issue"):
+        await async_create_fix_flow(None, "unknown_issue", None)
