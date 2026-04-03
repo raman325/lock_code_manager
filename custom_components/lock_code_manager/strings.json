@@ -136,7 +136,7 @@
         "step": {
           "init": {
             "title": "Migrate from Number of Uses",
-            "description": "The built-in **Number of Uses** feature is deprecated and will be removed in a future release.\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\nClick **Submit** to remove Number of Uses from your configuration and dismiss this notice."
+            "description": "The built-in **Number of Uses** feature is deprecated and will be removed in a future release.\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\n**Warning:** Clicking **Submit** will permanently remove Number of Uses from your configuration. Only do this after you have set up the blueprint replacement."
           }
         }
       }
