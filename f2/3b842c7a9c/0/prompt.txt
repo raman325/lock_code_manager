@@ -1,0 +1,5 @@
+for 964, let's make this a repair issue. So, the repair issue points users to the blueprint for the number of uses, and they click fix or fixed or whatever it is when they're ready to migrate to v3. We can also note that there will be a force migration to v3 in the future
+
+---
+
+we shouldn't strip the data. The whole point is to make this a repair warning to start. No persistent message, just the repair

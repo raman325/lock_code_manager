@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f23b842c7a9c",
+  "strategy": "manual-commit",
+  "branch": "refactor/deprecate-number-of-uses",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f2/3b842c7a9c/0/metadata.json",
+      "transcript": "/f2/3b842c7a9c/0/full.jsonl",
+      "content_hash": "/f2/3b842c7a9c/0/content_hash.txt",
+      "prompt": "/f2/3b842c7a9c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4971,
+    "cache_creation_tokens": 10820063,
+    "cache_read_tokens": 1067127312,
+    "output_tokens": 569122,
+    "api_call_count": 2343
+  }
+}
