@@ -1,0 +1,5 @@
+create a branch and PR it
+
+---
+
+add similar notification input options for the other blueprints. Are there other features we added to the slot usage limited we should consider adding elsewhere?
