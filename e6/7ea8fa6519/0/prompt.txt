@@ -1,0 +1,115 @@
+for 964, let's make this a repair issue. So, the repair issue points users to the blueprint for the number of uses, and they click fix or fixed or whatever it is when they're ready to migrate to v3. We can also note that there will be a force migration to v3 in the future
+
+---
+
+we shouldn't strip the data. The whole point is to make this a repair warning to start. No persistent message, just the repair
+
+---
+
+1. during the config flow, if the user uses the advanced flow (non-UI), they can still add number_of_uses
+2. in an options update, the user can still manually add number_of_uses
+
+is there any way to prevent these? I think 2 is doable since we have the before and after. Theoretically the same logic could work for 1 since the before is just empty
+
+---
+
+so its not possible to add the async_update_listener feature?
+
+---
+
+check vreview commens
+
+---
+
+run code review
+
+---
+
+<task-notification>
+<task-id>a53fb52ce80fe45b3</task-id>
+<tool-use-id>toolu_01ANK7pMhGpMRvKKReAjpDN8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a53fb52ce80fe45b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review deprecation PR #966" completed</summary>
+<result>Now I have a complete picture. Here is my review.
+
+---
+
+## Review: PR #966 -- Deprecate number_of_uses
+
+**Files reviewed:**
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py` (repair issue creation/dismissal + orphaned comment)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/repairs.py` (new repair flow)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/config_flow.py` (UI schema change)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/websocket.py` (deprecation guard)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/strings.json` and `translations/en.json`
+- `/Users/raman/projects/lock_code_manager/tests/test_init.py` (repair issue tests)
+- `/Users/raman/projects/lock_code_manager/tests/test_websocket.py` (updated websocket tests)
+
+---
+
+### Critical (90-100)
+
+**1. Orphaned comment with no implementation in `async_update_listener`** (Confidence: 95)
+
+File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py`, lines 617-619
+
+The PR adds this comment block:
+```python
+# Strip number_of_uses from slots that didn't previously have it
+# (deprecated — only existing values are preserved). Skip on initial
+# setup (curr_slots empty) since the data just moved from data→options.
+```
+
+But there is no corresponding stripping code. The comment sits directly above the pre-existing `# Set up any platforms...` comment and platform setup loop. This means the `async_update_listener` path has **no guard** against number_of_uses being added via a direct config entry update (as opposed to the websocket path, which is guarded). If the repair flow calls `async_update_entry` and triggers `async_update_listener`, the listener does not enforce the deprecation.
+
+This is either missing implementation or an orphaned comment from a draft that should be removed. Either way it is wrong -- a comment promising behavior that does not exist will mislead future readers.
+
+**Fix:** Either implement the stripping logic described by the comment, or remove the comment entirely. Given that the websocket path already guards against additions, and the repair flow strips from all entries, the comment may simply need to be deleted.
+
+---
+
+### Important (80-89)
+
+**2. No test for the repair flow execution** (Confidence: 88)
+
+File: `/Users/raman/projects/lock_code_manager/tests/test_init.py`
+
+The tests cover:
+- Repair issue is created when slots have number_of_uses
+- No repair issue when slots lack number_of_uses
+
+But there is **no test** that exercises `NumberOfUsesDeprecatedFlow.async_step_init` with `user_input != None` -- the actual fix action. This is the most important behavior to test: confirming that the flow correctly strips `number_of_uses` from all config entries' `data` and `options`, and that it handles entries where only some slots have the key.
+
+Per AGENTS.md: "Tests go with code changes in same PR; test-only PRs only for refactoring existing tests."
+
+**Fix:** Add a test (likely in a new `tests/test_repairs.py`) that:
+1. Sets up one or more config entries with `number_of_uses` in slot configs
+2. Executes the repair flow with user confirmation
+3. Asserts `number_of_uses` is stripped from all entries' data and options
+4. Verifies entries without `number_of_uses` are untouched (no unnecessary `async_update_entry` call)
+
+**3. Repair issue only checked for current entry on setup, not re-evaluated after repair** (Confidence: 82)
+
+File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py`, lines 347-360 and `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/repairs.py`
+
+The repair flow strips `number_of_uses` from all entries via `async_update_entry`, which triggers `async_update_listener` for each changed entry. However, `async_update_listener` does not re-evaluate whether the repair issue should be dismissed. The issue is only checked during `async_setup_entry`. So after the user confirms the repair, the issue gets auto-dismissed by the `self.async_create_entry(title="", data={})` return from the flow -- which is correct for the repair flow itself. But if someone later reloads just one entry that still has `number_of_uses` (e.g., the `async_update_entry` in the repair flow failed silently for one entry because the entry was being unloaded), the issue would be re-created.
+
+This is a minor edge case. The current design works for the normal path. Consider adding `async_delete_issue` at the end of the repair flow's `async_step_init` as a belt-and-suspenders measure.
+
+---
+
+### Summary of areas that look correct
+
+- **Config flow backward compatibility**: The `CODE_SLOT_SCHEMA` still accepts `number_of_uses` via `vol.Coerce(int)` while the `UI_CODE_SLOT_SCHEMA` no longer presents it. This is the correct approach for existing entries.
+- **Websocket guard**: The logic correctly allows updates to existing `number_of_uses` values, allows removal (setting to `None`), and blocks adding it to slots that don't already have it. The error code "deprecated" and message are clear.
+- **Translation strings**: `strings.json` and `translations/en.json` are in sync. The fix flow step structure (`issues` -> issue_id -> `fix_flow` -> `step` -> `init`) matches the Home Assistant repairs framework expectations.
+- **Repair flow stripping logic**: Iterating all entries, checking both `data` and `options`, shallow-copying slot configs before mutation, and only calling `async_update_entry` when changes were made -- all correct.
+- **Test updates**: Websocket tests correctly shifted from slot 1 (no `number_of_uses` in BASE_CONFIG) to slot 2 (has `number_of_uses: 5`), and the new rejection test validates the guard.</result>
+<usage><total_tokens>31766</total_tokens><tool_uses>14</tool_uses><duration_ms>100871</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a53fb52ce80fe45b3.output
+
+---
+
+missing coverage, looks like python

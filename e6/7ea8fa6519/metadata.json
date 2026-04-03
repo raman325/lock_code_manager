@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e67ea8fa6519",
+  "strategy": "manual-commit",
+  "branch": "refactor/deprecate-number-of-uses",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e6/7ea8fa6519/0/metadata.json",
+      "transcript": "/e6/7ea8fa6519/0/full.jsonl",
+      "content_hash": "/e6/7ea8fa6519/0/content_hash.txt",
+      "prompt": "/e6/7ea8fa6519/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5079,
+    "cache_creation_tokens": 10870530,
+    "cache_read_tokens": 1132781104,
+    "output_tokens": 588016,
+    "api_call_count": 2439
+  }
+}
