@@ -494,7 +494,11 @@ async def test_set_usercode_replaces_existing(
 async def test_set_usercode_preserves_existing_name(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test set_usercode preserves the existing friendly name when no name is provided."""
+    """Test set_usercode preserves the existing friendly name when no name is provided.
+
+    When the name does not change (PIN-only update), the old code must be deleted
+    first because Schlage rejects add_code with a duplicate name.
+    """
     get_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:1] Guest", "code": "****"},
@@ -507,14 +511,23 @@ async def test_set_usercode_preserves_existing_name(
     _register_schlage_service(hass, "add_code", add_handler)
     _register_schlage_service(hass, "delete_code", delete_handler)
 
+    # Track call order to verify delete happens before add
+    call_order: list[str] = []
+    add_handler.side_effect = lambda _: call_order.append("add")
+    delete_handler.side_effect = lambda _: call_order.append("delete")
+
     result = await schlage_lock.async_set_usercode(1, "9999")
 
     assert result is True
+    # Old code deleted first, then new code added with same tagged name
+    assert delete_handler.call_count == 1
+    delete_call = delete_handler.call_args[0][0]
+    assert delete_call.data["name"] == "[LCM:1] Guest"
+    assert add_handler.call_count == 1
     add_call = add_handler.call_args[0][0]
-    # Name preserved from existing code
     assert add_call.data["name"] == "[LCM:1] Guest"
-    # No delete needed since the tagged name is the same
-    assert delete_handler.call_count == 0
+    assert add_call.data["code"] == "9999"
+    assert call_order == ["delete", "add"]
 
 
 async def test_set_usercode_service_failure(

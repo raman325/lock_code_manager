@@ -368,10 +368,14 @@ class SchlageLock(BaseLock):
         effective_name = name or existing_friendly_name
         tagged_name = _make_tagged_name(code_slot, effective_name)
 
-        # Add the new code first to avoid data loss if the add fails.
-        await self._async_add_code(tagged_name, usercode)
-
-        if existing_full_name and existing_full_name != tagged_name:
+        if existing_full_name and existing_full_name == tagged_name:
+            # Same name (PIN-only update): Schlage rejects add_code with a
+            # duplicate name, so delete the old code first then re-add.
+            await self._async_delete_code(existing_full_name)
+            await self._async_add_code(tagged_name, usercode)
+        elif existing_full_name:
+            # Different name: add new first (safe, different name) then delete old.
+            await self._async_add_code(tagged_name, usercode)
             try:
                 await self._async_delete_code(existing_full_name)
             except LockDisconnected:
@@ -381,6 +385,9 @@ class SchlageLock(BaseLock):
                     code_slot,
                     existing_full_name,
                 )
+        else:
+            # No existing code: just add.
+            await self._async_add_code(tagged_name, usercode)
 
         LOGGER.debug(
             "Lock %s: set usercode on slot %s",
