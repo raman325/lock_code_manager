@@ -2122,16 +2122,16 @@ class TestUpdateSlotCondition:
         lock_code_manager_config_entry,
         hass_ws_client: WebSocketGenerator,
     ) -> None:
-        """Test updating number_of_uses for a slot."""
+        """Test updating number_of_uses for a slot that already has it."""
         ws_client = await hass_ws_client(hass)
 
-        # Update slot 1's number_of_uses
+        # Update slot 2's number_of_uses (slot 2 has number_of_uses=5 in BASE_CONFIG)
         await ws_client.send_json(
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
+                "slot": 2,
                 CONF_NUMBER_OF_USES: 10,
             }
         )
@@ -2140,7 +2140,7 @@ class TestUpdateSlotCondition:
 
         # Verify config entry was updated
         assert (
-            lock_code_manager_config_entry.data[CONF_SLOTS][1][CONF_NUMBER_OF_USES]
+            lock_code_manager_config_entry.data[CONF_SLOTS][2][CONF_NUMBER_OF_USES]
             == 10
         )
 
@@ -2151,29 +2151,16 @@ class TestUpdateSlotCondition:
         lock_code_manager_config_entry,
         hass_ws_client: WebSocketGenerator,
     ) -> None:
-        """Test clearing number_of_uses for a slot (disables tracking)."""
+        """Test clearing number_of_uses for a slot that has it."""
         ws_client = await hass_ws_client(hass)
 
-        # First set number_of_uses
+        # Slot 2 has number_of_uses=5 in BASE_CONFIG — clear it
         await ws_client.send_json(
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: 5,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Now clear it
-        await ws_client.send_json(
-            {
-                "id": 2,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
+                "slot": 2,
                 CONF_NUMBER_OF_USES: None,
             }
         )
@@ -2183,7 +2170,7 @@ class TestUpdateSlotCondition:
         # Verify number_of_uses was removed
         assert (
             CONF_NUMBER_OF_USES
-            not in lock_code_manager_config_entry.data[CONF_SLOTS][1]
+            not in lock_code_manager_config_entry.data[CONF_SLOTS][2]
         )
 
     async def test_update_both_conditions(
@@ -2202,13 +2189,13 @@ class TestUpdateSlotCondition:
         )
         await hass.async_block_till_done()
 
-        # Update both conditions for slot 1
+        # Update both conditions for slot 2 (which has number_of_uses in BASE_CONFIG)
         await ws_client.send_json(
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
+                "slot": 2,
                 "entity_id": SCHEDULE_TEST_ENTITY_ID,
                 CONF_NUMBER_OF_USES: 3,
             }
@@ -2217,7 +2204,7 @@ class TestUpdateSlotCondition:
         assert msg["success"]
 
         # Verify both were updated
-        slot_config = lock_code_manager_config_entry.data[CONF_SLOTS][1]
+        slot_config = lock_code_manager_config_entry.data[CONF_SLOTS][2]
         assert slot_config["entity_id"] == SCHEDULE_TEST_ENTITY_ID
         assert slot_config[CONF_NUMBER_OF_USES] == 3
 
@@ -2309,7 +2296,7 @@ class TestUpdateSlotCondition:
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
+                "slot": 2,
                 CONF_NUMBER_OF_USES: 0,
             }
         )
@@ -2391,49 +2378,29 @@ class TestUpdateSlotCondition:
             msg = await ws_client.receive_json()
             assert msg["success"], f"Failed for domain {domain}: {msg}"
 
-    async def test_number_entity_created_on_add(
+    async def test_add_number_of_uses_to_new_slot_rejected(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
         hass_ws_client: WebSocketGenerator,
     ) -> None:
-        """Test that number entity is created when adding number_of_uses."""
+        """Test that adding number_of_uses to a slot that doesn't have it is rejected."""
         ws_client = await hass_ws_client(hass)
-        ent_reg = er.async_get(hass)
-        entry_id = lock_code_manager_config_entry.entry_id
 
-        # Entity ID uses the config entry title (slugified)
-        number_entity_id = "number.mock_title_code_slot_1_number_of_uses"
-
-        # Verify no number entity exists for slot 1 before the update
-        assert ent_reg.async_get(number_entity_id) is None
-
-        # Add number_of_uses to slot 1
+        # Slot 1 does not have number_of_uses — adding should be rejected
         await ws_client.send_json(
             {
                 "id": 1,
                 "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: entry_id,
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 CONF_NUMBER_OF_USES: 10,
             }
         )
         msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Wait for entity creation
-        await hass.async_block_till_done()
-
-        # Verify number entity was created
-        entity_entry = ent_reg.async_get(number_entity_id)
-        assert entity_entry is not None, "Number entity was not created"
-        assert entity_entry.config_entry_id == entry_id
-
-        # Verify entity has the correct state
-        state = hass.states.get(number_entity_id)
-        assert state is not None, "Number entity state not found"
-        assert float(state.state) == 10
+        assert not msg["success"]
+        assert "deprecated" in msg["error"]["code"]
 
     async def test_reject_scheduler_condition_entity(
         self,

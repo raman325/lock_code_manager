@@ -49,6 +49,7 @@ from homeassistant.helpers import (
     entity_registry as er,
     instance_id,
 )
+from homeassistant.helpers.issue_registry import async_create_issue
 
 from .const import (
     CONF_CALENDAR,
@@ -339,6 +340,19 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
+    # Create repair issue if any slots use the deprecated number_of_uses feature
+    slots = get_entry_data(config_entry, CONF_SLOTS, {})
+    if any(slot_config.get(CONF_NUMBER_OF_USES) for slot_config in slots.values()):
+        async_create_issue(
+            hass,
+            DOMAIN,
+            "number_of_uses_deprecated",
+            is_fixable=True,
+            is_persistent=True,
+            severity="warning",
+            translation_key="number_of_uses_deprecated",
+        )
+
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
     else:
@@ -594,6 +608,9 @@ async def async_update_listener(
     curr_locks: list[str] = [*config_entry.data.get(CONF_LOCKS, [])]
     new_locks: list[str] = [*config_entry.options.get(CONF_LOCKS, [])]
 
+    # Strip number_of_uses from slots that didn't previously have it
+    # (deprecated — only existing values are preserved). Skip on initial
+    # setup (curr_slots empty) since the data just moved from data→options.
     # Set up any platforms that the new slot configs need that haven't already been
     # setup
     for platform in {

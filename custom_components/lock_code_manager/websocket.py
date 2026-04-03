@@ -1291,14 +1291,22 @@ async def update_slot_condition(
         else:
             slot_config[CONF_ENTITY_ID] = entity_id
 
-    # Update number_of_uses if present in message
+    # Update number_of_uses if present in message (deprecated — only allow
+    # updates to existing values or removal, not adding to new slots)
     if CONF_NUMBER_OF_USES in msg:
         num_uses = msg[CONF_NUMBER_OF_USES]
         if num_uses is None:
-            # Remove the key entirely (disables tracking, removes entity)
             slot_config.pop(CONF_NUMBER_OF_USES, None)
-        else:
+        elif CONF_NUMBER_OF_USES in slot_config:
             slot_config[CONF_NUMBER_OF_USES] = num_uses
+        else:
+            connection.send_error(
+                msg["id"],
+                "deprecated",
+                "Number of Uses is deprecated. Use the Slot Usage Limiter "
+                "blueprint instead.",
+            )
+            return
 
     data[CONF_SLOTS][slot_key] = slot_config
 
