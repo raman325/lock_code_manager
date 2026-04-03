@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7e7eafb0a9cd",
+  "strategy": "manual-commit",
+  "branch": "chore/type-checking-ci",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/providers/test_virtual.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7e/7eafb0a9cd/0/metadata.json",
+      "transcript": "/7e/7eafb0a9cd/0/full.jsonl",
+      "content_hash": "/7e/7eafb0a9cd/0/content_hash.txt",
+      "prompt": "/7e/7eafb0a9cd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5336,
+    "cache_creation_tokens": 11674180,
+    "cache_read_tokens": 1266720432,
+    "output_tokens": 623589,
+    "api_call_count": 2617
+  }
+}
