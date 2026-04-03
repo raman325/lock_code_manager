@@ -9,8 +9,6 @@
   codes immediately after.
 - **Config flow: conflicting integration detection** — Check for Keymaster or other
   code management integrations at setup and warn the user.
-- **Update migration docs** — Revise any wiki content that talks about "slowly migrating"
-  locks between tools. The guidance is now to commit fully to one tool.
 - **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
   code slots on a lock, so users can clean up stale codes without manual intervention.
 - **Unify Z-Wave event 15 duplicate handler with CodeRejectedError** — The reactive
@@ -20,9 +18,6 @@
   trigger a sync manager state update, or have the provider set a flag that the
   sync manager checks on next sync cycle. This would also allow the event 15
   handler to reset the sync tracker.
-- **Investigate lock-specific duplicate detection carve-outs** — Some locks don't mask
-  PINs or don't reject duplicates. Explore whether duplicate detection behavior can be
-  adapted per lock capability rather than one-size-fits-all.
 - Add type checking to CI:
   - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
   - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
@@ -63,11 +58,6 @@
 
 #### Sync Manager Follow-ups
 
-- Make unload symmetric with setup (unload treats everything as "remove all
-  slots/locks" through the same update_listener path)
-- Upgrade catch-all state tracking to targeted once entities are discovered
-  (currently deferred — modifying subscriptions from within a callback causes
-  timing issues)
 - Consider coordinator owning sync managers instead of binary sensor entities
   (manager lifecycle would survive entity recreation during config updates)
 
@@ -81,20 +71,6 @@ improves type safety, IDE autocompletion, and code readability.
 
 **Why not Voluptuous?** Voluptuous is for validation, not object instantiation.
 Other options like `dacite` or Pydantic add dependencies.
-
-### Rewrite Matter Provider
-
-Rewrite PR #741 using the `SlotCode.UNKNOWN` model. The Matter provider:
-
-- Returns `SlotCode.UNKNOWN` for occupied slots (PINs are write-only)
-- Returns `SlotCode.EMPTY` for cleared slots
-- Handles user/credential mapping internally (SetUser + SetCredential)
-- Uses HA's `matter.set_lock_credential` / `matter.clear_lock_credential` services
-- Sync handles `UNKNOWN` natively (no special resolution needed)
-
-HA core Matter lock services: `set_lock_user`, `clear_lock_user`,
-`set_lock_credential`, `clear_lock_credential`, `get_lock_users`,
-`get_lock_credential_status`, `get_lock_info`.
 
 ### Add Optional Flags to `get_config_entry_data` Websocket Command
 
@@ -124,22 +100,22 @@ no visibility to users or entities.
 
 **Current Providers:**
 
+- Akuvox (`akuvox.py`) - via Local Akuvox custom integration
+- Matter (`matter.py`)
+- Schlage (`schlage.py`)
 - Z-Wave JS (`zwave_js.py`)
 - Virtual (`virtual.py`) - for testing only
 
-**High Priority:**
+**Open PRs:**
 
-- **ZHA (Zigbee Home Automation)** - Very popular, supports many lock brands
-- **Matter** - Future-proof, industry standard (PR open)
-- **MQTT** - Generic protocol, many custom implementations
+- **ZHA** (#739) - Zigbee Home Automation
+- **MQTT/Zigbee2MQTT** (#740) - MQTT-based locks
 
-**Medium Priority:**
+**Potential Future Providers:**
 
 - **Nuki** - Popular in Europe
-- **Schlage** - Popular in North America
 - **SwitchBot** - Growing popularity
 - **SmartThings** - Large user base
-- **HomeKit Controller** - Apple ecosystem
 
 **Cannot Be Supported** (see README for details):
 
@@ -147,13 +123,6 @@ no visibility to users or entities.
 - `august`, `yale`, `yalexs_ble`, `yale_smart_alarm` - Library limitations
 
 See `AGENTS.md` for implementation approach and `BaseLock` interface.
-
-### Add Relevant New Home Assistant Core Features
-
-**Key Features to Evaluate:**
-
-1. **Selector Improvements** — Review config flow UI for better selectors
-2. **Repair Platform** — Consider adding repairs for common misconfigurations
 
 ### Custom Jinja Templates
 
