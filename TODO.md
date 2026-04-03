@@ -18,28 +18,9 @@
   trigger a sync manager state update, or have the provider set a flag that the
   sync manager checks on next sync cycle. This would also allow the event 15
   handler to reset the sync tracker.
-- Add type checking to CI:
-  - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
-  - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
-  - Fix existing type errors (~49 errors as of Mar 2026)
 - Test visual editor for both cards.
 
-## Testing
-
-- Strategy UI module has unit tests in `ts/*.test.ts` and Python tests for
-  resource registration/unload in `tests/test_init.py`; still need end-to-end
-  UI coverage (Lovelace resource registration + reload in a real frontend).
-- Test rate limiting and connection failure timing in live environment.
-- Extract shared base provider tests (every provider implements the same BaseLock
-  interface — common tests should be shared, with provider-specific tests layered on).
-
 ## Refactors and Maintenance
-
-### Simplify Tests
-
-- Consolidate duplicate test setup code in `tests/common.py` into shared fixtures
-- Consider parametrized tests where multiple similar tests exist
-- Reduce test boilerplate with helper functions
 
 ### Simplify Code
 
