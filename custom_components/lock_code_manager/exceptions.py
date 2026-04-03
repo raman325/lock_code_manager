@@ -58,7 +58,7 @@ class DuplicateCodeError(CodeRejectedError):
             managed_str = "managed" if conflicting_slot_managed else "unmanaged"
             reason = f"PIN duplicates {managed_str} slot {conflicting_slot}"
         else:
-            reason = "Lock rejected code (duplicate detected by lock firmware)"
+            reason = "duplicate detected by lock firmware"
         super().__init__(
             code_slot,
             lock_entity_id,

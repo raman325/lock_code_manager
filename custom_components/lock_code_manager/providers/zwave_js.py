@@ -336,8 +336,6 @@ class ZWaveJSLock(BaseLock):
             slot = self._set_in_progress_code_slot
             self._set_in_progress_code_slot = None
             self.mark_code_rejected(slot)
-            if self.coordinator:
-                self.coordinator.async_set_updated_data(self.coordinator.data)
             return
 
         self.async_fire_code_slot_event(

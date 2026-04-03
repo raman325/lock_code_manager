@@ -748,9 +748,12 @@ class BaseLock:
             Checks for duplicate PINs (from coordinator data) and for codes
             previously rejected by the lock firmware (from event 15).
             """
+            # Clear the firmware-rejection flag first so it doesn't persist
+            # if _check_duplicate_code raises its own DuplicateCodeError
+            firmware_rejected = code_slot in self._rejected_code_slots
+            self._rejected_code_slots.discard(code_slot)
             self._check_duplicate_code(code_slot, str(usercode))
-            if code_slot in self._rejected_code_slots:
-                self._rejected_code_slots.discard(code_slot)
+            if firmware_rejected:
                 raise DuplicateCodeError(
                     code_slot=code_slot,
                     lock_entity_id=self.lock.entity_id,
