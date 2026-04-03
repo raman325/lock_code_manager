@@ -22,7 +22,11 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
@@ -686,3 +690,61 @@ async def test_unload_fires_lock_removed_callbacks(
 
     # Both locks should have had their removed callbacks fired
     assert set(removed_locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_repair_issue_created(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that a repair issue is created when slots have number_of_uses."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            "2": {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                CONF_NUMBER_OF_USES: 5,
+            },
+        },
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Repair Test", title="Repair Test"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is not None
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_no_repair_when_absent(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that no repair issue is created when no slots have number_of_uses."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="No Repair Test", title="No Repair Test"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is None
+
+    await hass.config_entries.async_unload(config_entry.entry_id)

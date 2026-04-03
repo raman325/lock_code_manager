@@ -49,7 +49,11 @@ from homeassistant.helpers import (
     entity_registry as er,
     instance_id,
 )
-from homeassistant.helpers.issue_registry import async_create_issue
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 
 from .const import (
     CONF_CALENDAR,
@@ -340,18 +344,20 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
-    # Create repair issue if any slots use the deprecated number_of_uses feature
+    # Create or dismiss repair issue based on deprecated number_of_uses presence
     slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    if any(slot_config.get(CONF_NUMBER_OF_USES) for slot_config in slots.values()):
+    if any(CONF_NUMBER_OF_USES in slot_config for slot_config in slots.values()):
         async_create_issue(
             hass,
             DOMAIN,
             "number_of_uses_deprecated",
             is_fixable=True,
             is_persistent=True,
-            severity="warning",
+            severity=IssueSeverity.WARNING,
             translation_key="number_of_uses_deprecated",
         )
+    else:
+        async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
 
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)

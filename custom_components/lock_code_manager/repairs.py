@@ -6,7 +6,7 @@ from homeassistant import data_entry_flow
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_SLOTS, DOMAIN
+from .const import CONF_NUMBER_OF_USES, CONF_SLOTS, DOMAIN
 
 
 class NumberOfUsesDeprecatedFlow(RepairsFlow):
@@ -32,7 +32,8 @@ class NumberOfUsesDeprecatedFlow(RepairsFlow):
                         new_slots = {}
                         for slot_num, slot_config in data_dict[CONF_SLOTS].items():
                             new_slot = {**slot_config}
-                            if new_slot.pop("number_of_uses", None):
+                            if CONF_NUMBER_OF_USES in new_slot:
+                                new_slot.pop(CONF_NUMBER_OF_USES)
                                 changed = True
                             new_slots[slot_num] = new_slot
                         data_dict[CONF_SLOTS] = new_slots
