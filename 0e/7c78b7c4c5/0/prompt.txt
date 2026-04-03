@@ -535,3 +535,13 @@ remove it
 ---
 
 I am not sure. It doesn't seem relevant
+
+---
+
+is the TODO up to date? I see for example none of the new proviers listed. Rewrite Matter pvoider is done right?
+
+---
+
+Other Complexity
+Entity unique ID format - Is {entry_id}|{slot}|{type} optimal?
+async_internal_* method wrappers — are all necessary?
