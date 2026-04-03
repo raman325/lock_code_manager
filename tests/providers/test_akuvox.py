@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -33,6 +32,11 @@ from custom_components.lock_code_manager.providers.akuvox import (
     _is_local_user,
     _make_tagged_name,
     _parse_tag,
+)
+
+from .service_provider_tests import (
+    ServiceProviderConnectionTests,
+    register_mock_service,
 )
 
 LOCK_ENTITY_ID = "lock.local_akuvox_test_relay_a"
@@ -88,22 +92,31 @@ async def lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
-def _register_akuvox_service(
-    hass: HomeAssistant,
-    service_name: str,
-    handler: AsyncMock,
-) -> None:
-    """Register a mock Akuvox service that returns responses."""
+# --- Alias fixtures for shared test mixins ---
 
-    async def _service_handler(call):
-        return await handler(call)
 
-    hass.services.async_register(
-        AKUVOX_DOMAIN,
-        service_name,
-        _service_handler,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
+@pytest.fixture
+def provider_lock(akuvox_lock: AkuvoxLock) -> AkuvoxLock:
+    """Alias akuvox_lock for shared test mixins."""
+    return akuvox_lock
+
+
+@pytest.fixture
+def provider_config_entry(akuvox_config_entry: MockConfigEntry) -> MockConfigEntry:
+    """Alias akuvox_config_entry for shared test mixins."""
+    return akuvox_config_entry
+
+
+@pytest.fixture
+def provider_domain() -> str:
+    """Return the provider integration domain."""
+    return AKUVOX_DOMAIN
+
+
+@pytest.fixture
+def provider_lock_class() -> type[AkuvoxLock]:
+    """Return the provider lock class."""
+    return AkuvoxLock
 
 
 def _make_user(
@@ -211,47 +224,12 @@ class TestProperties:
 
 
 # ---------------------------------------------------------------------------
-# Connection
+# Connection (shared)
 # ---------------------------------------------------------------------------
 
 
-class TestConnection:
-    """Tests for connection checking."""
-
-    async def test_is_integration_connected_not_loaded(
-        self, akuvox_lock: AkuvoxLock
-    ) -> None:
-        """Test integration not connected when config entry is not loaded."""
-        assert await akuvox_lock.async_is_integration_connected() is False
-
-    async def test_is_integration_connected_loaded(
-        self, akuvox_lock: AkuvoxLock
-    ) -> None:
-        """Test integration connected when config entry is loaded."""
-        mock_entry = MagicMock()
-        mock_entry.state = ConfigEntryState.LOADED
-        akuvox_lock.lock_config_entry = mock_entry
-        assert await akuvox_lock.async_is_integration_connected() is True
-
-    async def test_is_integration_connected_no_config_entry(
-        self, hass: HomeAssistant, akuvox_config_entry: MockConfigEntry
-    ) -> None:
-        """Test integration not connected when lock has no config entry."""
-        entity_reg = er.async_get(hass)
-        lock_entity = entity_reg.async_get_or_create(
-            "lock",
-            "local_akuvox",
-            "test_no_entry",
-            config_entry=akuvox_config_entry,
-        )
-        lock = AkuvoxLock(
-            hass,
-            dr.async_get(hass),
-            entity_reg,
-            None,
-            lock_entity,
-        )
-        assert await lock.async_is_integration_connected() is False
+class TestConnection(ServiceProviderConnectionTests):
+    """Connection tests for Akuvox provider using shared mixin."""
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +255,7 @@ class TestGetUsercodes:
             },
         }
         handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
         codes = await akuvox_lock.async_get_usercodes()
 
@@ -293,7 +271,7 @@ class TestGetUsercodes:
         """Test get_usercodes when no users exist on the lock."""
         mock_response = {LOCK_ENTITY_ID: {"users": []}}
         handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
         codes = await akuvox_lock.async_get_usercodes()
 
@@ -324,7 +302,7 @@ class TestGetUsercodes:
             },
         }
         list_handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", list_handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
 
         codes = await akuvox_lock.async_get_usercodes()
 
@@ -347,7 +325,7 @@ class TestGetUsercodes:
             },
         }
         handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
         codes = await akuvox_lock.async_get_usercodes()
 
@@ -369,7 +347,7 @@ class TestGetUsercodes:
             },
         }
         handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
         codes = await akuvox_lock.async_get_usercodes()
 
@@ -390,7 +368,7 @@ class TestGetUsercodes:
             },
         }
         handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
         codes = await akuvox_lock.async_get_usercodes()
 
@@ -413,8 +391,8 @@ class TestSetUsercode:
         """Test setting a usercode creates a new user when none exists."""
         # list_users returns no users
         list_response = {LOCK_ENTITY_ID: {"users": []}}
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
 
         add_calls: list[dict[str, Any]] = []
@@ -422,7 +400,9 @@ class TestSetUsercode:
         async def _capture_add(call):
             add_calls.append(dict(call.data))
 
-        _register_akuvox_service(hass, "add_user", AsyncMock(side_effect=_capture_add))
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "add_user", AsyncMock(side_effect=_capture_add)
+        )
 
         result = await akuvox_lock.async_set_usercode(1, "1234", "Guest")
 
@@ -442,8 +422,8 @@ class TestSetUsercode:
                 ],
             },
         }
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
 
         modify_calls: list[dict[str, Any]] = []
@@ -451,8 +431,8 @@ class TestSetUsercode:
         async def _capture_modify(call):
             modify_calls.append(dict(call.data))
 
-        _register_akuvox_service(
-            hass, "modify_user", AsyncMock(side_effect=_capture_modify)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
         )
 
         result = await akuvox_lock.async_set_usercode(1, "5678", "Updated")
@@ -474,8 +454,8 @@ class TestSetUsercode:
                 ],
             },
         }
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
 
         modify_calls: list[dict[str, Any]] = []
@@ -483,8 +463,8 @@ class TestSetUsercode:
         async def _capture_modify(call):
             modify_calls.append(dict(call.data))
 
-        _register_akuvox_service(
-            hass, "modify_user", AsyncMock(side_effect=_capture_modify)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
         )
 
         result = await akuvox_lock.async_set_usercode(1, "9999")
@@ -497,11 +477,12 @@ class TestSetUsercode:
     ) -> None:
         """Test that service failures raise LockDisconnected."""
         list_response = {LOCK_ENTITY_ID: {"users": []}}
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
-        _register_akuvox_service(
+        register_mock_service(
             hass,
+            AKUVOX_DOMAIN,
             "add_user",
             AsyncMock(side_effect=HomeAssistantError("device offline")),
         )
@@ -529,8 +510,8 @@ class TestClearUsercode:
                 ],
             },
         }
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
 
         delete_calls: list[dict[str, Any]] = []
@@ -538,8 +519,8 @@ class TestClearUsercode:
         async def _capture_delete(call):
             delete_calls.append(dict(call.data))
 
-        _register_akuvox_service(
-            hass, "delete_user", AsyncMock(side_effect=_capture_delete)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "delete_user", AsyncMock(side_effect=_capture_delete)
         )
 
         result = await akuvox_lock.async_clear_usercode(1)
@@ -553,8 +534,8 @@ class TestClearUsercode:
     ) -> None:
         """Test clearing returns False when the slot has no user."""
         list_response = {LOCK_ENTITY_ID: {"users": []}}
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
 
         result = await akuvox_lock.async_clear_usercode(1)
@@ -571,11 +552,12 @@ class TestClearUsercode:
                 ],
             },
         }
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=list_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
-        _register_akuvox_service(
+        register_mock_service(
             hass,
+            AKUVOX_DOMAIN,
             "delete_user",
             AsyncMock(side_effect=HomeAssistantError("device offline")),
         )
@@ -599,8 +581,9 @@ class TestListUsersErrors:
         lcm_config_entry: MockConfigEntry,
     ) -> None:
         """Test that list_users failure raises LockDisconnected."""
-        _register_akuvox_service(
+        register_mock_service(
             hass,
+            AKUVOX_DOMAIN,
             "list_users",
             AsyncMock(side_effect=HomeAssistantError("connection lost")),
         )
@@ -620,8 +603,8 @@ class TestListUsersErrors:
         return_response=True, so the service call itself raises HomeAssistantError
         which our provider wraps as LockDisconnected.
         """
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value="not a dict")
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value="not a dict")
         )
 
         with pytest.raises(LockDisconnected, match="Failed to list users"):
@@ -635,8 +618,9 @@ class TestListUsersErrors:
     ) -> None:
         """Test that a malformed entity-level response raises LockCodeManagerError."""
         # Response is a dict but the entity key maps to a non-dict value
-        _register_akuvox_service(
+        register_mock_service(
             hass,
+            AKUVOX_DOMAIN,
             "list_users",
             AsyncMock(return_value={LOCK_ENTITY_ID: "not a dict"}),
         )
@@ -670,15 +654,15 @@ class TestAutoTagging:
             },
         }
         list_handler = AsyncMock(return_value=mock_response)
-        _register_akuvox_service(hass, "list_users", list_handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
 
         modify_calls: list[dict[str, Any]] = []
 
         async def _capture_modify(call):
             modify_calls.append(dict(call.data))
 
-        _register_akuvox_service(
-            hass, "modify_user", AsyncMock(side_effect=_capture_modify)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
         )
 
         await akuvox_lock._async_tag_unmanaged_users()
@@ -702,8 +686,8 @@ class TestAutoTagging:
                 ],
             },
         }
-        _register_akuvox_service(
-            hass, "list_users", AsyncMock(return_value=mock_response)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=mock_response)
         )
 
         modify_calls: list[dict[str, Any]] = []
@@ -715,8 +699,8 @@ class TestAutoTagging:
                 raise HomeAssistantError("device busy")
             modify_calls.append(dict(call.data))
 
-        _register_akuvox_service(
-            hass, "modify_user", AsyncMock(side_effect=_failing_then_ok)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_failing_then_ok)
         )
 
         await akuvox_lock._async_tag_unmanaged_users()
@@ -764,8 +748,8 @@ class TestHardRefresh:
             },
         }
         list_handler = AsyncMock(side_effect=[untagged_response, tagged_response])
-        _register_akuvox_service(hass, "list_users", list_handler)
-        _register_akuvox_service(hass, "modify_user", AsyncMock())
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
+        register_mock_service(hass, AKUVOX_DOMAIN, "modify_user", AsyncMock())
 
         codes = await akuvox_lock.async_hard_refresh_codes()
 

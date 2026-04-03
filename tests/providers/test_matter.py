@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, SupportsResponse
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -30,6 +29,12 @@ from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.matter import (
     MATTER_DOMAIN,
     MatterLock,
+)
+
+from .service_provider_tests import (
+    ServiceProviderConnectionTests,
+    ServiceProviderDeviceAvailabilityTests,
+    register_mock_service,
 )
 
 LOCK_ENTITY_ID = "lock.matter_test_matter_lock"
@@ -80,22 +85,36 @@ async def lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
-def _register_matter_service(
-    hass: HomeAssistant,
-    service_name: str,
-    handler: AsyncMock,
-) -> None:
-    """Register a mock Matter service that returns responses."""
+# --- Alias fixtures for shared test mixins ---
 
-    async def _service_handler(call):
-        return await handler(call)
 
-    hass.services.async_register(
-        MATTER_DOMAIN,
-        service_name,
-        _service_handler,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
+@pytest.fixture
+def provider_lock(matter_lock: MatterLock) -> MatterLock:
+    """Alias matter_lock for shared test mixins."""
+    return matter_lock
+
+
+@pytest.fixture
+def provider_config_entry(matter_config_entry: MockConfigEntry) -> MockConfigEntry:
+    """Alias matter_config_entry for shared test mixins."""
+    return matter_config_entry
+
+
+@pytest.fixture
+def provider_domain() -> str:
+    """Return the provider integration domain."""
+    return MATTER_DOMAIN
+
+
+@pytest.fixture
+def provider_lock_class() -> type[MatterLock]:
+    """Return the provider lock class."""
+    return MatterLock
+
+
+# ---------------------------------------------------------------------------
+# Property tests
+# ---------------------------------------------------------------------------
 
 
 async def test_domain_property(matter_lock: MatterLock) -> None:
@@ -113,6 +132,26 @@ async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
     assert matter_lock.usercode_scan_interval == timedelta(minutes=5)
 
 
+# ---------------------------------------------------------------------------
+# Connection and availability tests (shared)
+# ---------------------------------------------------------------------------
+
+
+class TestConnection(ServiceProviderConnectionTests):
+    """Connection tests for Matter provider using shared mixin."""
+
+
+class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
+    """Device availability tests for Matter provider using shared mixin."""
+
+    availability_service = "get_lock_info"
+
+
+# ---------------------------------------------------------------------------
+# Setup tests
+# ---------------------------------------------------------------------------
+
+
 async def test_setup(
     hass: HomeAssistant,
     matter_lock: MatterLock,
@@ -126,7 +165,7 @@ async def test_setup(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_info", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     await matter_lock.async_setup(lcm_config_entry)
     assert handler.call_count == 1
@@ -144,7 +183,7 @@ async def test_setup_unsupported_lock(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_info", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support user management"):
         await matter_lock.async_setup(lcm_config_entry)
@@ -163,71 +202,15 @@ async def test_setup_no_pin_support(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_info", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support PIN credentials"):
         await matter_lock.async_setup(lcm_config_entry)
 
 
-async def test_is_integration_connected_not_loaded(
-    hass: HomeAssistant, matter_lock: MatterLock, matter_config_entry: MockConfigEntry
-) -> None:
-    """Test integration not connected when config entry is not loaded."""
-    assert await matter_lock.async_is_integration_connected() is False
-
-
-async def test_is_integration_connected_loaded(
-    hass: HomeAssistant, matter_lock: MatterLock
-) -> None:
-    """Test integration connected when config entry is loaded."""
-    mock_entry = MagicMock()
-    mock_entry.state = ConfigEntryState.LOADED
-    matter_lock.lock_config_entry = mock_entry
-    assert await matter_lock.async_is_integration_connected() is True
-
-
-async def test_is_integration_connected_no_config_entry(
-    hass: HomeAssistant, matter_config_entry: MockConfigEntry
-) -> None:
-    """Test integration not connected when lock has no config entry."""
-    entity_reg = er.async_get(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "matter",
-        "test_matter_lock_no_entry",
-        config_entry=matter_config_entry,
-    )
-    lock = MatterLock(
-        hass,
-        dr.async_get(hass),
-        entity_reg,
-        None,
-        lock_entity,
-    )
-    assert await lock.async_is_integration_connected() is False
-
-
-async def test_is_device_available(
-    hass: HomeAssistant, matter_lock: MatterLock
-) -> None:
-    """Test device availability check via get_lock_info service."""
-    mock_response = {
-        LOCK_ENTITY_ID: {"supports_user_management": True},
-    }
-    handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_info", handler)
-
-    assert await matter_lock.async_is_device_available() is True
-
-
-async def test_is_device_available_error(
-    hass: HomeAssistant, matter_lock: MatterLock
-) -> None:
-    """Test device availability returns False when service call fails."""
-    handler = AsyncMock(side_effect=HomeAssistantError("device offline"))
-    _register_matter_service(hass, "get_lock_info", handler)
-
-    assert await matter_lock.async_is_device_available() is False
+# ---------------------------------------------------------------------------
+# get_usercodes tests
+# ---------------------------------------------------------------------------
 
 
 async def test_get_usercodes(
@@ -254,7 +237,7 @@ async def test_get_usercodes(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_users", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
     codes = await matter_lock.async_get_usercodes()
 
@@ -275,7 +258,7 @@ async def test_get_usercodes_no_users(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_users", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
     codes = await matter_lock.async_get_usercodes()
 
@@ -292,6 +275,11 @@ async def test_get_usercodes_no_configured_slots(
     assert codes == {}
 
 
+# ---------------------------------------------------------------------------
+# set_usercode tests
+# ---------------------------------------------------------------------------
+
+
 async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> None:
     """Test set_usercode calls the correct Matter services."""
     calls: list[dict[str, Any]] = []
@@ -300,11 +288,11 @@ async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> Non
         calls.append({"service": call.service, "data": dict(call.data)})
         return {LOCK_ENTITY_ID: {}}
 
-    _register_matter_service(
-        hass, "set_lock_credential", AsyncMock(side_effect=_capture_call)
+    register_mock_service(
+        hass, MATTER_DOMAIN, "set_lock_credential", AsyncMock(side_effect=_capture_call)
     )
-    _register_matter_service(
-        hass, "set_lock_user", AsyncMock(side_effect=_capture_call)
+    register_mock_service(
+        hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
     )
 
     result = await matter_lock.async_set_usercode(1, "1234", "User One")
@@ -331,17 +319,22 @@ async def test_set_usercode_no_name(
         calls.append(call.service)
         return {LOCK_ENTITY_ID: {}}
 
-    _register_matter_service(
-        hass, "set_lock_credential", AsyncMock(side_effect=_capture_call)
+    register_mock_service(
+        hass, MATTER_DOMAIN, "set_lock_credential", AsyncMock(side_effect=_capture_call)
     )
-    _register_matter_service(
-        hass, "set_lock_user", AsyncMock(side_effect=_capture_call)
+    register_mock_service(
+        hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
     )
 
     result = await matter_lock.async_set_usercode(3, "9999")
 
     assert result is True
     assert calls == ["set_lock_credential"]
+
+
+# ---------------------------------------------------------------------------
+# clear_usercode tests
+# ---------------------------------------------------------------------------
 
 
 async def test_clear_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> None:
@@ -353,8 +346,10 @@ async def test_clear_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> N
 
     handler_status = AsyncMock(return_value=credential_status_response)
     handler_clear = AsyncMock(return_value=clear_response)
-    _register_matter_service(hass, "get_lock_credential_status", handler_status)
-    _register_matter_service(hass, "clear_lock_credential", handler_clear)
+    register_mock_service(
+        hass, MATTER_DOMAIN, "get_lock_credential_status", handler_status
+    )
+    register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", handler_clear)
 
     result = await matter_lock.async_clear_usercode(1)
 
@@ -372,8 +367,10 @@ async def test_clear_usercode_already_empty(
     }
     handler_status = AsyncMock(return_value=credential_status_response)
     handler_clear = AsyncMock(return_value={LOCK_ENTITY_ID: {}})
-    _register_matter_service(hass, "get_lock_credential_status", handler_status)
-    _register_matter_service(hass, "clear_lock_credential", handler_clear)
+    register_mock_service(
+        hass, MATTER_DOMAIN, "get_lock_credential_status", handler_status
+    )
+    register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", handler_clear)
 
     result = await matter_lock.async_clear_usercode(2)
 
@@ -381,6 +378,11 @@ async def test_clear_usercode_already_empty(
     # Only the credential status check should have been called
     assert handler_status.call_count == 1
     assert handler_clear.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# hard_refresh_codes tests
+# ---------------------------------------------------------------------------
 
 
 async def test_hard_refresh_codes(
@@ -403,7 +405,7 @@ async def test_hard_refresh_codes(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_users", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
     codes = await matter_lock.async_hard_refresh_codes()
 
@@ -411,12 +413,17 @@ async def test_hard_refresh_codes(
     assert codes[2] is SlotCode.UNKNOWN
 
 
+# ---------------------------------------------------------------------------
+# Service error tests
+# ---------------------------------------------------------------------------
+
+
 async def test_service_call_failure_raises_lock_disconnected(
     hass: HomeAssistant, matter_lock: MatterLock
 ) -> None:
     """Test that Matter service failures raise LockDisconnected."""
     handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    _register_matter_service(hass, "set_lock_credential", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", handler)
 
     with pytest.raises(LockDisconnected, match="connection lost"):
         await matter_lock.async_set_usercode(1, "1234")
@@ -443,7 +450,7 @@ async def test_get_usercodes_multiple_credential_types(
         },
     }
     handler = AsyncMock(return_value=mock_response)
-    _register_matter_service(hass, "get_lock_users", handler)
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
     codes = await matter_lock.async_get_usercodes()
 
