@@ -29,8 +29,9 @@
 - Strategy UI module has unit tests in `ts/*.test.ts` and Python tests for
   resource registration/unload in `tests/test_init.py`; still need end-to-end
   UI coverage (Lovelace resource registration + reload in a real frontend).
-- Add provider tests when new integrations beyond Z-Wave JS and virtual are added.
 - Test rate limiting and connection failure timing in live environment.
+- Extract shared base provider tests (every provider implements the same BaseLock
+  interface — common tests should be shared, with provider-specific tests layered on).
 
 ## Refactors and Maintenance
 
@@ -50,11 +51,6 @@
    `config_entry.data` vs `config_entry.options`. Current understanding: prefer
    `options` only within the config entry update listener during options updates;
    elsewhere use `data` to avoid mid-update inconsistencies.
-
-#### Other Complexity
-
-- **Entity unique ID format** - Is `{entry_id}|{slot}|{type}` optimal?
-- **`async_internal_*` method wrappers** — are all necessary?
 
 #### Sync Manager Follow-ups
 
@@ -136,10 +132,8 @@ Lovelace resources.
 
 ### Improve Dashboard UI/UX
 
-- Add visual indicator when codes are out of sync
 - Bulk operations (enable/disable multiple slots)
 - Import/export slot configuration
-- History view showing when codes were used
 
 ### Add Service Actions
 
