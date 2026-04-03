@@ -11,9 +11,13 @@
   on a lock.
 - **Bulk operations** — Enable/disable multiple slots at once.
 - **Import/export slot configuration**
-- **PIN validation** — Warn on simple PINs ("1234", "0000"), duplicate PINs
-  across slots, format violations against lock requirements, and slot conflicts
-  across config entries.
+- **PIN validation** — Opt-in per config entry (`pin_validation` option, default
+  off). Built-in toggleable checks: duplicate PINs, simple PINs (blocklist),
+  format (digits-only, 4-10). Custom regex rules: list of
+  `{ pattern, reject: bool, message }` where reject=true is blocklist,
+  reject=false is allowlist. Blocks save with inline errors. Shared
+  `validate_pin()` in `validation.py`, called from config flow, options flow,
+  and websocket.
 - **Service actions:**
   - `set_temporary_code` — time-limited PIN
   - `generate_pin` — auto-generate secure PIN
