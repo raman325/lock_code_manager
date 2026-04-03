@@ -18,7 +18,6 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
-from homeassistant.components.persistent_notification import async_create
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -50,6 +49,7 @@ from homeassistant.helpers import (
     entity_registry as er,
     instance_id,
 )
+from homeassistant.helpers.issue_registry import async_create_issue
 
 from .const import (
     CONF_CALENDAR,
@@ -120,7 +120,6 @@ async def async_migrate_entry(
             config_entry.title,
         )
 
-        # Remove number_of_uses from all slot configs
         new_data = {**config_entry.data}
         new_options = {**config_entry.options}
         any_removed = False
@@ -140,14 +139,14 @@ async def async_migrate_entry(
         )
 
         if any_removed:
-            async_create(
+            async_create_issue(
                 hass,
-                "The **Number of Uses** feature has been removed from Lock Code Manager. "
-                "Use the [Slot Usage Limiter blueprint]"
-                "(https://github.com/raman325/lock_code_manager/wiki/Blueprints#slot-usage-limiter) "
-                "for equivalent functionality with more flexibility.",
-                title="Lock Code Manager: Number of Uses Removed",
-                notification_id="lcm_number_of_uses_removed",
+                DOMAIN,
+                "number_of_uses_removed",
+                is_fixable=True,
+                is_persistent=True,
+                severity="warning",
+                translation_key="number_of_uses_removed",
             )
 
         _LOGGER.info(

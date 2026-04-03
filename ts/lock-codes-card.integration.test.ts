@@ -143,7 +143,7 @@ describe('LockCodesCard integration', () => {
             await flush();
 
             const testData = makeLockCoordinatorData();
-            capturedCallback!(testData);
+            capturedCallback(testData);
 
             expect(el._data).toEqual(testData);
         });
@@ -187,7 +187,7 @@ describe('LockCodesCard integration', () => {
                     { slot: 3, code: null, name: undefined, managed: false }
                 ]
             });
-            capturedCallback!(testData);
+            capturedCallback(testData);
 
             expect(el._data?.slots).toHaveLength(3);
             expect(el._data?.slots[0].code).toBe('1234');
@@ -235,7 +235,7 @@ describe('LockCodesCard integration', () => {
 
             // Manually set an error to simulate a prior failure
             el._error = 'Previous error';
-            capturedCallback!(makeLockCoordinatorData());
+            capturedCallback(makeLockCoordinatorData());
 
             expect(el._error).toBeUndefined();
         });
@@ -320,7 +320,7 @@ describe('LockCodesCard integration', () => {
             container.appendChild(card2);
             await flush();
 
-            capturedCallback!(
+            capturedCallback(
                 makeLockCoordinatorData({
                     slots: [
                         {

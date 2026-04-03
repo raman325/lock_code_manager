@@ -9,9 +9,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
-from homeassistant.components.persistent_notification import (
-    _async_get_or_create_notifications,
-)
 from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.const import (
     ATTR_CODE,
@@ -25,7 +22,11 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
@@ -688,7 +689,7 @@ async def test_migration_v2_to_v3_removes_number_of_uses(
     setup_lovelace_ui,
     mock_lock_config_entry,
 ):
-    """Test migration from v2 to v3 strips number_of_uses and creates notification."""
+    """Test migration from v2 to v3 strips number_of_uses and creates repair issue."""
     v2_config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
@@ -727,9 +728,9 @@ async def test_migration_v2_to_v3_removes_number_of_uses(
     # Slot 1 should be unchanged
     assert "number_of_uses" not in migrated_data[CONF_SLOTS][1]
 
-    # Verify persistent notification was created
-    notifications = _async_get_or_create_notifications(hass)
-    assert "lcm_number_of_uses_removed" in notifications
+    # Verify repair issue was created
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_removed") is not None
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)
@@ -766,9 +767,9 @@ async def test_migration_v2_to_v3_no_notification_when_no_uses(
 
     assert config_entry.version == 3
 
-    # No notification should be created
-    notifications = _async_get_or_create_notifications(hass)
-    assert "lcm_number_of_uses_removed" not in notifications
+    # No repair issue should be created
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_removed") is None
 
     await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.config_entries.async_remove(config_entry.entry_id)

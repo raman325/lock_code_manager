@@ -169,7 +169,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
 
             const testData = makeSlotCardData();
-            capturedCallback!(testData);
+            capturedCallback(testData);
 
             expect(el._data).toEqual(testData);
         });
@@ -189,7 +189,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
 
             const maskedData = makeSlotCardData({ pin: null, pin_length: 4 });
-            capturedCallback!(maskedData);
+            capturedCallback(maskedData);
 
             expect(el._data?.pin).toBeNull();
             expect(el._data?.pin_length).toBe(4);
@@ -210,7 +210,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
 
             const revealedData = makeSlotCardData({ pin: '5678' });
-            capturedCallback!(revealedData);
+            capturedCallback(revealedData);
 
             expect(el._data?.pin).toBe('5678');
         });
@@ -281,7 +281,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             container.appendChild(card2);
             await flush();
 
-            capturedCallback!(
+            capturedCallback(
                 makeSlotCardData({
                     locks: [
                         {

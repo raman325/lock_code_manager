@@ -178,7 +178,7 @@ describe('LcmSubscriptionMixin integration', () => {
 
         // Simulate receiving data
         const testData = { slot_num: 1, name: 'Test User' };
-        capturedCallback!(testData);
+        capturedCallback(testData);
 
         expect(el._data).toEqual(testData);
         expect(el._error).toBeUndefined();

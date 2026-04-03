@@ -122,5 +122,18 @@
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
       "name": "Hard refresh usercodes"
     }
+  },
+  "issues": {
+    "number_of_uses_removed": {
+      "title": "Number of Uses feature removed",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Number of Uses has been replaced",
+            "description": "The built-in **Number of Uses** feature has been removed from Lock Code Manager.\n\nUse the **[Slot Usage Limiter blueprint](https://github.com/raman325/lock_code_manager/wiki/Blueprints#slot-usage-limiter)** for equivalent functionality with more flexibility, including notifications and unlimited mode.\n\nYour existing Number of Uses configuration has been removed from the config entry. Click **Submit** to acknowledge this change."
+          }
+        }
+      }
+    }
   }
 }
