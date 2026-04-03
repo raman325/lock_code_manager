@@ -57,8 +57,9 @@ blueprint:
     slot_number:
       name: Slot number
       description: >
-        The code slot number. Can be a static number (e.g. `3`) or a Jinja2
-        template that resolves to a number using calendar event attributes
+        The Lock Code Manager code slot number. Can be a static number (e.g.
+        `3`) or a Jinja2 template that resolves to a number using calendar
+        event attributes
         (e.g. `{{ description | regex_findall('slot (\d+)') | first }}`).
       selector:
         template:
@@ -84,6 +85,15 @@ blueprint:
       default: true
       selector:
         boolean:
+    notify_target:
+      name: Notification service (optional)
+      description: >
+        A notify entity to send messages to when PINs are set or cleared.
+        Leave empty to skip notifications.
+      default: ""
+      selector:
+        entity:
+          domain: notify
 
 mode: single
 
@@ -91,6 +101,8 @@ variables:
   config_entry: !input config_entry
   calendar_entity: !input calendar_entity
   clear_on_end: !input clear_on_end
+  notify_target: !input notify_target
+  _slot_number: !input slot_number
   config_entry_title: >
     {{ config_entry_attr(config_entry, 'title') }}
   _all_entities: >
@@ -133,6 +145,21 @@ actions:
               entity_id: "{{ pin_entity }}"
             data:
               value: "{{ pin_value }}"
+          - if:
+              - condition: template
+                value_template: "{{ notify_target != '' }}"
+            then:
+              - action: notify.send_message
+                target:
+                  entity_id: "{{ notify_target }}"
+                data:
+                  title: >
+                    {{ config_entry_title }} — Slot {{ _slot_number }}
+                    PIN Set
+                  message: >
+                    {{ config_entry_title }} code slot {{ _slot_number }}
+                    PIN set from calendar event "{{ message }}"
+                    ({{ now().strftime('%Y-%m-%d %H:%M:%S') }}).
       - conditions:
           - condition: template
             value_template: >
@@ -145,3 +172,18 @@ actions:
               entity_id: "{{ pin_entity }}"
             data:
               value: ""
+          - if:
+              - condition: template
+                value_template: "{{ notify_target != '' }}"
+            then:
+              - action: notify.send_message
+                target:
+                  entity_id: "{{ notify_target }}"
+                data:
+                  title: >
+                    {{ config_entry_title }} — Slot {{ _slot_number }}
+                    PIN Cleared
+                  message: >
+                    {{ config_entry_title }} code slot {{ _slot_number }}
+                    PIN cleared after calendar event ended
+                    ({{ now().strftime('%Y-%m-%d %H:%M:%S') }}).
