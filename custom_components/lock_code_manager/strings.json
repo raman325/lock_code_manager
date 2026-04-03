@@ -128,5 +128,18 @@
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
       "name": "Hard refresh usercodes"
     }
+  },
+  "issues": {
+    "number_of_uses_deprecated": {
+      "title": "Number of Uses is deprecated",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Migrate from Number of Uses",
+            "description": "The built-in **Number of Uses** feature is deprecated and will be removed in a future release.\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\n**Warning:** Clicking **Submit** will permanently remove Number of Uses from your configuration. Only do this after you have set up the blueprint replacement."
+          }
+        }
+      }
+    }
   }
 }

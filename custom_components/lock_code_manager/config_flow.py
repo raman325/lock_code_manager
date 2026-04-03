@@ -47,12 +47,12 @@ UI_CODE_SLOT_SCHEMA = vol.Schema(
         vol.Optional(CONF_ENTITY_ID): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
         ),
-        vol.Optional(CONF_NUMBER_OF_USES): sel.TextSelector(
-            sel.TextSelectorConfig(type=sel.TextSelectorType.NUMBER)
-        ),
     }
 )
 
+# Validation schema accepts number_of_uses for backward compatibility with
+# existing config entries, but the UI schema above does not show it for new
+# entries. number_of_uses is deprecated — use the Slot Usage Limiter blueprint.
 CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA.extend(
     {vol.Optional(CONF_NUMBER_OF_USES): vol.Coerce(int)}
 )
