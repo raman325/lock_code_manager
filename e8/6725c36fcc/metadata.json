@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e86725c36fcc",
+  "strategy": "manual-commit",
+  "branch": "refactor/unify-duplicate-handler",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "TODO.md",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e8/6725c36fcc/0/metadata.json",
+      "transcript": "/e8/6725c36fcc/0/full.jsonl",
+      "content_hash": "/e8/6725c36fcc/0/content_hash.txt",
+      "prompt": "/e8/6725c36fcc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5394,
+    "cache_creation_tokens": 12500476,
+    "cache_read_tokens": 1295054662,
+    "output_tokens": 631099,
+    "api_call_count": 2653
+  }
+}
