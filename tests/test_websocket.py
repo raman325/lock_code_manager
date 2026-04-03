@@ -1457,93 +1457,82 @@ async def test_subscribe_lock_codes_masked_shape_contract(
 class TestGetTextState:
     """Tests for _get_text_state helper."""
 
-    async def test_returns_valid_state(self, hass: HomeAssistant) -> None:
-        """Test returns state value for valid entity."""
-        hass.states.async_set("text.test", "hello")
-        assert _get_text_state(hass, "text.test") == "hello"
-
-    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
-        """Test returns None for unknown state."""
-        hass.states.async_set("text.test", STATE_UNKNOWN)
-        assert _get_text_state(hass, "text.test") is None
-
-    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
-        """Test returns None for unavailable state."""
-        hass.states.async_set("text.test", STATE_UNAVAILABLE)
-        assert _get_text_state(hass, "text.test") is None
-
-    async def test_returns_none_for_nonexistent(self, hass: HomeAssistant) -> None:
-        """Test returns None for nonexistent entity."""
-        assert _get_text_state(hass, "text.nonexistent") is None
-
-    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
-        """Test returns None when entity_id is None."""
-        assert _get_text_state(hass, None) is None
+    @pytest.mark.parametrize(
+        ("entity_id", "state_value", "expected"),
+        [
+            pytest.param("text.test", "hello", "hello", id="valid-state"),
+            pytest.param("text.test", STATE_UNKNOWN, None, id="unknown"),
+            pytest.param("text.test", STATE_UNAVAILABLE, None, id="unavailable"),
+            pytest.param("text.nonexistent", None, None, id="nonexistent"),
+            pytest.param(None, None, None, id="none-entity-id"),
+        ],
+    )
+    async def test_get_text_state(
+        self,
+        hass: HomeAssistant,
+        entity_id: str | None,
+        state_value: str | None,
+        expected: str | None,
+    ) -> None:
+        """Test _get_text_state for various inputs."""
+        if entity_id is not None and state_value is not None:
+            hass.states.async_set(entity_id, state_value)
+        result = _get_text_state(hass, entity_id)
+        assert result == expected
 
 
 class TestGetBoolState:
     """Tests for _get_bool_state helper."""
 
-    async def test_returns_true_for_on(self, hass: HomeAssistant) -> None:
-        """Test returns True for 'on' state."""
-        hass.states.async_set("switch.test", STATE_ON)
-        assert _get_bool_state(hass, "switch.test") is True
-
-    async def test_returns_false_for_off(self, hass: HomeAssistant) -> None:
-        """Test returns False for 'off' state."""
-        hass.states.async_set("switch.test", STATE_OFF)
-        assert _get_bool_state(hass, "switch.test") is False
-
-    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
-        """Test returns None for unknown state."""
-        hass.states.async_set("switch.test", STATE_UNKNOWN)
-        assert _get_bool_state(hass, "switch.test") is None
-
-    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
-        """Test returns None for unavailable state."""
-        hass.states.async_set("switch.test", STATE_UNAVAILABLE)
-        assert _get_bool_state(hass, "switch.test") is None
-
-    async def test_returns_none_for_nonexistent(self, hass: HomeAssistant) -> None:
-        """Test returns None for nonexistent entity."""
-        assert _get_bool_state(hass, "switch.nonexistent") is None
-
-    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
-        """Test returns None when entity_id is None."""
-        assert _get_bool_state(hass, None) is None
+    @pytest.mark.parametrize(
+        ("entity_id", "state_value", "expected"),
+        [
+            pytest.param("switch.test", STATE_ON, True, id="on"),
+            pytest.param("switch.test", STATE_OFF, False, id="off"),
+            pytest.param("switch.test", STATE_UNKNOWN, None, id="unknown"),
+            pytest.param("switch.test", STATE_UNAVAILABLE, None, id="unavailable"),
+            pytest.param("switch.nonexistent", None, None, id="nonexistent"),
+            pytest.param(None, None, None, id="none-entity-id"),
+        ],
+    )
+    async def test_get_bool_state(
+        self,
+        hass: HomeAssistant,
+        entity_id: str | None,
+        state_value: str | None,
+        expected: bool | None,
+    ) -> None:
+        """Test _get_bool_state for various inputs."""
+        if entity_id is not None and state_value is not None:
+            hass.states.async_set(entity_id, state_value)
+        assert _get_bool_state(hass, entity_id) is expected
 
 
 class TestGetNumberState:
     """Tests for _get_number_state helper."""
 
-    async def test_returns_integer(self, hass: HomeAssistant) -> None:
-        """Test returns integer for valid number."""
-        hass.states.async_set("number.test", "42")
-        assert _get_number_state(hass, "number.test") == 42
-
-    async def test_returns_integer_from_float(self, hass: HomeAssistant) -> None:
-        """Test converts float to integer."""
-        hass.states.async_set("number.test", "3.14")
-        assert _get_number_state(hass, "number.test") == 3
-
-    async def test_returns_none_for_invalid(self, hass: HomeAssistant) -> None:
-        """Test returns None for non-numeric value."""
-        hass.states.async_set("number.test", "not_a_number")
-        assert _get_number_state(hass, "number.test") is None
-
-    async def test_returns_none_for_unknown(self, hass: HomeAssistant) -> None:
-        """Test returns None for unknown state."""
-        hass.states.async_set("number.test", STATE_UNKNOWN)
-        assert _get_number_state(hass, "number.test") is None
-
-    async def test_returns_none_for_unavailable(self, hass: HomeAssistant) -> None:
-        """Test returns None for unavailable state."""
-        hass.states.async_set("number.test", STATE_UNAVAILABLE)
-        assert _get_number_state(hass, "number.test") is None
-
-    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
-        """Test returns None when entity_id is None."""
-        assert _get_number_state(hass, None) is None
+    @pytest.mark.parametrize(
+        ("entity_id", "state_value", "expected"),
+        [
+            pytest.param("number.test", "42", 42, id="integer"),
+            pytest.param("number.test", "3.14", 3, id="float-to-integer"),
+            pytest.param("number.test", "not_a_number", None, id="invalid"),
+            pytest.param("number.test", STATE_UNKNOWN, None, id="unknown"),
+            pytest.param("number.test", STATE_UNAVAILABLE, None, id="unavailable"),
+            pytest.param(None, None, None, id="none-entity-id"),
+        ],
+    )
+    async def test_get_number_state(
+        self,
+        hass: HomeAssistant,
+        entity_id: str | None,
+        state_value: str | None,
+        expected: int | None,
+    ) -> None:
+        """Test _get_number_state for various inputs."""
+        if entity_id is not None and state_value is not None:
+            hass.states.async_set(entity_id, state_value)
+        assert _get_number_state(hass, entity_id) == expected
 
 
 class TestGetLastChanged:
@@ -1557,33 +1546,44 @@ class TestGetLastChanged:
         # Should be a valid ISO format string
         datetime.fromisoformat(result)
 
-    async def test_returns_none_for_nonexistent(self, hass: HomeAssistant) -> None:
-        """Test returns None for nonexistent entity."""
-        assert _get_last_changed(hass, "sensor.nonexistent") is None
-
-    async def test_returns_none_for_none_entity_id(self, hass: HomeAssistant) -> None:
-        """Test returns None when entity_id is None."""
-        assert _get_last_changed(hass, None) is None
-
-    async def test_require_valid_state_filters_unknown(
-        self, hass: HomeAssistant
+    @pytest.mark.parametrize(
+        ("entity_id", "state_value", "require_valid_state", "expect_none"),
+        [
+            pytest.param("sensor.nonexistent", None, False, True, id="nonexistent"),
+            pytest.param(None, None, False, True, id="none-entity-id"),
+            pytest.param(
+                "sensor.test", STATE_UNKNOWN, True, True, id="require-valid-unknown"
+            ),
+            pytest.param(
+                "sensor.test",
+                STATE_UNAVAILABLE,
+                True,
+                True,
+                id="require-valid-unavailable",
+            ),
+            pytest.param(
+                "sensor.test", "valid_value", True, False, id="require-valid-allows"
+            ),
+        ],
+    )
+    async def test_get_last_changed(
+        self,
+        hass: HomeAssistant,
+        entity_id: str | None,
+        state_value: str | None,
+        require_valid_state: bool,
+        expect_none: bool,
     ) -> None:
-        """Test require_valid_state=True returns None for unknown state."""
-        hass.states.async_set("sensor.test", STATE_UNKNOWN)
-        assert _get_last_changed(hass, "sensor.test", require_valid_state=True) is None
-
-    async def test_require_valid_state_filters_unavailable(
-        self, hass: HomeAssistant
-    ) -> None:
-        """Test require_valid_state=True returns None for unavailable state."""
-        hass.states.async_set("sensor.test", STATE_UNAVAILABLE)
-        assert _get_last_changed(hass, "sensor.test", require_valid_state=True) is None
-
-    async def test_require_valid_state_allows_valid(self, hass: HomeAssistant) -> None:
-        """Test require_valid_state=True returns timestamp for valid state."""
-        hass.states.async_set("sensor.test", "valid_value")
-        result = _get_last_changed(hass, "sensor.test", require_valid_state=True)
-        assert result is not None
+        """Test _get_last_changed for various inputs."""
+        if entity_id is not None and state_value is not None:
+            hass.states.async_set(entity_id, state_value)
+        result = _get_last_changed(
+            hass, entity_id, require_valid_state=require_valid_state
+        )
+        if expect_none:
+            assert result is None
+        else:
+            assert result is not None
 
 
 class TestFindConfigEntryByTitle:

@@ -45,86 +45,127 @@ def _manager(last_set_pin: str | None = None) -> SlotSyncManager:
 class TestCalculateInSync:
     """Tests for SlotSyncManager.calculate_in_sync."""
 
-    # -- Active (ON) + various lock codes ------------------------------------
-
-    def test_active_matching_pin(self) -> None:
-        """Active slot with matching PIN is in sync."""
-        assert _manager().calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code="1234")
-        )
-
-    def test_active_mismatched_pin(self) -> None:
-        """Active slot with different PIN is out of sync."""
-        assert not _manager().calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code="5678")
-        )
-
-    def test_active_unknown_code_matching_last_set(self) -> None:
-        """Active slot with UNKNOWN code is in sync when PIN matches last set."""
-        assert _manager(last_set_pin="1234").calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code=SlotCode.UNKNOWN)
-        )
-
-    def test_active_unknown_code_pin_changed(self) -> None:
-        """Active slot with UNKNOWN code is out of sync when PIN changed."""
-        assert not _manager(last_set_pin="1234").calculate_in_sync(
-            _slot(active=STATE_ON, pin="5678", coordinator_code=SlotCode.UNKNOWN)
-        )
-
-    def test_active_unknown_code_never_set(self) -> None:
-        """Active slot with UNKNOWN code is out of sync when never set by LCM."""
-        assert not _manager(last_set_pin=None).calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code=SlotCode.UNKNOWN)
-        )
-
-    def test_active_empty_code(self) -> None:
-        """Active slot with EMPTY code is out of sync (need to set)."""
-        assert not _manager().calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code=SlotCode.EMPTY)
-        )
-
-    def test_active_no_coordinator_data_matching(self) -> None:
-        """Active slot falls back to code_state when coordinator_code is None."""
-        assert _manager().calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code=None, code="1234")
-        )
-
-    def test_active_no_coordinator_data_mismatched(self) -> None:
-        """Active slot falls back to code_state when coordinator_code is None."""
-        assert not _manager().calculate_in_sync(
-            _slot(active=STATE_ON, pin="1234", coordinator_code=None, code="5678")
-        )
-
-    # -- Inactive (OFF) + various lock codes ---------------------------------
-
-    def test_inactive_empty_code(self) -> None:
-        """Inactive slot with EMPTY code is in sync."""
-        assert _manager().calculate_in_sync(
-            _slot(active=STATE_OFF, coordinator_code=SlotCode.EMPTY)
-        )
-
-    def test_inactive_unknown_code(self) -> None:
-        """Inactive slot with UNKNOWN code is out of sync (need to clear)."""
-        assert not _manager().calculate_in_sync(
-            _slot(active=STATE_OFF, coordinator_code=SlotCode.UNKNOWN)
-        )
-
-    def test_inactive_has_pin(self) -> None:
-        """Inactive slot with a PIN on lock is out of sync (need to clear)."""
-        assert not _manager().calculate_in_sync(
-            _slot(active=STATE_OFF, coordinator_code="1234")
-        )
-
-    def test_inactive_empty_string_fallback(self) -> None:
-        """Inactive slot with empty string code_state is in sync (fallback)."""
-        assert _manager().calculate_in_sync(
-            _slot(active=STATE_OFF, coordinator_code=None, code="")
-        )
-
-    def test_inactive_nonempty_string_fallback(self) -> None:
-        """Inactive slot with code on lock via fallback is out of sync."""
-        assert not _manager().calculate_in_sync(
-            _slot(active=STATE_OFF, coordinator_code=None, code="1234")
+    @pytest.mark.parametrize(
+        ("last_set_pin", "slot_kwargs", "expected"),
+        [
+            # -- Active (ON) + various lock codes --
+            pytest.param(
+                None,
+                {"active": STATE_ON, "pin": "1234", "coordinator_code": "1234"},
+                True,
+                id="active-matching-pin",
+            ),
+            pytest.param(
+                None,
+                {"active": STATE_ON, "pin": "1234", "coordinator_code": "5678"},
+                False,
+                id="active-mismatched-pin",
+            ),
+            pytest.param(
+                "1234",
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": SlotCode.UNKNOWN,
+                },
+                True,
+                id="active-unknown-code-matching-last-set",
+            ),
+            pytest.param(
+                "1234",
+                {
+                    "active": STATE_ON,
+                    "pin": "5678",
+                    "coordinator_code": SlotCode.UNKNOWN,
+                },
+                False,
+                id="active-unknown-code-pin-changed",
+            ),
+            pytest.param(
+                None,
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": SlotCode.UNKNOWN,
+                },
+                False,
+                id="active-unknown-code-never-set",
+            ),
+            pytest.param(
+                None,
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": SlotCode.EMPTY,
+                },
+                False,
+                id="active-empty-code",
+            ),
+            pytest.param(
+                None,
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": None,
+                    "code": "1234",
+                },
+                True,
+                id="active-no-coordinator-data-matching",
+            ),
+            pytest.param(
+                None,
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": None,
+                    "code": "5678",
+                },
+                False,
+                id="active-no-coordinator-data-mismatched",
+            ),
+            # -- Inactive (OFF) + various lock codes --
+            pytest.param(
+                None,
+                {"active": STATE_OFF, "coordinator_code": SlotCode.EMPTY},
+                True,
+                id="inactive-empty-code",
+            ),
+            pytest.param(
+                None,
+                {"active": STATE_OFF, "coordinator_code": SlotCode.UNKNOWN},
+                False,
+                id="inactive-unknown-code",
+            ),
+            pytest.param(
+                None,
+                {"active": STATE_OFF, "coordinator_code": "1234"},
+                False,
+                id="inactive-has-pin",
+            ),
+            pytest.param(
+                None,
+                {"active": STATE_OFF, "coordinator_code": None, "code": ""},
+                True,
+                id="inactive-empty-string-fallback",
+            ),
+            pytest.param(
+                None,
+                {"active": STATE_OFF, "coordinator_code": None, "code": "1234"},
+                False,
+                id="inactive-nonempty-string-fallback",
+            ),
+        ],
+    )
+    def test_calculate_in_sync(
+        self,
+        last_set_pin: str | None,
+        slot_kwargs: dict,
+        expected: bool,
+    ) -> None:
+        """Test calculate_in_sync with various active/inactive and code combos."""
+        assert (
+            _manager(last_set_pin=last_set_pin).calculate_in_sync(_slot(**slot_kwargs))
+            is expected
         )
 
 

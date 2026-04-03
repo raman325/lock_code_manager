@@ -121,37 +121,34 @@ def provider_lock_class() -> type[SchlageLock]:
 class TestMakeTaggedName:
     """Tests for _make_tagged_name."""
 
-    def test_with_name(self) -> None:
-        """Test tagged name with friendly name."""
-        assert _make_tagged_name(1, "Guest") == "[LCM:1] Guest"
-
-    def test_without_name(self) -> None:
-        """Test tagged name defaults to 'Code Slot N'."""
-        assert _make_tagged_name(5) == "[LCM:5] Code Slot 5"
-
-    def test_none_name(self) -> None:
-        """Test tagged name with explicit None."""
-        assert _make_tagged_name(3, None) == "[LCM:3] Code Slot 3"
+    @pytest.mark.parametrize(
+        ("slot", "name", "expected"),
+        [
+            pytest.param(1, "Guest", "[LCM:1] Guest", id="with-name"),
+            pytest.param(5, None, "[LCM:5] Code Slot 5", id="without-name"),
+            pytest.param(3, None, "[LCM:3] Code Slot 3", id="none-name"),
+        ],
+    )
+    def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
+        """Test _make_tagged_name for various inputs."""
+        assert _make_tagged_name(slot, name) == expected
 
 
 class TestParseTag:
     """Tests for _parse_tag."""
 
-    def test_valid_tag(self) -> None:
-        """Test parsing a valid tag."""
-        assert _parse_tag("[LCM:1] Guest") == (1, "Guest")
-
-    def test_large_slot(self) -> None:
-        """Test parsing a large slot number."""
-        assert _parse_tag("[LCM:99] Family") == (99, "Family")
-
-    def test_no_tag(self) -> None:
-        """Test parsing name without a tag."""
-        assert _parse_tag("Guest Code") == (None, "Guest Code")
-
-    def test_empty_string(self) -> None:
-        """Test parsing an empty string."""
-        assert _parse_tag("") == (None, "")
+    @pytest.mark.parametrize(
+        ("input_str", "expected"),
+        [
+            pytest.param("[LCM:1] Guest", (1, "Guest"), id="valid-tag"),
+            pytest.param("[LCM:99] Family", (99, "Family"), id="large-slot"),
+            pytest.param("Guest Code", (None, "Guest Code"), id="no-tag"),
+            pytest.param("", (None, ""), id="empty-string"),
+        ],
+    )
+    def test_parse_tag(self, input_str: str, expected: tuple[int | None, str]) -> None:
+        """Test _parse_tag for various inputs."""
+        assert _parse_tag(input_str) == expected
 
 
 # ---------------------------------------------------------------------------
