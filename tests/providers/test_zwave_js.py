@@ -21,7 +21,7 @@ from homeassistant.components.persistent_notification import (
 )
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_OFF, STATE_ON
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -35,6 +35,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.models import (
     LockCodeManagerConfigEntryData,
     SlotCode,
@@ -1819,23 +1820,20 @@ def _get_enabled_switch_entity_id(hass: HomeAssistant, entry_id: str, slot: int)
     return entity_id
 
 
-async def test_duplicate_code_notification_disables_slot(
+async def test_duplicate_code_notification_marks_rejected(
     hass: HomeAssistant,
     zwave_integration: MockConfigEntry,
     lock_entity: er.RegistryEntry,
     lock_schlage_be469: Node,
     mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Test that event 15 with _set_in_progress_code_slot set disables the slot."""
+    """Test that event 15 marks the slot rejected and clears in-progress."""
     lcm_entry = await _setup_lcm_entry(
         hass,
         lock_entity.entity_id,
         {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
         mock_zwave_usercodes,
     )
-    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
-    assert hass.states.get(switch_entity_id).state == STATE_ON
 
     # Find the ZWaveJSLock instance created by LCM setup
     runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
@@ -1847,40 +1845,29 @@ async def test_duplicate_code_notification_disables_slot(
     )
     await hass.async_block_till_done()
 
-    # Switch should be turned off
-    assert hass.states.get(switch_entity_id).state == STATE_OFF
-
-    # Persistent notification should be created
-    notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
-    assert notification_id in notifications
+    # Slot should be marked as rejected for the sync manager to pick up
+    assert 2 in lock_instance._rejected_code_slots
 
     # In-progress field should be cleared
     assert lock_instance._set_in_progress_code_slot is None
 
-    # Error should be logged
-    assert "rejected the code for slot 2" in caplog.text
-    assert "because it duplicates" in caplog.text
-
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
-async def test_duplicate_code_notification_no_user_id_disables_slot(
+async def test_duplicate_code_notification_no_user_id_marks_rejected(
     hass: HomeAssistant,
     zwave_integration: MockConfigEntry,
     lock_entity: er.RegistryEntry,
     lock_schlage_be469: Node,
     mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
 ) -> None:
-    """Test event 15 with no userId in params still handles it using in-progress slot."""
+    """Test event 15 with no userId in params still marks rejected using in-progress slot."""
     lcm_entry = await _setup_lcm_entry(
         hass,
         lock_entity.entity_id,
         {"3": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
         mock_zwave_usercodes,
     )
-    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 3)
-    assert hass.states.get(switch_entity_id).state == STATE_ON
 
     runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
@@ -1891,7 +1878,7 @@ async def test_duplicate_code_notification_no_user_id_disables_slot(
     )
     await hass.async_block_till_done()
 
-    assert hass.states.get(switch_entity_id).state == STATE_OFF
+    assert 3 in lock_instance._rejected_code_slots
     assert lock_instance._set_in_progress_code_slot is None
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
@@ -2020,17 +2007,18 @@ async def test_set_in_progress_cleared_on_value_update(
     await zwave_js_lock.async_unload(False)
 
 
-async def test_handle_duplicate_code_early_return_code_slot_cleared(
+async def test_internal_set_usercode_raises_duplicate_for_rejected_slot(
     hass: HomeAssistant,
     zwave_integration: MockConfigEntry,
     lock_entity: er.RegistryEntry,
     lock_schlage_be469: Node,
     mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
 ) -> None:
-    """Test _async_handle_duplicate_code returns early when code_slot is None.
+    """Test async_internal_set_usercode raises DuplicateCodeError for rejected slots.
 
-    This covers the race where _set_in_progress_code_slot is cleared between the
-    event handler scheduling the task and the task actually running.
+    When a slot is in _rejected_code_slots (marked by event 15), the next call to
+    async_internal_set_usercode should raise DuplicateCodeError without calling the
+    provider's async_set_usercode, and clear the slot from the rejected set.
     """
     lcm_entry = await _setup_lcm_entry(
         hass,
@@ -2038,91 +2026,23 @@ async def test_handle_duplicate_code_early_return_code_slot_cleared(
         {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
         mock_zwave_usercodes,
     )
-    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
-    assert hass.states.get(switch_entity_id).state == STATE_ON
 
     runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
 
-    # code_slot is None — simulates race where slot was cleared before task ran
-    lock_instance._set_in_progress_code_slot = None
-    await lock_instance._async_handle_duplicate_code()
+    # Mark slot 2 as rejected (simulating event 15)
+    lock_instance.mark_code_rejected(2)
+    assert 2 in lock_instance._rejected_code_slots
 
-    # Switch should still be on, no notification created
-    assert hass.states.get(switch_entity_id).state == STATE_ON
-    notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
-    assert notification_id not in notifications
+    # Attempt to set usercode should raise DuplicateCodeError
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        await lock_instance.async_internal_set_usercode(2, "1234", source="sync")
 
-    await hass.config_entries.async_unload(lcm_entry.entry_id)
+    assert exc_info.value.code_slot == 2
+    assert exc_info.value.conflicting_slot is None
+    assert "duplicate detected by lock firmware" in str(exc_info.value)
 
-
-async def test_handle_duplicate_code_early_return_no_matching_entry(
-    hass: HomeAssistant,
-    zwave_integration: MockConfigEntry,
-    lock_entity: er.RegistryEntry,
-    lock_schlage_be469: Node,
-    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
-) -> None:
-    """Test _async_handle_duplicate_code returns early when no config entry manages the slot."""
-    lcm_entry = await _setup_lcm_entry(
-        hass,
-        lock_entity.entity_id,
-        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
-        mock_zwave_usercodes,
-    )
-    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
-    assert hass.states.get(switch_entity_id).state == STATE_ON
-
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
-    lock_instance = runtime_data.locks[lock_entity.entity_id]
-
-    # Set in-progress to a slot not managed by any config entry
-    lock_instance._set_in_progress_code_slot = 99
-    await lock_instance._async_handle_duplicate_code()
-
-    # Switch should still be on, no notification created
-    assert hass.states.get(switch_entity_id).state == STATE_ON
-    notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_99_slot_disabled"
-    assert notification_id not in notifications
-    # In-progress should be cleared even on early return
-    assert lock_instance._set_in_progress_code_slot is None
-
-    await hass.config_entries.async_unload(lcm_entry.entry_id)
-
-
-async def test_handle_duplicate_code_early_return_entity_not_found(
-    hass: HomeAssistant,
-    zwave_integration: MockConfigEntry,
-    lock_entity: er.RegistryEntry,
-    lock_schlage_be469: Node,
-    mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
-) -> None:
-    """Test _async_handle_duplicate_code returns early when enabled entity is not found."""
-    lcm_entry = await _setup_lcm_entry(
-        hass,
-        lock_entity.entity_id,
-        {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
-        mock_zwave_usercodes,
-    )
-    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
-    assert hass.states.get(switch_entity_id).state == STATE_ON
-
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
-    lock_instance = runtime_data.locks[lock_entity.entity_id]
-
-    # Set in-progress to a valid slot but mock entity registry to return None
-    lock_instance._set_in_progress_code_slot = 2
-    with patch.object(lock_instance.ent_reg, "async_get_entity_id", return_value=None):
-        await lock_instance._async_handle_duplicate_code()
-
-    # Switch should still be on, no notification created
-    assert hass.states.get(switch_entity_id).state == STATE_ON
-    notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
-    assert notification_id not in notifications
-    # In-progress should be cleared
-    assert lock_instance._set_in_progress_code_slot is None
+    # Slot should be cleared from the rejected set
+    assert 2 not in lock_instance._rejected_code_slots
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)

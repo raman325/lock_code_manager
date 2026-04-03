@@ -53,10 +53,9 @@ from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from ..data import find_entry_for_lock_slot, get_entry_data
+from ..data import get_entry_data
 from ..exceptions import LockDisconnected
 from ..models import SlotCode
-from ..util import async_disable_slot
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -324,18 +323,21 @@ class ZWaveJSLock(BaseLock):
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
 
-        # Handle duplicate code rejection — only when LCM initiated the set
+        # Handle duplicate code rejection — only when LCM initiated the set.
+        # Mark the slot as rejected so the sync manager raises DuplicateCodeError
+        # on the next tick, routing through the standard CodeRejectedError flow
+        # (tracker reset, circuit breaker awareness, notification).
         if (
             evt.data[ATTR_EVENT]
             == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
             and self._set_in_progress_code_slot is not None
             and code_slot in (0, self._set_in_progress_code_slot)
         ):
-            slot = self._set_in_progress_code_slot or code_slot
-            self.hass.async_create_task(
-                self._async_handle_duplicate_code(),
-                f"Handle duplicate code for {self.lock.entity_id} slot {slot}",
-            )
+            slot = self._set_in_progress_code_slot
+            self._set_in_progress_code_slot = None
+            self.mark_code_rejected(slot)
+            if self.coordinator:
+                self.coordinator.async_set_updated_data(self.coordinator.data)
             return
 
         self.async_fire_code_slot_event(
@@ -350,43 +352,6 @@ class ZWaveJSLock(BaseLock):
             ),
             action_text=evt.data.get(ATTR_EVENT_LABEL),
             source_data=evt,
-        )
-
-    async def _async_handle_duplicate_code(self) -> None:
-        """Handle duplicate code rejection from the lock."""
-        lock_ent_id = self.lock.entity_id
-        code_slot = self._set_in_progress_code_slot
-        self._set_in_progress_code_slot = None
-        if code_slot is None:
-            return
-        entry = find_entry_for_lock_slot(self.hass, self.lock.entity_id, code_slot)
-        if entry is None:
-            return
-
-        entry_title = entry.title or entry.entry_id
-        reason = (
-            f"Lock **{lock_ent_id}** rejected the code for slot **{code_slot}** "
-            f"(config entry **{entry_title}**) because it duplicates a code "
-            f"in another slot. Slot {code_slot} has been disabled. Please set a "
-            f"unique code and re-enable slot {code_slot}"
-        )
-        _LOGGER.error(
-            "Lock %s rejected the code for slot %s (config entry %s) because "
-            "it duplicates a code in another slot. Slot %s has been disabled",
-            lock_ent_id,
-            code_slot,
-            entry_title,
-            code_slot,
-        )
-        await async_disable_slot(
-            self.hass,
-            self.ent_reg,
-            entry.entry_id,
-            code_slot,
-            reason=reason,
-            title="Duplicate Lock Code Rejected",
-            lock_name=self.display_name,
-            lock_entity_id=lock_ent_id,
         )
 
     @property
