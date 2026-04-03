@@ -1,5 +1,1 @@
-create a branch and PR it
-
----
-
-add similar notification input options for the other blueprints. Are there other features we added to the slot usage limited we should consider adding elsewhere?
+for 964, let's make this a repair issue. So, the repair issue points users to the blueprint for the number of uses, and they click fix or fixed or whatever it is when they're ready to migrate to v3. We can also note that there will be a force migration to v3 in the future
