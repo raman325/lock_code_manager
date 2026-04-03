@@ -83,7 +83,7 @@ class SlotSyncManager:
         coordinator: LockUsercodeUpdateCoordinator,
         lock: BaseLock,
         slot_num: int,
-        state_writer: Callable[[], None],
+        state_writer: Callable[[bool | None], None],
     ) -> None:
         """Initialize the sync manager."""
         self._hass = hass
@@ -351,8 +351,8 @@ class SlotSyncManager:
     # -- Orchestration -------------------------------------------------------
 
     def _write_state(self) -> None:
-        """Notify the entity to write its Home Assistant state."""
-        self._state_writer()
+        """Notify the entity to write Home Assistant state."""
+        self._state_writer(self.in_sync)
 
     @callback
     def _mark_dirty(self, *_args: Any) -> None:

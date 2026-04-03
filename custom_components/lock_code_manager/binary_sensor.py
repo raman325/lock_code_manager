@@ -259,9 +259,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
         CoordinatorEntity.__init__(self, coordinator)
 
         @callback
-        def _sync_and_write_state() -> None:
+        def _sync_and_write_state(in_sync: bool | None) -> None:
             """Sync _attr_is_on from manager and write HA state."""
-            self._attr_is_on = self._sync_manager.in_sync
+            self._attr_is_on = in_sync
             self.async_write_ha_state()
 
         self._sync_manager = SlotSyncManager(
