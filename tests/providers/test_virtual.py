@@ -81,7 +81,7 @@ async def virtual_lock_with_slots(hass: HomeAssistant) -> VirtualLock:
     return lock
 
 
-async def test_door_lock(virtual_lock: VirtualLock, hass: HomeAssistant):
+async def test_door_lock(virtual_lock: VirtualLock):
     """Test a lock entity."""
     lock = virtual_lock
     assert lock.usercode_scan_interval == timedelta(minutes=1)
