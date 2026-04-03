@@ -102,7 +102,6 @@ variables:
   calendar_entity: !input calendar_entity
   clear_on_end: !input clear_on_end
   notify_target: !input notify_target
-  _slot_number: !input slot_number
   config_entry_title: >
     {{ config_entry_attr(config_entry, 'title') }}
   _all_entities: >
@@ -154,10 +153,10 @@ actions:
                   entity_id: "{{ notify_target }}"
                 data:
                   title: >
-                    {{ config_entry_title }} — Slot {{ _slot_number }}
+                    {{ config_entry_title }} — Slot {{ slot_number }}
                     PIN Set
                   message: >
-                    {{ config_entry_title }} code slot {{ _slot_number }}
+                    {{ config_entry_title }} code slot {{ slot_number }}
                     PIN set from calendar event "{{ message }}"
                     ({{ now().strftime('%Y-%m-%d %H:%M:%S') }}).
       - conditions:
@@ -181,9 +180,9 @@ actions:
                   entity_id: "{{ notify_target }}"
                 data:
                   title: >
-                    {{ config_entry_title }} — Slot {{ _slot_number }}
+                    {{ config_entry_title }} — Slot {{ slot_number }}
                     PIN Cleared
                   message: >
-                    {{ config_entry_title }} code slot {{ _slot_number }}
+                    {{ config_entry_title }} code slot {{ slot_number }}
                     PIN cleared after calendar event ended
                     ({{ now().strftime('%Y-%m-%d %H:%M:%S') }}).
