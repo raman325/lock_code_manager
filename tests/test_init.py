@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
 )
+from custom_components.lock_code_manager.repairs import NumberOfUsesDeprecatedFlow
 
 from .common import (
     BASE_CONFIG,
@@ -746,5 +747,50 @@ async def test_number_of_uses_no_repair_when_absent(
 
     issue_reg = ir.async_get(hass)
     assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is None
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_repair_flow_strips_data(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that the repair flow strips number_of_uses from all entries."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            "2": {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                CONF_NUMBER_OF_USES: 5,
+            },
+        },
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Repair Flow Test", title="Repair Flow"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify repair issue exists
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is not None
+
+    # Execute the repair flow (simulate user clicking Submit)
+    flow = NumberOfUsesDeprecatedFlow()
+    flow.hass = hass
+    result = await flow.async_step_init(user_input={})
+
+    assert result["type"] == "create_entry"
+
+    # Verify number_of_uses was stripped from the config entry
+    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS]["2"]
+    # Slot 1 should be unchanged
+    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS]["1"]
 
     await hass.config_entries.async_unload(config_entry.entry_id)

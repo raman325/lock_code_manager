@@ -345,8 +345,13 @@ async def async_setup_entry(
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     # Create or dismiss repair issue based on deprecated number_of_uses presence
-    slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    if any(CONF_NUMBER_OF_USES in slot_config for slot_config in slots.values()):
+    # across ALL config entries (not just this one) since the issue is global
+    has_number_of_uses = any(
+        CONF_NUMBER_OF_USES in slot_config
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        for slot_config in get_entry_data(entry, CONF_SLOTS, {}).values()
+    )
+    if has_number_of_uses:
         async_create_issue(
             hass,
             DOMAIN,
@@ -355,6 +360,9 @@ async def async_setup_entry(
             is_persistent=True,
             severity=IssueSeverity.WARNING,
             translation_key="number_of_uses_deprecated",
+            translation_placeholders={
+                "blueprint_url": "https://github.com/raman325/lock_code_manager/wiki/Blueprints#slot-usage-limiter",
+            },
         )
     else:
         async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
