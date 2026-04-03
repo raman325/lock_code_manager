@@ -2,6 +2,7 @@
   "config": {
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
+      "lock_reset_cancelled": "Setup cancelled. Unmanaged codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated."
     },
     "error": {
@@ -18,6 +19,15 @@
           "yaml": "YAML"
         },
         "title": "Choose Path"
+      },
+      "lock_reset": {
+        "description": "Unmanaged codes were found on the selected locks:\n\n{slot_summary}\n\nChoose how to handle them before proceeding.",
+        "menu_options": {
+          "lock_reset_clear": "Clear all unmanaged codes",
+          "lock_reset_adopt": "Adopt readable codes into Lock Code Manager",
+          "lock_reset_cancel": "Cancel"
+        },
+        "title": "Unmanaged Codes Found"
       },
       "code_slot": {
         "data": {
