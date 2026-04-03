@@ -47,18 +47,22 @@ class DuplicateCodeError(CodeRejectedError):
     def __init__(
         self,
         code_slot: int,
-        conflicting_slot: int,
-        conflicting_slot_managed: bool,
         lock_entity_id: str,
+        conflicting_slot: int | None = None,
+        conflicting_slot_managed: bool = False,
     ):
         """Initialize the error."""
         self.conflicting_slot = conflicting_slot
         self.conflicting_slot_managed = conflicting_slot_managed
-        managed_str = "managed" if conflicting_slot_managed else "unmanaged"
+        if conflicting_slot is not None:
+            managed_str = "managed" if conflicting_slot_managed else "unmanaged"
+            reason = f"PIN duplicates {managed_str} slot {conflicting_slot}"
+        else:
+            reason = "duplicate detected by lock firmware"
         super().__init__(
             code_slot,
             lock_entity_id,
-            f"PIN duplicates {managed_str} slot {conflicting_slot}",
+            reason,
         )
 
 

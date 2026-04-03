@@ -11,13 +11,6 @@
   code management integrations at setup and warn the user.
 - **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
   code slots on a lock, so users can clean up stale codes without manual intervention.
-- **Unify Z-Wave event 15 duplicate handler with CodeRejectedError** — The reactive
-  duplicate handler (`_async_handle_duplicate_code` in `zwave_js.py`) uses
-  `async_disable_slot` (shared helper in `util.py`). It should surface through
-  the exception hierarchy instead. Options: route through the coordinator to
-  trigger a sync manager state update, or have the provider set a flag that the
-  sync manager checks on next sync cycle. This would also allow the event 15
-  handler to reset the sync tracker.
 - Test visual editor for both cards.
 
 ## Refactors and Maintenance

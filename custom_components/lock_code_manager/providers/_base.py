@@ -165,6 +165,18 @@ class BaseLock:
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _push_retry: OneShotRetry | None = field(default=None, init=False)
     _push_disabled: bool = field(default=False, init=False)
+    _rejected_code_slots: set[int] = field(default_factory=set, init=False)
+
+    @final
+    @callback
+    def mark_code_rejected(self, code_slot: int) -> None:
+        """Mark a slot as having its code rejected by the lock.
+
+        The next sync tick will raise DuplicateCodeError for this slot
+        in async_internal_set_usercode, routing it through the sync
+        manager's standard CodeRejectedError handling.
+        """
+        self._rejected_code_slots.add(code_slot)
 
     @final
     async def _async_executor_call(
@@ -729,14 +741,30 @@ class BaseLock:
             self.mask_pin(usercode),
             source,
         )
-        # Check for duplicate PINs under the lock so coordinator data
-        # can't change between the check and the set operation
+
+        def _pre_execute_checks() -> None:
+            """Run pre-execution checks atomically inside the operation lock.
+
+            Checks for duplicate PINs (from coordinator data) and for codes
+            previously rejected by the lock firmware (from event 15).
+            """
+            # Clear the firmware-rejection flag first so it doesn't persist
+            # if _check_duplicate_code raises its own DuplicateCodeError
+            firmware_rejected = code_slot in self._rejected_code_slots
+            self._rejected_code_slots.discard(code_slot)
+            self._check_duplicate_code(code_slot, str(usercode))
+            if firmware_rejected:
+                raise DuplicateCodeError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                )
+
         changed = await self._execute_rate_limited(
             "set",
             self.async_set_usercode,
             code_slot,
             usercode,
-            pre_execute=lambda: self._check_duplicate_code(code_slot, str(usercode)),
+            pre_execute=_pre_execute_checks,
             name=name,
         )
         # Refresh coordinator to update entity states from cache (only if changed).
