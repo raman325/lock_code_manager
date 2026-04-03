@@ -1,31 +1,47 @@
 # Lock Code Manager
 
-Lock Code Manager is a Home Assistant integration that allows you to more easily manage
-your usercodes on your locks. Once you have configured it, the integration will set and
-clear codes on your locks as needed depending on how you decide to configure them.
+Lock Code Manager is a Home Assistant integration that keeps PIN codes in sync
+across one or more locks, even across different lock providers (e.g. Z-Wave and
+Matter locks sharing the same codes). Define your codes once and Lock Code
+Manager handles setting, clearing, and monitoring them on every lock.
 
 Features:
 
-- Synchronize multiple locks with a single set of codes
-- Optionally use a condition entity to control when a code is active. Supported entity types:
-  - `calendar` - code is active when an event is in progress
-  - `binary_sensor` - code is active when the sensor is `on`
-  - `switch` - code is active when the switch is `on`
-  - `schedule` - code is active when the schedule is `on`
-  - `input_boolean` - code is active when the input boolean is `on`
-- Optionally define a maximum number of uses for a code before the code is disabled
+- Synchronize PIN codes across multiple locks and providers
+- Automatic sync — codes are set and cleared as needed, with retry and
+  drift detection
+- Condition entities control when a code is active:
+  - `calendar` — active during events
+  - `binary_sensor` / `switch` / `input_boolean` — active when on
+  - `schedule` — active during scheduled times
+- [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
+  for usage limiting, calendar-driven PINs, and more
+- Dashboard cards for managing codes and viewing lock status
 
 Locks from the following integrations are currently supported:
 
-- Z-Wave
-- Matter
-- [Virtual](https://github.com/twrecked/hass-virtual) custom integration. See the
-  [Wiki page on this integration](https://github.com/raman325/lock_code_manager/wiki/Virtual-integration)
-  for more details on why it was built and how it works.
+**Core integrations:**
 
-The code was written to make it (I think) easy to add support for locks in other
-integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you
-want to learn more about that and take a stab at it. Contributors welcome!
+- [Matter][wiki-matter]
+- [Schlage WiFi][wiki-schlage]
+- [Z-Wave][wiki-zwave]
+
+**Custom integrations:**
+
+- [Akuvox][wiki-akuvox] (via [Local Akuvox][local-akuvox])
+- [Virtual][wiki-virtual] (via [hass-virtual][hass-virtual])
+
+[wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
+[wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
+[wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
+[wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
+[local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
+[hass-virtual]: https://github.com/twrecked/hass-virtual
+[wiki-zwave]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-integration
+
+Adding support for new lock integrations is straightforward — see the
+[Adding a Provider](https://github.com/raman325/lock_code_manager/wiki/Adding-a-Provider)
+guide. Contributors welcome!
 
 ## Integrations That Cannot Currently Be Supported
 
@@ -43,8 +59,8 @@ for details.
 
 The best way to install this integration is via HACS.
 
-1. Set up your locks as entities to your Home Assistant instance through the corresponding
-   integration (e.g. Z-Wave)
+1. Set up your locks in Home Assistant through a supported integration
+   (Z-Wave, Matter, Schlage, etc.)
 2. Add this repository as a custom integration repository in HACS
 3. Go to Settings > Devices & Services > Add Integration
 4. Select Lock Code Manager
@@ -84,8 +100,7 @@ knock on `keymaster`, unfortunately a lot of what is built in this integration w
 possible for most of `keymaster`'s life. I briefly considered implementing this into
 `keymaster` but:
 
-1. `keymaster` is still a great solution that works as is, and is more feature rich than
-   this integration will likely ever be.
+1. `keymaster` is still a great solution that works as is.
 2. `keymaster` is surprisingly simple under the hood because it makes Home Assistant do a
    lot of the heavy lifting for figuring out when to enable and disable a usercode. This
    integration, on the other hand, attempts to do all of the heavy lifting internally in
