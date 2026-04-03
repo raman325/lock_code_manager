@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "0e7c78b7c4c5",
+  "strategy": "manual-commit",
+  "branch": "chore/cleanup-readme-todos",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "README.md",
+    "TODO.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0e/7c78b7c4c5/0/metadata.json",
+      "transcript": "/0e/7c78b7c4c5/0/full.jsonl",
+      "content_hash": "/0e/7c78b7c4c5/0/content_hash.txt",
+      "prompt": "/0e/7c78b7c4c5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5275,
+    "cache_creation_tokens": 11650474,
+    "cache_read_tokens": 1233697999,
+    "output_tokens": 614445,
+    "api_call_count": 2575
+  }
+}
