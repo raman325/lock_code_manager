@@ -155,6 +155,16 @@ See `AGENTS.md` for implementation approach and `BaseLock` interface.
 1. **Selector Improvements** — Review config flow UI for better selectors
 2. **Repair Platform** — Consider adding repairs for common misconfigurations
 
+### Custom Jinja Templates
+
+Ship a `.jinja` file with helper macros for LCM entity resolution (e.g.
+`lcm_slot_entities(config_entry_id, slot_num)` to get PIN, name, enabled,
+active entity IDs without regex matching). HA loads `.jinja` files from
+`config/custom_templates/` at startup and they're used via
+`{% from 'lcm.jinja' import macro_name %}`. LCM could auto-install the
+file to `custom_templates/` during setup, similar to how it installs
+Lovelace resources.
+
 ### Improve Dashboard UI/UX
 
 - Add visual indicator when codes are out of sync
