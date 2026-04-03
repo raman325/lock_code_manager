@@ -164,8 +164,9 @@ actions:
                       message: >
                         {{ _config_entry_title }} code slot {{ _slot_number }}
                         has been disabled after reaching the usage limit.
-                        Last used on
-                        {{ trigger.to_state.state | default('unknown lock') }}
+                        Last used on lock
+                        {{ state_attr(trigger.entity_id, 'event_type')
+                           | default('unknown') }}
                         at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}.
       - conditions:
           - condition: trigger
