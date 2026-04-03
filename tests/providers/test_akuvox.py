@@ -144,62 +144,75 @@ def _make_user(
 class TestHelperFunctions:
     """Tests for module-level helpers."""
 
-    def test_make_tagged_name_with_name(self) -> None:
-        """Test tagged name with friendly name."""
-        assert _make_tagged_name(1, "Guest") == "[LCM:1] Guest"
+    @pytest.mark.parametrize(
+        ("slot", "name", "expected"),
+        [
+            pytest.param(1, "Guest", "[LCM:1] Guest", id="with-name"),
+            pytest.param(5, None, "[LCM:5] Code Slot 5", id="without-name"),
+            pytest.param(3, None, "[LCM:3] Code Slot 3", id="none-name"),
+        ],
+    )
+    def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
+        """Test _make_tagged_name for various inputs."""
+        assert _make_tagged_name(slot, name) == expected
 
-    def test_make_tagged_name_without_name(self) -> None:
-        """Test tagged name defaults to 'Code Slot N'."""
-        assert _make_tagged_name(5) == "[LCM:5] Code Slot 5"
+    @pytest.mark.parametrize(
+        ("input_str", "expected"),
+        [
+            pytest.param("[LCM:1] Guest", (1, "Guest"), id="valid-tag"),
+            pytest.param("[LCM:99] Family", (99, "Family"), id="large-slot"),
+            pytest.param("Guest Code", (None, "Guest Code"), id="no-tag"),
+            pytest.param("", (None, ""), id="empty-string"),
+        ],
+    )
+    def test_parse_tag(self, input_str: str, expected: tuple[int | None, str]) -> None:
+        """Test _parse_tag for various inputs."""
+        assert _parse_tag(input_str) == expected
 
-    def test_make_tagged_name_none_name(self) -> None:
-        """Test tagged name with explicit None."""
-        assert _make_tagged_name(3, None) == "[LCM:3] Code Slot 3"
-
-    def test_parse_tag_valid(self) -> None:
-        """Test parsing a valid tag."""
-        assert _parse_tag("[LCM:1] Guest") == (1, "Guest")
-
-    def test_parse_tag_large_slot(self) -> None:
-        """Test parsing a large slot number."""
-        assert _parse_tag("[LCM:99] Family") == (99, "Family")
-
-    def test_parse_tag_no_tag(self) -> None:
-        """Test parsing name without a tag."""
-        assert _parse_tag("Guest Code") == (None, "Guest Code")
-
-    def test_parse_tag_empty_string(self) -> None:
-        """Test parsing an empty string."""
-        assert _parse_tag("") == (None, "")
-
-    def test_is_local_user_source_type_1(self) -> None:
-        """A08S/E18C pattern: source_type '1' is local."""
-        assert _is_local_user({"source_type": "1", "user_type": "0"}) is True
-
-    def test_is_local_user_source_type_2(self) -> None:
-        """A08S/E18C pattern: source_type '2' is cloud."""
-        assert _is_local_user({"source_type": "2", "user_type": "0"}) is False
-
-    def test_is_local_user_none_source_local_user_type(self) -> None:
-        """X916 pattern: source_type None, user_type '-1' is local."""
-        assert _is_local_user({"source_type": None, "user_type": "-1"}) is True
-
-    def test_is_local_user_none_source_cloud_user_type(self) -> None:
-        """X916 pattern: source_type None, user_type '0' is cloud."""
-        assert _is_local_user({"source_type": None, "user_type": "0"}) is False
-
-    def test_is_local_user_missing_source_type(self) -> None:
-        """Missing source_type key falls back to user_type."""
-        assert _is_local_user({"user_type": "-1"}) is True
-
-    def test_is_local_user_empty_string_source_type(self) -> None:
-        """Empty string source_type falls through to user_type check."""
-        assert _is_local_user({"source_type": "", "user_type": "-1"}) is True
-        assert _is_local_user({"source_type": "", "user_type": "0"}) is False
-
-    def test_is_local_user_missing_both(self) -> None:
-        """Missing both fields is not local."""
-        assert _is_local_user({}) is False
+    @pytest.mark.parametrize(
+        ("user_data", "expected"),
+        [
+            pytest.param(
+                {"source_type": "1", "user_type": "0"},
+                True,
+                id="source-type-1-local",
+            ),
+            pytest.param(
+                {"source_type": "2", "user_type": "0"},
+                False,
+                id="source-type-2-cloud",
+            ),
+            pytest.param(
+                {"source_type": None, "user_type": "-1"},
+                True,
+                id="none-source-local-user-type",
+            ),
+            pytest.param(
+                {"source_type": None, "user_type": "0"},
+                False,
+                id="none-source-cloud-user-type",
+            ),
+            pytest.param(
+                {"user_type": "-1"},
+                True,
+                id="missing-source-type-local",
+            ),
+            pytest.param(
+                {"source_type": "", "user_type": "-1"},
+                True,
+                id="empty-source-type-local",
+            ),
+            pytest.param(
+                {"source_type": "", "user_type": "0"},
+                False,
+                id="empty-source-type-cloud",
+            ),
+            pytest.param({}, False, id="missing-both"),
+        ],
+    )
+    def test_is_local_user(self, user_data: dict, expected: bool) -> None:
+        """Test _is_local_user for various user data patterns."""
+        assert _is_local_user(user_data) is expected
 
 
 # ---------------------------------------------------------------------------
