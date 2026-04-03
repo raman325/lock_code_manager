@@ -1,0 +1,181 @@
+---
+blueprint:
+  name: "Lock Code Manager: Slot Usage Limiter"
+  description: >
+    Decrements an `input_number` helper each time a Lock Code Manager code
+    slot PIN is used on the lock. When the counter reaches 0, the Lock Code
+    Manager slot is automatically disabled. Optionally resets the counter
+    when the slot is re-enabled in Lock Code Manager.
+
+
+    **Special values**
+
+    - Set the counter to **-1** for unlimited uses (counter stays at -1,
+      slot is never disabled).
+
+    - Set the counter to **0** to immediately disable the slot on next use.
+
+
+    **Requirements**
+
+    This blueprint requires at least one lock that supports code slot events
+    (i.e. produces `*_code_slot_*_pin_used` events). If none of your locks
+    support this, the counter will never decrement.
+
+
+    **Setup**
+
+    1. Create an `input_number` helper (Settings → Devices & Services → Helpers)
+       with min=-1, max=your desired limit, and step=1.
+
+    2. Import this blueprint and configure it with the PIN used event entity,
+       enabled switch entity, and the helper you just created.
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_limiter.yaml
+  input:
+    config_entry:
+      name: Lock Code Manager config entry
+      description: >
+        The Lock Code Manager config entry that manages your lock(s).
+        Used to identify the setup in notifications.
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    slot_number:
+      name: Code slot number
+      description: The Lock Code Manager code slot number.
+      selector:
+        number:
+          min: 1
+          max: 999
+          mode: box
+    pin_used_entity:
+      name: PIN used event entity
+      description: >
+        The Lock Code Manager event entity that fires when the PIN is used
+        (e.g. `event.front_door_code_slot_1_pin_used`).
+      selector:
+        entity:
+          domain: event
+          integration: lock_code_manager
+    enabled_switch:
+      name: Slot enabled switch
+      description: >
+        The Lock Code Manager switch entity that enables/disables the code
+        slot (e.g. `switch.front_door_code_slot_1_enabled`).
+      selector:
+        entity:
+          domain: switch
+          integration: lock_code_manager
+    uses_counter:
+      name: Uses counter
+      description: >
+        An `input_number` helper that tracks remaining uses. Set to -1 for
+        unlimited uses. Create one via Settings → Devices & Services → Helpers
+        (set min to -1).
+      selector:
+        entity:
+          domain: input_number
+    initial_uses:
+      name: Initial uses on re-enable
+      description: >
+        When greater than 0, the counter is automatically reset to this value
+        each time the Lock Code Manager slot is re-enabled. Set to 0 to
+        disable auto-reset. Set to -1 for unlimited uses on re-enable.
+      default: 0
+      selector:
+        number:
+          min: -1
+          max: 999
+          mode: box
+    notify_target:
+      name: Notification service (optional)
+      description: >
+        A notify entity to send a message to when uses are exhausted and the
+        slot is disabled. Leave empty to skip notifications.
+      default: ""
+      selector:
+        entity:
+          domain: notify
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input pin_used_entity
+    id: pin_used
+  - trigger: state
+    entity_id: !input enabled_switch
+    id: slot_enabled
+    to: "on"
+
+variables:
+  initial_uses: !input initial_uses
+  uses_counter: !input uses_counter
+  notify_target: !input notify_target
+  _config_entry: !input config_entry
+  _config_entry_title: >
+    {{ config_entry_attr(_config_entry, 'title') }}
+  _slot_number: !input slot_number
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: pin_used
+        sequence:
+          - variables:
+              current: >
+                {{ states(uses_counter) | int(0) }}
+          # -1 means unlimited — skip decrement and disable
+          - if:
+              - condition: template
+                value_template: "{{ current == -1 }}"
+            then:
+              - stop: "Unlimited uses — no action needed"
+          - variables:
+              new_count: >
+                {{ [current - 1, 0] | max }}
+          - action: input_number.set_value
+            target:
+              entity_id: !input uses_counter
+            data:
+              value: "{{ new_count }}"
+          - if:
+              - condition: template
+                value_template: "{{ new_count == 0 }}"
+            then:
+              - action: switch.turn_off
+                target:
+                  entity_id: !input enabled_switch
+              - if:
+                  - condition: template
+                    value_template: "{{ notify_target != '' }}"
+                then:
+                  - action: notify.send_message
+                    target:
+                      entity_id: "{{ notify_target }}"
+                    data:
+                      title: >
+                        {{ _config_entry_title }} — Slot {{ _slot_number }}
+                        Usage Limit Reached
+                      message: >
+                        {{ _config_entry_title }} code slot {{ _slot_number }}
+                        has been disabled after reaching the usage limit.
+                        Last used on lock
+                        {{ state_attr(trigger.entity_id, 'event_type')
+                           | default('unknown') }}
+                        at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}.
+      - conditions:
+          - condition: trigger
+            id: slot_enabled
+          - condition: template
+            value_template: "{{ initial_uses | int(0) != 0 }}"
+        sequence:
+          - action: input_number.set_value
+            target:
+              entity_id: !input uses_counter
+            data:
+              value: !input initial_uses
