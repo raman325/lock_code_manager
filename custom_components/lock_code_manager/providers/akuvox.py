@@ -276,10 +276,8 @@ class AkuvoxLock(BaseLock):
                 untagged.append((device_id, pin, name))
 
         available = sorted(managed_slots - assigned_slots)
-        avail_iter = iter(available)
         for device_id, _pin, original_name in untagged:
-            slot_num = next(avail_iter, None)
-            if slot_num is None:
+            if not available:
                 LOGGER.debug(
                     "Lock %s: no managed slot available for untagged user '%s'; "
                     "leaving untouched",
@@ -288,6 +286,7 @@ class AkuvoxLock(BaseLock):
                 )
                 break
 
+            slot_num = available[0]
             tagged_name = _make_tagged_name(slot_num, original_name)
             try:
                 await self._async_modify_user(device_id, name=tagged_name)
@@ -300,7 +299,7 @@ class AkuvoxLock(BaseLock):
                 )
                 continue
 
-            assigned_slots.add(slot_num)
+            available.pop(0)
             LOGGER.debug(
                 "Lock %s: tagged user '%s' (id=%s) as slot %d: '%s'",
                 self.lock.entity_id,

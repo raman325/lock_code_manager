@@ -724,7 +724,7 @@ class TestAutoTagging:
         # First modify failed so slot 1 should be reused for the second user
         assert len(modify_calls) == 1
         assert modify_calls[0]["id"] == "201"
-        assert modify_calls[0]["name"] == "[LCM:2] Visitor B"
+        assert modify_calls[0]["name"] == "[LCM:1] Visitor B"
 
     async def test_no_managed_slots_is_noop(
         self,
