@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -21,12 +21,14 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    LockCodeManagerError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
-    _is_masked_pin,
     _make_tagged_name,
     _parse_tag,
 )
@@ -138,26 +140,6 @@ class TestParseTag:
         assert _parse_tag("") == (None, "")
 
 
-class TestIsMaskedPin:
-    """Tests for _is_masked_pin."""
-
-    def test_masked_stars(self) -> None:
-        """Test masked PIN with asterisks."""
-        assert _is_masked_pin("****") is True
-
-    def test_empty_string(self) -> None:
-        """Test empty string is masked."""
-        assert _is_masked_pin("") is True
-
-    def test_real_pin(self) -> None:
-        """Test real PIN is not masked."""
-        assert _is_masked_pin("1234") is False
-
-    def test_all_zeros(self) -> None:
-        """Test all zeros is not masked (legitimate PIN)."""
-        assert _is_masked_pin("0000") is False
-
-
 # ---------------------------------------------------------------------------
 # Provider property tests
 # ---------------------------------------------------------------------------
@@ -179,7 +161,7 @@ async def test_usercode_scan_interval(schlage_lock: SchlageLock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Connection tests
+# Connection and availability tests
 # ---------------------------------------------------------------------------
 
 
@@ -219,6 +201,27 @@ async def test_is_integration_connected_no_config_entry(
         lock_entity,
     )
     assert await lock.async_is_integration_connected() is False
+
+
+async def test_is_device_available_success(
+    hass: HomeAssistant, schlage_lock: SchlageLock
+) -> None:
+    """Test device availability returns True when get_codes succeeds."""
+    mock_response = {LOCK_ENTITY_ID: {}}
+    handler = AsyncMock(return_value=mock_response)
+    _register_schlage_service(hass, "get_codes", handler)
+
+    assert await schlage_lock.async_is_device_available() is True
+
+
+async def test_is_device_available_error(
+    hass: HomeAssistant, schlage_lock: SchlageLock
+) -> None:
+    """Test device availability returns False when service call fails."""
+    handler = AsyncMock(side_effect=HomeAssistantError("device offline"))
+    _register_schlage_service(hass, "get_codes", handler)
+
+    assert await schlage_lock.async_is_device_available() is False
 
 
 # ---------------------------------------------------------------------------
@@ -271,12 +274,12 @@ async def test_get_usercodes_no_configured_slots(
     assert codes == {}
 
 
-async def test_get_usercodes_auto_tags_untagged_codes(
+async def test_get_usercodes_does_not_auto_tag(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that untagged codes with real PINs are auto-tagged to managed slots."""
+    """Test that get_usercodes does not auto-tag untagged codes."""
     get_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "Guest", "code": "1234"},
@@ -284,79 +287,17 @@ async def test_get_usercodes_auto_tags_untagged_codes(
     }
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(return_value=None)
-    delete_handler = AsyncMock(return_value=None)
     _register_schlage_service(hass, "get_codes", get_handler)
     _register_schlage_service(hass, "add_code", add_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
 
     codes = await schlage_lock.async_get_usercodes()
 
-    # Slot 1 should be occupied after auto-tagging
-    assert codes[1] is SlotCode.UNKNOWN
-    assert codes[2] is SlotCode.EMPTY
-
-    # Verify add_code was called with the tagged name
-    assert add_handler.call_count == 1
-    add_call = add_handler.call_args[0][0]
-    assert add_call.data["name"] == "[LCM:1] Guest"
-    assert add_call.data["code"] == "1234"
-
-    # Verify delete_code was called to remove the original
-    assert delete_handler.call_count == 1
-    delete_call = delete_handler.call_args[0][0]
-    assert delete_call.data["name"] == "Guest"
-
-
-async def test_get_usercodes_skips_masked_pin_for_auto_tag(
-    hass: HomeAssistant,
-    schlage_lock: SchlageLock,
-    lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test that untagged codes with masked PINs are not auto-tagged."""
-    get_response = {
-        LOCK_ENTITY_ID: {
-            "code1": {"name": "Guest", "code": "****"},
-        },
-    }
-    get_handler = AsyncMock(return_value=get_response)
-    _register_schlage_service(hass, "get_codes", get_handler)
-
-    codes = await schlage_lock.async_get_usercodes()
-
-    # Both slots should be empty because the masked code cannot be auto-tagged
+    # Untagged codes are not counted as occupied
     assert codes[1] is SlotCode.EMPTY
     assert codes[2] is SlotCode.EMPTY
 
-
-async def test_get_usercodes_auto_tag_rollback_on_delete_failure(
-    hass: HomeAssistant,
-    schlage_lock: SchlageLock,
-    lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test that auto-tagging rolls back if delete of original fails."""
-    get_response = {
-        LOCK_ENTITY_ID: {
-            "code1": {"name": "Guest", "code": "1234"},
-        },
-    }
-    get_handler = AsyncMock(return_value=get_response)
-    add_handler = AsyncMock(return_value=None)
-    # delete_code fails (will be called for both original delete and rollback)
-    delete_handler = AsyncMock(side_effect=HomeAssistantError("delete failed"))
-    _register_schlage_service(hass, "get_codes", get_handler)
-    _register_schlage_service(hass, "add_code", add_handler)
-    _register_schlage_service(hass, "delete_code", delete_handler)
-
-    codes = await schlage_lock.async_get_usercodes()
-
-    # Slot should not be marked as occupied since tagging failed
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.EMPTY
-
-    # add_code called once for the tagging attempt
-    assert add_handler.call_count == 1
-    # delete_code called twice: once to delete original, once for rollback
-    assert delete_handler.call_count == 2
+    # No add_code call should have been made
+    assert add_handler.call_count == 0
 
 
 async def test_get_usercodes_duplicate_tag_uses_first(
@@ -398,6 +339,105 @@ async def test_get_usercodes_ignores_tags_outside_managed_range(
 
     assert codes[1] is SlotCode.EMPTY
     assert codes[2] is SlotCode.EMPTY
+
+
+# ---------------------------------------------------------------------------
+# Auto-tagging tests (_async_tag_unmanaged_codes)
+# ---------------------------------------------------------------------------
+
+
+async def test_tag_unmanaged_codes(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test that untagged codes with real PINs are auto-tagged to managed slots."""
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    get_handler = AsyncMock(return_value=get_response)
+    add_handler = AsyncMock(return_value=None)
+    delete_handler = AsyncMock(return_value=None)
+    _register_schlage_service(hass, "get_codes", get_handler)
+    _register_schlage_service(hass, "add_code", add_handler)
+    _register_schlage_service(hass, "delete_code", delete_handler)
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    # Verify add_code was called with the tagged name
+    assert add_handler.call_count == 1
+    add_call = add_handler.call_args[0][0]
+    assert add_call.data["name"] == "[LCM:1] Guest"
+    assert add_call.data["code"] == "1234"
+
+    # Verify delete_code was called to remove the original
+    assert delete_handler.call_count == 1
+    delete_call = delete_handler.call_args[0][0]
+    assert delete_call.data["name"] == "Guest"
+
+
+async def test_tag_unmanaged_codes_skips_masked_pin(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test that untagged codes with masked PINs are not auto-tagged."""
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "****"},
+        },
+    }
+    get_handler = AsyncMock(return_value=get_response)
+    add_handler = AsyncMock(return_value=None)
+    _register_schlage_service(hass, "get_codes", get_handler)
+    _register_schlage_service(hass, "add_code", add_handler)
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    # No add_code call because the PIN is masked
+    assert add_handler.call_count == 0
+
+
+async def test_tag_unmanaged_codes_rollback_on_delete_failure(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test that auto-tagging rolls back if delete of original fails."""
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    get_handler = AsyncMock(return_value=get_response)
+    add_handler = AsyncMock(return_value=None)
+    # delete_code fails (will be called for both original delete and rollback)
+    delete_handler = AsyncMock(side_effect=HomeAssistantError("delete failed"))
+    _register_schlage_service(hass, "get_codes", get_handler)
+    _register_schlage_service(hass, "add_code", add_handler)
+    _register_schlage_service(hass, "delete_code", delete_handler)
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    # add_code called once for the tagging attempt
+    assert add_handler.call_count == 1
+    # delete_code called twice: once to delete original, once for rollback
+    assert delete_handler.call_count == 2
+
+
+async def test_tag_unmanaged_codes_no_managed_slots(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+) -> None:
+    """Test that tagging is a no-op when no slots are configured."""
+    add_handler = AsyncMock(return_value=None)
+    _register_schlage_service(hass, "add_code", add_handler)
+
+    await schlage_lock._async_tag_unmanaged_codes()
+
+    assert add_handler.call_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +597,7 @@ async def test_hard_refresh_codes(
     schlage_lock: SchlageLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test hard_refresh_codes returns same result as get_usercodes."""
+    """Test hard_refresh_codes calls tagging then returns usercodes."""
     mock_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:2] Family", "code": "****"},
@@ -566,7 +606,9 @@ async def test_hard_refresh_codes(
     handler = AsyncMock(return_value=mock_response)
     _register_schlage_service(hass, "get_codes", handler)
 
-    codes = await schlage_lock.async_hard_refresh_codes()
+    with patch.object(schlage_lock, "_async_tag_unmanaged_codes") as mock_tag:
+        codes = await schlage_lock.async_hard_refresh_codes()
+        mock_tag.assert_awaited_once()
 
     assert codes[1] is SlotCode.EMPTY
     assert codes[2] is SlotCode.UNKNOWN
@@ -587,4 +629,31 @@ async def test_get_codes_service_failure(
     _register_schlage_service(hass, "get_codes", handler)
 
     with pytest.raises(LockDisconnected, match="connection lost"):
+        await schlage_lock.async_get_usercodes()
+
+
+async def test_get_codes_service_validation_error(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test that get_usercodes raises LockDisconnected on ServiceValidationError."""
+    handler = AsyncMock(side_effect=ServiceValidationError("invalid entity"))
+    _register_schlage_service(hass, "get_codes", handler)
+
+    with pytest.raises(LockDisconnected, match="invalid entity"):
+        await schlage_lock.async_get_usercodes()
+
+
+async def test_get_codes_malformed_entity_response(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test that get_codes raises LockCodeManagerError on malformed entity response."""
+    # Return a valid dict at the top level, but the entity sub-key is not a dict
+    handler = AsyncMock(return_value={LOCK_ENTITY_ID: "not a dict"})
+    _register_schlage_service(hass, "get_codes", handler)
+
+    with pytest.raises(LockCodeManagerError, match="malformed entity response"):
         await schlage_lock.async_get_usercodes()

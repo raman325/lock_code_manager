@@ -21,12 +21,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 import re
 
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
-from ..exceptions import LockDisconnected
+from ..exceptions import LockCodeManagerError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
@@ -54,13 +54,6 @@ def _parse_tag(name: str) -> tuple[int | None, str]:
     if match:
         return int(match.group(1)), match.group(2)
     return None, name
-
-
-def _is_masked_pin(pin: str) -> bool:
-    """Return True if a PIN looks masked or placeholder (e.g. '****', empty)."""
-    if not pin:
-        return True
-    return len(set(pin)) == 1 and pin[0] == "*"
 
 
 @dataclass(repr=False, eq=False)
@@ -114,19 +107,25 @@ class SchlageLock(BaseLock):
                 blocking=True,
                 return_response=True,
             )
-        except HomeAssistantError as err:
+        except (ServiceValidationError, HomeAssistantError) as err:
             raise LockDisconnected(
                 f"Schlage get_codes failed for {entity_id}: {err}"
             ) from err
 
         if not isinstance(response, dict):
-            return {}
+            raise LockCodeManagerError(
+                f"Schlage get_codes returned malformed response for {entity_id}: "
+                f"expected dict, got {type(response).__name__}"
+            )
 
         # Platform entity services wrap the response per entity_id.
         entity_response = response.get(entity_id, response)
-        if isinstance(entity_response, dict):
-            return entity_response
-        return {}
+        if not isinstance(entity_response, dict):
+            raise LockCodeManagerError(
+                f"Schlage get_codes returned malformed entity response for "
+                f"{entity_id}: expected dict, got {type(entity_response).__name__}"
+            )
+        return entity_response
 
     async def _async_add_code(self, name: str, code: str) -> None:
         """Add a new code with the given name and PIN."""
@@ -138,7 +137,7 @@ class SchlageLock(BaseLock):
                 service_data={"entity_id": entity_id, "name": name, "code": code},
                 blocking=True,
             )
-        except HomeAssistantError as err:
+        except (ServiceValidationError, HomeAssistantError) as err:
             raise LockDisconnected(
                 f"Schlage add_code failed for {entity_id}: {err}"
             ) from err
@@ -153,7 +152,7 @@ class SchlageLock(BaseLock):
                 service_data={"entity_id": entity_id, "name": name},
                 blocking=True,
             )
-        except HomeAssistantError as err:
+        except (ServiceValidationError, HomeAssistantError) as err:
             raise LockDisconnected(
                 f"Schlage delete_code failed for {entity_id}: {err}"
             ) from err
@@ -164,68 +163,52 @@ class SchlageLock(BaseLock):
             return False
         return self.lock_config_entry.state == ConfigEntryState.LOADED
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes.
+    async def async_is_device_available(self) -> bool:
+        """Return whether the Schlage lock device is available for commands."""
+        try:
+            await self._async_get_codes()
+        except (LockDisconnected, LockCodeManagerError) as err:
+            LOGGER.debug(
+                "Lock %s: availability check failed: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return False
+        return True
 
-        Schlage PINs are write-only (returned as masked values), so occupied
-        slots return SlotCode.UNKNOWN and cleared slots return SlotCode.EMPTY.
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Set up lock by performing initial auto-tagging of unmanaged codes."""
+        await super().async_setup(config_entry)
+        await self._async_tag_unmanaged_codes()
 
-        Untagged codes discovered on the lock are automatically tagged and
-        assigned to the next available managed slot.
+    async def _async_tag_unmanaged_codes(self) -> None:
+        """Tag unmanaged codes on the lock with Lock Code Manager slot numbers.
+
+        Discovers untagged codes and assigns them to the next available managed
+        slot by renaming (add tagged, delete original).
         """
         managed_slots = self._get_managed_slots()
         if not managed_slots:
-            return {}
+            return
 
         codes = await self._async_get_codes()
 
         assigned_slots: set[int] = set()
-        # (code_id, pin, slot, friendly_name)
-        tagged: list[tuple[str, str, int, str]] = []
-        # (code_id, pin, original_name)
+        # (code_id, original_name, pin)
         untagged: list[tuple[str, str, str]] = []
 
         for code_id, code_data in codes.items():
             name = code_data.get("name", "")
             pin = code_data.get("code", "")
-            slot_num, friendly_name = _parse_tag(name)
+            slot_num, _friendly_name = _parse_tag(name)
             if slot_num is not None:
-                tagged.append((code_id, pin, slot_num, friendly_name))
                 assigned_slots.add(slot_num)
             else:
-                untagged.append((code_id, pin, name))
+                untagged.append((code_id, name, pin))
 
-        # Track which managed slots have tagged codes
-        occupied_slots: set[int] = set()
-
-        # Process tagged codes: keep the first per slot (sorted by code_id for determinism)
-        tagged.sort(key=lambda t: t[0])
-        seen_slots: set[int] = set()
-        for code_id, pin, slot_num, friendly_name in tagged:
-            if slot_num not in managed_slots:
-                LOGGER.debug(
-                    "Lock %s: ignoring tagged code slot %d outside managed range",
-                    self.lock.entity_id,
-                    slot_num,
-                )
-                continue
-            if slot_num in seen_slots:
-                LOGGER.warning(
-                    "Lock %s: duplicate tag for slot %d (code_id=%s, name='%s'), "
-                    "skipping in favor of earlier entry",
-                    self.lock.entity_id,
-                    slot_num,
-                    code_id,
-                    friendly_name,
-                )
-                continue
-            seen_slots.add(slot_num)
-            occupied_slots.add(slot_num)
-
-        # Auto-tag untagged codes into the next available managed slot
         sorted_managed = sorted(managed_slots)
         next_slot_idx = 0
-        for _code_id, pin, original_name in untagged:
+        for _code_id, original_name, pin in untagged:
             if not original_name or not original_name.strip():
                 LOGGER.debug(
                     "Lock %s: skipping code with empty or whitespace name",
@@ -233,7 +216,7 @@ class SchlageLock(BaseLock):
                 )
                 continue
 
-            if _is_masked_pin(pin):
+            if self.is_masked_or_empty(pin):
                 LOGGER.debug(
                     "Lock %s: skipping untaggable code '%s' (PIN is masked or empty)",
                     self.lock.entity_id,
@@ -262,38 +245,40 @@ class SchlageLock(BaseLock):
 
             try:
                 await self._async_add_code(tagged_name, pin)
-            except LockDisconnected:
+            except LockDisconnected as err:
                 LOGGER.error(
-                    "Lock %s: failed to tag code '%s' for slot %d",
+                    "Lock %s: failed to tag code '%s' for slot %d: %s",
                     self.lock.entity_id,
                     original_name,
                     prospective_slot,
+                    err,
                 )
                 continue
 
             try:
                 await self._async_delete_code(original_name)
-            except LockDisconnected:
+            except LockDisconnected as err:
                 LOGGER.warning(
                     "Lock %s: tagged code added but failed to delete original '%s' "
-                    "for slot %d, attempting rollback",
+                    "for slot %d: %s, attempting rollback",
                     self.lock.entity_id,
                     original_name,
                     prospective_slot,
+                    err,
                 )
                 try:
                     await self._async_delete_code(tagged_name)
-                except LockDisconnected:
+                except LockDisconnected as rollback_err:
                     LOGGER.error(
                         "Lock %s: rollback failed for tagged code '%s', "
-                        "lock may have duplicate entries",
+                        "lock may have duplicate entries: %s",
                         self.lock.entity_id,
                         tagged_name,
+                        rollback_err,
                     )
                 continue
 
             assigned_slots.add(prospective_slot)
-            occupied_slots.add(prospective_slot)
             LOGGER.debug(
                 "Lock %s: tagged code '%s' as slot %d: '%s'",
                 self.lock.entity_id,
@@ -301,6 +286,55 @@ class SchlageLock(BaseLock):
                 prospective_slot,
                 tagged_name,
             )
+
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+        """Get dictionary of code slots and usercodes.
+
+        Schlage PINs are write-only (returned as masked values), so occupied
+        slots return SlotCode.UNKNOWN and cleared slots return SlotCode.EMPTY.
+
+        This method only reads and classifies codes; auto-tagging of unmanaged
+        codes is handled by ``_async_tag_unmanaged_codes()``.
+        """
+        managed_slots = self._get_managed_slots()
+        if not managed_slots:
+            return {}
+
+        codes = await self._async_get_codes()
+
+        # Track which managed slots have tagged codes
+        occupied_slots: set[int] = set()
+
+        # Collect tagged codes: keep the first per slot (sorted by code_id for determinism)
+        tagged: list[tuple[str, int, str]] = []
+        for code_id, code_data in codes.items():
+            name = code_data.get("name", "")
+            slot_num, friendly_name = _parse_tag(name)
+            if slot_num is not None:
+                tagged.append((code_id, slot_num, friendly_name))
+
+        tagged.sort(key=lambda t: t[0])
+        seen_slots: set[int] = set()
+        for code_id, slot_num, friendly_name in tagged:
+            if slot_num not in managed_slots:
+                LOGGER.debug(
+                    "Lock %s: ignoring tagged code slot %d outside managed range",
+                    self.lock.entity_id,
+                    slot_num,
+                )
+                continue
+            if slot_num in seen_slots:
+                LOGGER.warning(
+                    "Lock %s: duplicate tag for slot %d (code_id=%s, name='%s'), "
+                    "skipping in favor of earlier entry",
+                    self.lock.entity_id,
+                    slot_num,
+                    code_id,
+                    friendly_name,
+                )
+                continue
+            seen_slots.add(slot_num)
+            occupied_slots.add(slot_num)
 
         # Build final result: UNKNOWN for occupied, EMPTY for unoccupied managed slots
         return {
@@ -388,7 +422,8 @@ class SchlageLock(BaseLock):
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """Perform hard refresh and return all codes.
 
-        Schlage has no cache to invalidate, so this is identical to
-        async_get_usercodes.
+        Schlage has no cache to invalidate; re-tags unmanaged codes and then
+        reads the current state.
         """
+        await self._async_tag_unmanaged_codes()
         return await self.async_get_usercodes()
