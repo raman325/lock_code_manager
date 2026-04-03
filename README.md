@@ -24,7 +24,7 @@ Locks from the following integrations are currently supported:
 
 - [Matter][wiki-matter]
 - [Schlage WiFi][wiki-schlage]
-- [Z-Wave](https://www.home-assistant.io/integrations/zwave_js/)
+- [Z-Wave][wiki-zwave]
 
 **Custom integrations:**
 
@@ -37,10 +37,11 @@ Locks from the following integrations are currently supported:
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
 [local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
 [hass-virtual]: https://github.com/twrecked/hass-virtual
+[wiki-zwave]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-integration
 
-The code was written to make it (I think) easy to add support for locks in other
-integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you
-want to learn more about that and take a stab at it. Contributors welcome!
+Adding support for new lock integrations is straightforward — see the
+[Adding a Provider](https://github.com/raman325/lock_code_manager/wiki/Adding-a-Provider)
+guide. Contributors welcome!
 
 ## Integrations That Cannot Currently Be Supported
 
@@ -58,8 +59,8 @@ for details.
 
 The best way to install this integration is via HACS.
 
-1. Set up your locks as entities to your Home Assistant instance through the corresponding
-   integration (e.g. Z-Wave)
+1. Set up your locks in Home Assistant through a supported integration
+   (Z-Wave, Matter, Schlage, etc.)
 2. Add this repository as a custom integration repository in HACS
 3. Go to Settings > Devices & Services > Add Integration
 4. Select Lock Code Manager
@@ -99,8 +100,7 @@ knock on `keymaster`, unfortunately a lot of what is built in this integration w
 possible for most of `keymaster`'s life. I briefly considered implementing this into
 `keymaster` but:
 
-1. `keymaster` is still a great solution that works as is, and is more feature rich than
-   this integration will likely ever be.
+1. `keymaster` is still a great solution that works as is.
 2. `keymaster` is surprisingly simple under the hood because it makes Home Assistant do a
    lot of the heavy lifting for figuring out when to enable and disable a usercode. This
    integration, on the other hand, attempts to do all of the heavy lifting internally in
