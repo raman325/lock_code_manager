@@ -51,11 +51,6 @@
    `options` only within the config entry update listener during options updates;
    elsewhere use `data` to avoid mid-update inconsistencies.
 
-#### Other Complexity
-
-- **Entity unique ID format** - Is `{entry_id}|{slot}|{type}` optimal?
-- **`async_internal_*` method wrappers** — are all necessary?
-
 #### Sync Manager Follow-ups
 
 - Consider coordinator owning sync managers instead of binary sensor entities
@@ -136,10 +131,8 @@ Lovelace resources.
 
 ### Improve Dashboard UI/UX
 
-- Add visual indicator when codes are out of sync
 - Bulk operations (enable/disable multiple slots)
 - Import/export slot configuration
-- History view showing when codes were used
 
 ### Add Service Actions
 
