@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "eddc677e2d7d",
+  "strategy": "manual-commit",
+  "branch": "fix/repair-issue-lifecycle",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ed/dc677e2d7d/0/metadata.json",
+      "transcript": "/ed/dc677e2d7d/0/full.jsonl",
+      "content_hash": "/ed/dc677e2d7d/0/content_hash.txt",
+      "prompt": "/ed/dc677e2d7d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8032,
+    "cache_creation_tokens": 14276576,
+    "cache_read_tokens": 1581271595,
+    "output_tokens": 777575,
+    "api_call_count": 3283
+  }
+}
