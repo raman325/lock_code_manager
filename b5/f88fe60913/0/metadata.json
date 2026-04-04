@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "b5f88fe60913",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T23:00:08.416296Z",
+  "branch": "fix/provider-return-all-slots",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_matter.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "f8e9cf5a5521",
+  "token_usage": {
+    "input_tokens": 8170,
+    "cache_creation_tokens": 14339834,
+    "cache_read_tokens": 1619170278,
+    "output_tokens": 800885,
+    "api_call_count": 3391
+  },
+  "session_metrics": {
+    "turn_count": 277
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T22:59:57.907424Z",
+    "agent_lines": 0,
+    "human_added": 44,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 44,
+    "agent_percentage": 0
+  }
+}
