@@ -2,7 +2,8 @@
 
 Handles PIN credential management via Matter lock services.
 PINs are write-only: occupied slots report SlotCode.UNKNOWN, cleared slots report
-SlotCode.EMPTY. Subscribes to LockOperation events for code slot event tracking.
+SlotCode.EMPTY. Subscribes to DoorLock cluster events for code slot tracking and
+push-based occupancy updates via LockOperation and LockUserChange events.
 """
 
 from __future__ import annotations
@@ -30,8 +31,17 @@ MATTER_DOMAIN = "matter"
 # DoorLock cluster ID (0x0101 = 257)
 _DOOR_LOCK_CLUSTER_ID = 257
 
-# LockOperation event ID
+# DoorLock cluster event IDs
 _LOCK_OPERATION_EVENT_ID = 2
+_LOCK_USER_CHANGE_EVENT_ID = 4
+
+# LockUserChange LockDataType values
+_LOCK_DATA_TYPE_PIN = 6
+
+# LockUserChange DataOperationType values
+_DATA_OP_ADD = 0
+_DATA_OP_CLEAR = 1
+_DATA_OP_MODIFY = 2
 
 
 @dataclass(repr=False, eq=False)
@@ -168,11 +178,16 @@ class MatterLock(BaseLock):
 
     @callback
     def _subscribe_to_events(self) -> None:
-        """Subscribe to Matter LockOperation events for code slot tracking.
+        """Subscribe to Matter DoorLock cluster events.
+
+        Handles two event types:
+        - LockOperation (event 2): fires code slot events when a PIN is used
+        - LockUserChange (event 4): pushes occupancy updates to coordinator
+          when credentials are added, modified, or cleared
 
         Called during setup. Does not use the push subscription framework
-        because that would disable polling — Matter needs polling for value
-        updates (PINs are write-only) and events only for code slot tracking.
+        because that would disable polling — Matter needs polling for full
+        reconciliation and events for real-time change detection.
         """
         if self._event_unsub is not None:
             return
@@ -188,7 +203,7 @@ class MatterLock(BaseLock):
             return
 
         self._event_unsub = client.subscribe_events(
-            callback=self._on_lock_operation,
+            callback=self._on_node_event,
             event_filter=EventType.NODE_EVENT,
             node_filter=node_id,
         )
@@ -206,20 +221,25 @@ class MatterLock(BaseLock):
         await super().async_unload(remove_permanently)
 
     @callback
-    def _on_lock_operation(self, _event: Any, node_event: Any) -> None:
-        """Handle Matter LockOperation events.
+    def _on_node_event(self, _event: Any, node_event: Any) -> None:
+        """Dispatch DoorLock cluster events to the appropriate handler."""
+        if getattr(node_event, "cluster_id", None) != _DOOR_LOCK_CLUSTER_ID:
+            return
+
+        event_id = getattr(node_event, "event_id", None)
+        if event_id == _LOCK_OPERATION_EVENT_ID:
+            self._handle_lock_operation(node_event)
+        elif event_id == _LOCK_USER_CHANGE_EVENT_ID:
+            self._handle_lock_user_change(node_event)
+
+    @callback
+    def _handle_lock_operation(self, node_event: Any) -> None:
+        """Handle LockOperation events (event ID 2).
 
         Fires a code slot event when a PIN credential is used to lock/unlock.
         Only PIN credentials (credentialType=1) trigger the event — other
         credential types (RFID, fingerprint, etc.) are ignored.
         """
-        # Filter to DoorLock cluster LockOperation events
-        if (
-            getattr(node_event, "cluster_id", None) != _DOOR_LOCK_CLUSTER_ID
-            or getattr(node_event, "event_id", None) != _LOCK_OPERATION_EVENT_ID
-        ):
-            return
-
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
         credentials = data.get("credentials")
         lock_operation_type = data.get("lockOperationType")
@@ -265,6 +285,54 @@ class MatterLock(BaseLock):
             else "operated",
             source_data=data,
         )
+
+    @callback
+    def _handle_lock_user_change(self, node_event: Any) -> None:
+        """Handle LockUserChange events (event ID 4).
+
+        Pushes occupancy updates to the coordinator when a PIN credential is
+        added, modified, or cleared. This provides real-time change detection
+        without waiting for the next poll cycle.
+
+        Only PIN credentials (LockDataType=6) are handled. The DataIndex field
+        maps to the credential index (code slot number).
+        """
+        data: dict[str, Any] = getattr(node_event, "data", None) or {}
+
+        # Only handle PIN credential changes (LockDataType 6 = PIN)
+        if data.get("lockDataType") != _LOCK_DATA_TYPE_PIN:
+            return
+
+        code_slot = data.get("dataIndex")
+        if code_slot is None:
+            return
+        code_slot = int(code_slot)
+
+        operation = data.get("dataOperationType")
+
+        if operation == _DATA_OP_CLEAR:
+            resolved: str | SlotCode = SlotCode.EMPTY
+        elif operation in (_DATA_OP_ADD, _DATA_OP_MODIFY):
+            resolved = SlotCode.UNKNOWN
+        else:
+            LOGGER.debug(
+                "Lock %s: LockUserChange event with unknown operation %s for slot %s",
+                self.lock.entity_id,
+                operation,
+                code_slot,
+            )
+            return
+
+        LOGGER.debug(
+            "Lock %s: LockUserChange event — slot=%s, operation=%s, resolved=%s",
+            self.lock.entity_id,
+            code_slot,
+            operation,
+            resolved,
+        )
+
+        if self.coordinator:
+            self.coordinator.push_update({code_slot: resolved})
 
     # -- Usercode CRUD -------------------------------------------------------
 
@@ -321,7 +389,8 @@ class MatterLock(BaseLock):
         """Set a usercode on a code slot.
 
         Returns True unconditionally because Matter does not reveal whether
-        the credential value actually changed.
+        the credential value actually changed. Pushes SlotCode.UNKNOWN to the
+        coordinator immediately — the LockUserChange event will confirm.
         """
         await self._async_call_service(
             "set_lock_credential",
@@ -350,15 +419,17 @@ class MatterLock(BaseLock):
                     code_slot,
                     name,
                 )
+        # Optimistic update: service call succeeded, push occupancy state
+        # immediately. The LockUserChange event will confirm later.
+        if self.coordinator:
+            self.coordinator.push_update({code_slot: SlotCode.UNKNOWN})
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """Clear a usercode on a code slot.
 
         Returns True if a credential was cleared, False if the slot was already
-        empty. Note: there is a TOCTOU race between the status check and the
-        clear — if another party clears the credential between the two calls,
-        the clear call may fail. This is inherent in the two-step protocol.
+        empty. Pushes SlotCode.EMPTY to the coordinator immediately on success.
         """
         lock_data = await self._async_call_service(
             "get_lock_credential_status",
@@ -379,6 +450,10 @@ class MatterLock(BaseLock):
                 "credential_index": code_slot,
             },
         )
+        # Optimistic update: clear succeeded, push empty state immediately.
+        # The LockUserChange event will confirm later.
+        if self.coordinator:
+            self.coordinator.push_update({code_slot: SlotCode.EMPTY})
         return True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:

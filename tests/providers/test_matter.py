@@ -486,14 +486,14 @@ def _make_node_event(
 
 
 class TestLockOperationEvent:
-    """Test _on_lock_operation callback filtering and event firing."""
+    """Test _on_node_event callback filtering and event firing."""
 
     def test_unlock_with_pin_credential(self, matter_lock: MatterLock) -> None:
         """Unlock with PIN credential fires code slot event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -515,7 +515,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -537,7 +537,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -556,7 +556,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -575,7 +575,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 cluster_id=6,  # OnOff cluster
@@ -590,7 +590,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=3,  # LockOperationError
@@ -605,7 +605,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(data={"lockOperationType": 1}),
         )
@@ -617,7 +617,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(data={"lockOperationType": 1, "credentials": []}),
         )
@@ -629,7 +629,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -647,7 +647,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_lock_operation(None, _make_node_event(data=None))
+        matter_lock._on_node_event(None, _make_node_event(data=None))
 
         assert len(fired) == 0
 
@@ -814,3 +814,262 @@ class TestEventSubscription:
 
         assert matter_lock._event_unsub is None
         mock_client.subscribe_events.assert_not_called()
+
+
+# =============================================================================
+# LockUserChange event tests
+# =============================================================================
+
+
+class TestLockUserChangeEvent:
+    """Test _handle_lock_user_change callback and coordinator push updates."""
+
+    def test_pin_added_pushes_unknown(self, matter_lock: MatterLock) -> None:
+        """Adding a PIN credential pushes SlotCode.UNKNOWN to coordinator."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {3: SlotCode.EMPTY}
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 0,  # Add
+                    "dataIndex": 3,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_called_once_with({3: SlotCode.UNKNOWN})
+
+    def test_pin_modified_pushes_unknown(self, matter_lock: MatterLock) -> None:
+        """Modifying a PIN credential pushes SlotCode.UNKNOWN to coordinator."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {5: SlotCode.UNKNOWN}
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 2,  # Modify
+                    "dataIndex": 5,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_called_once_with({5: SlotCode.UNKNOWN})
+
+    def test_pin_cleared_pushes_empty(self, matter_lock: MatterLock) -> None:
+        """Clearing a PIN credential pushes SlotCode.EMPTY to coordinator."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {2: SlotCode.UNKNOWN}
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 1,  # Clear
+                    "dataIndex": 2,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+
+    def test_non_pin_data_type_ignored(self, matter_lock: MatterLock) -> None:
+        """Non-PIN LockDataType (e.g. RFID=7) is ignored."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 7,  # RFID, not PIN
+                    "dataOperationType": 0,
+                    "dataIndex": 1,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_not_called()
+
+    def test_missing_data_index_ignored(self, matter_lock: MatterLock) -> None:
+        """Event with no dataIndex is ignored."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 0,
+                    # no dataIndex
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_not_called()
+
+    def test_unknown_operation_type_ignored(self, matter_lock: MatterLock) -> None:
+        """Unknown DataOperationType is ignored."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 99,  # unknown
+                    "dataIndex": 1,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_not_called()
+
+    def test_no_coordinator_does_not_crash(self, matter_lock: MatterLock) -> None:
+        """LockUserChange with no coordinator attached does not crash."""
+        matter_lock.coordinator = None
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,
+                    "dataOperationType": 0,
+                    "dataIndex": 1,
+                },
+            ),
+        )
+        # No assert — just verifying it doesn't raise
+
+    def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
+        """Event from non-DoorLock cluster is ignored."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                cluster_id=999,  # not DoorLock
+                event_id=4,
+                data={
+                    "lockDataType": 6,
+                    "dataOperationType": 0,
+                    "dataIndex": 1,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_not_called()
+
+
+# =============================================================================
+# Optimistic push update tests (set/clear usercode)
+# =============================================================================
+
+
+class TestOptimisticPushUpdates:
+    """Test that set/clear usercode pushes to coordinator optimistically."""
+
+    async def test_set_usercode_pushes_unknown(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_set_usercode pushes SlotCode.UNKNOWN after service call."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "set_lock_credential",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
+        )
+
+        result = await matter_lock.async_set_usercode(3, "1234")
+
+        assert result is True
+        mock_coordinator.push_update.assert_called_once_with({3: SlotCode.UNKNOWN})
+
+    async def test_set_usercode_no_coordinator(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_set_usercode without coordinator does not crash."""
+        matter_lock.coordinator = None
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "set_lock_credential",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
+        )
+
+        result = await matter_lock.async_set_usercode(3, "1234")
+        assert result is True
+
+    async def test_clear_usercode_pushes_empty(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_clear_usercode pushes SlotCode.EMPTY after clearing."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "get_lock_credential_status",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {"credential_exists": True}}),
+        )
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "clear_lock_credential",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
+        )
+
+        result = await matter_lock.async_clear_usercode(5)
+
+        assert result is True
+        mock_coordinator.push_update.assert_called_once_with({5: SlotCode.EMPTY})
+
+    async def test_clear_empty_slot_no_push(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_clear_usercode on empty slot does not push to coordinator."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "get_lock_credential_status",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {"credential_exists": False}}),
+        )
+
+        result = await matter_lock.async_clear_usercode(5)
+
+        assert result is False
+        mock_coordinator.push_update.assert_not_called()
