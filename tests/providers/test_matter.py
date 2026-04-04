@@ -321,6 +321,35 @@ async def test_get_usercodes_unmanaged_occupied_slots(
     assert codes == {5: SlotCode.UNKNOWN, 8: SlotCode.UNKNOWN}
 
 
+async def test_get_usercodes_invalid_credential_index_skipped(
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+) -> None:
+    """Test that invalid credential_index values are skipped with a warning."""
+    register_mock_service(
+        hass,
+        MATTER_DOMAIN,
+        "get_lock_users",
+        AsyncMock(
+            return_value={
+                LOCK_ENTITY_ID: {
+                    "users": [
+                        {
+                            "credentials": [
+                                {"credential_type": "pin", "credential_index": "bad"},
+                                {"credential_type": "pin", "credential_index": 3},
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    codes = await matter_lock.async_get_usercodes()
+    # Only slot 3 should appear; "bad" index is skipped
+    assert codes == {3: SlotCode.UNKNOWN}
+
+
 # ---------------------------------------------------------------------------
 # set_usercode tests
 # ---------------------------------------------------------------------------

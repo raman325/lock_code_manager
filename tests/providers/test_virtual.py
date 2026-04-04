@@ -206,3 +206,18 @@ async def test_get_usercodes_includes_unmanaged_slots(
     assert codes[1] == "1234"
     assert codes[2] is SlotCode.EMPTY
     assert codes[99] == "9999"
+
+
+async def test_get_usercodes_invalid_stored_key_skipped(
+    virtual_lock_with_slots: VirtualLock,
+):
+    """Test that invalid stored slot keys are skipped with a warning."""
+    lock = virtual_lock_with_slots
+
+    lock._data["bad_key"] = {"code": "1111", "name": "corrupt"}
+    lock._data["3"] = {"code": "3333", "name": "valid_unmanaged"}
+
+    codes = await lock.async_get_usercodes()
+    # "bad_key" should be skipped; slot 3 should appear
+    assert 3 in codes
+    assert codes[3] == "3333"
