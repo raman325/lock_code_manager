@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from matter_server.common.models import MatterNodeEvent
 import pytest
@@ -725,3 +725,43 @@ class TestEventSubscription:
         """Test async_unload handles no active subscription."""
         matter_lock._event_unsub = None
         await matter_lock.async_unload(False)  # should not crash
+
+    def test_get_matter_client_success(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns client from hass.data."""
+        mock_client = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.matter_client = mock_client
+        mock_entry_data = MagicMock()
+        mock_entry_data.adapter = mock_adapter
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+        assert matter_lock._get_matter_client() is mock_client
+
+    def test_subscribe_to_events_success(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        matter_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test _subscribe_to_events subscribes when client and node available."""
+        mock_unsub = MagicMock()
+        mock_client = MagicMock()
+        mock_client.subscribe_events.return_value = mock_unsub
+        mock_adapter = MagicMock()
+        mock_adapter.matter_client = mock_client
+        mock_entry_data = MagicMock()
+        mock_entry_data.adapter = mock_adapter
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "16")},
+        )
+        matter_lock.device_entry = device
+
+        matter_lock._subscribe_to_events()
+
+        assert matter_lock._event_unsub is mock_unsub
+        mock_client.subscribe_events.assert_called_once()
