@@ -466,6 +466,13 @@ class SlotSyncManager:
                 self._log_prefix,
                 expected_in_sync,
             )
+            if expected_in_sync:
+                # Clear any persisted slot_disabled issue from before restart
+                async_delete_issue(
+                    self._hass,
+                    DOMAIN,
+                    f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                )
             self._write_state()
             if not expected_in_sync:
                 self._dirty = True  # schedule sync on next tick

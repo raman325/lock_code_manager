@@ -253,9 +253,4 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         if self._connection_unsub:
             self._connection_unsub()
             self._connection_unsub = None
-        async_delete_issue(
-            self.hass,
-            DOMAIN,
-            f"lock_offline_{self._lock.lock.entity_id}",
-        )
         await super().async_shutdown()
