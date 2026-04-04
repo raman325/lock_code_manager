@@ -247,7 +247,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_choose_path()
 
         has_readable = any(
-            code is not SlotCode.UNKNOWN
+            not isinstance(code, SlotCode)
             for codes in self._unmanaged_codes.values()
             for code in codes.values()
         )
