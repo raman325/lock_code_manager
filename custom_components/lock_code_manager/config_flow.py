@@ -159,10 +159,10 @@ async def _async_get_unmanaged_codes(
                 lock_entity_id,
             )
             continue
-        lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-            hass, dev_reg, ent_reg, lock_config_entry, lock_entry
-        )
         try:
+            lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
+                hass, dev_reg, ent_reg, lock_config_entry, lock_entry
+            )
             usercodes = await lock_instance.async_internal_get_usercodes()
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
