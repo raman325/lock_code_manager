@@ -123,8 +123,8 @@ async def test_domain_property(matter_lock: MatterLock) -> None:
 
 
 async def test_supports_code_slot_events(matter_lock: MatterLock) -> None:
-    """Test that Matter locks do not support code slot events."""
-    assert matter_lock.supports_code_slot_events is False
+    """Test that Matter locks support code slot events via LockOperation."""
+    assert matter_lock.supports_code_slot_events is True
 
 
 async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
