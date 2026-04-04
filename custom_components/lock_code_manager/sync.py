@@ -36,7 +36,11 @@ from homeassistant.helpers.event import (
     async_track_state_change_filtered,
     async_track_time_interval,
 )
-from homeassistant.helpers.issue_registry import async_delete_issue
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -314,8 +318,23 @@ class SlotSyncManager:
             )
         except Exception:
             _LOGGER.exception(
-                "%s: Failed to disable slot, resetting sync tracker anyway",
+                "%s: Failed to disable slot via service call",
                 self._log_prefix,
+            )
+            # Fallback: create repair issue directly so the user is notified
+            # even though the switch service call failed
+            async_create_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                is_fixable=True,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key="slot_disabled",
+                translation_placeholders={
+                    "slot_num": str(self._slot_num),
+                    "reason": reason,
+                },
             )
         finally:
             self._reset_sync_tracker()

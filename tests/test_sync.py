@@ -281,6 +281,13 @@ class TestDisableSlotExceptionHandling:
         assert manager._sync_attempt_first is None
         assert "Failed to disable slot" in caplog.text
 
+        # Fallback repair issue should be created even though service call failed
+        issue_registry = async_get_issue_registry(hass)
+        entry_id = lock_code_manager_config_entry.entry_id
+        issue = issue_registry.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1")
+        assert issue is not None
+        assert issue.severity == IssueSeverity.WARNING
+
     async def test_disable_slot_success_resets_sync_tracker(
         self,
         hass: HomeAssistant,

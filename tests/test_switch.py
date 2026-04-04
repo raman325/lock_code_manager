@@ -53,7 +53,7 @@ async def test_switch_entity(
     )
 
     # Attempt to toggle switch on. This should raise because the PIN value is empty
-    with pytest.raises(HomeAssistantError, match="PIN is required"):
+    with pytest.raises(HomeAssistantError, match="Set a PIN code"):
         await hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TOGGLE,

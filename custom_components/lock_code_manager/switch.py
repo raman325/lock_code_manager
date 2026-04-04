@@ -83,7 +83,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
                 },
             )
             raise HomeAssistantError(
-                f"A PIN is required before enabling slot {self.slot_num}"
+                f"Set a PIN code for slot {self.slot_num} before enabling it"
             )
         self._update_config_entry(True)
         async_delete_issue(
