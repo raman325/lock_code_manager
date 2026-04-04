@@ -139,6 +139,9 @@ class MatterLock(BaseLock):
             lock_info,
         )
 
+        # Subscribe to LockOperation events for code slot event tracking
+        self._subscribe_to_events()
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether the Matter integration is loaded."""
         if not self.lock_config_entry:
@@ -161,18 +164,28 @@ class MatterLock(BaseLock):
             return False
         return True
 
-    # -- Push subscription for LockOperation events --------------------------
+    # -- Event subscription (separate from push value updates) ----------------
 
     @callback
-    def setup_push_subscription(self) -> None:
-        """Subscribe to Matter LockOperation events."""
+    def _subscribe_to_events(self) -> None:
+        """Subscribe to Matter LockOperation events for code slot tracking.
+
+        Called during setup. Does not use the push subscription framework
+        because that would disable polling — Matter needs polling for value
+        updates (PINs are write-only) and events only for code slot tracking.
+        """
+        if self._event_unsub is not None:
+            return
+
         client = self._get_matter_client()
         node_id = self._matter_node_id
         if not client or node_id is None:
-            raise LockDisconnected(
-                f"Cannot subscribe to events for {self.lock.entity_id}: "
-                f"Matter client or node ID unavailable"
+            LOGGER.debug(
+                "Lock %s: Matter client or node ID unavailable, "
+                "skipping event subscription",
+                self.lock.entity_id,
             )
+            return
 
         self._event_unsub = client.subscribe_events(
             callback=self._on_lock_operation,
@@ -185,12 +198,12 @@ class MatterLock(BaseLock):
             node_id,
         )
 
-    @callback
-    def teardown_push_subscription(self) -> None:
-        """Unsubscribe from Matter events."""
+    async def async_unload(self, remove_permanently: bool) -> None:
+        """Unload lock and unsubscribe from events."""
         if self._event_unsub:
             self._event_unsub()
             self._event_unsub = None
+        await super().async_unload(remove_permanently)
 
     @callback
     def _on_lock_operation(self, event: Any, node_event: Any) -> None:
