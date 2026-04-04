@@ -190,3 +190,19 @@ async def test_get_usercodes_returns_empty_for_cleared_slots(
     codes = await lock.async_get_usercodes()
     assert codes[1] is SlotCode.EMPTY
     assert codes[2] is SlotCode.EMPTY
+
+
+async def test_get_usercodes_includes_unmanaged_slots(
+    virtual_lock_with_slots: VirtualLock,
+):
+    """Test that async_get_usercodes returns unmanaged occupied slots."""
+    lock = virtual_lock_with_slots
+
+    # Set code on managed slot 1 and unmanaged slot 99
+    await lock.async_set_usercode(1, "1234", "slot1")
+    lock._data["99"] = {"code": "9999", "name": "unmanaged"}
+
+    codes = await lock.async_get_usercodes()
+    assert codes[1] == "1234"
+    assert codes[2] is SlotCode.EMPTY
+    assert codes[99] == "9999"
