@@ -2,8 +2,8 @@
 
 Handles PIN credential management via Matter lock services.
 PINs are write-only: occupied slots report SlotCode.UNKNOWN, cleared slots report
-SlotCode.EMPTY. Subscribes to DoorLock cluster events for code slot tracking and
-push-based occupancy updates via LockOperation and LockUserChange events.
+SlotCode.EMPTY. Subscribes to DoorLock cluster events via the push framework for
+code slot tracking (LockOperation) and occupancy updates (LockUserChange).
 """
 
 from __future__ import annotations
@@ -60,6 +60,16 @@ class MatterLock(BaseLock):
     @property
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
+        return True
+
+    @property
+    def supports_push(self) -> bool:
+        """Return whether this lock supports push-based updates.
+
+        Matter locks push occupancy changes via LockUserChange events.
+        PINs are still write-only (values are never pushed), but slot
+        occupancy (UNKNOWN/EMPTY) is pushed in real time.
+        """
         return True
 
     @property
@@ -149,9 +159,6 @@ class MatterLock(BaseLock):
             lock_info,
         )
 
-        # Subscribe to LockOperation events for code slot event tracking
-        self._subscribe_to_events()
-
     async def async_is_integration_connected(self) -> bool:
         """Return whether the Matter integration is loaded."""
         if not self.lock_config_entry:
@@ -174,10 +181,10 @@ class MatterLock(BaseLock):
             return False
         return True
 
-    # -- Event subscription (separate from push value updates) ----------------
+    # -- Event subscription via push framework --------------------------------
 
     @callback
-    def _subscribe_to_events(self) -> None:
+    def setup_push_subscription(self) -> None:
         """Subscribe to Matter DoorLock cluster events.
 
         Handles two event types:
@@ -185,9 +192,7 @@ class MatterLock(BaseLock):
         - LockUserChange (event 4): pushes occupancy updates to coordinator
           when credentials are added, modified, or cleared
 
-        Called during setup. Does not use the push subscription framework
-        because that would disable polling — Matter needs polling for full
-        reconciliation and events for real-time change detection.
+        Called by BaseLock.subscribe_push_updates() with automatic retry.
         """
         if self._event_unsub is not None:
             return
@@ -195,12 +200,9 @@ class MatterLock(BaseLock):
         client = self._get_matter_client()
         node_id = self._matter_node_id
         if not client or node_id is None:
-            LOGGER.debug(
-                "Lock %s: Matter client or node ID unavailable, "
-                "skipping event subscription",
-                self.lock.entity_id,
+            raise LockDisconnected(
+                f"Matter client or node ID unavailable for {self.lock.entity_id}"
             )
-            return
 
         self._event_unsub = client.subscribe_events(
             callback=self._on_node_event,
@@ -213,12 +215,12 @@ class MatterLock(BaseLock):
             node_id,
         )
 
-    async def async_unload(self, remove_permanently: bool) -> None:
-        """Unload lock and unsubscribe from events."""
+    @callback
+    def teardown_push_subscription(self) -> None:
+        """Unsubscribe from Matter DoorLock cluster events."""
         if self._event_unsub:
             self._event_unsub()
             self._event_unsub = None
-        await super().async_unload(remove_permanently)
 
     @callback
     def _on_node_event(self, _event: Any, node_event: Any) -> None:
@@ -303,10 +305,13 @@ class MatterLock(BaseLock):
         if data.get("lockDataType") != _LOCK_DATA_TYPE_PIN:
             return
 
-        code_slot = data.get("dataIndex")
-        if code_slot is None:
+        raw_index = data.get("dataIndex")
+        if raw_index is None:
             return
-        code_slot = int(code_slot)
+        try:
+            code_slot = int(raw_index)
+        except (TypeError, ValueError):
+            return
 
         operation = data.get("dataOperationType")
 

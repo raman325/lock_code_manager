@@ -694,37 +694,37 @@ class TestEventSubscription:
         hass.data.pop("matter", None)
         assert matter_lock._get_matter_client() is None
 
-    def test_subscribe_to_events_idempotent(self, matter_lock: MatterLock) -> None:
-        """Test _subscribe_to_events is a no-op if already subscribed."""
+    def test_setup_push_idempotent(self, matter_lock: MatterLock) -> None:
+        """Test setup_push_subscription is a no-op if already subscribed."""
         matter_lock._event_unsub = lambda: None  # already subscribed
-        matter_lock._subscribe_to_events()  # should be a no-op
+        matter_lock.setup_push_subscription()  # should be a no-op
         # If it tried to subscribe again, it would fail (no client)
         assert matter_lock._event_unsub is not None
 
-    def test_subscribe_to_events_no_client(
+    def test_setup_push_no_client_raises(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """Test _subscribe_to_events gracefully handles missing client."""
+        """Test setup_push_subscription raises when client unavailable."""
         hass.data.pop("matter", None)
-        matter_lock._subscribe_to_events()
-        assert matter_lock._event_unsub is None
+        with pytest.raises(LockDisconnected):
+            matter_lock.setup_push_subscription()
 
-    async def test_unload_unsubscribes(self, matter_lock: MatterLock) -> None:
-        """Test async_unload cleans up event subscription."""
+    def test_teardown_push_unsubscribes(self, matter_lock: MatterLock) -> None:
+        """Test teardown_push_subscription cleans up event subscription."""
         unsub_called = [False]
 
         def _unsub() -> None:
             unsub_called[0] = True
 
         matter_lock._event_unsub = _unsub
-        await matter_lock.async_unload(False)
+        matter_lock.teardown_push_subscription()
         assert unsub_called[0]
         assert matter_lock._event_unsub is None
 
-    async def test_unload_no_subscription(self, matter_lock: MatterLock) -> None:
-        """Test async_unload handles no active subscription."""
+    def test_teardown_push_no_subscription(self, matter_lock: MatterLock) -> None:
+        """Test teardown_push_subscription handles no active subscription."""
         matter_lock._event_unsub = None
-        await matter_lock.async_unload(False)  # should not crash
+        matter_lock.teardown_push_subscription()  # should not crash
 
     def test_get_matter_client_success(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -738,13 +738,13 @@ class TestEventSubscription:
         hass.data["matter"] = {"entry_id": mock_entry_data}
         assert matter_lock._get_matter_client() is mock_client
 
-    def test_subscribe_to_events_success(
+    def test_setup_push_success(
         self,
         hass: HomeAssistant,
         matter_lock: MatterLock,
         matter_config_entry: MockConfigEntry,
     ) -> None:
-        """Test _subscribe_to_events subscribes when client and node available."""
+        """Test setup_push_subscription subscribes when client and node available."""
         mock_unsub = MagicMock()
         mock_client = MagicMock()
         mock_client.subscribe_events.return_value = mock_unsub
@@ -761,7 +761,7 @@ class TestEventSubscription:
         )
         matter_lock.device_entry = device
 
-        matter_lock._subscribe_to_events()
+        matter_lock.setup_push_subscription()
 
         assert matter_lock._event_unsub is mock_unsub
         mock_client.subscribe_events.assert_called_once()
@@ -796,12 +796,12 @@ class TestEventSubscription:
         hass.data["matter"] = {"entry_id": mock_entry_data}
         assert matter_lock._get_matter_client() is None
 
-    def test_subscribe_no_node_id(
+    def test_setup_push_no_node_id_raises(
         self,
         hass: HomeAssistant,
         matter_lock: MatterLock,
     ) -> None:
-        """Test _subscribe_to_events skips when node ID is None."""
+        """Test setup_push_subscription raises when node ID is None."""
         mock_client = MagicMock()
         mock_adapter = MagicMock()
         mock_adapter.matter_client = mock_client
@@ -810,7 +810,8 @@ class TestEventSubscription:
         hass.data["matter"] = {"entry_id": mock_entry_data}
         matter_lock.device_entry = None  # no node ID
 
-        matter_lock._subscribe_to_events()
+        with pytest.raises(LockDisconnected):
+            matter_lock.setup_push_subscription()
 
         assert matter_lock._event_unsub is None
         mock_client.subscribe_events.assert_not_called()
