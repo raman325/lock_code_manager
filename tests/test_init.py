@@ -885,9 +885,26 @@ async def test_unload_cleans_up_repair_issues(
             },
         )
 
+    # Create lock_offline issues for both locks
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"lock_offline_{lock_id}",
+            is_fixable=False,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="lock_offline",
+            translation_placeholders={"lock_entity_id": lock_id},
+        )
+
     # Verify issues exist
     assert issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1") is not None
     assert issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_2") is not None
+    assert (
+        issue_reg.async_get_issue(DOMAIN, f"lock_offline_{LOCK_1_ENTITY_ID}")
+        is not None
+    )
 
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -902,3 +919,5 @@ async def test_unload_cleans_up_repair_issues(
             issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
             is None
         )
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is None
