@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "1b4c0ac6d809",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T02:05:52.4798Z",
+  "branch": "fix/event-entity-and-readme-table",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "b775d57798ea",
+  "token_usage": {
+    "input_tokens": 5634,
+    "cache_creation_tokens": 13459412,
+    "cache_read_tokens": 1435643994,
+    "output_tokens": 669864,
+    "api_call_count": 2815
+  },
+  "session_metrics": {
+    "turn_count": 219
+  }
+}

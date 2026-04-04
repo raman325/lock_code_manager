@@ -1,0 +1,840 @@
+for 964, let's make this a repair issue. So, the repair issue points users to the blueprint for the number of uses, and they click fix or fixed or whatever it is when they're ready to migrate to v3. We can also note that there will be a force migration to v3 in the future
+
+---
+
+we shouldn't strip the data. The whole point is to make this a repair warning to start. No persistent message, just the repair
+
+---
+
+1. during the config flow, if the user uses the advanced flow (non-UI), they can still add number_of_uses
+2. in an options update, the user can still manually add number_of_uses
+
+is there any way to prevent these? I think 2 is doable since we have the before and after. Theoretically the same logic could work for 1 since the before is just empty
+
+---
+
+so its not possible to add the async_update_listener feature?
+
+---
+
+check vreview commens
+
+---
+
+run code review
+
+---
+
+<task-notification>
+<task-id>a53fb52ce80fe45b3</task-id>
+<tool-use-id>toolu_01ANK7pMhGpMRvKKReAjpDN8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a53fb52ce80fe45b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review deprecation PR #966" completed</summary>
+<result>Now I have a complete picture. Here is my review.
+
+---
+
+## Review: PR #966 -- Deprecate number_of_uses
+
+**Files reviewed:**
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py` (repair issue creation/dismissal + orphaned comment)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/repairs.py` (new repair flow)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/config_flow.py` (UI schema change)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/websocket.py` (deprecation guard)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/strings.json` and `translations/en.json`
+- `/Users/raman/projects/lock_code_manager/tests/test_init.py` (repair issue tests)
+- `/Users/raman/projects/lock_code_manager/tests/test_websocket.py` (updated websocket tests)
+
+---
+
+### Critical (90-100)
+
+**1. Orphaned comment with no implementation in `async_update_listener`** (Confidence: 95)
+
+File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py`, lines 617-619
+
+The PR adds this comment block:
+```python
+# Strip number_of_uses from slots that didn't previously have it
+# (deprecated — only existing values are preserved). Skip on initial
+# setup (curr_slots empty) since the data just moved from data→options.
+```
+
+But there is no corresponding stripping code. The comment sits directly above the pre-existing `# Set up any platforms...` comment and platform setup loop. This means the `async_update_listener` path has **no guard** against number_of_uses being added via a direct config entry update (as opposed to the websocket path, which is guarded). If the repair flow calls `async_update_entry` and triggers `async_update_listener`, the listener does not enforce the deprecation.
+
+This is either missing implementation or an orphaned comment from a draft that should be removed. Either way it is wrong -- a comment promising behavior that does not exist will mislead future readers.
+
+**Fix:** Either implement the stripping logic described by the comment, or remove the comment entirely. Given that the websocket path already guards against additions, and the repair flow strips from all entries, the comment may simply need to be deleted.
+
+---
+
+### Important (80-89)
+
+**2. No test for the repair flow execution** (Confidence: 88)
+
+File: `/Users/raman/projects/lock_code_manager/tests/test_init.py`
+
+The tests cover:
+- Repair issue is created when slots have number_of_uses
+- No repair issue when slots lack number_of_uses
+
+But there is **no test** that exercises `NumberOfUsesDeprecatedFlow.async_step_init` with `user_input != None` -- the actual fix action. This is the most important behavior to test: confirming that the flow correctly strips `number_of_uses` from all config entries' `data` and `options`, and that it handles entries where only some slots have the key.
+
+Per AGENTS.md: "Tests go with code changes in same PR; test-only PRs only for refactoring existing tests."
+
+**Fix:** Add a test (likely in a new `tests/test_repairs.py`) that:
+1. Sets up one or more config entries with `number_of_uses` in slot configs
+2. Executes the repair flow with user confirmation
+3. Asserts `number_of_uses` is stripped from all entries' data and options
+4. Verifies entries without `number_of_uses` are untouched (no unnecessary `async_update_entry` call)
+
+**3. Repair issue only checked for current entry on setup, not re-evaluated after repair** (Confidence: 82)
+
+File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/__init__.py`, lines 347-360 and `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/repairs.py`
+
+The repair flow strips `number_of_uses` from all entries via `async_update_entry`, which triggers `async_update_listener` for each changed entry. However, `async_update_listener` does not re-evaluate whether the repair issue should be dismissed. The issue is only checked during `async_setup_entry`. So after the user confirms the repair, the issue gets auto-dismissed by the `self.async_create_entry(title="", data={})` return from the flow -- which is correct for the repair flow itself. But if someone later reloads just one entry that still has `number_of_uses` (e.g., the `async_update_entry` in the repair flow failed silently for one entry because the entry was being unloaded), the issue would be re-created.
+
+This is a minor edge case. The current design works for the normal path. Consider adding `async_delete_issue` at the end of the repair flow's `async_step_init` as a belt-and-suspenders measure.
+
+---
+
+### Summary of areas that look correct
+
+- **Config flow backward compatibility**: The `CODE_SLOT_SCHEMA` still accepts `number_of_uses` via `vol.Coerce(int)` while the `UI_CODE_SLOT_SCHEMA` no longer presents it. This is the correct approach for existing entries.
+- **Websocket guard**: The logic correctly allows updates to existing `number_of_uses` values, allows removal (setting to `None`), and blocks adding it to slots that don't already have it. The error code "deprecated" and message are clear.
+- **Translation strings**: `strings.json` and `translations/en.json` are in sync. The fix flow step structure (`issues` -> issue_id -> `fix_flow` -> `step` -> `init`) matches the Home Assistant repairs framework expectations.
+- **Repair flow stripping logic**: Iterating all entries, checking both `data` and `options`, shallow-copying slot configs before mutation, and only calling `async_update_entry` when changes were made -- all correct.
+- **Test updates**: Websocket tests correctly shifted from slot 1 (no `number_of_uses` in BASE_CONFIG) to slot 2 (has `number_of_uses: 5`), and the new rejection test validates the guard.</result>
+<usage><total_tokens>31766</total_tokens><tool_uses>14</tool_uses><duration_ms>100871</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a53fb52ce80fe45b3.output
+
+---
+
+missing coverage, looks like python
+
+---
+
+the repair text is wrong. We don't have autofix
+
+---
+
+we should just add a warning Only do this when you are prepared to do so or something of that sort
+
+---
+
+merged this and the matter PR. FF main, cleanup stale branches. Then ff main in ../keymaster. Look at the non zwave_js providers there and create corresponding branches and PRs here. Do it via subagents
+
+---
+
+pull upstream for keymaster
+
+---
+
+are the tests the same across providers? Some providers might have more/different tests, but the base tests should be the same shouldn't they?
+
+---
+
+do code reviews of 967 and 968
+
+---
+
+<task-notification>
+<task-id>a28fe50993e08c31b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a28fe50993e08c31b.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review Schlage PR #967" completed</summary>
+<result>Now I have the full picture. Let me review the provider code carefully against the base interface and the Matter provider pattern.
+
+Here is my review of PR #967 (branch `feat/schlage-provider`).
+
+---
+
+**Files reviewed:**
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py` (new, 394 lines)
+- `/Users/raman/projects/lock_code_manager/tests/providers/test_schlage.py` (new, 590 lines)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/__init__.py` (registration)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/manifest.json` (dependency)
+
+Compared against `_base.py` (BaseLock interface) and `matter.py` / `test_matter.py` (latest provider pattern).
+
+---
+
+## Critical (90-100)
+
+### 1. Auto-tagging performs write operations inside `async_get_usercodes()` -- called by the coordinator on every poll (Confidence: 95)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py`, lines ~262-340 (the auto-tag loop in `async_get_usercodes`)
+
+**Problem:** `async_get_usercodes()` is documented in `_base.py` as a read operation ("Get dictionary of code slots and usercodes"). The coordinator calls it on every poll interval (every 5 minutes here). The auto-tagging logic inside `async_get_usercodes()` calls `_async_add_code` and `_async_delete_code` -- mutating lock state during what should be a read-only operation.
+
+This means:
+- Every 5-minute poll re-scans for untagged codes and attempts to tag them, even if tagging already failed for legitimate reasons (e.g., a code the user intentionally left untagged).
+- The add/delete calls bypass `_execute_rate_limited` because they go through the internal helpers directly rather than through `async_internal_set_usercode`/`async_internal_clear_usercode`, so there is no rate limiting or duplicate checking on these operations.
+- If the add succeeds but the delete fails and the rollback also fails, the next poll will attempt the same tagging again on the (now-duplicate) untagged code, potentially creating more duplicates each cycle.
+
+**Suggested fix:** Extract the auto-tagging into a separate method (e.g., `_async_tag_unmanaged_codes`) that runs once during `async_setup()`, or at most during `async_hard_refresh_codes()`. The regular `async_get_usercodes()` poll should only read and classify codes that are already tagged, treating untagged codes as not belonging to Lock Code Manager.
+
+### 2. `_async_delete_code` deletes by name, but Schlage may have multiple codes with the same name (Confidence: 85)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py`, lines 183-196
+
+**Problem:** The `_async_delete_code` method passes `name` as the identifier in the service data. If the Schlage integration's `delete_code` service uses name-based lookup (not unique ID), and the auto-tagging rollback failed leaving duplicates, a subsequent delete could remove the wrong code. The provider has access to `code_id` (the dict key from `get_codes`) but never uses it for deletion. If the Schlage service supports deletion by ID, that would be significantly safer.
+
+**Suggested fix:** Verify the Schlage integration's `delete_code` service schema. If it supports deletion by access code ID (not just name), use the ID. If it only supports name-based deletion, add a comment documenting this limitation and the duplicate risk.
+
+---
+
+## Important (80-89)
+
+### 3. `_async_get_codes` silently returns empty dict on unexpected response shapes (Confidence: 85)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py`, lines 159-166
+
+```python
+if not isinstance(response, dict):
+    return {}
+
+entity_response = response.get(entity_id, response)
+if isinstance(entity_response, dict):
+    return entity_response
+return {}
+```
+
+**Problem:** When the response is not a dict or not in the expected format, this silently returns `{}`, which makes all slots appear empty (`SlotCode.EMPTY`). Compare with the Matter provider which raises `LockCodeManagerError` for unexpected response shapes. A malformed response could cause the coordinator to think all codes were cleared, potentially triggering the sync sensor to re-push codes unnecessarily.
+
+**Suggested fix:** Log a warning or raise `LockCodeManagerError` when the response is present but malformed, similar to the Matter provider pattern. Only return `{}` for the genuinely-empty case.
+
+### 4. `_is_masked_pin` is redundant with `BaseLock.is_masked_or_empty` (Confidence: 82)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py`, lines 96-100
+
+**Problem:** `BaseLock` already has `is_masked_or_empty()` (line 273 of `_base.py`) which handles the `"*" * len(code_str)` check plus `None`, `SlotCode.EMPTY`, and `SlotCode.UNKNOWN`. The Schlage provider defines its own `_is_masked_pin` that does roughly the same thing but with slightly different semantics (it checks empty string separately). This creates a maintenance risk where the two functions could diverge.
+
+**Suggested fix:** Use `self.is_masked_or_empty(pin)` instead of the standalone `_is_masked_pin(pin)` in the auto-tagging logic.
+
+### 5. No `async_is_device_available` override -- device availability not checked (Confidence: 80)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py`
+
+**Problem:** The Matter provider overrides `async_is_device_available()` to probe the lock before operations. The Schlage provider inherits the default (`return True`), meaning operations will proceed even when the physical device is offline, relying entirely on the service call to fail. This is the correct approach if there is no lightweight way to probe Schlage device availability, but the Matter provider shows the expected pattern is to override this when possible. The Schlage `get_codes` service could serve as a lightweight probe similar to Matter's `get_lock_info`.
+
+**Suggested fix:** Consider overriding `async_is_device_available()` to call `_async_get_codes()` and catch failures, similar to the Matter pattern. If this is intentionally omitted (e.g., because `get_codes` is too expensive), add a comment explaining why.
+
+---
+
+## Summary
+
+The provider implementation follows the Matter pattern well structurally -- it correctly implements the `domain` property, `async_is_integration_connected`, `async_get_usercodes`, `async_set_usercode`, `async_clear_usercode`, and `async_hard_refresh_codes`. The test coverage is thorough and mirrors the Matter test patterns.
+
+The primary concern is the auto-tagging logic embedded in `async_get_usercodes()` (issue #1), which performs writes during a read operation on every poll cycle. This is architecturally problematic and could cause cascading issues with duplicate codes. Moving auto-tagging to setup or a dedicated method would resolve this.</result>
+<usage><total_tokens>57725</total_tokens><tool_uses>9</tool_uses><duration_ms>70475</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a28fe50993e08c31b.output
+
+---
+
+<task-notification>
+<task-id>a12ad22699c2ddfbd</task-id>
+<tool-use-id>toolu_018xjkW5FpZNSuCSuQH5Mobn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a12ad22699c2ddfbd.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review Akuvox PR #968" completed</summary>
+<result>Now I have a comprehensive picture of the PR. Let me analyze the code carefully.
+
+---
+
+**Reviewing PR #968: Akuvox lock provider on branch `feat/akuvox-provider`**
+
+Files reviewed:
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/akuvox.py` (new, 382 lines)
+- `/Users/raman/projects/lock_code_manager/tests/providers/test_akuvox.py` (new, 633 lines)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/__init__.py` (modified)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/manifest.json` (modified)
+
+Reference files consulted: `_base.py`, `matter.py`, `test_matter.py`, `AGENTS.md`
+
+---
+
+## Critical (90-100)
+
+### 1. Side effects in `async_get_usercodes()` -- modifying device state during a read operation (Confidence: 95)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/akuvox.py`, lines ~309-341
+
+`async_get_usercodes()` calls `_async_modify_user()` to auto-tag untagged users during what the coordinator treats as a read-only poll. This is called on every poll cycle (every 2 minutes via `usercode_scan_interval`). The base class documentation for `get_usercodes()` says "Called by data coordinator to get data for code slot sensors" -- it is a data-fetching method, not a mutation method.
+
+Problems:
+- If the modify call fails (caught via `LockDisconnected`), the method logs an error and `continue`s, but the slot remains in `assigned_slots` is NOT added (correct), yet the `avail_iter` has already been consumed. Actually looking more closely, the `continue` skips the `assigned_slots.add()` on line 320 -- wait, no, `assigned_slots.add(slot_num)` is on line 320 before the modify call on line 323. So even when the modify fails, the slot is marked as assigned, meaning the next poll will NOT attempt to tag it again... but it also won't have the user mapped to it. This means the slot is permanently "consumed" until the next restart or until the user is tagged by some other means.
+- On every 2-minute poll, untagged users will get re-attempted only if `assigned_slots` is rebuilt from scratch each call (which it is, since it is a local variable). So actually the `assigned_slots.add(slot_num)` before the modify doesn't persist -- on the next poll, the untagged user will be retried. But there is still a subtle issue: `assigned_slots.add(slot_num)` on line 320 runs before the modify succeeds, so within a single poll call, if there are multiple untagged users and the modify for the first fails, the slot is consumed and the second untagged user gets the next slot number. The first user will then be retried on the next poll and potentially get a different slot number. This could cause slot assignments to be unstable across polls.
+
+**Suggested fix:** Move `assigned_slots.add(slot_num)` after the successful modify call, or better yet, separate the auto-tagging logic into its own method (perhaps called from `async_setup()` once, not on every poll).
+
+### 2. Missing `async_hard_refresh_codes` implementation (Confidence: 92)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/akuvox.py`
+
+The Matter provider implements `async_hard_refresh_codes()` (even if it just delegates to `async_get_usercodes()`). The base class's default raises `ProviderNotImplementedError`. The Akuvox provider does not override `hard_refresh_interval` (defaults to `None`, which disables periodic hard refresh), so this won't be called periodically. However, the coordinator can call `async_internal_hard_refresh_codes()` directly, and if the websocket API or any other code path triggers it, it will raise `ProviderNotImplementedError`. Per the Matter provider pattern, even if there is no cache to invalidate, providing the implementation is the safer approach.
+
+**Suggested fix:** Add `async_hard_refresh_codes` that delegates to `async_get_usercodes()`, same as the Matter provider does.
+
+---
+
+## Important (80-89)
+
+### 3. `_async_list_users` silently returns empty list on unexpected response shapes (Confidence: 85)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/akuvox.py`, lines ~176-183
+
+When `response` is a dict but `entity_response` is a dict without a `"users"` key, or when `entity_response` is not a dict (e.g., a list or string), the method silently returns `[]`. Compare this to the Matter provider's `_async_call_service` which validates response structure and raises `LockCodeManagerError` on unexpected shapes. Silently returning an empty user list means all slots will appear `EMPTY`, which could trigger the coordinator to clear codes that actually exist on the device.
+
+**Suggested fix:** Log a warning or raise `LockCodeManagerError` when the response structure is unexpected, similar to how Matter validates its responses.
+
+### 4. `_is_local_user` with integer `source_type` would pass string comparison incorrectly (Confidence: 82)
+
+**File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/akuvox.py`, lines ~87-93
+
+The function does `str(source_type) == _LOCAL_SOURCE_TYPE` which handles the int-to-string conversion, but the `source_type is not None` check on line 90 will be `True` for `source_type = 0` (falsy but not None). If Akuvox ever returns `source_type: 0`, this would evaluate `str(0) == "1"` which is `False`, falling through correctly. However, the function does not handle the case where `source_type` is an empty string -- `str("") == "1"` is False, and it would NOT fall back to the user_type check because `"" is not None` is True. If the API returns `source_type: ""` to indicate "absent", the function would incorrectly use the source_type path instead of falling back to user_type.
+
+**Suggested fix:** Change the guard to `if source_type is not None and source_type != "":` or `if source_type:` to also fall through on empty strings.
+
+### 5. `MagicMock` used instead of `MockConfigEntry` in connection test (Confidence: 80)
+
+**File:** `/Users/raman/projects/lock_code_manager/tests/providers/test_akuvox.py`, lines ~647-650
+
+`test_is_integration_connected_loaded` replaces `lock_config_entry` with a `MagicMock()` instead of using a properly configured `MockConfigEntry`. This is the same pattern as the Matter tests, so it is not a regression, but it means the test doesn't exercise the real `ConfigEntry` state machinery.
+
+This is minor and matches the existing pattern, so no action required unless you want to improve test fidelity across all providers.
+
+---
+
+## Summary
+
+The provider implementation is well-structured and follows the Matter provider pattern closely. The test coverage is thorough. The three most significant concerns are:
+
+1. **Side effects during polling** -- `async_get_usercodes()` mutating device state (auto-tagging) on every coordinator poll is architecturally surprising and could lead to unstable slot assignments if modify calls fail.
+2. **Missing `async_hard_refresh_codes`** -- easy fix, should delegate to `async_get_usercodes()`.
+3. **Silent empty-list fallback** in `_async_list_users` could mask API issues and cause the coordinator to believe all slots are empty.</result>
+<usage><total_tokens>61457</total_tokens><tool_uses>18</tool_uses><duration_ms>104709</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a12ad22699c2ddfbd.output
+
+---
+
+I don't have hardware so let's go for defensive coding where we can
+
+---
+
+you reviewed all comments?
+
+---
+
+do another code review for each then wait for the next review from copilot for each
+
+---
+
+<task-notification>
+<task-id>aca5cdb02e66684a8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/aca5cdb02e66684a8.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review Schlage PR #967 round 2" completed</summary>
+<result>There's also a `_validate_code_value` check -- duplicate PIN values are also rejected. So even if you try to set the same PIN value that already exists on another code on the lock, the `add_code` will fail. This is another edge case, but it's the Schlage integration's constraint, not something this provider can easily work around.
+
+The primary issue though remains the same-name update case. This is a real functional bug.
+
+Here is my review:
+
+---
+
+## Review: PR #967 -- Schlage WiFi Lock Provider (Round 2)
+
+**Files reviewed:**
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/schlage.py` (new, 429 lines)
+- `/Users/raman/projects/lock_code_manager/tests/providers/test_schlage.py` (new, 659 lines)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/__init__.py` (registration)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/manifest.json` (after_dependencies)
+
+### Critical (90-100)
+
+**1. `async_set_usercode` fails when updating PIN without changing name (confidence: 95)**
+
+File: `custom_components/lock_code_manager/providers/schlage.py`, lines 407-410 (in the diff, the `async_set_usercode` method)
+
+The Schlage HA integration's `add_code` service calls `_validate_code_name()` which raises `ServiceValidationError` if a code with the same name already exists on the lock (see `/Users/raman/projects/home-assistant/homeassistant/components/schlage/lock.py` lines 78-91). The current code calls `_async_add_code(tagged_name, usercode)` first, then conditionally deletes the old code. When updating a PIN on an existing slot where the name does not change (i.e., `existing_full_name == tagged_name`), the `add_code` call will hit the duplicate name validation and raise `ServiceValidationError`, which gets wrapped as `LockDisconnected`.
+
+This means every PIN-only update on an existing Schlage code will fail at runtime.
+
+The test `test_set_usercode_preserves_existing_name` does not catch this because it mocks the service handler, bypassing the real validation logic.
+
+**Suggested fix:** When the tagged name matches the existing full name, delete-then-add (accepting the brief window of data loss for same-name updates). Alternatively, detect same-name updates and reverse the operation order:
+
+```python
+# If the name didn't change, we must delete first because Schlage
+# rejects add_code with a duplicate name.
+if existing_full_name == tagged_name:
+    await self._async_delete_code(existing_full_name)
+    await self._async_add_code(tagged_name, usercode)
+elif existing_full_name:
+    # Name changed: add new first (safe), then delete old
+    await self._async_add_code(tagged_name, usercode)
+    try:
+        await self._async_delete_code(existing_full_name)
+    except LockDisconnected:
+        LOGGER.warning(...)
+else:
+    # No existing code, just add
+    await self._async_add_code(tagged_name, usercode)
+```
+
+### Important (80-89)
+
+**2. `_validate_code_value` will reject duplicate PINs across codes (confidence: 82)**
+
+File: `custom_components/lock_code_manager/providers/schlage.py`, `async_set_usercode` method
+
+The Schlage integration's `add_code` also validates that the PIN value is not already in use by another code on the lock (`_validate_code_value` in the HA Schlage lock.py, lines 93-103). If two Lock Code Manager slots are assigned the same PIN, the second `set_usercode` call will fail with `ServiceValidationError`. This is a Schlage-level constraint that users may not expect, and the provider does not surface a helpful error message -- it will appear as a generic `LockDisconnected` error.
+
+**Suggested fix:** Either document this as a known Schlage limitation, or catch `ServiceValidationError` separately in `_async_add_code` and re-raise as a more descriptive `LockCodeManagerError` (e.g., "Schlage locks do not allow duplicate PIN values across codes").
+
+---
+
+No other high-confidence issues found. The auto-tagging logic, rollback behavior, masked PIN handling, service error wrapping, and test coverage all look solid otherwise. The previous review findings (auto-tagging extraction, malformed response handling, `ServiceValidationError` catching, `async_is_device_available`, `is_masked_or_empty`, rollback logging) have been properly addressed.</result>
+<usage><total_tokens>52634</total_tokens><tool_uses>26</tool_uses><duration_ms>163020</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/aca5cdb02e66684a8.output
+
+---
+
+<task-notification>
+<task-id>a7020d52a8ab3f85f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a7020d52a8ab3f85f.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review Akuvox PR #968 round 2" completed</summary>
+<result>The `async_setup_internal` wraps `async_setup` in a try/finally, but doesn't catch exceptions. If `_async_tag_unmanaged_users` raises `LockDisconnected` during setup, it would propagate. This could be an issue -- during initial setup, if the device is temporarily unavailable, the entire setup fails. But this may be intentional behavior (fail setup if device is unreachable), so I won't flag it as high-confidence.
+
+Let me now summarize my findings.
+
+---
+
+## Review: PR #968 (feat/akuvox-provider) - Round 2
+
+**Files reviewed:**
+- `/custom_components/lock_code_manager/providers/akuvox.py` (new, 423 lines)
+- `/custom_components/lock_code_manager/providers/__init__.py` (2 lines changed)
+- `/custom_components/lock_code_manager/manifest.json` (1 line changed)
+- `/tests/providers/test_akuvox.py` (new, 773 lines)
+
+### Critical (90-100)
+
+**1. Failed auto-tagging permanently consumes slot numbers from iterator** (Confidence: 95)
+
+File: `custom_components/lock_code_manager/providers/akuvox.py`, lines ~279-301
+
+In `_async_tag_unmanaged_users`, `avail_iter` is a one-pass iterator. When `next(avail_iter)` is called and the subsequent `_async_modify_user` fails (caught by `except LockDisconnected`), the code does `continue` but the slot number is already consumed from the iterator and permanently lost. The next untagged user gets the next slot number instead of reusing the failed one.
+
+Additionally, `assigned_slots.add(slot_num)` on line 303 (after successful modify) is dead code -- the set is never read again after `available` and `avail_iter` are computed on lines 278-279.
+
+The test `test_failed_modify_does_not_consume_slot` at line 1155 has a misleading name: its assertion at line 1192 (`modify_calls[0]["name"] == "[LCM:2] Visitor B"`) proves that slot 1 **is** consumed by the failed modify, and the second user gets slot 2 instead of slot 1.
+
+**Fix:** Replace the iterator with a mutable list that only removes slots on success:
+
+```python
+available = sorted(managed_slots - assigned_slots)
+for device_id, _pin, original_name in untagged:
+    if not available:
+        LOGGER.debug(
+            "Lock %s: no managed slot available for untagged user '%s'; "
+            "leaving untouched",
+            self.lock.entity_id,
+            original_name,
+        )
+        break
+
+    slot_num = available[0]
+    tagged_name = _make_tagged_name(slot_num, original_name)
+    try:
+        await self._async_modify_user(device_id, name=tagged_name)
+    except LockDisconnected:
+        LOGGER.error(
+            "Lock %s: failed to tag user '%s' for slot %d",
+            self.lock.entity_id,
+            original_name,
+            slot_num,
+        )
+        continue
+
+    available.pop(0)
+    ...
+```
+
+And rename the test to match the corrected behavior, updating the assertion to expect `[LCM:1] Visitor B` (the failed slot 1 is retried for the next user).
+
+### Important (80-89)
+
+No additional important issues found. The rest of the code is well-structured -- error handling, response validation, the provider interface implementation, and test coverage are all solid.</result>
+<usage><total_tokens>49808</total_tokens><tool_uses>23</tool_uses><duration_ms>169751</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a7020d52a8ab3f85f.output
+
+---
+
+yes
+
+---
+
+check latest review comments to 967/968. 969 merged
+
+---
+
+ok, cest la vie, they're all merged. Let's push staged wiki changes and make updates for the two new providers. I am prepping the release right now
+
+---
+
+2.0.0 is out
+
+---
+
+can you add links to all the integration docs here: https://github.com/raman325/lock_code_manager/pull/970
+
+---
+
+also update the intro to make the purpose more clear which is to sync codes to 1 or more lock across providers, or something like that
+
+---
+
+anything else we should update in The README while we are at it?
+
+---
+
+wiki should probably have a zwave integraiton apge liek we have for every other integraiton. README should link there too. Each wiki integration page should link to the home-assistant docs. We also need blueprints linked in the sidebar and homepage. Also make your updates
+
+---
+
+wiki should probably have a zwave integraiton apge liek we have for every other integraiton. README should link there too. Each wiki integration page should link to the home-assistant docs. We also need blueprints linked in the sidebar and homepage. Also make your updates minus minimum version required, HACS will enforce that
+
+---
+
+see review comments
+
+---
+
+merged, ff main and clean up stale branches
+
+---
+
+do we still need this todo: Update migration docs — Revise any wiki content that talks about "slowly migrating" locks between tools. The guidance is now to commit fully to one tool.
+
+---
+
+remove it
+
+---
+
+I am not sure. It doesn't seem relevant
+
+---
+
+is the TODO up to date? I see for example none of the new proviers listed. Rewrite Matter pvoider is done right?
+
+---
+
+Other Complexity
+Entity unique ID format - Is {entry_id}|{slot}|{type} optimal?
+async_internal_* method wrappers — are all necessary?
+
+---
+
+things were already merge you may need to create a new PR after rebaseing
+
+---
+
+all of those PRs are closed/merged. So any README changes need to be made in a new branch off of main. Clean and prune stale branches
+
+---
+
+merged, ff main and clean up and prune stale branches
+
+---
+
+ok so now we need separate agents:
+  - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
+  - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
+  - Fix existing type errors (~49 errors as of Mar 2026)
+- Simplify Tests
+
+---
+
+ok so now we need separate agents:
+  - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
+  - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
+  - Fix existing type errors (~49 errors as of Mar 2026)
+- Simplify Tests (under refactors and maintenance
+- Testing (top level)
+
+---
+
+see review comments
+
+---
+
+<task-notification>
+<task-id>ab5e0f2e711f7f4c9</task-id>
+<tool-use-id>toolu_011E6u6HMaucxNA86HaUMqRa</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/ab5e0f2e711f7f4c9.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR 973 review comments" completed</summary>
+<result>Done. Two fixes applied and pushed to `chore/type-checking-ci`:
+
+1. **Mypy version mismatch**: Changed `mypy==1.20.0` to `mypy==1.19.1` in `/Users/raman/projects/lock_code_manager/requirements_lint.txt` to match the pre-commit config pin at `v1.19.1`.
+
+2. **CI job too heavy**: Changed the mypy job's install step in `/Users/raman/projects/lock_code_manager/.github/workflows/python-checks.yml` (line 66) from `requirements_dev.txt` to `requirements_lint.txt`.
+
+All pre-commit hooks passed.</result>
+<usage><total_tokens>23897</total_tokens><tool_uses>22</tool_uses><duration_ms>106191</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/ab5e0f2e711f7f4c9.output
+
+---
+
+<task-notification>
+<task-id>ae8fbaf3c25ddc90f</task-id>
+<tool-use-id>toolu_01KVhSWBHkoUvXrGRKZS8UUS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/ae8fbaf3c25ddc90f.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR 974 review comments" completed</summary>
+<result>Done. Removed the unused `hass` parameter from `test_door_lock` in `/Users/raman/projects/lock_code_manager/tests/providers/test_virtual.py`. The `virtual_lock` fixture already depends on `hass`, so it was redundant. All 479 tests pass and pre-commit checks are clean.</result>
+<usage><total_tokens>28826</total_tokens><tool_uses>26</tool_uses><duration_ms>195328</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/ae8fbaf3c25ddc90f.output
+
+---
+
+both are merged. FF main, then see if there are opportunities to parameterize tests. If so, createa a new branch and PR to parametrize as many as you can within reason. Goal is sto reduce repeat logic not to have the least LoC (although that is nice too)
+
+---
+
+do we need to use pytest.param and especify ids?
+
+---
+
+its fine
+
+---
+
+merged, ff main and delete stale branches and worktrees
+
+---
+
+see review comments on 975. Do we need to address any of them?
+
+---
+
+lets make sure all the things from the TODO here are addressed, if not, create corresponding PRs, and remove them from our TODOs:
+Testing
+Strategy UI module has unit tests in ts/*.test.ts and Python tests for resource registration/unload in tests/test_init.py; still need end-to-end UI coverage (Lovelace resource registration + reload in a real frontend).
+Test rate limiting and connection failure timing in live environment.
+Extract shared base provider tests (every provider implements the same BaseLock interface — common tests should be shared, with provider-specific tests layered on).
+Refactors and Maintenance
+Simplify Tests
+Consolidate duplicate test setup code in tests/common.py into shared fixtures
+Consider parametrized tests where multiple similar tests exist
+Reduce test boilerplate with helper functions
+
+type checking can now be removed right?
+
+---
+
+merged. lets do this one: Unify Z-Wave event 15 duplicate handler with CodeRejectedError — The reactive duplicate handler (_async_handle_duplicate_code in zwave_js.py) uses async_disable_slot (shared helper in util.py). It should surface through the exception hierarchy instead. Options: route through the coordinator to trigger a sync manager state update, or have the provider set a flag that the sync manager checks on next sync cycle. This would also allow the event 15 handler to reset the sync tracker.
+
+---
+
+update TODO as well in this branch
+
+---
+
+once pushed run code review. I triggered another copilot review, wait for those comments as well and address any concerns
+
+---
+
+<task-notification>
+<task-id>a74d9807fa9dead78</task-id>
+<tool-use-id>toolu_01ECNnB6NkNzE8FobXnPWvh9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a74d9807fa9dead78.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #980 round 2" completed</summary>
+<result>The original branch isn't local anymore. That's fine -- the review is complete. Let me summarize.
+
+---
+
+## Review of PR #980: Unify Z-Wave event 15 duplicate handler with CodeRejectedError
+
+**Files reviewed:**
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/exceptions.py` (DuplicateCodeError signature change)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py` (mark_code_rejected, _pre_execute_checks)
+- `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/zwave_js.py` (event 15 handler, removed _async_handle_duplicate_code)
+- `/Users/raman/projects/lock_code_manager/tests/providers/test_zwave_js.py` (updated tests)
+- `/Users/raman/projects/lock_code_manager/TODO.md` (removed completed item)
+
+**All 478 tests pass.**
+
+### No high-confidence issues found (confidence >= 80)
+
+The changes are clean and well-structured. Here is a summary of what I verified:
+
+**Flag lifecycle** -- Correct. The `_rejected_code_slots` set is populated by `mark_code_rejected()` (called from event 15 handler), consumed and cleared in `_pre_execute_checks()` inside `async_internal_set_usercode`, and the clear happens unconditionally before any check can raise, preventing stale flags.
+
+**Exception flow** -- Correct. The `DuplicateCodeError` signature change from positional to keyword-optional `conflicting_slot` is backward-compatible because all existing callers (in `_check_duplicate_code`, `test_binary_sensor.py`, `test_websocket.py`, `test_exceptions.py`) use keyword arguments. The `conflicting_slot=None` branch correctly produces the "duplicate detected by lock firmware" message.
+
+**Race condition handling** -- The event 15 handler now synchronously clears `_set_in_progress_code_slot` and marks the slot rejected, eliminating the old `async_create_task` race where `_set_in_progress_code_slot` could be cleared between task scheduling and execution. This is a strict improvement.
+
+**Pre-execute check ordering** -- The flag is read and cleared before `_check_duplicate_code` runs. If `_check_duplicate_code` raises its own `DuplicateCodeError` (with a specific conflicting slot), the firmware flag doesn't persist. If `_check_duplicate_code` passes but the firmware flag was set, the firmware-level `DuplicateCodeError` is raised. Both orderings produce the correct result.
+
+**Test coverage** -- Tests cover: event 15 with userId present, event 15 with userId=0 (fallback to in-progress slot), and the full `async_internal_set_usercode` raising `DuplicateCodeError` for a rejected slot with assertions on `conflicting_slot is None` and the firmware message. The removed tests (early-return for None code_slot, no matching entry, entity not found) are correctly removed since those code paths no longer exist.
+
+**Cleanup on unload** -- `_rejected_code_slots` is not explicitly cleared in `async_unload`, but this is fine. The set is instance-level state on the `BaseLock` dataclass and will be garbage collected when the lock instance is discarded on entry unload. No stale flags can leak across config entry reloads.</result>
+<usage><total_tokens>37844</total_tokens><tool_uses>28</tool_uses><duration_ms>146921</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-raman-projects-lock-code-manager/453e0149-376f-4dc6-bc77-552585a773b9/tasks/a74d9807fa9dead78.output
+
+---
+
+merged. ff main and clean stale. Then review what's in stasha - i am guessing mosgt if not all can be dropped. Finally, submit a PR that restructures the TODO as it's split between the new items and refactors and the structure is not helpful to get a high level overview of what to do
+
+---
+
+merged ff fand clean stale. which user acing features would provide the most value
+
+---
+
+evaluate all of the TODOs and rank in terms of impact/value
+
+---
+
+Lets do 1-3>
+1. We need to have friendly error messaging to support this. It should also be opt in at the config entry level I think.
+2. Repair issue is the right way to surface. It can be auto dismissed once resolved
+3. Should only occur if needed and with user confirmation
+
+---
+
+A
+
+---
+
+A
+
+---
+
+C
+
+---
+
+C
+
+---
+
+B
+
+---
+
+B
+
+---
+
+for the previous answer, make it a mix of B and C so you can adopt or cancel but you cant skip. For this answer C
+
+---
+
+note that you can only adopt into same slot numbers if they are readable. If they are not readable, it is a binary choice
+
+---
+
+let's go back to design 1 - users should also be able to specify regex patterns and error messages
+
+---
+
+C
+
+---
+
+can this be achieved with a blueprint? can anything else be achieved with a blueprint?
+
+---
+
+we can keep it all in code, but let's skip PIN validation and put the design in TODO
+
+---
+
+I think we should have repairs instead of persistent notifications for all things
+
+---
+
+yes
+
+---
+
+A
+
+---
+
+see issue 776
+
+---
+
+no, what is michael staying
+
+---
+
+how about issue 984
+
+---
+
+#2 we should just not create the event entity
+
+---
+
+lets just always create it, it simplifies things
+
+---
+
+I don't think it's true that Matter doesn't support events. See the Matter LockOperation event
+
+---
+
+lets add support for the events in this PR
+
+---
+
+link the PR to the issue
+
+---
+
+we can get rid of the event name in the readme table notes
+
+---
+
+add tests for the event. Find actual event signatures from homeassistant tests. If needed, you can clone libraries locally to ~/projects to look at tests there too. We want to test multiple events that would fail different levels of the filter as well as a valid one
+
+---
+
+also as part of this PR, update the blueprint to support matter locks
+
+---
+
+also stage wiki changes if needed
+
+---
+
+do we support other types of entry like NFC/RFID/fingerprint?
+
+---
+
+I think eventually we want to get away from PINs and really say code or something. It could be text or a string, and at that point its just a regex of what can show up as valid
+
+---
+
+the event entity should only fire when the pin is used though
