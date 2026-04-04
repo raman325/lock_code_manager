@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "cde3e9143f4d",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T21:12:25.417047Z",
+  "branch": "feat/lock-reset-step",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "8adfce652a70",
+  "token_usage": {
+    "input_tokens": 7891,
+    "cache_creation_tokens": 14200813,
+    "cache_read_tokens": 1548705522,
+    "output_tokens": 752860,
+    "api_call_count": 3170
+  },
+  "session_metrics": {
+    "turn_count": 249
+  }
+}
