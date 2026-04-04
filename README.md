@@ -18,18 +18,18 @@ Features:
   for usage limiting, calendar-driven PINs, and more
 - Dashboard cards for managing codes and viewing lock status
 
-Locks from the following integrations are currently supported:
+Supported lock integrations:
 
-**Core integrations:**
+| Integration | Read PINs | Push Updates | Code Events | Notes |
+| --- | --- | --- | --- | --- |
+| [Z-Wave][wiki-zwave] | Varies | Yes | Yes | Some locks mask PINs |
+| [Matter][wiki-matter] | No | No | Yes | PINs write-only per spec |
+| [Schlage WiFi][wiki-schlage] | No | No | No | Cloud-based, PINs masked |
+| [Akuvox][wiki-akuvox]¹ | Yes | No | No | Local API, polling-based |
+| [Virtual][wiki-virtual]¹ | Yes | No | No | For testing only |
 
-- [Matter][wiki-matter]
-- [Schlage WiFi][wiki-schlage]
-- [Z-Wave][wiki-zwave]
-
-**Custom integrations:**
-
-- [Akuvox][wiki-akuvox] (via [Local Akuvox][local-akuvox])
-- [Virtual][wiki-virtual] (via [hass-virtual][hass-virtual])
+¹ Custom integration required ([Local Akuvox][local-akuvox],
+[hass-virtual][hass-virtual])
 
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
 [wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration

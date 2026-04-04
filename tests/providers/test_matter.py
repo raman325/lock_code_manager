@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+from matter_server.common.models import MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -123,8 +124,8 @@ async def test_domain_property(matter_lock: MatterLock) -> None:
 
 
 async def test_supports_code_slot_events(matter_lock: MatterLock) -> None:
-    """Test that Matter locks do not support code slot events."""
-    assert matter_lock.supports_code_slot_events is False
+    """Test that Matter locks support code slot events via LockOperation."""
+    assert matter_lock.supports_code_slot_events is True
 
 
 async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
@@ -458,3 +459,358 @@ async def test_get_usercodes_multiple_credential_types(
     assert codes[1] is SlotCode.EMPTY
     # Slot 2 has a PIN credential
     assert codes[2] is SlotCode.UNKNOWN
+
+
+# =============================================================================
+# LockOperation event tests
+# =============================================================================
+
+
+def _make_node_event(
+    cluster_id: int = 257,
+    event_id: int = 2,
+    data: dict[str, Any] | None = None,
+) -> MatterNodeEvent:
+    """Create a MatterNodeEvent for testing."""
+    return MatterNodeEvent(
+        node_id=1,
+        endpoint_id=1,
+        cluster_id=cluster_id,
+        event_id=event_id,
+        event_number=0,
+        priority=1,
+        timestamp=0,
+        timestamp_type=0,
+        data=data,
+    )
+
+
+class TestLockOperationEvent:
+    """Test _on_lock_operation callback filtering and event firing."""
+
+    def test_unlock_with_pin_credential(self, matter_lock: MatterLock) -> None:
+        """Unlock with PIN credential fires code slot event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "lockOperationType": 1,  # kUnlock
+                    "credentials": [
+                        {"credentialType": 1, "credentialIndex": 2},  # PIN, slot 2
+                    ],
+                }
+            ),
+        )
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 2
+        assert fired[0]["to_locked"] is False
+        assert fired[0]["action_text"] == "unlocked"
+
+    def test_lock_with_pin_credential(self, matter_lock: MatterLock) -> None:
+        """Lock with PIN credential fires code slot event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "lockOperationType": 0,  # kLock
+                    "credentials": [
+                        {"credentialType": 1, "credentialIndex": 5},
+                    ],
+                }
+            ),
+        )
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 5
+        assert fired[0]["to_locked"] is True
+        assert fired[0]["action_text"] == "locked"
+
+    def test_rfid_credential_ignored(self, matter_lock: MatterLock) -> None:
+        """RFID credential does not fire pin_used event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "lockOperationType": 1,
+                    "credentials": [
+                        {"credentialType": 2, "credentialIndex": 3},  # RFID
+                    ],
+                }
+            ),
+        )
+
+        assert len(fired) == 0
+
+    def test_fingerprint_credential_ignored(self, matter_lock: MatterLock) -> None:
+        """Fingerprint credential does not fire pin_used event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "lockOperationType": 1,
+                    "credentials": [
+                        {"credentialType": 3, "credentialIndex": 1},  # Fingerprint
+                    ],
+                }
+            ),
+        )
+
+        assert len(fired) == 0
+
+    def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
+        """Events from non-DoorLock clusters are ignored."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                cluster_id=6,  # OnOff cluster
+                data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
+            ),
+        )
+
+        assert len(fired) == 0
+
+    def test_wrong_event_id_ignored(self, matter_lock: MatterLock) -> None:
+        """Non-LockOperation DoorLock events are ignored."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                event_id=3,  # LockOperationError
+                data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
+            ),
+        )
+
+        assert len(fired) == 0
+
+    def test_no_credentials_ignored(self, matter_lock: MatterLock) -> None:
+        """Event without credentials is ignored."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(data={"lockOperationType": 1}),
+        )
+
+        assert len(fired) == 0
+
+    def test_empty_credentials_ignored(self, matter_lock: MatterLock) -> None:
+        """Event with empty credentials list is ignored."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(data={"lockOperationType": 1, "credentials": []}),
+        )
+
+        assert len(fired) == 0
+
+    def test_no_operation_type(self, matter_lock: MatterLock) -> None:
+        """Event without lockOperationType fires with to_locked=None."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "credentials": [{"credentialType": 1, "credentialIndex": 3}],
+                }
+            ),
+        )
+
+        assert len(fired) == 1
+        assert fired[0]["to_locked"] is None
+        assert fired[0]["action_text"] == "operated"
+
+    def test_none_data_ignored(self, matter_lock: MatterLock) -> None:
+        """Event with None data is ignored (no credentials)."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(None, _make_node_event(data=None))
+
+        assert len(fired) == 0
+
+
+# =============================================================================
+# Event subscription lifecycle tests
+# =============================================================================
+
+
+class TestEventSubscription:
+    """Test event subscription setup and teardown."""
+
+    def test_matter_node_id_from_device_registry(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        matter_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test _matter_node_id resolves from device identifiers."""
+        dev_reg = dr.async_get(hass)
+        dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "42")},
+        )
+        # Update the lock's device_entry
+        matter_lock._dev_reg = dev_reg
+        device = dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "42")},
+        )
+        matter_lock.device_entry = device
+
+        assert matter_lock._matter_node_id == 42
+
+    def test_matter_node_id_no_device(self, matter_lock: MatterLock) -> None:
+        """Test _matter_node_id returns None when no device entry."""
+        matter_lock.device_entry = None
+        assert matter_lock._matter_node_id is None
+
+    def test_get_matter_client_no_data(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns None when no Matter data."""
+        hass.data.pop("matter", None)
+        assert matter_lock._get_matter_client() is None
+
+    def test_subscribe_to_events_idempotent(self, matter_lock: MatterLock) -> None:
+        """Test _subscribe_to_events is a no-op if already subscribed."""
+        matter_lock._event_unsub = lambda: None  # already subscribed
+        matter_lock._subscribe_to_events()  # should be a no-op
+        # If it tried to subscribe again, it would fail (no client)
+        assert matter_lock._event_unsub is not None
+
+    def test_subscribe_to_events_no_client(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _subscribe_to_events gracefully handles missing client."""
+        hass.data.pop("matter", None)
+        matter_lock._subscribe_to_events()
+        assert matter_lock._event_unsub is None
+
+    async def test_unload_unsubscribes(self, matter_lock: MatterLock) -> None:
+        """Test async_unload cleans up event subscription."""
+        unsub_called = [False]
+
+        def _unsub() -> None:
+            unsub_called[0] = True
+
+        matter_lock._event_unsub = _unsub
+        await matter_lock.async_unload(False)
+        assert unsub_called[0]
+        assert matter_lock._event_unsub is None
+
+    async def test_unload_no_subscription(self, matter_lock: MatterLock) -> None:
+        """Test async_unload handles no active subscription."""
+        matter_lock._event_unsub = None
+        await matter_lock.async_unload(False)  # should not crash
+
+    def test_get_matter_client_success(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns client from hass.data."""
+        mock_client = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.matter_client = mock_client
+        mock_entry_data = MagicMock()
+        mock_entry_data.adapter = mock_adapter
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+        assert matter_lock._get_matter_client() is mock_client
+
+    def test_subscribe_to_events_success(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        matter_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test _subscribe_to_events subscribes when client and node available."""
+        mock_unsub = MagicMock()
+        mock_client = MagicMock()
+        mock_client.subscribe_events.return_value = mock_unsub
+        mock_adapter = MagicMock()
+        mock_adapter.matter_client = mock_client
+        mock_entry_data = MagicMock()
+        mock_entry_data.adapter = mock_adapter
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "16")},
+        )
+        matter_lock.device_entry = device
+
+        matter_lock._subscribe_to_events()
+
+        assert matter_lock._event_unsub is mock_unsub
+        mock_client.subscribe_events.assert_called_once()
+
+    def test_matter_node_id_invalid_identifier(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        matter_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test _matter_node_id returns None for non-numeric identifier."""
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "not_a_number")},
+        )
+        matter_lock.device_entry = device
+        assert matter_lock._matter_node_id is None
+
+    def test_get_matter_client_empty_data(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns None for empty matter data dict."""
+        hass.data["matter"] = {}
+        assert matter_lock._get_matter_client() is None
+
+    def test_get_matter_client_bad_adapter(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns None when adapter has no matter_client."""
+        mock_entry_data = MagicMock(spec=[])  # no attributes
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+        assert matter_lock._get_matter_client() is None
+
+    def test_subscribe_no_node_id(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """Test _subscribe_to_events skips when node ID is None."""
+        mock_client = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.matter_client = mock_client
+        mock_entry_data = MagicMock()
+        mock_entry_data.adapter = mock_adapter
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+        matter_lock.device_entry = None  # no node ID
+
+        matter_lock._subscribe_to_events()
+
+        assert matter_lock._event_unsub is None
+        mock_client.subscribe_events.assert_not_called()

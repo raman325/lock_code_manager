@@ -2,16 +2,20 @@
 
 Handles PIN credential management via Matter lock services.
 PINs are write-only: occupied slots report SlotCode.UNKNOWN, cleared slots report
-SlotCode.EMPTY.
+SlotCode.EMPTY. Subscribes to LockOperation events for code slot event tracking.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
+from matter_server.common.models import EventType
+
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
@@ -23,10 +27,20 @@ from .const import LOGGER
 
 MATTER_DOMAIN = "matter"
 
+# DoorLock cluster ID (0x0101 = 257)
+_DOOR_LOCK_CLUSTER_ID = 257
+
+# LockOperation event ID
+_LOCK_OPERATION_EVENT_ID = 2
+
 
 @dataclass(repr=False, eq=False)
 class MatterLock(BaseLock):
     """Class to represent a Matter lock."""
+
+    _event_unsub: Callable[[], None] | None = field(
+        default=None, init=False, repr=False
+    )
 
     @property
     def domain(self) -> str:
@@ -36,12 +50,37 @@ class MatterLock(BaseLock):
     @property
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
-        return False
+        return True
 
     @property
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=5)
+
+    @property
+    def _matter_node_id(self) -> int | None:
+        """Resolve the Matter node ID from the device registry."""
+        if not self.device_entry:
+            return None
+        for domain, identifier in self.device_entry.identifiers:
+            if domain == MATTER_DOMAIN:
+                # Matter device identifiers are "{node_id}"
+                try:
+                    return int(identifier)
+                except (ValueError, TypeError):
+                    continue
+        return None
+
+    def _get_matter_client(self) -> Any | None:
+        """Get the MatterClient from hass.data."""
+        matter_data = self.hass.data.get(MATTER_DOMAIN)
+        if not matter_data:
+            return None
+        try:
+            entry_data = next(iter(matter_data.values()))
+            return entry_data.adapter.matter_client
+        except (StopIteration, AttributeError):
+            return None
 
     async def _async_call_service(
         self,
@@ -100,6 +139,9 @@ class MatterLock(BaseLock):
             lock_info,
         )
 
+        # Subscribe to LockOperation events for code slot event tracking
+        self._subscribe_to_events()
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether the Matter integration is loaded."""
         if not self.lock_config_entry:
@@ -121,6 +163,110 @@ class MatterLock(BaseLock):
             )
             return False
         return True
+
+    # -- Event subscription (separate from push value updates) ----------------
+
+    @callback
+    def _subscribe_to_events(self) -> None:
+        """Subscribe to Matter LockOperation events for code slot tracking.
+
+        Called during setup. Does not use the push subscription framework
+        because that would disable polling — Matter needs polling for value
+        updates (PINs are write-only) and events only for code slot tracking.
+        """
+        if self._event_unsub is not None:
+            return
+
+        client = self._get_matter_client()
+        node_id = self._matter_node_id
+        if not client or node_id is None:
+            LOGGER.debug(
+                "Lock %s: Matter client or node ID unavailable, "
+                "skipping event subscription",
+                self.lock.entity_id,
+            )
+            return
+
+        self._event_unsub = client.subscribe_events(
+            callback=self._on_lock_operation,
+            event_filter=EventType.NODE_EVENT,
+            node_filter=node_id,
+        )
+        LOGGER.debug(
+            "Lock %s: subscribed to Matter events (node %s)",
+            self.lock.entity_id,
+            node_id,
+        )
+
+    async def async_unload(self, remove_permanently: bool) -> None:
+        """Unload lock and unsubscribe from events."""
+        if self._event_unsub:
+            self._event_unsub()
+            self._event_unsub = None
+        await super().async_unload(remove_permanently)
+
+    @callback
+    def _on_lock_operation(self, _event: Any, node_event: Any) -> None:
+        """Handle Matter LockOperation events.
+
+        Fires a code slot event when a PIN credential is used to lock/unlock.
+        Only PIN credentials (credentialType=1) trigger the event — other
+        credential types (RFID, fingerprint, etc.) are ignored.
+        """
+        # Filter to DoorLock cluster LockOperation events
+        if (
+            getattr(node_event, "cluster_id", None) != _DOOR_LOCK_CLUSTER_ID
+            or getattr(node_event, "event_id", None) != _LOCK_OPERATION_EVENT_ID
+        ):
+            return
+
+        data: dict[str, Any] = getattr(node_event, "data", None) or {}
+        credentials = data.get("credentials")
+        lock_operation_type = data.get("lockOperationType")
+
+        # Must have credentials with a PIN type to fire
+        if not credentials:
+            return
+
+        # Find the PIN credential index (credentialType 1 = PIN)
+        code_slot: int | None = None
+        for cred in credentials:
+            if isinstance(cred, dict) and cred.get("credentialType") == 1:
+                code_slot = cred.get("credentialIndex")
+                break
+
+        # Only fire for PIN credentials
+        if code_slot is None:
+            return
+
+        # Determine lock/unlock from operation type
+        # 0 = Lock, 1 = Unlock, 2 = NonAccessUserEvent, 3 = ForcedUserEvent, 4 = Unlatch
+        if lock_operation_type == 0:
+            to_locked = True
+        elif lock_operation_type == 1:
+            to_locked = False
+        else:
+            to_locked = None
+
+        LOGGER.debug(
+            "Lock %s: LockOperation event — slot=%s, locked=%s",
+            self.lock.entity_id,
+            code_slot,
+            to_locked,
+        )
+
+        self.async_fire_code_slot_event(
+            code_slot=code_slot,
+            to_locked=to_locked,
+            action_text="locked"
+            if to_locked
+            else "unlocked"
+            if to_locked is False
+            else "operated",
+            source_data=data,
+        )
+
+    # -- Usercode CRUD -------------------------------------------------------
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes.
