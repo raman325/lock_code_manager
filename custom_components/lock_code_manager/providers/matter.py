@@ -206,7 +206,7 @@ class MatterLock(BaseLock):
         await super().async_unload(remove_permanently)
 
     @callback
-    def _on_lock_operation(self, event: Any, node_event: Any) -> None:
+    def _on_lock_operation(self, _event: Any, node_event: Any) -> None:
         """Handle Matter LockOperation events.
 
         Fires a code slot event when a PIN credential is used to lock/unlock.
@@ -240,10 +240,13 @@ class MatterLock(BaseLock):
             return
 
         # Determine lock/unlock from operation type
-        # 0 = Lock, 1 = Unlock, 2 = NonAccessUserEvent, 3 = ForcedUserEvent
-        to_locked = (
-            lock_operation_type == 0 if lock_operation_type is not None else None
-        )
+        # 0 = Lock, 1 = Unlock, 2 = NonAccessUserEvent, 3 = ForcedUserEvent, 4 = Unlatch
+        if lock_operation_type == 0:
+            to_locked = True
+        elif lock_operation_type == 1:
+            to_locked = False
+        else:
+            to_locked = None
 
         LOGGER.debug(
             "Lock %s: LockOperation event — slot=%s, locked=%s",
