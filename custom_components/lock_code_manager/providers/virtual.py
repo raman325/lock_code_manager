@@ -97,15 +97,32 @@ class VirtualLock(BaseLock):
         return True
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes."""
-        code_slots = {
+        """Get dictionary of code slots and usercodes.
+
+        Returns all slots with data plus managed empty slots. Unmanaged
+        occupied slots are included so callers like the lock reset config
+        flow step can detect codes not managed by Lock Code Manager.
+        """
+        managed_slots = {
             int(code_slot)
             for entry in self.hass.config_entries.async_entries(DOMAIN)
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
+        stored_slots = set()
+        for k in self._data:
+            try:
+                stored_slots.add(int(k))
+            except (TypeError, ValueError):
+                _LOGGER.warning(
+                    "Virtual lock %s: skipping stored slot with invalid key %r",
+                    self.lock.entity_id,
+                    k,
+                )
+                continue
+        all_slots = managed_slots | stored_slots
         data: dict[int, str | SlotCode] = {}
-        for slot_num in code_slots:
+        for slot_num in all_slots:
             slot_key = str(slot_num)
             if slot_key in self._data:
                 data[slot_num] = str(self._data[slot_key]["code"])
