@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -17,6 +18,7 @@ from custom_components.lock_code_manager.const import (
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
     DOMAIN,
+    POLL_FAILURE_ALERT_THRESHOLD,
 )
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
@@ -965,3 +967,70 @@ async def test_push_update_no_reset_when_data_unchanged(
     coordinator.push_update({1: "1234"})
 
     assert coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1
+
+
+async def test_poll_failure_alert_created_after_threshold(
+    hass: HomeAssistant,
+) -> None:
+    """Test that a repair issue is created after POLL_FAILURE_ALERT_THRESHOLD failures."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{lock.lock.entity_id}"
+    issue = issue_registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.severity == "warning"
+    assert issue.is_fixable is False
+
+
+async def test_poll_failure_alert_not_created_before_threshold(
+    hass: HomeAssistant,
+) -> None:
+    """Test that no repair issue exists before reaching the alert threshold."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD - 1):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{lock.lock.entity_id}"
+    issue = issue_registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is None
+
+
+async def test_poll_failure_alert_dismissed_on_recovery(
+    hass: HomeAssistant,
+) -> None:
+    """Test that the repair issue is dismissed when the lock recovers."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get_fail):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    # Verify issue exists
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{lock.lock.entity_id}"
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+    # Now succeed
+    mock_get_success = AsyncMock(return_value={1: "1234"})
+    with patch.object(lock, "async_internal_get_usercodes", mock_get_success):
+        await coordinator.async_get_usercodes()
+
+    # Issue should be dismissed
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is None

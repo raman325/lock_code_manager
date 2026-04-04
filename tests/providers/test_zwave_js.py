@@ -16,14 +16,12 @@ from zwave_js_server.const.command_class.lock import (
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.node import Node
 
-from homeassistant.components.persistent_notification import (
-    _async_get_or_create_notifications,
-)
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTION_TEXT,
@@ -1910,10 +1908,14 @@ async def test_duplicate_code_notification_ignored_when_not_in_progress(
     # Switch should still be on
     assert hass.states.get(switch_entity_id).state == STATE_ON
 
-    # No persistent notification
-    notifications = _async_get_or_create_notifications(hass)
-    notification_id = f"{DOMAIN}_{lcm_entry.entry_id}_2_slot_disabled"
-    assert notification_id not in notifications
+    # No repair issue created for slot_disabled
+    issue_registry = async_get_issue_registry(hass)
+    matching_issues = [
+        issue
+        for issue in issue_registry.issues.values()
+        if issue.domain == DOMAIN and issue.issue_id.startswith("slot_disabled_")
+    ]
+    assert len(matching_issues) == 0
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 

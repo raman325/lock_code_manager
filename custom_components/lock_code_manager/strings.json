@@ -140,6 +140,32 @@
           }
         }
       }
+    },
+    "slot_disabled": {
+      "title": "Lock Code Manager: Slot {slot_num} disabled",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Slot {slot_num} was disabled",
+            "description": "Slot {slot_num} has been automatically disabled.\n\n**Reason:** {reason}\n\nClick **Submit** to acknowledge this issue."
+          }
+        }
+      }
+    },
+    "pin_required": {
+      "title": "Lock Code Manager: PIN required for slot {slot_num}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "PIN required for slot {slot_num}",
+            "description": "A PIN is required to enable slot {slot_num} on the lock configuration **{config_entry_title}**. Please set a PIN before enabling this slot.\n\nClick **Submit** to acknowledge this issue."
+          }
+        }
+      }
+    },
+    "lock_offline": {
+      "title": "Lock unreachable: {lock_entity_id}",
+      "description": "Lock Code Manager has been unable to communicate with `{lock_entity_id}` for multiple consecutive attempts. Code synchronization is paused until the lock is reachable again. This issue will be automatically dismissed when the lock recovers."
     }
   }
 }

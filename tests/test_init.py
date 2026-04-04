@@ -41,6 +41,7 @@ from custom_components.lock_code_manager.const import (
     STRATEGY_PATH,
 )
 from custom_components.lock_code_manager.repairs import (
+    AcknowledgeRepairFlow,
     NumberOfUsesDeprecatedFlow,
     async_create_fix_flow,
 )
@@ -817,6 +818,30 @@ async def test_async_create_fix_flow():
     """Test async_create_fix_flow returns the correct flow."""
     flow = await async_create_fix_flow(None, "number_of_uses_deprecated", None)
     assert isinstance(flow, NumberOfUsesDeprecatedFlow)
+
+
+async def test_async_create_fix_flow_slot_disabled():
+    """Test async_create_fix_flow returns AcknowledgeRepairFlow for slot_disabled."""
+    flow = await async_create_fix_flow(None, "slot_disabled_abc_1", None)
+    assert isinstance(flow, AcknowledgeRepairFlow)
+
+
+async def test_acknowledge_repair_flow_steps():
+    """Test AcknowledgeRepairFlow shows form then creates entry on confirm."""
+    flow = AcknowledgeRepairFlow()
+    # First call shows the form
+    result = await flow.async_step_init(user_input=None)
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    # Second call with input creates the entry
+    result = await flow.async_step_init(user_input={})
+    assert result["type"] == "create_entry"
+
+
+async def test_async_create_fix_flow_pin_required():
+    """Test async_create_fix_flow returns AcknowledgeRepairFlow for pin_required."""
+    flow = await async_create_fix_flow(None, "pin_required_abc_1", None)
+    assert isinstance(flow, AcknowledgeRepairFlow)
 
 
 async def test_async_create_fix_flow_unknown():
