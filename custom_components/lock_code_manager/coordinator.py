@@ -167,13 +167,14 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             self._consecutive_failures = 0
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
-            # Always attempt to delete — async_delete_issue is a no-op if
-            # the issue doesn't exist, so no need to track whether it was created.
-            async_delete_issue(
-                self.hass,
-                DOMAIN,
-                f"lock_offline_{self._lock.lock.entity_id}",
-            )
+        # Unconditionally clear lock_offline issue on any successful poll.
+        # Runs outside the if-block so it also clears persisted issues that
+        # survive HA restarts (where _consecutive_failures resets to 0).
+        async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"lock_offline_{self._lock.lock.entity_id}",
+        )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Update usercodes."""
