@@ -35,7 +35,7 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import find_entry_for_lock_slot, get_entry_data
+from .data import get_entry_data
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -142,6 +142,8 @@ async def _async_get_unmanaged_codes(
         lock_config_entry = hass.config_entries.async_get_entry(
             lock_entry.config_entry_id
         )
+        if lock_config_entry is None:
+            continue
         lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
             hass, dev_reg, ent_reg, lock_config_entry, lock_entry
         )
@@ -158,11 +160,16 @@ async def _async_get_unmanaged_codes(
         # configured in a Lock Code Manager config entry, so unmanaged codes
         # on those providers will not be detected here. This reset step is
         # most useful for Z-Wave locks which return all occupied slots.
+        managed_slots = {
+            int(s)
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
+            for s in get_entry_data(entry, CONF_SLOTS, {})
+        }
         unmanaged = {
             slot: code
             for slot, code in usercodes.items()
-            if code is not SlotCode.EMPTY
-            and find_entry_for_lock_slot(hass, lock_entity_id, slot) is None
+            if code is not SlotCode.EMPTY and slot not in managed_slots
         }
         if unmanaged:
             result[lock_entity_id] = unmanaged
