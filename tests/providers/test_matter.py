@@ -128,6 +128,11 @@ async def test_supports_code_slot_events(matter_lock: MatterLock) -> None:
     assert matter_lock.supports_code_slot_events is True
 
 
+async def test_supports_push(matter_lock: MatterLock) -> None:
+    """Test that Matter locks support push-based updates."""
+    assert matter_lock.supports_push is True
+
+
 async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
     """Test that scan interval is 5 minutes."""
     assert matter_lock.usercode_scan_interval == timedelta(minutes=5)
@@ -923,6 +928,45 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
+    def test_non_integer_data_index_ignored(self, matter_lock: MatterLock) -> None:
+        """Non-integer dataIndex logs warning and is ignored."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 0,
+                    "dataIndex": "not_a_number",
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_not_called()
+
+    def test_coordinator_data_none_no_push(self, matter_lock: MatterLock) -> None:
+        """LockUserChange skips push when coordinator.data is None."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = None
+        matter_lock.coordinator = mock_coordinator
+
+        matter_lock._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 0,  # Add
+                    "dataIndex": 1,
+                },
+            ),
+        )
+
+        mock_coordinator.push_update.assert_not_called()
+
     def test_unknown_operation_type_ignored(self, matter_lock: MatterLock) -> None:
         """Unknown DataOperationType is ignored."""
         mock_coordinator = MagicMock()
@@ -1073,4 +1117,74 @@ class TestOptimisticPushUpdates:
         result = await matter_lock.async_clear_usercode(5)
 
         assert result is False
+        mock_coordinator.push_update.assert_not_called()
+
+    async def test_set_usercode_failure_no_push(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_set_usercode does not push when service call fails."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "set_lock_credential",
+            AsyncMock(side_effect=HomeAssistantError("timeout")),
+        )
+
+        with pytest.raises(LockDisconnected):
+            await matter_lock.async_set_usercode(3, "1234")
+
+        mock_coordinator.push_update.assert_not_called()
+
+    async def test_clear_usercode_failure_no_push(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_clear_usercode does not push when clear service fails."""
+        mock_coordinator = MagicMock()
+        matter_lock.coordinator = mock_coordinator
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "get_lock_credential_status",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {"credential_exists": True}}),
+        )
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "clear_lock_credential",
+            AsyncMock(side_effect=HomeAssistantError("timeout")),
+        )
+
+        with pytest.raises(LockDisconnected):
+            await matter_lock.async_clear_usercode(5)
+
+        mock_coordinator.push_update.assert_not_called()
+
+    async def test_set_usercode_coordinator_data_none_no_push(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """async_set_usercode skips push when coordinator.data is None."""
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = None
+        matter_lock.coordinator = mock_coordinator
+
+        register_mock_service(
+            hass,
+            MATTER_DOMAIN,
+            "set_lock_credential",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
+        )
+
+        result = await matter_lock.async_set_usercode(3, "1234")
+
+        assert result is True
         mock_coordinator.push_update.assert_not_called()

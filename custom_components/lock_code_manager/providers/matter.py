@@ -233,6 +233,12 @@ class MatterLock(BaseLock):
             self._handle_lock_operation(node_event)
         elif event_id == _LOCK_USER_CHANGE_EVENT_ID:
             self._handle_lock_user_change(node_event)
+        else:
+            LOGGER.debug(
+                "Lock %s: unhandled DoorLock event_id=%s",
+                self.lock.entity_id,
+                event_id,
+            )
 
     @callback
     def _handle_lock_operation(self, node_event: Any) -> None:
@@ -311,6 +317,11 @@ class MatterLock(BaseLock):
         try:
             code_slot = int(raw_index)
         except (TypeError, ValueError):
+            LOGGER.warning(
+                "Lock %s: LockUserChange has non-integer dataIndex %r, ignoring",
+                self.lock.entity_id,
+                raw_index,
+            )
             return
 
         operation = data.get("dataOperationType")
@@ -336,7 +347,7 @@ class MatterLock(BaseLock):
             resolved,
         )
 
-        if self.coordinator:
+        if self.coordinator and self.coordinator.data is not None:
             self.coordinator.push_update({code_slot: resolved})
 
     # -- Usercode CRUD -------------------------------------------------------
@@ -426,7 +437,7 @@ class MatterLock(BaseLock):
                 )
         # Optimistic update: service call succeeded, push occupancy state
         # immediately. The LockUserChange event will confirm later.
-        if self.coordinator:
+        if self.coordinator and self.coordinator.data is not None:
             self.coordinator.push_update({code_slot: SlotCode.UNKNOWN})
         return True
 
@@ -457,7 +468,7 @@ class MatterLock(BaseLock):
         )
         # Optimistic update: clear succeeded, push empty state immediately.
         # The LockUserChange event will confirm later.
-        if self.coordinator:
+        if self.coordinator and self.coordinator.data is not None:
             self.coordinator.push_update({code_slot: SlotCode.EMPTY})
         return True
 
