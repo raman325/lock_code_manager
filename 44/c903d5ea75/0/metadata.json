@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "44c903d5ea75",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T04:08:01.619618Z",
+  "branch": "feat/matter-push-updates",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "0b4ecebfd04f",
+  "token_usage": {
+    "input_tokens": 5845,
+    "cache_creation_tokens": 13751075,
+    "cache_read_tokens": 1514868394,
+    "output_tokens": 717476,
+    "api_call_count": 2992
+  },
+  "session_metrics": {
+    "turn_count": 233
+  }
+}
