@@ -137,12 +137,27 @@ async def _async_get_unmanaged_codes(
     lock_instances: dict[str, Any] = {}
     for lock_entity_id in lock_entity_ids:
         lock_entry = ent_reg.async_get(lock_entity_id)
-        if not lock_entry or lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
+        if not lock_entry:
+            _LOGGER.warning(
+                "Entity %s not found in registry; skipping usercode check",
+                lock_entity_id,
+            )
+            continue
+        if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
+            _LOGGER.debug(
+                "Lock %s uses unsupported platform %s; skipping usercode check",
+                lock_entity_id,
+                lock_entry.platform,
+            )
             continue
         lock_config_entry = hass.config_entries.async_get_entry(
             lock_entry.config_entry_id
         )
         if lock_config_entry is None:
+            _LOGGER.warning(
+                "Config entry for lock %s not found; skipping usercode check",
+                lock_entity_id,
+            )
             continue
         lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
             hass, dev_reg, ent_reg, lock_config_entry, lock_entry
@@ -150,8 +165,9 @@ async def _async_get_unmanaged_codes(
         try:
             usercodes = await lock_instance.async_internal_get_usercodes()
         except Exception:  # noqa: BLE001
-            _LOGGER.debug(
-                "Failed to get usercodes from %s during lock reset check",
+            _LOGGER.warning(
+                "Failed to get usercodes from %s during lock reset check; "
+                "this lock's codes will not be shown",
                 lock_entity_id,
                 exc_info=True,
             )
@@ -265,6 +281,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         for lock_entity_id, codes in self._unmanaged_codes.items():
             lock_instance = self._lock_instances.get(lock_entity_id)
             if not lock_instance:
+                _LOGGER.warning(
+                    "No lock instance for %s; cannot clear unmanaged codes",
+                    lock_entity_id,
+                )
                 continue
             for slot in codes:
                 try:
@@ -314,6 +334,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 continue
             lock_instance = self._lock_instances.get(lock_entity_id)
             if not lock_instance:
+                _LOGGER.warning(
+                    "No lock instance for %s; cannot clear masked codes",
+                    lock_entity_id,
+                )
                 continue
             for slot in masked_slots:
                 try:
