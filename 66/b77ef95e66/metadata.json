@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "66b77ef95e66",
+  "strategy": "manual-commit",
+  "branch": "fix/event-entity-and-readme-table",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_matter.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/b77ef95e66/0/metadata.json",
+      "transcript": "/66/b77ef95e66/0/full.jsonl",
+      "content_hash": "/66/b77ef95e66/0/content_hash.txt",
+      "prompt": "/66/b77ef95e66/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5587,
+    "cache_creation_tokens": 13432931,
+    "cache_read_tokens": 1399928429,
+    "output_tokens": 658081,
+    "api_call_count": 2776
+  }
+}
