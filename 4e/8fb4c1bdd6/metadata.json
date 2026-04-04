@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "4e8fb4c1bdd6",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-return-all-slots",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/4e/8fb4c1bdd6/0/metadata.json",
+      "transcript": "/4e/8fb4c1bdd6/0/full.jsonl",
+      "content_hash": "/4e/8fb4c1bdd6/0/content_hash.txt",
+      "prompt": "/4e/8fb4c1bdd6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8142,
+    "cache_creation_tokens": 14324930,
+    "cache_read_tokens": 1610147971,
+    "output_tokens": 796271,
+    "api_call_count": 3367
+  }
+}
