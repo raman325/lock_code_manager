@@ -355,16 +355,17 @@ class MatterLock(BaseLock):
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes.
 
-        Matter PINs are write-only, so occupied slots return SlotCode.UNKNOWN.
+        Returns all occupied PIN credential slots as SlotCode.UNKNOWN (PINs are
+        write-only) and managed empty slots as SlotCode.EMPTY. Unmanaged
+        occupied slots are included so callers like the lock reset config flow
+        step can detect codes not managed by Lock Code Manager.
         """
-        code_slots = {
+        managed_slots = {
             int(code_slot)
             for entry in self.hass.config_entries.async_entries(DOMAIN)
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
-        if not code_slots:
-            return {}
 
         lock_data = await self._async_call_service(
             "get_lock_users",
@@ -388,15 +389,17 @@ class MatterLock(BaseLock):
                     continue
                 occupied_slots.add(int(cred_index))
 
+        all_slots = managed_slots | occupied_slots
         LOGGER.debug(
-            "Lock %s: %s managed slots, %s occupied",
+            "Lock %s: %s managed, %s occupied, %s total",
             self.lock.entity_id,
-            len(code_slots),
-            len(occupied_slots & code_slots),
+            len(managed_slots),
+            len(occupied_slots),
+            len(all_slots),
         )
         return {
             slot: SlotCode.UNKNOWN if slot in occupied_slots else SlotCode.EMPTY
-            for slot in code_slots
+            for slot in all_slots
         }
 
     async def async_set_usercode(

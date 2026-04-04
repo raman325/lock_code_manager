@@ -276,7 +276,13 @@ async def test_get_usercodes_no_configured_slots(
     hass: HomeAssistant,
     matter_lock: MatterLock,
 ) -> None:
-    """Test get_usercodes returns empty dict when no slots are configured."""
+    """Test get_usercodes returns empty dict when no slots configured and no occupied slots."""
+    register_mock_service(
+        hass,
+        MATTER_DOMAIN,
+        "get_lock_users",
+        AsyncMock(return_value={LOCK_ENTITY_ID: {"users": []}}),
+    )
     codes = await matter_lock.async_get_usercodes()
     assert codes == {}
 
