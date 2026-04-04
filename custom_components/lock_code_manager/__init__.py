@@ -468,8 +468,19 @@ async def async_unload_entry(
         for slot_num in get_entry_data(config_entry, CONF_SLOTS, {}):
             async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
             async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+        # Only delete lock_offline if no other LCM entry manages this lock
+        other_entries = [
+            e
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if e.entry_id != entry_id
+        ]
         for lock_entity_id in get_entry_data(config_entry, CONF_LOCKS, []):
-            async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
+            still_managed = any(
+                lock_entity_id in get_entry_data(e, CONF_LOCKS, [])
+                for e in other_entries
+            )
+            if not still_managed:
+                async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
 
     if not hass_data.get(CONF_LOCKS):
         await _async_cleanup_strategy_resource(hass, hass_data)

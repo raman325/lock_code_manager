@@ -485,8 +485,11 @@ class SlotSyncManager:
                 self._log_prefix,
                 expected_in_sync,
             )
-            if expected_in_sync:
-                # Clear any persisted slot_disabled issue from before restart
+            if expected_in_sync and slot_state.active_state == STATE_ON:
+                # Clear any persisted slot_disabled issue from before restart,
+                # but only if the slot is enabled — a disabled slot can be
+                # "in sync" (no code desired, no code on lock) without the
+                # circuit breaker condition being resolved.
                 async_delete_issue(
                     self._hass,
                     DOMAIN,
@@ -582,11 +585,14 @@ class SlotSyncManager:
             self._in_sync = True
             self._write_state()
             self._reset_sync_tracker()
-            async_delete_issue(
-                self._hass,
-                DOMAIN,
-                f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
-            )
+            # Only clear slot_disabled when the slot is enabled — a disabled
+            # slot can be "in sync" without the issue being resolved
+            if slot_state.active_state == STATE_ON:
+                async_delete_issue(
+                    self._hass,
+                    DOMAIN,
+                    f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                )
 
     # -- State tracking subscriptions ----------------------------------------
 
