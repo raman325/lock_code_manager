@@ -317,6 +317,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                             lock_entity_id,
                         )
                         continue
+                    # Same PIN — skip, keep existing slot config intact
+                    continue
                 self.data[CONF_SLOTS][slot] = {
                     CONF_NAME: f"Slot {slot}",
                     CONF_PIN: str(code),
