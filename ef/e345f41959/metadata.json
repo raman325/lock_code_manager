@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "efe345f41959",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-return-all-slots",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/test_virtual.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ef/e345f41959/0/metadata.json",
+      "transcript": "/ef/e345f41959/0/full.jsonl",
+      "content_hash": "/ef/e345f41959/0/content_hash.txt",
+      "prompt": "/ef/e345f41959/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8151,
+    "cache_creation_tokens": 14329046,
+    "cache_read_tokens": 1612737390,
+    "output_tokens": 797794,
+    "api_call_count": 3374
+  }
+}
