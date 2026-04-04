@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "732e178917ee",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T03:18:05.910352Z",
+  "branch": "feat/lock-reset-step",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_config_flow.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "761acad58e62",
+  "token_usage": {
+    "input_tokens": 5751,
+    "cache_creation_tokens": 13576609,
+    "cache_read_tokens": 1506829619,
+    "output_tokens": 690121,
+    "api_call_count": 2912
+  },
+  "session_metrics": {
+    "turn_count": 227
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T03:17:56.851685Z",
+    "agent_lines": 27,
+    "human_added": 16,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 43,
+    "agent_percentage": 62.7906976744186
+  }
+}

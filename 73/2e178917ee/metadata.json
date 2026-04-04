@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "732e178917ee",
+  "strategy": "manual-commit",
+  "branch": "feat/lock-reset-step",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/73/2e178917ee/0/metadata.json",
+      "transcript": "/73/2e178917ee/0/full.jsonl",
+      "content_hash": "/73/2e178917ee/0/content_hash.txt",
+      "prompt": "/73/2e178917ee/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5751,
+    "cache_creation_tokens": 13576609,
+    "cache_read_tokens": 1506829619,
+    "output_tokens": 690121,
+    "api_call_count": 2912
+  }
+}
