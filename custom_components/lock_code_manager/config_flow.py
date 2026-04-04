@@ -217,9 +217,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Check for unmanaged codes on selected locks and show reset options."""
-        self._unmanaged_codes, self._lock_instances = await _async_get_unmanaged_codes(
-            self.hass, self.dev_reg, self.ent_reg, self.data[CONF_LOCKS]
-        )
+        if not self._unmanaged_codes:
+            (
+                self._unmanaged_codes,
+                self._lock_instances,
+            ) = await _async_get_unmanaged_codes(
+                self.hass, self.dev_reg, self.ent_reg, self.data[CONF_LOCKS]
+            )
         if not self._unmanaged_codes:
             return await self.async_step_choose_path()
 
@@ -228,22 +232,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             for codes in self._unmanaged_codes.values()
             for code in codes.values()
         )
-        has_masked = any(
-            code is SlotCode.UNKNOWN
-            for codes in self._unmanaged_codes.values()
-            for code in codes.values()
-        )
 
         menu_options = ["lock_reset_clear", "lock_reset_cancel"]
-        if has_readable and not has_masked:
-            # All readable: offer adopt and clear
-            menu_options = [
-                "lock_reset_clear",
-                "lock_reset_adopt",
-                "lock_reset_cancel",
-            ]
-        elif has_readable and has_masked:
-            # Mix: offer adopt readable (clearing masked) and clear all
+        if has_readable:
             menu_options = [
                 "lock_reset_clear",
                 "lock_reset_adopt",
@@ -293,9 +284,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             for slot, code in codes.items():
                 if code is SlotCode.UNKNOWN:
                     continue
-                int_slot = int(slot)
-                if int_slot in self.data[CONF_SLOTS]:
-                    existing_pin = self.data[CONF_SLOTS][int_slot].get(CONF_PIN)
+                if slot in self.data[CONF_SLOTS]:
+                    existing_pin = self.data[CONF_SLOTS][slot].get(CONF_PIN)
                     if existing_pin != str(code):
                         _LOGGER.warning(
                             "Slot %s has conflicting PINs across locks "
@@ -304,7 +294,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                             lock_entity_id,
                         )
                         continue
-                self.data[CONF_SLOTS][int_slot] = {
+                self.data[CONF_SLOTS][slot] = {
                     CONF_NAME: f"Slot {slot}",
                     CONF_PIN: str(code),
                     CONF_ENABLED: True,
