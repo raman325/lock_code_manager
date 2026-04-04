@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "705700da71f6",
+  "strategy": "manual-commit",
+  "branch": "fix/event-entity-and-readme-table",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/70/5700da71f6/0/metadata.json",
+      "transcript": "/70/5700da71f6/0/full.jsonl",
+      "content_hash": "/70/5700da71f6/0/content_hash.txt",
+      "prompt": "/70/5700da71f6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5680,
+    "cache_creation_tokens": 13472947,
+    "cache_read_tokens": 1469348908,
+    "output_tokens": 675240,
+    "api_call_count": 2851
+  }
+}
