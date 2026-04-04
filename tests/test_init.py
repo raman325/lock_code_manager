@@ -848,3 +848,76 @@ async def test_async_create_fix_flow_unknown():
     """Test async_create_fix_flow raises for unknown issue."""
     with pytest.raises(ValueError, match="Unknown issue"):
         await async_create_fix_flow(None, "unknown_issue", None)
+
+
+async def test_unload_cleans_up_repair_issues(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that unloading an entry deletes slot_disabled and pin_required repair issues."""
+    entry_id = lock_code_manager_config_entry.entry_id
+    issue_reg = ir.async_get(hass)
+
+    # Create repair issues that should be cleaned up on unload
+    for slot_num in (1, 2):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"slot_disabled_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="slot_disabled",
+            translation_placeholders={"slot_num": str(slot_num), "reason": "test"},
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"pin_required_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="pin_required",
+            translation_placeholders={
+                "slot_num": str(slot_num),
+                "config_entry_title": "test",
+            },
+        )
+
+    # Create lock_offline issues for both locks
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"lock_offline_{lock_id}",
+            is_fixable=False,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="lock_offline",
+            translation_placeholders={"lock_entity_id": lock_id},
+        )
+
+    # Verify issues exist
+    assert issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1") is not None
+    assert issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_2") is not None
+    assert (
+        issue_reg.async_get_issue(DOMAIN, f"lock_offline_{LOCK_1_ENTITY_ID}")
+        is not None
+    )
+
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # All issues for this entry should be deleted
+    for slot_num in (1, 2):
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
+            is None
+        )
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+            is None
+        )
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is None

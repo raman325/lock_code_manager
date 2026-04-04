@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_get as async_get_issue_registry,
+)
 
+from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.models import SlotCode, SlotState
 from custom_components.lock_code_manager.sync import SlotSyncManager
 
@@ -243,3 +249,108 @@ class TestTryUpgradeStateTracking:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
         assert not manager._tracking_all_states
         assert manager._state_tracking_unsub is original_unsub
+
+
+class TestDisableSlotExceptionHandling:
+    """Tests for _disable_slot exception handling (Issue 7)."""
+
+    async def test_disable_slot_exception_resets_sync_tracker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Sync tracker resets even when async_disable_slot raises."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        # Set up some sync tracker state to verify it gets reset
+        manager._sync_attempt_count = 5
+        manager._sync_attempt_first = MagicMock()
+
+        with patch(
+            "custom_components.lock_code_manager.sync.async_disable_slot",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("service call failed"),
+        ):
+            await manager._disable_slot("test reason")
+
+        # Sync tracker should still be reset even after exception
+        assert manager._sync_attempt_count == 0
+        assert manager._sync_attempt_first is None
+        assert "Failed to disable slot" in caplog.text
+
+        # Fallback repair issue should be created even though service call failed
+        issue_registry = async_get_issue_registry(hass)
+        entry_id = lock_code_manager_config_entry.entry_id
+        issue = issue_registry.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1")
+        assert issue is not None
+        assert issue.severity == IssueSeverity.WARNING
+
+    async def test_disable_slot_success_resets_sync_tracker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Sync tracker resets when async_disable_slot succeeds."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._sync_attempt_count = 5
+        manager._sync_attempt_first = MagicMock()
+
+        with patch(
+            "custom_components.lock_code_manager.sync.async_disable_slot",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            await manager._disable_slot("test reason")
+
+        assert manager._sync_attempt_count == 0
+        assert manager._sync_attempt_first is None
+
+
+class TestSlotDisabledIssueCleanup:
+    """Tests for slot_disabled_ issue auto-deletion when back in sync (Issue 1)."""
+
+    async def test_slot_disabled_issue_deleted_when_back_in_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """slot_disabled_ repair issue is deleted when slot comes back in sync."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        entry_id = lock_code_manager_config_entry.entry_id
+        slot_num = manager._slot_num
+
+        # Manually create a slot_disabled issue to simulate circuit breaker
+        issue_id = f"slot_disabled_{entry_id}_{slot_num}"
+        async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            is_persistent=True,
+            severity=IssueSeverity.WARNING,
+            translation_key="slot_disabled",
+            translation_placeholders={
+                "slot_num": str(slot_num),
+                "reason": "test",
+            },
+        )
+
+        issue_registry = async_get_issue_registry(hass)
+        assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+        # Initialize the manager state so it thinks it was out of sync
+        manager._in_sync = False
+
+        # Trigger a tick that will find the slot in sync (coordinator has matching code)
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+        # The issue should be deleted since slot is back in sync
+        assert issue_registry.async_get_issue(DOMAIN, issue_id) is None

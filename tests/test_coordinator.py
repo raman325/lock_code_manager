@@ -1034,3 +1034,28 @@ async def test_poll_failure_alert_dismissed_on_recovery(
 
     # Issue should be dismissed
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_lock_offline_issue_persists_across_shutdown(
+    hass: HomeAssistant,
+) -> None:
+    """Test that lock_offline repair issue persists across coordinator shutdown.
+
+    The issue is persistent and only cleaned up on entry unload or recovery.
+    """
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get_fail):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{lock.lock.entity_id}"
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+    # Shutdown should NOT delete the issue — it persists across restarts
+    await coordinator.async_shutdown()
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
