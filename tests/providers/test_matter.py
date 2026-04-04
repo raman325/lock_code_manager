@@ -287,6 +287,40 @@ async def test_get_usercodes_no_configured_slots(
     assert codes == {}
 
 
+async def test_get_usercodes_unmanaged_occupied_slots(
+    hass: HomeAssistant,
+    matter_lock: MatterLock,
+) -> None:
+    """Test get_usercodes returns unmanaged occupied slots as UNKNOWN."""
+    register_mock_service(
+        hass,
+        MATTER_DOMAIN,
+        "get_lock_users",
+        AsyncMock(
+            return_value={
+                LOCK_ENTITY_ID: {
+                    "users": [
+                        {
+                            "credentials": [
+                                {
+                                    "credential_type": "pin",
+                                    "credential_index": 5,
+                                },
+                                {
+                                    "credential_type": "pin",
+                                    "credential_index": 8,
+                                },
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+    )
+    codes = await matter_lock.async_get_usercodes()
+    assert codes == {5: SlotCode.UNKNOWN, 8: SlotCode.UNKNOWN}
+
+
 # ---------------------------------------------------------------------------
 # set_usercode tests
 # ---------------------------------------------------------------------------

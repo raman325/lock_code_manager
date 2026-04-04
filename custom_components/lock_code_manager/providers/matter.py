@@ -387,7 +387,15 @@ class MatterLock(BaseLock):
                 cred_index = credential.get("credential_index")
                 if cred_index is None:
                     continue
-                occupied_slots.add(int(cred_index))
+                try:
+                    occupied_slots.add(int(cred_index))
+                except (TypeError, ValueError):
+                    LOGGER.warning(
+                        "Lock %s: skipping credential with invalid index %r",
+                        self.lock.entity_id,
+                        cred_index,
+                    )
+                    continue
 
         all_slots = managed_slots | occupied_slots
         LOGGER.debug(

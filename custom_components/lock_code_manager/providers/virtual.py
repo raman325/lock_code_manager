@@ -109,7 +109,13 @@ class VirtualLock(BaseLock):
             for code_slot in get_entry_data(entry, CONF_SLOTS, {})
             if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
         }
-        all_slots = managed_slots | {int(k) for k in self._data}
+        stored_slots = set()
+        for k in self._data:
+            try:
+                stored_slots.add(int(k))
+            except (TypeError, ValueError):
+                continue
+        all_slots = managed_slots | stored_slots
         data: dict[int, str | SlotCode] = {}
         for slot_num in all_slots:
             slot_key = str(slot_num)
