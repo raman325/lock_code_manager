@@ -473,7 +473,7 @@ async def test_lock_reset_mixed_codes_adopt_clears_masked(hass: HomeAssistant):
 
 
 async def test_lock_reset_clear_missing_lock_instance(hass: HomeAssistant):
-    """Test that clear skips locks without a lock_instance (line 270)."""
+    """Test that clear skips locks without a lock_instance."""
     unmanaged = {
         LOCK_1_ENTITY_ID: {3: "9999"},
         LOCK_2_ENTITY_ID: {5: "1111"},
@@ -502,7 +502,7 @@ async def test_lock_reset_clear_missing_lock_instance(hass: HomeAssistant):
 
 
 async def test_lock_reset_clear_exception_during_clear(hass: HomeAssistant):
-    """Test that an exception clearing a slot is caught and logged (lines 276-277)."""
+    """Test that an exception during slot clearing is caught and logged."""
     mock_clear = AsyncMock(side_effect=RuntimeError("device unavailable"))
     mock_lock = AsyncMock()
     mock_lock.async_internal_clear_usercode = mock_clear
@@ -527,7 +527,7 @@ async def test_lock_reset_clear_exception_during_clear(hass: HomeAssistant):
 
 
 async def test_lock_reset_adopt_pin_conflict(hass: HomeAssistant):
-    """Test that conflicting PINs across locks are skipped (lines 298-306)."""
+    """Test that conflicting PINs across locks keep the first-seen PIN."""
     # Two locks have the same slot but different PINs
     unmanaged = {
         LOCK_1_ENTITY_ID: {3: "9999"},
@@ -568,7 +568,7 @@ async def test_lock_reset_adopt_pin_conflict(hass: HomeAssistant):
 
 
 async def test_lock_reset_adopt_missing_lock_instance_for_masked(hass: HomeAssistant):
-    """Test that masked slot clear is skipped when lock_instance is missing (line 320)."""
+    """Test that masked slot clear is skipped when lock_instance is missing."""
     unmanaged = {
         LOCK_1_ENTITY_ID: {3: "9999"},
         LOCK_2_ENTITY_ID: {5: SlotCode.UNKNOWN},
@@ -592,7 +592,7 @@ async def test_lock_reset_adopt_missing_lock_instance_for_masked(hass: HomeAssis
 
 
 async def test_lock_reset_adopt_exception_clearing_masked(hass: HomeAssistant):
-    """Test that exception clearing masked slot is caught (lines 326-327)."""
+    """Test that exceptions while clearing a masked slot are caught."""
     mock_clear = AsyncMock(side_effect=RuntimeError("device unavailable"))
     mock_lock = AsyncMock()
     mock_lock.async_internal_clear_usercode = mock_clear
@@ -618,7 +618,7 @@ async def test_lock_reset_adopt_exception_clearing_masked(hass: HomeAssistant):
 
 
 async def test_async_get_unmanaged_codes_exception(hass: HomeAssistant):
-    """Test _async_get_unmanaged_codes catches exception from usercodes fetch (lines 150-156)."""
+    """Test _async_get_unmanaged_codes catches exception from usercodes fetch."""
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
         side_effect=RuntimeError("node not ready")
@@ -652,7 +652,7 @@ async def test_async_get_unmanaged_codes_exception(hass: HomeAssistant):
 
 
 async def test_async_get_unmanaged_codes_returns_unmanaged(hass: HomeAssistant):
-    """Test _async_get_unmanaged_codes returns unmanaged codes (lines 168-169)."""
+    """Test _async_get_unmanaged_codes returns only unmanaged non-empty codes."""
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
         return_value={1: "1234", 3: "9999", 4: SlotCode.EMPTY}
@@ -665,6 +665,16 @@ async def test_async_get_unmanaged_codes_returns_unmanaged(hass: HomeAssistant):
     )
     dev_reg = dr.async_get(hass)
 
+    # Create an LCM config entry that manages slot 1 on this lock
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234", CONF_NAME: "S1"}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+
     with (
         patch(
             "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
@@ -675,16 +685,12 @@ async def test_async_get_unmanaged_codes_returns_unmanaged(hass: HomeAssistant):
             "async_get_entry",
             return_value=MockConfigEntry(domain="zwave_js"),
         ),
-        patch(
-            "custom_components.lock_code_manager.config_flow.find_entry_for_lock_slot",
-            side_effect=lambda hass, lock, slot: "fake_entry" if slot == 1 else None,
-        ),
     ):
         result, instances = await _async_get_unmanaged_codes(
             hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
         )
 
-    # Slot 1 is managed (find_entry_for_lock_slot returns non-None), slot 4 is empty
+    # Slot 1 is managed by the LCM entry, slot 4 is empty
     # Only slot 3 should be returned as unmanaged
     assert LOCK_1_ENTITY_ID in result
     assert result[LOCK_1_ENTITY_ID] == {3: "9999"}
