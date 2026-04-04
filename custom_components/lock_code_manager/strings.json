@@ -165,7 +165,7 @@
     },
     "lock_offline": {
       "title": "Lock unreachable: {lock_entity_id}",
-      "description": "Lock Code Manager has been unable to communicate with `{lock_entity_id}` for {failure_count} consecutive attempts. Code synchronization is paused until the lock is reachable again. This issue will be automatically dismissed when the lock recovers."
+      "description": "Lock Code Manager has been unable to communicate with `{lock_entity_id}` for multiple consecutive attempts. Code synchronization is paused until the lock is reachable again. This issue will be automatically dismissed when the lock recovers."
     }
   }
 }

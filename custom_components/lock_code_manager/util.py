@@ -74,9 +74,7 @@ async def async_disable_slot(
     )
 
     if reason:
-        issue_id = (
-            f"slot_disabled_{config_entry_id}_{slot_num}_{lock_entity_id or 'unknown'}"
-        )
+        issue_id = f"slot_disabled_{config_entry_id}_{slot_num}"
         async_create_issue(
             hass,
             DOMAIN,

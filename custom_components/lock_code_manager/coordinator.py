@@ -148,12 +148,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                 DOMAIN,
                 f"lock_offline_{self._lock.lock.entity_id}",
                 is_fixable=False,
-                is_persistent=False,
+                is_persistent=True,
                 severity=IssueSeverity.WARNING,
                 translation_key="lock_offline",
                 translation_placeholders={
                     "lock_entity_id": self._lock.lock.entity_id,
-                    "failure_count": str(self._consecutive_failures),
                 },
             )
 

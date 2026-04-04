@@ -193,7 +193,7 @@ async def test_async_disable_slot_creates_repair_issue(
     assert result is True
 
     issue_registry = async_get_issue_registry(hass)
-    issue_id = f"slot_disabled_{entry_id}_2_lock.test_1"
+    issue_id = f"slot_disabled_{entry_id}_2"
     issue = issue_registry.async_get_issue(DOMAIN, issue_id)
     assert issue is not None
     assert issue.severity == "warning"
