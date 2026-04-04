@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "82e727c603a2",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T04:58:05.966373Z",
+  "branch": "feat/matter-push-updates",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "2ab978d887e8",
+  "token_usage": {
+    "input_tokens": 7718,
+    "cache_creation_tokens": 13776529,
+    "cache_read_tokens": 1519866630,
+    "output_tokens": 726309,
+    "api_call_count": 3025
+  },
+  "session_metrics": {
+    "turn_count": 237
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T04:57:56.085631Z",
+    "agent_lines": 0,
+    "human_added": 11,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 11,
+    "agent_percentage": 0
+  }
+}
