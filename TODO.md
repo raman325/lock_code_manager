@@ -35,6 +35,17 @@
 **Cannot support:** esphome (no API), august/yale/yalexs_ble/yale_smart_alarm
 (library limitations)
 
+## Architecture Considerations
+
+- **Event-driven vs optimistic push updates** — For providers that support push
+  events (Matter LockUserChange, Z-Wave value updates), consider removing
+  optimistic pushes from set/clear methods and relying solely on events. The
+  event is the lock's actual confirmation the credential was stored, while
+  optimistic pushes only confirm the service call was accepted. Event-only
+  updates give a single source of truth and simpler code, at the cost of a
+  brief latency window before the coordinator updates. Z-Wave may still need
+  optimistic pushes to avoid sync loops with stale cache reads.
+
 ## Code Quality
 
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.

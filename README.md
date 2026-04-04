@@ -23,7 +23,7 @@ Supported lock integrations:
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | Yes | Yes | Some locks mask PINs |
-| [Matter][wiki-matter] | No | No | Yes | PINs write-only per spec |
+| [Matter][wiki-matter] | No | Yes | Yes | PINs write-only per spec |
 | [Schlage WiFi][wiki-schlage] | No | No | No | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | Yes | No | No | Local API, polling-based |
 | [Virtual][wiki-virtual]¹ | Yes | No | No | For testing only |
