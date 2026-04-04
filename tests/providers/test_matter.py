@@ -532,8 +532,8 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is True
         assert fired[0]["action_text"] == "locked"
 
-    def test_rfid_credential_fires_event(self, matter_lock: MatterLock) -> None:
-        """RFID credential usage fires code slot event."""
+    def test_rfid_credential_ignored(self, matter_lock: MatterLock) -> None:
+        """RFID credential does not fire pin_used event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
@@ -549,11 +549,10 @@ class TestLockOperationEvent:
             ),
         )
 
-        assert len(fired) == 1
-        assert fired[0]["code_slot"] == 3
+        assert len(fired) == 0
 
-    def test_fingerprint_credential_fires_event(self, matter_lock: MatterLock) -> None:
-        """Fingerprint credential usage fires code slot event."""
+    def test_fingerprint_credential_ignored(self, matter_lock: MatterLock) -> None:
+        """Fingerprint credential does not fire pin_used event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
@@ -569,8 +568,7 @@ class TestLockOperationEvent:
             ),
         )
 
-        assert len(fired) == 1
-        assert fired[0]["code_slot"] == 1
+        assert len(fired) == 0
 
     def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
         """Events from non-DoorLock clusters are ignored."""

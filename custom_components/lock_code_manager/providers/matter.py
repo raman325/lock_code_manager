@@ -196,9 +196,9 @@ class MatterLock(BaseLock):
     def _on_lock_operation(self, event: Any, node_event: Any) -> None:
         """Handle Matter LockOperation events.
 
-        Fires a code slot event when a credential is used to lock/unlock.
-        Supports any credential type (PIN, RFID, fingerprint, etc.) —
-        the event data includes the credential type for filtering.
+        Fires a code slot event when a PIN credential is used to lock/unlock.
+        Only PIN credentials (credentialType=1) trigger the event — other
+        credential types (RFID, fingerprint, etc.) are ignored.
         """
         # Filter to DoorLock cluster LockOperation events
         if (
@@ -211,17 +211,20 @@ class MatterLock(BaseLock):
         credentials = data.get("credentials")
         lock_operation_type = data.get("lockOperationType")
 
-        # Must have credentials to identify the code slot
+        # Must have credentials with a PIN type to fire
         if not credentials:
             return
 
-        # Find the first credential index (any type)
+        # Find the PIN credential index (credentialType 1 = PIN)
         code_slot: int | None = None
         for cred in credentials:
-            if isinstance(cred, dict):
+            if isinstance(cred, dict) and cred.get("credentialType") == 1:
                 code_slot = cred.get("credentialIndex")
-                if code_slot is not None:
-                    break
+                break
+
+        # Only fire for PIN credentials
+        if code_slot is None:
+            return
 
         # Determine lock/unlock from operation type
         # 0 = Lock, 1 = Unlock, 2 = NonAccessUserEvent, 3 = ForcedUserEvent
