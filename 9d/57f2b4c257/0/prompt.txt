@@ -2528,3 +2528,7 @@ does adopt assume that we are creating a brand new slot? What if adopting overwr
 ---
 
 yes I thought the plan was to have it available for either flow
+
+---
+
+right but also, if I was managing slot 1, and I update to include slot 2, if it's a matter lock, slot 1 will show as unknown. We can reset it if we want to be safe but we should note that's what's happening
