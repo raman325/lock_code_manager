@@ -650,3 +650,78 @@ class TestLockOperationEvent:
         matter_lock._on_lock_operation(None, _make_node_event(data=None))
 
         assert len(fired) == 0
+
+
+# =============================================================================
+# Event subscription lifecycle tests
+# =============================================================================
+
+
+class TestEventSubscription:
+    """Test event subscription setup and teardown."""
+
+    def test_matter_node_id_from_device_registry(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        matter_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test _matter_node_id resolves from device identifiers."""
+        dev_reg = dr.async_get(hass)
+        dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "42")},
+        )
+        # Update the lock's device_entry
+        matter_lock._dev_reg = dev_reg
+        device = dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "42")},
+        )
+        matter_lock.device_entry = device
+
+        assert matter_lock._matter_node_id == 42
+
+    def test_matter_node_id_no_device(self, matter_lock: MatterLock) -> None:
+        """Test _matter_node_id returns None when no device entry."""
+        matter_lock.device_entry = None
+        assert matter_lock._matter_node_id is None
+
+    def test_get_matter_client_no_data(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns None when no Matter data."""
+        hass.data.pop("matter", None)
+        assert matter_lock._get_matter_client() is None
+
+    def test_subscribe_to_events_idempotent(self, matter_lock: MatterLock) -> None:
+        """Test _subscribe_to_events is a no-op if already subscribed."""
+        matter_lock._event_unsub = lambda: None  # already subscribed
+        matter_lock._subscribe_to_events()  # should be a no-op
+        # If it tried to subscribe again, it would fail (no client)
+        assert matter_lock._event_unsub is not None
+
+    def test_subscribe_to_events_no_client(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _subscribe_to_events gracefully handles missing client."""
+        hass.data.pop("matter", None)
+        matter_lock._subscribe_to_events()
+        assert matter_lock._event_unsub is None
+
+    async def test_unload_unsubscribes(self, matter_lock: MatterLock) -> None:
+        """Test async_unload cleans up event subscription."""
+        unsub_called = [False]
+
+        def _unsub() -> None:
+            unsub_called[0] = True
+
+        matter_lock._event_unsub = _unsub
+        await matter_lock.async_unload(False)
+        assert unsub_called[0]
+        assert matter_lock._event_unsub is None
+
+    async def test_unload_no_subscription(self, matter_lock: MatterLock) -> None:
+        """Test async_unload handles no active subscription."""
+        matter_lock._event_unsub = None
+        await matter_lock.async_unload(False)  # should not crash
