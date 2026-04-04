@@ -471,7 +471,9 @@ async def async_unload_entry(
         # Only delete lock_offline if no other LCM entry manages this lock
         other_entries = [
             e
-            for e in hass.config_entries.async_entries(DOMAIN)
+            for e in hass.config_entries.async_entries(
+                DOMAIN, include_disabled=False, include_ignore=False
+            )
             if e.entry_id != entry_id
         ]
         for lock_entity_id in get_entry_data(config_entry, CONF_LOCKS, []):
