@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "03ca04bf0391",
+  "strategy": "manual-commit",
+  "branch": "feat/matter-push-updates",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/test_matter.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/03/ca04bf0391/0/metadata.json",
+      "transcript": "/03/ca04bf0391/0/full.jsonl",
+      "content_hash": "/03/ca04bf0391/0/content_hash.txt",
+      "prompt": "/03/ca04bf0391/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5815,
+    "cache_creation_tokens": 13626331,
+    "cache_read_tokens": 1511486911,
+    "output_tokens": 708546,
+    "api_call_count": 2964
+  }
+}
