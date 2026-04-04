@@ -159,7 +159,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""
         if self._consecutive_failures > 0:
-            had_alert = self._consecutive_failures >= POLL_FAILURE_ALERT_THRESHOLD
             _LOGGER.info(
                 "Lock %s recovered after %d consecutive failures",
                 self._lock.lock.entity_id,
@@ -168,12 +167,13 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             self._consecutive_failures = 0
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
-            if had_alert:
-                async_delete_issue(
-                    self.hass,
-                    DOMAIN,
-                    f"lock_offline_{self._lock.lock.entity_id}",
-                )
+            # Always attempt to delete — async_delete_issue is a no-op if
+            # the issue doesn't exist, so no need to track whether it was created.
+            async_delete_issue(
+                self.hass,
+                DOMAIN,
+                f"lock_offline_{self._lock.lock.entity_id}",
+            )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Update usercodes."""
