@@ -2,9 +2,15 @@
 
 ## User-Facing Features
 
-- **Config flow: lock reset step** — Check for existing unmanaged codes on the
-  lock during setup. User can cancel or proceed (all slots cleared, LCM re-sets
-  managed codes immediately).
+- **Config flow: lock reset in options flow** — Extend the lock reset step
+  (clear/adopt unmanaged codes) to the options flow when new locks are added.
+  Adopt should merge into existing slot config (preserve names, settings) rather
+  than creating fresh entries. Key considerations: (1) compute "unmanaged" against
+  the *new* slot config being submitted, not the current stored config, so removing
+  a slot doesn't immediately offer to clear it; (2) existing managed slots on
+  write-only locks (Matter) show as UNKNOWN — filter these out using the new config
+  rather than offering to reset them; (3) if re-setting managed PINs for safety
+  after lock reset, note this to the user.
 - **Config flow: conflicting integration detection** — Warn if Keymaster or other
   code management integrations are detected at setup.
 - **Clear all unmanaged codes** — Button or service to clear unmanaged code slots
