@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "da2fa1bb7270",
+  "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T21:48:52.345652Z",
+  "branch": "fix/repair-issue-lifecycle",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py",
+    "tests/test_sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "f9ac79baa3c4",
+  "token_usage": {
+    "input_tokens": 8016,
+    "cache_creation_tokens": 14268998,
+    "cache_read_tokens": 1576825397,
+    "output_tokens": 774611,
+    "api_call_count": 3269
+  },
+  "session_metrics": {
+    "turn_count": 261
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T21:48:42.195797Z",
+    "agent_lines": 0,
+    "human_added": 28,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 28,
+    "agent_percentage": 0
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "da2fa1bb7270",
+  "strategy": "manual-commit",
+  "branch": "fix/repair-issue-lifecycle",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py",
+    "tests/test_sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/da/2fa1bb7270/0/metadata.json",
+      "transcript": "/da/2fa1bb7270/0/full.jsonl",
+      "content_hash": "/da/2fa1bb7270/0/content_hash.txt",
+      "prompt": "/da/2fa1bb7270/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8016,
+    "cache_creation_tokens": 14268998,
+    "cache_read_tokens": 1576825397,
+    "output_tokens": 774611,
+    "api_call_count": 3269
+  }
+}
