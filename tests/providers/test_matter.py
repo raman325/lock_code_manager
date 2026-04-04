@@ -488,8 +488,8 @@ def _make_node_event(
 class TestLockOperationEvent:
     """Test _on_lock_operation callback filtering and event firing."""
 
-    def test_keypad_unlock_with_pin_credential(self, matter_lock: MatterLock) -> None:
-        """Valid keypad unlock with PIN credential fires code slot event."""
+    def test_unlock_with_pin_credential(self, matter_lock: MatterLock) -> None:
+        """Unlock with PIN credential fires code slot event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
@@ -497,7 +497,6 @@ class TestLockOperationEvent:
             None,
             _make_node_event(
                 data={
-                    "operationSource": 3,  # kKeypad
                     "lockOperationType": 1,  # kUnlock
                     "credentials": [
                         {"credentialType": 1, "credentialIndex": 2},  # PIN, slot 2
@@ -511,8 +510,8 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is False
         assert fired[0]["action_text"] == "unlocked"
 
-    def test_keypad_lock_with_pin_credential(self, matter_lock: MatterLock) -> None:
-        """Valid keypad lock with PIN credential fires code slot event."""
+    def test_lock_with_pin_credential(self, matter_lock: MatterLock) -> None:
+        """Lock with PIN credential fires code slot event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
@@ -520,7 +519,6 @@ class TestLockOperationEvent:
             None,
             _make_node_event(
                 data={
-                    "operationSource": 3,
                     "lockOperationType": 0,  # kLock
                     "credentials": [
                         {"credentialType": 1, "credentialIndex": 5},
@@ -534,6 +532,46 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is True
         assert fired[0]["action_text"] == "locked"
 
+    def test_rfid_credential_fires_event(self, matter_lock: MatterLock) -> None:
+        """RFID credential usage fires code slot event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "lockOperationType": 1,
+                    "credentials": [
+                        {"credentialType": 2, "credentialIndex": 3},  # RFID
+                    ],
+                }
+            ),
+        )
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 3
+
+    def test_fingerprint_credential_fires_event(self, matter_lock: MatterLock) -> None:
+        """Fingerprint credential usage fires code slot event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(
+                data={
+                    "lockOperationType": 1,
+                    "credentials": [
+                        {"credentialType": 3, "credentialIndex": 1},  # Fingerprint
+                    ],
+                }
+            ),
+        )
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 1
+
     def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
         """Events from non-DoorLock clusters are ignored."""
         fired: list[dict[str, Any]] = []
@@ -542,8 +580,8 @@ class TestLockOperationEvent:
         matter_lock._on_lock_operation(
             None,
             _make_node_event(
-                cluster_id=6,  # OnOff cluster, not DoorLock
-                data={"operationSource": 3},
+                cluster_id=6,  # OnOff cluster
+                data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
             ),
         )
 
@@ -557,54 +595,39 @@ class TestLockOperationEvent:
         matter_lock._on_lock_operation(
             None,
             _make_node_event(
-                event_id=3,  # LockOperationError, not LockOperation
-                data={"operationSource": 3},
+                event_id=3,  # LockOperationError
+                data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
             ),
         )
 
         assert len(fired) == 0
 
-    def test_non_keypad_source_ignored(self, matter_lock: MatterLock) -> None:
-        """Non-keypad operations (remote, manual, etc.) are ignored."""
+    def test_no_credentials_ignored(self, matter_lock: MatterLock) -> None:
+        """Event without credentials is ignored."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        for source in (0, 1, 2, 4, 5, 6, 7, 8, 9, 10):
-            matter_lock._on_lock_operation(
-                None,
-                _make_node_event(
-                    data={
-                        "operationSource": source,
-                        "lockOperationType": 1,
-                        "credentials": [
-                            {"credentialType": 1, "credentialIndex": 1},
-                        ],
-                    }
-                ),
-            )
+        matter_lock._on_lock_operation(
+            None,
+            _make_node_event(data={"lockOperationType": 1}),
+        )
 
         assert len(fired) == 0
 
-    def test_keypad_no_credentials(self, matter_lock: MatterLock) -> None:
-        """Keypad event without credentials fires with code_slot=None."""
+    def test_empty_credentials_ignored(self, matter_lock: MatterLock) -> None:
+        """Event with empty credentials list is ignored."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         matter_lock._on_lock_operation(
             None,
-            _make_node_event(
-                data={
-                    "operationSource": 3,
-                    "lockOperationType": 1,
-                }
-            ),
+            _make_node_event(data={"lockOperationType": 1, "credentials": []}),
         )
 
-        assert len(fired) == 1
-        assert fired[0]["code_slot"] is None
+        assert len(fired) == 0
 
-    def test_keypad_rfid_credential_ignored(self, matter_lock: MatterLock) -> None:
-        """Keypad event with only RFID credential has code_slot=None."""
+    def test_no_operation_type(self, matter_lock: MatterLock) -> None:
+        """Event without lockOperationType fires with to_locked=None."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
@@ -612,31 +635,7 @@ class TestLockOperationEvent:
             None,
             _make_node_event(
                 data={
-                    "operationSource": 3,
-                    "lockOperationType": 1,
-                    "credentials": [
-                        {"credentialType": 2, "credentialIndex": 1},  # RFID, not PIN
-                    ],
-                }
-            ),
-        )
-
-        assert len(fired) == 1
-        assert fired[0]["code_slot"] is None
-
-    def test_keypad_no_operation_type(self, matter_lock: MatterLock) -> None:
-        """Keypad event without lockOperationType fires with to_locked=None."""
-        fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
-
-        matter_lock._on_lock_operation(
-            None,
-            _make_node_event(
-                data={
-                    "operationSource": 3,
-                    "credentials": [
-                        {"credentialType": 1, "credentialIndex": 3},
-                    ],
+                    "credentials": [{"credentialType": 1, "credentialIndex": 3}],
                 }
             ),
         )
@@ -645,15 +644,11 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is None
         assert fired[0]["action_text"] == "operated"
 
-    def test_none_data(self, matter_lock: MatterLock) -> None:
-        """Event with None data and keypad source doesn't crash."""
+    def test_none_data_ignored(self, matter_lock: MatterLock) -> None:
+        """Event with None data is ignored (no credentials)."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        # None data means operationSource is None → not keypad → ignored
-        matter_lock._on_lock_operation(
-            None,
-            _make_node_event(data=None),
-        )
+        matter_lock._on_lock_operation(None, _make_node_event(data=None))
 
         assert len(fired) == 0

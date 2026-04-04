@@ -33,9 +33,6 @@ _DOOR_LOCK_CLUSTER_ID = 257
 # LockOperation event ID
 _LOCK_OPERATION_EVENT_ID = 2
 
-# Operation source enum values that indicate keypad/PIN usage
-_KEYPAD_SOURCE = 3  # OperationSourceEnum.kKeypad
-
 
 @dataclass(repr=False, eq=False)
 class MatterLock(BaseLock):
@@ -199,7 +196,9 @@ class MatterLock(BaseLock):
     def _on_lock_operation(self, event: Any, node_event: Any) -> None:
         """Handle Matter LockOperation events.
 
-        Fires a code slot event when a PIN credential is used to lock/unlock.
+        Fires a code slot event when a credential is used to lock/unlock.
+        Supports any credential type (PIN, RFID, fingerprint, etc.) —
+        the event data includes the credential type for filtering.
         """
         # Filter to DoorLock cluster LockOperation events
         if (
@@ -209,21 +208,19 @@ class MatterLock(BaseLock):
             return
 
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
-        operation_source = data.get("operationSource")
         credentials = data.get("credentials")
         lock_operation_type = data.get("lockOperationType")
 
-        # Only fire events for keypad operations (PIN entry)
-        if operation_source != _KEYPAD_SOURCE:
+        # Must have credentials to identify the code slot
+        if not credentials:
             return
 
-        # Find the credential index from the credentials list
+        # Find the first credential index (any type)
         code_slot: int | None = None
-        if credentials:
-            for cred in credentials:
-                if isinstance(cred, dict) and cred.get("credentialType") == 1:
-                    # credentialType 1 = PIN
-                    code_slot = cred.get("credentialIndex")
+        for cred in credentials:
+            if isinstance(cred, dict):
+                code_slot = cred.get("credentialIndex")
+                if code_slot is not None:
                     break
 
         # Determine lock/unlock from operation type
@@ -233,11 +230,10 @@ class MatterLock(BaseLock):
         )
 
         LOGGER.debug(
-            "Lock %s: LockOperation event — slot=%s, locked=%s, source=%s",
+            "Lock %s: LockOperation event — slot=%s, locked=%s",
             self.lock.entity_id,
             code_slot,
             to_locked,
-            operation_source,
         )
 
         self.async_fire_code_slot_event(
