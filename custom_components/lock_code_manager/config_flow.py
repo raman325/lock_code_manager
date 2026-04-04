@@ -146,7 +146,7 @@ async def _async_get_unmanaged_codes(
             hass, dev_reg, ent_reg, lock_config_entry, lock_entry
         )
         try:
-            usercodes = await lock_instance.async_get_usercodes()
+            usercodes = await lock_instance.async_internal_get_usercodes()
         except Exception:  # noqa: BLE001
             _LOGGER.debug(
                 "Failed to get usercodes from %s during lock reset check",
@@ -154,6 +154,10 @@ async def _async_get_unmanaged_codes(
                 exc_info=True,
             )
             continue
+        # Note: some providers (Matter, Virtual) only return slots already
+        # configured in a Lock Code Manager config entry, so unmanaged codes
+        # on those providers will not be detected here. This reset step is
+        # most useful for Z-Wave locks which return all occupied slots.
         unmanaged = {
             slot: code
             for slot, code in usercodes.items()
@@ -266,7 +270,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 continue
             for slot in codes:
                 try:
-                    await lock_instance.async_clear_usercode(slot)
+                    await lock_instance.async_internal_clear_usercode(
+                        slot, source="direct"
+                    )
                 except Exception:  # noqa: BLE001
                     _LOGGER.warning(
                         "Failed to clear slot %s on %s",
@@ -283,11 +289,22 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> dict[str, Any]:
         """Adopt readable unmanaged codes into the Lock Code Manager configuration."""
         self.data.setdefault(CONF_SLOTS, {})
-        for codes in self._unmanaged_codes.values():
+        for lock_entity_id, codes in self._unmanaged_codes.items():
             for slot, code in codes.items():
                 if code is SlotCode.UNKNOWN:
                     continue
-                self.data[CONF_SLOTS][int(slot)] = {
+                int_slot = int(slot)
+                if int_slot in self.data[CONF_SLOTS]:
+                    existing_pin = self.data[CONF_SLOTS][int_slot].get(CONF_PIN)
+                    if existing_pin != str(code):
+                        _LOGGER.warning(
+                            "Slot %s has conflicting PINs across locks "
+                            "(keeping first seen PIN, skipping %s)",
+                            slot,
+                            lock_entity_id,
+                        )
+                        continue
+                self.data[CONF_SLOTS][int_slot] = {
                     CONF_NAME: f"Slot {slot}",
                     CONF_PIN: str(code),
                     CONF_ENABLED: True,
@@ -303,7 +320,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 continue
             for slot in masked_slots:
                 try:
-                    await lock_instance.async_clear_usercode(slot)
+                    await lock_instance.async_internal_clear_usercode(
+                        slot, source="direct"
+                    )
                 except Exception:  # noqa: BLE001
                     _LOGGER.warning(
                         "Failed to clear masked slot %s on %s",

@@ -319,7 +319,7 @@ async def test_lock_reset_readable_codes_clear(hass: HomeAssistant):
     """Test clearing unmanaged readable codes."""
     mock_clear = AsyncMock(return_value=True)
     mock_lock = AsyncMock()
-    mock_lock.async_clear_usercode = mock_clear
+    mock_lock.async_internal_clear_usercode = mock_clear
     unmanaged = {LOCK_1_ENTITY_ID: {3: "9999", 4: "8888"}}
     lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
 
@@ -439,7 +439,7 @@ async def test_lock_reset_mixed_codes_adopt_clears_masked(hass: HomeAssistant):
     """Test that adopt with mixed codes adopts readable and clears masked."""
     mock_clear = AsyncMock(return_value=True)
     mock_lock = AsyncMock()
-    mock_lock.async_clear_usercode = mock_clear
+    mock_lock.async_internal_clear_usercode = mock_clear
     unmanaged = {LOCK_1_ENTITY_ID: {3: "9999", 4: SlotCode.UNKNOWN}}
     lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
 
@@ -461,4 +461,4 @@ async def test_lock_reset_mixed_codes_adopt_clears_masked(hass: HomeAssistant):
     assert result["type"] == "menu"
     assert result["step_id"] == "choose_path"
     # Only the masked slot (4) should have been cleared
-    mock_clear.assert_called_once_with(4)
+    mock_clear.assert_called_once_with(4, source="direct")
