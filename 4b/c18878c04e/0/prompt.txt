@@ -778,3 +778,23 @@ yes
 ---
 
 A
+
+---
+
+see issue 776
+
+---
+
+no, what is michael staying
+
+---
+
+how about issue 984
+
+---
+
+#2 we should just not create the event entity
+
+---
+
+lets just always create it, it simplifies things
