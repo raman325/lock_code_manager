@@ -172,10 +172,6 @@ async def _async_get_unmanaged_codes(
                 exc_info=True,
             )
             continue
-        # TODO: Matter and Virtual providers currently only return slots
-        # managed by an LCM config entry. A follow-up PR will make them
-        # return all occupied slots (matching Z-Wave behavior) so unmanaged
-        # codes are detected here.
         managed_slots = {
             int(s)
             for entry in hass.config_entries.async_entries(DOMAIN)
