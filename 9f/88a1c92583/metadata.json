@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9f88a1c92583",
+  "strategy": "manual-commit",
+  "branch": "fix/event-entity-and-readme-table",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/9f/88a1c92583/0/metadata.json",
+      "transcript": "/9f/88a1c92583/0/full.jsonl",
+      "content_hash": "/9f/88a1c92583/0/content_hash.txt",
+      "prompt": "/9f/88a1c92583/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5530,
+    "cache_creation_tokens": 13397138,
+    "cache_read_tokens": 1358296571,
+    "output_tokens": 645480,
+    "api_call_count": 2729
+  }
+}
