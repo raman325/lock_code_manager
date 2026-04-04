@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "fdb81650a52f",
+  "strategy": "manual-commit",
+  "branch": "fix/provider-return-all-slots",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "tests/providers/test_matter.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/b81650a52f/0/metadata.json",
+      "transcript": "/fd/b81650a52f/0/full.jsonl",
+      "content_hash": "/fd/b81650a52f/0/content_hash.txt",
+      "prompt": "/fd/b81650a52f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8128,
+    "cache_creation_tokens": 14319313,
+    "cache_read_tokens": 1605771475,
+    "output_tokens": 793818,
+    "api_call_count": 3355
+  }
+}
