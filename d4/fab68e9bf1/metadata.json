@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d4fab68e9bf1",
+  "strategy": "manual-commit",
+  "branch": "feat/drift-alerting",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d4/fab68e9bf1/0/metadata.json",
+      "transcript": "/d4/fab68e9bf1/0/full.jsonl",
+      "content_hash": "/d4/fab68e9bf1/0/content_hash.txt",
+      "prompt": "/d4/fab68e9bf1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7826,
+    "cache_creation_tokens": 14165585,
+    "cache_read_tokens": 1536407218,
+    "output_tokens": 741648,
+    "api_call_count": 3117
+  }
+}
