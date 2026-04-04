@@ -765,3 +765,52 @@ class TestEventSubscription:
 
         assert matter_lock._event_unsub is mock_unsub
         mock_client.subscribe_events.assert_called_once()
+
+    def test_matter_node_id_invalid_identifier(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        matter_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test _matter_node_id returns None for non-numeric identifier."""
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=matter_config_entry.entry_id,
+            identifiers={("matter", "not_a_number")},
+        )
+        matter_lock.device_entry = device
+        assert matter_lock._matter_node_id is None
+
+    def test_get_matter_client_empty_data(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns None for empty matter data dict."""
+        hass.data["matter"] = {}
+        assert matter_lock._get_matter_client() is None
+
+    def test_get_matter_client_bad_adapter(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Test _get_matter_client returns None when adapter has no matter_client."""
+        mock_entry_data = MagicMock(spec=[])  # no attributes
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+        assert matter_lock._get_matter_client() is None
+
+    def test_subscribe_no_node_id(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+    ) -> None:
+        """Test _subscribe_to_events skips when node ID is None."""
+        mock_client = MagicMock()
+        mock_adapter = MagicMock()
+        mock_adapter.matter_client = mock_client
+        mock_entry_data = MagicMock()
+        mock_entry_data.adapter = mock_adapter
+        hass.data["matter"] = {"entry_id": mock_entry_data}
+        matter_lock.device_entry = None  # no node ID
+
+        matter_lock._subscribe_to_events()
+
+        assert matter_lock._event_unsub is None
+        mock_client.subscribe_events.assert_not_called()
