@@ -462,6 +462,12 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_lock(hass, config_entry)
 
+    # Clean up repair issues for this config entry
+    entry_id = config_entry.entry_id
+    for slot_num in curr_slots:
+        async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
+        async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+
     if not hass_data.get(CONF_LOCKS):
         await _async_cleanup_strategy_resource(hass, hass_data)
 

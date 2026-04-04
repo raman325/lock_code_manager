@@ -36,6 +36,7 @@ from homeassistant.helpers.event import (
     async_track_state_change_filtered,
     async_track_time_interval,
 )
+from homeassistant.helpers.issue_registry import async_delete_issue
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -301,16 +302,23 @@ class SlotSyncManager:
 
     async def _disable_slot(self, reason: str) -> None:
         """Disable the slot and create a repair issue."""
-        await async_disable_slot(
-            self._hass,
-            self._ent_reg,
-            self._config_entry.entry_id,
-            self._slot_num,
-            reason=reason,
-            lock_name=self._lock.display_name,
-            lock_entity_id=self._lock.lock.entity_id,
-        )
-        self._reset_sync_tracker()
+        try:
+            await async_disable_slot(
+                self._hass,
+                self._ent_reg,
+                self._config_entry.entry_id,
+                self._slot_num,
+                reason=reason,
+                lock_name=self._lock.display_name,
+                lock_entity_id=self._lock.lock.entity_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "%s: Failed to disable slot, resetting sync tracker anyway",
+                self._log_prefix,
+            )
+        finally:
+            self._reset_sync_tracker()
 
     # -- Attempt tracking + circuit breaker ----------------------------------
 
@@ -548,6 +556,11 @@ class SlotSyncManager:
             self._in_sync = True
             self._write_state()
             self._reset_sync_tracker()
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+            )
 
     # -- State tracking subscriptions ----------------------------------------
 

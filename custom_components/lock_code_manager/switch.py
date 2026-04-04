@@ -7,9 +7,14 @@ import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import CONF_ENABLED, CONF_PIN, STATE_UNKNOWN, Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 
 from .const import DOMAIN
 from .entity import BaseLockCodeManagerEntity
@@ -77,8 +82,15 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
                     "config_entry_title": self.config_entry.title,
                 },
             )
-            return
+            raise HomeAssistantError(
+                f"A PIN is required before enabling slot {self.slot_num}"
+            )
         self._update_config_entry(True)
+        async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"pin_required_{self.config_entry.entry_id}_{self.slot_num}",
+        )
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""

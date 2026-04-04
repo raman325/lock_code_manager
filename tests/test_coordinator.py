@@ -1034,3 +1034,29 @@ async def test_poll_failure_alert_dismissed_on_recovery(
 
     # Issue should be dismissed
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_lock_offline_issue_deleted_on_shutdown(
+    hass: HomeAssistant,
+) -> None:
+    """Test that lock_offline repair issue is deleted on coordinator shutdown."""
+    coordinator, lock = _create_poll_coordinator(hass)
+    coordinator.last_update_success = True
+
+    # Create the lock_offline issue by exceeding the poll failure alert threshold
+    mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(lock, "async_internal_get_usercodes", mock_get_fail):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await coordinator.async_get_usercodes()
+
+    # Verify issue exists
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{lock.lock.entity_id}"
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+    # Shutdown coordinator
+    await coordinator.async_shutdown()
+
+    # Issue should be deleted
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
