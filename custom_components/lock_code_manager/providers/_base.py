@@ -247,11 +247,10 @@ class BaseLock:
         """Post initialization."""
         if not (device_id := self.lock.device_id):
             _LOGGER.warning(
-                "Lock %s (%s) does not have a device ID; push updates and "
+                "Lock %s does not have a device ID; push updates and "
                 "event subscriptions will be unavailable. "
                 "platform=%s, config_entry_id=%s, unique_id=%s",
                 self.lock.entity_id,
-                self.lock.platform,
                 self.lock.platform,
                 self.lock.config_entry_id,
                 self.lock.unique_id,
