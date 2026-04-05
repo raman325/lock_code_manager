@@ -2540,3 +2540,7 @@ can we write the inner loop of _async_get_unmanaged_codes as a function that rai
 ---
 
 makae it a top level fucntion that accepts the parameters it needs from the parent function
+
+---
+
+Query locks for usercodes and return only unmanaged ones. Why do we have to prefilter?
