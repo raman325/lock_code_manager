@@ -35,7 +35,7 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import get_entry_data
+from .data import get_entry_data, get_managed_slots
 from .exceptions import LockCodeManagerError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
@@ -196,16 +196,11 @@ async def _async_get_unmanaged_codes(
                 exc_info=True,
             )
         else:
-            managed_slots = {
-                int(s)
-                for entry in hass.config_entries.async_entries(DOMAIN)
-                if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
-                for s in get_entry_data(entry, CONF_SLOTS, {})
-            }
+            managed = get_managed_slots(hass, lock_entity_id)
             unmanaged = {
                 slot: code
                 for slot, code in usercodes.items()
-                if code is not SlotCode.EMPTY and slot not in managed_slots
+                if code is not SlotCode.EMPTY and slot not in managed
             }
             if unmanaged:
                 result[lock_entity_id] = unmanaged
@@ -294,19 +289,17 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"slot_summary": slot_summary},
         )
 
-    async def async_step_lock_reset_clear(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Clear all unmanaged codes from the selected locks."""
-        for lock_entity_id, codes in self._unmanaged_codes.items():
+    async def _clear_slots(self, slots_to_clear: dict[str, list[int]]) -> None:
+        """Clear specified slots on each lock, logging failures."""
+        for lock_entity_id, slots in slots_to_clear.items():
             lock_instance = self._lock_instances.get(lock_entity_id)
             if not lock_instance:
                 _LOGGER.warning(
-                    "No lock instance for %s; cannot clear unmanaged codes",
+                    "No lock instance for %s; cannot clear codes",
                     lock_entity_id,
                 )
                 continue
-            for slot in codes:
+            for slot in slots:
                 try:
                     await lock_instance.async_internal_clear_usercode(
                         slot, source="direct"
@@ -318,6 +311,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         lock_entity_id,
                         exc_info=True,
                     )
+
+    async def async_step_lock_reset_clear(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Clear all unmanaged codes from the selected locks."""
+        await self._clear_slots(
+            {lid: list(codes) for lid, codes in self._unmanaged_codes.items()}
+        )
         self._unmanaged_codes = {}
         self._lock_instances = {}
         return await self.async_step_choose_path()
@@ -350,29 +351,12 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 }
 
         # Clear masked codes that were not adopted
-        for lock_entity_id, codes in self._unmanaged_codes.items():
-            masked_slots = [s for s, c in codes.items() if c is SlotCode.UNKNOWN]
-            if not masked_slots:
-                continue
-            lock_instance = self._lock_instances.get(lock_entity_id)
-            if not lock_instance:
-                _LOGGER.warning(
-                    "No lock instance for %s; cannot clear masked codes",
-                    lock_entity_id,
-                )
-                continue
-            for slot in masked_slots:
-                try:
-                    await lock_instance.async_internal_clear_usercode(
-                        slot, source="direct"
-                    )
-                except Exception:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Failed to clear masked slot %s on %s",
-                        slot,
-                        lock_entity_id,
-                        exc_info=True,
-                    )
+        await self._clear_slots(
+            {
+                lid: [s for s, c in codes.items() if c is SlotCode.UNKNOWN]
+                for lid, codes in self._unmanaged_codes.items()
+            }
+        )
 
         self._unmanaged_codes = {}
         self._lock_instances = {}
