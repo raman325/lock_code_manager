@@ -25,6 +25,16 @@ def get_slot_data(config_entry, slot_num: int) -> dict[str, Any]:
     return get_entry_data(config_entry, CONF_SLOTS, {}).get(slot_num, {})
 
 
+def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
+    """Return the set of slot numbers managed by any LCM config entry for a lock."""
+    return {
+        int(code_slot)
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        for code_slot in get_entry_data(entry, CONF_SLOTS, {})
+        if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
+    }
+
+
 def find_entry_for_lock_slot(
     hass: HomeAssistant, lock_entity_id: str, code_slot: int
 ) -> ConfigEntry | None:

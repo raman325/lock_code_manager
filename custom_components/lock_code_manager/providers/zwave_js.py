@@ -52,8 +52,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from ..data import get_entry_data
+from ..data import get_managed_slots
 from ..exceptions import LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
@@ -508,12 +507,7 @@ class ZWaveJSLock(BaseLock):
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
-        code_slots = {
-            int(code_slot)
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
-            for code_slot in get_entry_data(entry, CONF_SLOTS, {})
-            if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
-        }
+        code_slots = get_managed_slots(self.hass, self.lock.entity_id)
         data: dict[int, str | SlotCode] = {}
 
         if not await self.async_is_integration_connected():
