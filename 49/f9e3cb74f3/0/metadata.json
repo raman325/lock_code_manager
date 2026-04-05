@@ -3,32 +3,21 @@
   "checkpoint_id": "49f9e3cb74f3",
   "session_id": "3f097ff1-5bb6-4622-8cfe-35782dd270ba",
   "strategy": "manual-commit",
-  "created_at": "2026-04-05T13:07:11.892658Z",
+  "created_at": "2026-04-05T13:10:20.622469Z",
   "branch": "fix/warn-missing-device-id",
   "checkpoints_count": 1,
-  "files_touched": [
-    "custom_components/lock_code_manager/providers/_base.py"
-  ],
+  "files_touched": [],
   "agent": "Claude Code",
   "model": "claude-opus-4-6[1m]",
-  "turn_id": "226f5b8a1dc7",
+  "turn_id": "973db4633394",
   "token_usage": {
-    "input_tokens": 8404,
-    "cache_creation_tokens": 15337996,
-    "cache_read_tokens": 1696479894,
-    "output_tokens": 839716,
-    "api_call_count": 3573
+    "input_tokens": 8413,
+    "cache_creation_tokens": 15342023,
+    "cache_read_tokens": 1699822503,
+    "output_tokens": 840914,
+    "api_call_count": 3580
   },
   "session_metrics": {
-    "turn_count": 302
-  },
-  "initial_attribution": {
-    "calculated_at": "2026-04-05T13:07:00.696442Z",
-    "agent_lines": 7,
-    "human_added": 3,
-    "human_modified": 0,
-    "human_removed": 0,
-    "total_committed": 10,
-    "agent_percentage": 70
+    "turn_count": 303
   }
 }

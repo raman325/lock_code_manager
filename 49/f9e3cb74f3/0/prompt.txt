@@ -2612,3 +2612,7 @@ check latest on issue 984
 ---
 
 add the warning I just added to _base.py as a new branch and PR
+
+---
+
+are there additional data points we should log to help with debugging?
