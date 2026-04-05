@@ -24,8 +24,7 @@ import re
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from ..data import get_entry_data
+from ..data import get_managed_slots
 from ..exceptions import LockCodeManagerError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
@@ -85,13 +84,8 @@ class SchlageLock(BaseLock):
         return timedelta(minutes=5)
 
     def _get_managed_slots(self) -> set[int]:
-        """Return the set of slot numbers managed by Lock Code Manager for this lock."""
-        return {
-            int(code_slot)
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
-            for code_slot in get_entry_data(entry, CONF_SLOTS, {})
-            if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
-        }
+        """Return managed slot numbers for this lock."""
+        return get_managed_slots(self.hass, self.lock.entity_id)
 
     async def _async_get_codes(self) -> dict[str, dict[str, str]]:
         """Call ``schlage.get_codes`` and return the response dict.
