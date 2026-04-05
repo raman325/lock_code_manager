@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d9e9c5942583",
+  "strategy": "manual-commit",
+  "branch": "refactor/extract-managed-slots-helper",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/data.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/e9c5942583/0/metadata.json",
+      "transcript": "/d9/e9c5942583/0/full.jsonl",
+      "content_hash": "/d9/e9c5942583/0/content_hash.txt",
+      "prompt": "/d9/e9c5942583/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8291,
+    "cache_creation_tokens": 14824784,
+    "cache_read_tokens": 1655457513,
+    "output_tokens": 821989,
+    "api_call_count": 3482
+  }
+}
