@@ -2544,3 +2544,7 @@ makae it a top level fucntion that accepts the parameters it needs from the pare
 ---
 
 Query locks for usercodes and return only unmanaged ones. Why do we have to prefilter?
+
+---
+
+lets move everything into else: under try and then we don't need to continue under except
