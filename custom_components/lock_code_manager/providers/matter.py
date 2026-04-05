@@ -20,7 +20,7 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..data import get_managed_slots
-from ..exceptions import LockCodeManagerError, LockDisconnected
+from ..exceptions import DuplicateCodeError, LockCodeManagerError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
@@ -412,16 +412,28 @@ class MatterLock(BaseLock):
         Returns True unconditionally because Matter does not reveal whether
         the credential value actually changed. Pushes SlotCode.UNKNOWN to the
         coordinator immediately — the LockUserChange event will confirm.
+
+        If the lock returns a "duplicate" status, the PIN already exists on
+        another slot. This raises DuplicateCodeError so the sync manager can
+        disable the slot and notify the user.
         """
-        await self._async_call_service(
-            "set_lock_credential",
-            {
-                "entity_id": self.lock.entity_id,
-                "credential_type": "pin",
-                "credential_data": usercode,
-                "credential_index": code_slot,
-            },
-        )
+        try:
+            await self._async_call_service(
+                "set_lock_credential",
+                {
+                    "entity_id": self.lock.entity_id,
+                    "credential_type": "pin",
+                    "credential_data": usercode,
+                    "credential_index": code_slot,
+                },
+            )
+        except LockDisconnected as err:
+            if "duplicate" in str(err).lower():
+                raise DuplicateCodeError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
+            raise
         if name is not None:
             try:
                 await self._async_call_service(

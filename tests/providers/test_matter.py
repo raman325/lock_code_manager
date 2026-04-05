@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.exceptions import (
+    DuplicateCodeError,
     LockCodeManagerError,
     LockDisconnected,
 )
@@ -502,6 +503,23 @@ async def test_service_call_failure_raises_lock_disconnected(
 
     with pytest.raises(LockDisconnected, match="connection lost"):
         await matter_lock.async_set_usercode(1, "1234")
+
+
+async def test_set_usercode_duplicate_raises_duplicate_code_error(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test that a duplicate status from the lock raises DuplicateCodeError."""
+    handler = AsyncMock(
+        side_effect=HomeAssistantError(
+            "Failed to set credential: lock returned status `duplicate`"
+        )
+    )
+    register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", handler)
+
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        await matter_lock.async_set_usercode(1, "1234")
+    assert exc_info.value.code_slot == 1
+    assert exc_info.value.lock_entity_id == LOCK_ENTITY_ID
 
 
 async def test_get_usercodes_multiple_credential_types(

@@ -46,6 +46,13 @@
   brief latency window before the coordinator updates. Z-Wave may still need
   optimistic pushes to avoid sync loops with stale cache reads.
 
+- **Matter provider: direct Matter client commands** — Replace HA service calls
+  (`matter.set_lock_credential`, etc.) with direct `MatterClient.send_device_command()`
+  calls to get structured response objects (e.g., `SetCredentialResponse.status`
+  with `DlStatus.kDuplicate`). Currently duplicate detection relies on string
+  matching the error message. Direct commands would give typed status codes for
+  duplicate, occupied, resource exhausted, etc.
+
 ## Code Quality
 
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.
