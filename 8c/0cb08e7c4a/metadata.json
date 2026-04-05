@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8c0cb08e7c4a",
+  "strategy": "manual-commit",
+  "branch": "fix/enhance-device-id-warning",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/8c/0cb08e7c4a/0/metadata.json",
+      "transcript": "/8c/0cb08e7c4a/0/full.jsonl",
+      "content_hash": "/8c/0cb08e7c4a/0/content_hash.txt",
+      "prompt": "/8c/0cb08e7c4a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8421,
+    "cache_creation_tokens": 15346819,
+    "cache_read_tokens": 1703677073,
+    "output_tokens": 842113,
+    "api_call_count": 3588
+  }
+}
