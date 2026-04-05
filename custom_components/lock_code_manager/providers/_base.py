@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
+import logging
 import time
 from typing import Any, Literal, NoReturn, final
 
@@ -47,6 +48,8 @@ from ..exceptions import (
 from ..models import SlotCode
 from ..util import OneShotRetry, mask_pin
 from .const import LOGGER
+
+_LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
@@ -243,6 +246,16 @@ class BaseLock:
     def __post_init__(self) -> None:
         """Post initialization."""
         if not (device_id := self.lock.device_id):
+            _LOGGER.warning(
+                "Lock %s (%s) does not have a device ID; push updates and "
+                "event subscriptions will be unavailable. "
+                "platform=%s, config_entry_id=%s, unique_id=%s",
+                self.lock.entity_id,
+                self.lock.platform,
+                self.lock.platform,
+                self.lock.config_entry_id,
+                self.lock.unique_id,
+            )
             return
         self.device_entry = self.dev_reg.async_get(device_id)
 
