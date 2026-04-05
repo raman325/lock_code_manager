@@ -119,6 +119,51 @@ def _check_common_slots(
         }
 
 
+async def _async_check_existing_usercodes(
+    hass: HomeAssistant,
+    dev_reg: dr.DeviceRegistry,
+    ent_reg: er.EntityRegistry,
+    lock_entity_id: str,
+) -> tuple[Any, dict[int, str | SlotCode]]:
+    """Query a single lock for all existing usercodes.
+
+    Returns (lock_instance, usercodes) where usercodes is the full dict from
+    the provider (managed and unmanaged, including empty slots). Callers are
+    responsible for filtering.
+
+    Raises LockCodeManagerError for expected skip conditions (missing entity,
+    unsupported platform, missing config entry). Unexpected exceptions from
+    the provider propagate directly.
+    """
+    lock_entry = ent_reg.async_get(lock_entity_id)
+    if not lock_entry:
+        _LOGGER.warning(
+            "Entity %s not found in registry; skipping usercode check",
+            lock_entity_id,
+        )
+        raise LockCodeManagerError(lock_entity_id)
+    if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
+        _LOGGER.debug(
+            "Lock %s uses unsupported platform %s; skipping usercode check",
+            lock_entity_id,
+            lock_entry.platform,
+        )
+        raise LockCodeManagerError(lock_entity_id)
+    lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
+    if lock_config_entry is None:
+        _LOGGER.warning(
+            "Config entry for lock %s not found; skipping usercode check",
+            lock_entity_id,
+        )
+        raise LockCodeManagerError(lock_entity_id)
+
+    lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
+        hass, dev_reg, ent_reg, lock_config_entry, lock_entry
+    )
+    usercodes = await lock_instance.async_internal_get_usercodes()
+    return lock_instance, usercodes
+
+
 async def _async_get_unmanaged_codes(
     hass: HomeAssistant,
     dev_reg: dr.DeviceRegistry,
@@ -134,64 +179,15 @@ async def _async_get_unmanaged_codes(
     - Dict keyed by lock entity ID to temporary lock provider instances, for
       reuse in clear/adopt steps.
     """
-
-    async def _query_lock(
-        lock_entity_id: str,
-    ) -> tuple[Any, dict[int, str | SlotCode]]:
-        """Query a single lock for unmanaged codes.
-
-        Returns (lock_instance, unmanaged_codes) or raises on any skip condition.
-        Logs the reason before raising so the outer loop can use a bare except.
-        """
-        lock_entry = ent_reg.async_get(lock_entity_id)
-        if not lock_entry:
-            _LOGGER.warning(
-                "Entity %s not found in registry; skipping usercode check",
-                lock_entity_id,
-            )
-            raise LockCodeManagerError(lock_entity_id)
-        if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
-            _LOGGER.debug(
-                "Lock %s uses unsupported platform %s; skipping usercode check",
-                lock_entity_id,
-                lock_entry.platform,
-            )
-            raise LockCodeManagerError(lock_entity_id)
-        lock_config_entry = hass.config_entries.async_get_entry(
-            lock_entry.config_entry_id
-        )
-        if lock_config_entry is None:
-            _LOGGER.warning(
-                "Config entry for lock %s not found; skipping usercode check",
-                lock_entity_id,
-            )
-            raise LockCodeManagerError(lock_entity_id)
-
-        lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
-            hass, dev_reg, ent_reg, lock_config_entry, lock_entry
-        )
-        usercodes = await lock_instance.async_internal_get_usercodes()
-
-        managed_slots = {
-            int(s)
-            for entry in hass.config_entries.async_entries(DOMAIN)
-            if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
-            for s in get_entry_data(entry, CONF_SLOTS, {})
-        }
-        unmanaged = {
-            slot: code
-            for slot, code in usercodes.items()
-            if code is not SlotCode.EMPTY and slot not in managed_slots
-        }
-        return lock_instance, unmanaged
-
     result: dict[str, dict[int, str | SlotCode]] = {}
     lock_instances: dict[str, Any] = {}
     for lock_entity_id in lock_entity_ids:
         try:
-            lock_instance, unmanaged = await _query_lock(lock_entity_id)
+            lock_instance, usercodes = await _async_check_existing_usercodes(
+                hass, dev_reg, ent_reg, lock_entity_id
+            )
         except LockCodeManagerError:
-            continue
+            pass
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Failed to get usercodes from %s during lock reset check; "
@@ -199,10 +195,21 @@ async def _async_get_unmanaged_codes(
                 lock_entity_id,
                 exc_info=True,
             )
-            continue
-        if unmanaged:
-            result[lock_entity_id] = unmanaged
-            lock_instances[lock_entity_id] = lock_instance
+        else:
+            managed_slots = {
+                int(s)
+                for entry in hass.config_entries.async_entries(DOMAIN)
+                if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
+                for s in get_entry_data(entry, CONF_SLOTS, {})
+            }
+            unmanaged = {
+                slot: code
+                for slot, code in usercodes.items()
+                if code is not SlotCode.EMPTY and slot not in managed_slots
+            }
+            if unmanaged:
+                result[lock_entity_id] = unmanaged
+                lock_instances[lock_entity_id] = lock_instance
     return result, lock_instances
 
 
