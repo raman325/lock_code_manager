@@ -835,9 +835,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     // Condition dialog state
     @state() private _showConditionDialog = false;
-    @state() private _dialogMode: 'add-entity' | 'edit-entity' | 'add-uses' = 'add-entity';
+    @state() private _dialogMode: 'add-entity' | 'edit-entity' = 'add-entity';
     @state() private _dialogEntityId: string | null = null;
-    @state() private _dialogNumberOfUses: number | null = null;
     @state() private _dialogSaving = false;
 
     // Confirmation dialog state
@@ -1272,7 +1271,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             : undefined;
 
         // Determine what conditions can still be added
-        const canAddUses = !hasNumberOfUses;
         const canAddEntity = !hasConditionEntity;
 
         const usesStatusText = usesBlocking ? 'No uses left' : 'Uses available';
@@ -1288,17 +1286,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           ></ha-svg-icon>
                           <span class="condition-entity-status">${usesStatusText}</span>
                           <span class="condition-entity-domain"># of Uses</span>
-                          <span class="condition-action-icons">
-                              <ha-svg-icon
-                                  class="condition-delete-icon"
-                                  .path=${mdiDelete}
-                                  title="Remove use tracking"
-                                  @click=${(e: Event) => {
-                                      e.stopPropagation();
-                                      this._deleteNumberOfUses();
-                                  }}
-                              ></ha-svg-icon>
-                          </span>
+                          <span class="condition-action-icons"> </span>
                       </div>
                       <div class="condition-item-detail">
                           <div class="condition-edit-container">
@@ -1348,25 +1336,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           )}
                   </div>`
                 : nothing}
-            ${canAddUses || canAddEntity
+            ${canAddEntity
                 ? html`<div class="add-condition-links">
-                      ${canAddUses
-                          ? html`<span
-                                class="add-condition-link"
-                                @click=${() => this._openConditionDialog('add-uses')}
-                                >+ Add # of uses limit</span
-                            >`
-                          : nothing}
-                      ${canAddUses && canAddEntity
-                          ? html`<span class="add-condition-separator">•</span>`
-                          : nothing}
-                      ${canAddEntity
-                          ? html`<span
-                                class="add-condition-link"
-                                @click=${() => this._openConditionDialog('add-entity')}
-                                >+ Add on/off entity</span
-                            >`
-                          : nothing}
+                      <span
+                          class="add-condition-link"
+                          @click=${() => this._openConditionDialog('add-entity')}
+                          >+ Add on/off entity</span
+                      >
                   </div>`
                 : nothing}
         `;
@@ -1754,14 +1730,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 <div class="empty-conditions-actions">
                     <button
                         class="empty-conditions-btn"
-                        @click=${() => this._openConditionDialog('add-uses')}
-                        title="Add number of uses limit"
-                    >
-                        <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
-                        # of Uses
-                    </button>
-                    <button
-                        class="empty-conditions-btn"
                         @click=${() => this._openConditionDialog('add-entity')}
                         title="Add on/off condition entity"
                     >
@@ -1773,7 +1741,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         `;
     }
 
-    private _openConditionDialog(mode: 'add-entity' | 'edit-entity' | 'add-uses'): void {
+    private _openConditionDialog(mode: 'add-entity' | 'edit-entity'): void {
         this._dialogMode = mode;
         const conditions = this._data?.conditions;
 
@@ -1783,9 +1751,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         } else if (mode === 'add-entity') {
             // Start fresh for adding
             this._dialogEntityId = null;
-        } else if (mode === 'add-uses') {
-            // Default to 5 for new use tracking
-            this._dialogNumberOfUses = 5;
         }
 
         this._showConditionDialog = true;
@@ -1800,7 +1765,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._confirmDialog = {
             onConfirm: async () => {
                 try {
-                    await this._updateSlotCondition({ entity_id: null });
+                    await this._clearSlotCondition();
                     // Force re-subscribe to get updated data
                     this._unsubscribe();
                     void this._subscribe();
@@ -1815,150 +1780,99 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         };
     }
 
-    private _deleteNumberOfUses(): void {
-        this._confirmDialog = {
-            onConfirm: async () => {
-                try {
-                    await this._updateSlotCondition({ number_of_uses: null });
-                    // Force re-subscribe to get updated data
-                    this._unsubscribe();
-                    void this._subscribe();
-                } catch (err) {
-                    this._setActionError(
-                        `Failed to remove use tracking: ${err instanceof Error ? err.message : 'Unknown error'}`
-                    );
-                }
-            },
-            text: 'This will stop tracking how many times this PIN can be used.',
-            title: 'Remove use tracking?'
-        };
-    }
-
-    private async _updateSlotCondition(updates: {
-        entity_id?: string | null;
-        number_of_uses?: number | null;
-    }): Promise<void> {
-        if (!this._hass || !this._config) {
-            throw new Error('Not initialized');
-        }
-
+    private async _setSlotCondition(entity_id: string): Promise<void> {
+        if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
+            entity_id,
             slot: this._config.slot,
-            type: 'lock_code_manager/update_slot_condition',
-            ...updates
+            type: 'lock_code_manager/set_slot_condition'
         };
-
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
         } else if (this._config.config_entry_title) {
             msg.config_entry_title = this._config.config_entry_title;
         }
+        await this._hass.callWS(msg);
+    }
 
+    private async _clearSlotCondition(): Promise<void> {
+        if (!this._hass || !this._config) return;
+        const msg: MessageBase & Record<string, unknown> = {
+            slot: this._config.slot,
+            type: 'lock_code_manager/clear_slot_condition'
+        };
+        if (this._config.config_entry_id) {
+            msg.config_entry_id = this._config.config_entry_id;
+        } else if (this._config.config_entry_title) {
+            msg.config_entry_title = this._config.config_entry_title;
+        }
         await this._hass.callWS(msg);
     }
 
     private _renderConditionDialog(): TemplateResult {
-        const isEntityMode =
-            this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity';
-        const isAddUsesMode = this._dialogMode === 'add-uses';
-
         const dialogTitle =
-            this._dialogMode === 'add-entity'
-                ? 'Add Condition Entity'
-                : this._dialogMode === 'edit-entity'
-                  ? 'Edit Condition Entity'
-                  : 'Add Use Tracking';
+            this._dialogMode === 'add-entity' ? 'Add Condition Entity' : 'Edit Condition Entity';
 
         return html`
             <ha-dialog open @closed=${this._closeConditionDialog} .heading=${dialogTitle}>
                 <div class="dialog-content">
-                    ${isEntityMode
-                        ? html`
-                              <div class="dialog-section">
-                                  <div class="dialog-section-description">
-                                      PIN is active only when this entity is "on"
-                                  </div>
-                                  <input
-                                      type="text"
-                                      class="entity-select"
-                                      list="condition-entity-list"
-                                      placeholder="Search or select entity..."
-                                      .value=${this._dialogEntityId ?? ''}
-                                      @focus=${(e: Event) => {
-                                          // Select all on focus for easier replacement
-                                          (e.target as HTMLInputElement).select();
-                                      }}
-                                      @input=${(e: Event) => {
-                                          const val = (e.target as HTMLInputElement).value;
-                                          // Only set if it's a valid entity ID
-                                          if (this._hass?.states[val]) {
-                                              this._dialogEntityId = val;
-                                          } else if (val === '') {
-                                              this._dialogEntityId = null;
-                                          }
-                                      }}
-                                      @change=${(e: Event) => {
-                                          const val = (e.target as HTMLInputElement).value;
-                                          if (this._hass?.states[val]) {
-                                              this._dialogEntityId = val;
-                                          } else if (val === '') {
-                                              this._dialogEntityId = null;
-                                          }
-                                      }}
-                                  />
-                                  <datalist id="condition-entity-list">
-                                      ${this._hass
-                                          ? Object.keys(this._hass.states)
-                                                .filter((eid) =>
-                                                    [
-                                                        'calendar',
-                                                        'schedule',
-                                                        'binary_sensor',
-                                                        'switch',
-                                                        'input_boolean'
-                                                    ].includes(eid.split('.')[0])
-                                                )
-                                                .sort()
-                                                .map(
-                                                    (eid) => html`
-                                                        <option
-                                                            value=${eid}
-                                                            label="${this._hass.states[eid]
-                                                                ?.attributes?.friendly_name ?? eid}"
-                                                        ></option>
-                                                    `
-                                                )
-                                          : nothing}
-                                  </datalist>
-                              </div>
-                          `
-                        : nothing}
-                    ${isAddUsesMode
-                        ? html`
-                              <div class="dialog-section">
-                                  <div class="dialog-section-description">
-                                      Set the initial number of uses for this PIN
-                                  </div>
-                                  <div class="dialog-number-input">
-                                      <label>Initial uses:</label>
-                                      <input
-                                          type="number"
-                                          min="1"
-                                          .value=${String(this._dialogNumberOfUses ?? 5)}
-                                          @input=${(e: Event) => {
-                                              const val = parseInt(
-                                                  (e.target as HTMLInputElement).value,
-                                                  10
-                                              );
-                                              if (!isNaN(val) && val > 0) {
-                                                  this._dialogNumberOfUses = val;
-                                              }
-                                          }}
-                                      />
-                                  </div>
-                              </div>
-                          `
-                        : nothing}
+                    <div class="dialog-section">
+                        <div class="dialog-section-description">
+                            PIN is active only when this entity is "on"
+                        </div>
+                        <input
+                            type="text"
+                            class="entity-select"
+                            list="condition-entity-list"
+                            placeholder="Search or select entity..."
+                            .value=${this._dialogEntityId ?? ''}
+                            @focus=${(e: Event) => {
+                                // Select all on focus for easier replacement
+                                (e.target as HTMLInputElement).select();
+                            }}
+                            @input=${(e: Event) => {
+                                const val = (e.target as HTMLInputElement).value;
+                                // Only set if it's a valid entity ID
+                                if (this._hass?.states[val]) {
+                                    this._dialogEntityId = val;
+                                } else if (val === '') {
+                                    this._dialogEntityId = null;
+                                }
+                            }}
+                            @change=${(e: Event) => {
+                                const val = (e.target as HTMLInputElement).value;
+                                if (this._hass?.states[val]) {
+                                    this._dialogEntityId = val;
+                                } else if (val === '') {
+                                    this._dialogEntityId = null;
+                                }
+                            }}
+                        />
+                        <datalist id="condition-entity-list">
+                            ${this._hass
+                                ? Object.keys(this._hass.states)
+                                      .filter((eid) =>
+                                          [
+                                              'calendar',
+                                              'schedule',
+                                              'binary_sensor',
+                                              'switch',
+                                              'input_boolean'
+                                          ].includes(eid.split('.')[0])
+                                      )
+                                      .sort()
+                                      .map(
+                                          (eid) => html`
+                                              <option
+                                                  value=${eid}
+                                                  label="${this._hass.states[eid]?.attributes
+                                                      ?.friendly_name ?? eid}"
+                                              ></option>
+                                          `
+                                      )
+                                : nothing}
+                        </datalist>
+                    </div>
                 </div>
                 <ha-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
                     Cancel
@@ -2007,28 +1921,24 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._dialogSaving = true;
 
         try {
-            const msg: MessageBase & Record<string, unknown> = {
-                slot: this._config.slot,
-                type: 'lock_code_manager/update_slot_condition'
-            };
-
-            if (this._config.config_entry_id) {
-                msg.config_entry_id = this._config.config_entry_id;
-            } else if (this._config.config_entry_title) {
-                msg.config_entry_title = this._config.config_entry_title;
-            } else {
-                throw new Error('No config entry identifier');
-            }
-
             if (this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity') {
-                msg.entity_id = this._dialogEntityId;
-            } else if (this._dialogMode === 'add-uses') {
-                msg.number_of_uses = this._dialogNumberOfUses ?? 5;
+                const entityId =
+                    typeof this._dialogEntityId === 'string' ? this._dialogEntityId.trim() : '';
+                if (!entityId) {
+                    this._setActionError('Please select an entity before saving');
+                    this._dialogSaving = false;
+                    return;
+                }
+                if (!(entityId in this._hass.states)) {
+                    this._setActionError(`Selected entity not found: ${entityId}`);
+                    this._dialogSaving = false;
+                    return;
+                }
+                await this._setSlotCondition(entityId);
             } else {
                 throw new Error(`Unknown dialog mode: ${this._dialogMode}`);
             }
 
-            await this._hass.callWS(msg);
             this._closeConditionDialog();
             // Force re-subscribe to get updated data since config changes
             // don't trigger entity state changes
