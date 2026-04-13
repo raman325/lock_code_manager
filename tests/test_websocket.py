@@ -412,20 +412,19 @@ async def test_subscribe_code_slot_invalid_slot(
     assert msg["error"]["code"] == "not_found"
 
 
-async def test_set_lock_usercode(
+async def test_set_usercode(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_lock_usercode WS API for setting a code."""
+    """Test set_usercode websocket command for setting a code."""
     ws_client = await hass_ws_client(hass)
 
-    # Set a usercode
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_lock_usercode",
+            "type": "lock_code_manager/set_usercode",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "9999",
@@ -436,44 +435,19 @@ async def test_set_lock_usercode(
     assert msg["result"]["success"] is True
 
 
-async def test_set_lock_usercode_clear(
+async def test_clear_usercode(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_lock_usercode WS API for clearing a code."""
+    """Test clear_usercode websocket command for clearing a code."""
     ws_client = await hass_ws_client(hass)
 
-    # Clear a usercode (empty string)
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_lock_usercode",
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            ATTR_CODE_SLOT: 3,
-            ATTR_USERCODE: "",
-        }
-    )
-    msg = await ws_client.receive_json()
-    assert msg["success"]
-    assert msg["result"]["success"] is True
-
-
-async def test_set_lock_usercode_clear_no_usercode(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    """Test set_lock_usercode WS API clears when usercode not provided."""
-    ws_client = await hass_ws_client(hass)
-
-    # Clear a usercode (no usercode key provided)
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/set_lock_usercode",
+            "type": "lock_code_manager/clear_usercode",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
         }
@@ -483,22 +457,44 @@ async def test_set_lock_usercode_clear_no_usercode(
     assert msg["result"]["success"] is True
 
 
-async def test_set_lock_usercode_lock_not_found(
+async def test_set_usercode_lock_not_found(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_lock_usercode WS API with invalid lock entity ID."""
+    """Test set_usercode websocket command with invalid lock entity ID."""
     ws_client = await hass_ws_client(hass)
 
     await ws_client.send_json(
         {
             "id": 1,
-            "type": "lock_code_manager/set_lock_usercode",
+            "type": "lock_code_manager/set_usercode",
             ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "1234",
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+
+
+async def test_clear_usercode_lock_not_found(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test clear_usercode websocket command with invalid lock entity ID."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/clear_usercode",
+            ATTR_LOCK_ENTITY_ID: "lock.nonexistent",
+            ATTR_CODE_SLOT: 3,
         }
     )
     msg = await ws_client.receive_json()
@@ -851,16 +847,15 @@ async def test_subscribe_lock_codes_slot_metadata(
     assert slot_1.get(ATTR_MANAGED) is True
 
 
-async def test_set_lock_usercode_operation_failure(
+async def test_set_usercode_operation_failure(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_lock_usercode WS API when operation fails."""
+    """Test set_usercode websocket command when operation fails."""
     ws_client = await hass_ws_client(hass)
 
-    # Mock the lock's set_usercode to raise an exception
     lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
@@ -870,7 +865,7 @@ async def test_set_lock_usercode_operation_failure(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_lock_usercode",
+                "type": "lock_code_manager/set_usercode",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
                 ATTR_USERCODE: "1234",
@@ -882,16 +877,15 @@ async def test_set_lock_usercode_operation_failure(
         assert "Test error" in msg["error"]["message"]
 
 
-async def test_set_lock_usercode_clear_operation_failure(
+async def test_clear_usercode_operation_failure(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_lock_usercode WS API when clear operation fails."""
+    """Test clear_usercode websocket command when operation fails."""
     ws_client = await hass_ws_client(hass)
 
-    # Mock the lock's clear_usercode to raise an exception
     lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
@@ -901,10 +895,9 @@ async def test_set_lock_usercode_clear_operation_failure(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_lock_usercode",
+                "type": "lock_code_manager/clear_usercode",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "",  # Empty string triggers clear
             }
         )
         msg = await ws_client.receive_json()
@@ -913,13 +906,13 @@ async def test_set_lock_usercode_clear_operation_failure(
         assert "Clear failed" in msg["error"]["message"]
 
 
-async def test_set_lock_usercode_duplicate_code_error(
+async def test_set_usercode_duplicate_code_error(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_lock_usercode WS API returns error when duplicate code detected."""
+    """Test set_usercode websocket command returns error when duplicate code detected."""
     ws_client = await hass_ws_client(hass)
 
     lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
@@ -938,7 +931,7 @@ async def test_set_lock_usercode_duplicate_code_error(
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/set_lock_usercode",
+                "type": "lock_code_manager/set_usercode",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
                 ATTR_USERCODE: "1234",
@@ -1167,13 +1160,13 @@ async def test_coordinator_push_update_reflects_in_subscribe_lock_codes(
     assert slots_by_num[1][ATTR_CODE] == "9999"
 
 
-async def test_set_lock_usercode_reflects_in_subscribe_lock_codes(
+async def test_set_usercode_reflects_in_subscribe_lock_codes(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that set_lock_usercode for an unmanaged slot appears in subscribe_lock_codes."""
+    """Test that set_usercode for an unmanaged slot appears in subscribe_lock_codes."""
     ws_client = await hass_ws_client(hass)
 
     # Subscribe to lock 1 with reveal=True
@@ -1196,7 +1189,7 @@ async def test_set_lock_usercode_reflects_in_subscribe_lock_codes(
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/set_lock_usercode",
+            "type": "lock_code_manager/set_usercode",
             ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
             ATTR_CODE_SLOT: 3,
             ATTR_USERCODE: "7777",

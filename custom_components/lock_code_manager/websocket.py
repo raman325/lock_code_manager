@@ -258,7 +258,8 @@ async def async_setup(hass: HomeAssistant) -> bool:
     websocket_api.async_register_command(hass, get_config_entry_data)
     websocket_api.async_register_command(hass, subscribe_lock_codes)
     websocket_api.async_register_command(hass, subscribe_code_slot)
-    websocket_api.async_register_command(hass, set_lock_usercode)
+    websocket_api.async_register_command(hass, ws_set_usercode)
+    websocket_api.async_register_command(hass, ws_clear_usercode)
     websocket_api.async_register_command(hass, update_slot_condition)
 
     return True
@@ -1144,33 +1145,13 @@ async def subscribe_code_slot(
     _send_update(calendar_next_event)
 
 
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "lock_code_manager/set_lock_usercode",
-        vol.Required(ATTR_LOCK_ENTITY_ID): str,
-        vol.Required(ATTR_CODE_SLOT): int,
-        vol.Optional(ATTR_USERCODE): str,
-    }
-)
-@websocket_api.async_response
-async def set_lock_usercode(
+def _get_lock_or_error(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
-) -> None:
-    """
-    Set or clear a usercode on a lock slot.
-
-    If usercode is provided, sets the code. If usercode is empty or not provided,
-    clears the code slot.
-
-    This is intended for managing unmanaged slots directly on the lock.
-    For LCM-managed slots, use the entity services instead.
-    """
+) -> BaseLock | None:
+    """Validate lock exists and return it, or send error and return None."""
     lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
-    code_slot = msg[ATTR_CODE_SLOT]
-    usercode = msg.get(ATTR_USERCODE, "").strip()
-
     lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
     if not lock:
         connection.send_error(
@@ -1178,15 +1159,68 @@ async def set_lock_usercode(
             websocket_api.const.ERR_NOT_FOUND,
             f"Lock {lock_entity_id} is not managed by Lock Code Manager",
         )
+        return None
+    return lock
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lock_code_manager/set_usercode",
+        vol.Required(ATTR_LOCK_ENTITY_ID): str,
+        vol.Required(ATTR_CODE_SLOT): int,
+        vol.Required(ATTR_USERCODE): str,
+    }
+)
+@websocket_api.async_response
+async def ws_set_usercode(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Set a usercode on a lock slot.
+
+    This is intended for managing unmanaged slots directly on the lock.
+    For LCM-managed slots, use the entity services instead.
+    """
+    lock = _get_lock_or_error(hass, connection, msg)
+    if lock is None:
         return
 
     try:
-        if usercode:
-            # Set the usercode
-            await lock.async_internal_set_usercode(code_slot, usercode)
-        else:
-            # Clear the usercode
-            await lock.async_internal_clear_usercode(code_slot)
+        await lock.async_internal_set_usercode(msg[ATTR_CODE_SLOT], msg[ATTR_USERCODE])
+        connection.send_result(msg["id"], {"success": True})
+    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
+        connection.send_error(
+            msg["id"],
+            websocket_api.const.ERR_UNKNOWN_ERROR,
+            str(err),
+        )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lock_code_manager/clear_usercode",
+        vol.Required(ATTR_LOCK_ENTITY_ID): str,
+        vol.Required(ATTR_CODE_SLOT): int,
+    }
+)
+@websocket_api.async_response
+async def ws_clear_usercode(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Clear a usercode from a lock slot.
+
+    This is intended for managing unmanaged slots directly on the lock.
+    For LCM-managed slots, use the entity services instead.
+    """
+    lock = _get_lock_or_error(hass, connection, msg)
+    if lock is None:
+        return
+
+    try:
+        await lock.async_internal_clear_usercode(msg[ATTR_CODE_SLOT])
         connection.send_result(msg["id"], {"success": True})
     except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
         connection.send_error(
