@@ -94,8 +94,8 @@ class LcmSlotCardEditor extends LitElement {
                 >
                     ${this._configEntries.map(
                         (entry) =>
-                            html`<mwc-list-item .value=${entry.entry_id}
-                                >${entry.title}</mwc-list-item
+                            html`<ha-list-item .value=${entry.entry_id}
+                                >${entry.title}</ha-list-item
                             >`
                     )}
                 </ha-select>
@@ -123,7 +123,7 @@ class LcmSlotCardEditor extends LitElement {
                 >
                     ${CODE_DISPLAY_OPTIONS.map(
                         (opt) =>
-                            html`<mwc-list-item .value=${opt.value}>${opt.label}</mwc-list-item>`
+                            html`<ha-list-item .value=${opt.value}>${opt.label}</ha-list-item>`
                     )}
                 </ha-select>
             </div>

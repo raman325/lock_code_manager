@@ -96,7 +96,7 @@ class LockCodesCardEditor extends LitElement {
                 >
                     ${CODE_DISPLAY_OPTIONS.map(
                         (opt) =>
-                            html`<mwc-list-item .value=${opt.value}>${opt.label}</mwc-list-item>`
+                            html`<ha-list-item .value=${opt.value}>${opt.label}</ha-list-item>`
                     )}
                 </ha-select>
             </div>
