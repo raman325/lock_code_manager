@@ -315,7 +315,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 vol.Required(ATTR_CODE_SLOT): vol.All(
                     vol.Coerce(int), vol.Range(min=1)
                 ),
-                vol.Required(ATTR_USERCODE): cv.string,
+                vol.Required(ATTR_USERCODE): vol.All(cv.string, str.strip, vol.Length(min=1)),
             }
         ),
     )

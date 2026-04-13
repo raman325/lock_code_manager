@@ -123,6 +123,11 @@ async def async_set_usercode(
     hass: HomeAssistant, lock_entity_id: str, code_slot: int, usercode: str
 ) -> None:
     """Set a usercode on a lock slot."""
+    usercode = usercode.strip()
+    if not usercode:
+        raise ServiceValidationError(
+            "Usercode must not be empty; use the clear operation instead"
+        )
     lock = get_managed_lock(hass, lock_entity_id)
     await lock.async_internal_set_usercode(code_slot, usercode)
 
@@ -147,7 +152,7 @@ def get_slot_config(config_entry: ConfigEntry, slot_num: int) -> dict[str, Any]:
 def get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> ConfigEntry:
     """Get a loaded config entry by ID, raising if not found or not loaded."""
     config_entry = hass.config_entries.async_get_entry(config_entry_id)
-    if not config_entry:
+    if not config_entry or config_entry.domain != DOMAIN:
         raise ServiceValidationError(
             f"No lock code manager config entry with ID `{config_entry_id}` found"
         )

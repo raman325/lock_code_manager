@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+import voluptuous as vol
 
 from homeassistant.const import CONF_ENTITY_ID, STATE_ON
 from homeassistant.core import HomeAssistant
@@ -128,12 +129,13 @@ async def test_set_slot_condition_service(
         },
         blocking=True,
     )
+    await hass.async_block_till_done()
 
     # Verify the config entry was updated with the condition entity
     updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
     # After update, data is written via options then moved to data
-    # Check both data and options for the condition entity
-    slots = updated_entry.data.get("slots", updated_entry.options.get("slots", {}))
+    # Check both options and data for the condition entity
+    slots = updated_entry.options.get("slots", updated_entry.data.get("slots", {}))
     slot_key = 1 if 1 in slots else "1"
     assert slots[slot_key][CONF_ENTITY_ID] == condition_entity_id
 
@@ -220,9 +222,10 @@ async def test_clear_slot_condition_service(
         },
         blocking=True,
     )
+    await hass.async_block_till_done()
 
     updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
-    slots = updated_entry.data.get("slots", updated_entry.options.get("slots", {}))
+    slots = updated_entry.options.get("slots", updated_entry.data.get("slots", {}))
     slot_key = 2 if 2 in slots else "2"
     assert CONF_ENTITY_ID not in slots[slot_key]
 
@@ -260,6 +263,48 @@ async def test_clear_slot_condition_service_slot_not_found(
             {
                 "config_entry_id": entry.entry_id,
                 ATTR_SLOT: 999,
+            },
+            blocking=True,
+        )
+
+
+async def test_set_usercode_service_empty_usercode(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Test set_usercode service raises when usercode is empty or whitespace."""
+    for usercode in ["", "   ", "\t\n"]:
+        with pytest.raises(
+            (ServiceValidationError, vol.MultipleInvalid),
+        ):
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_SET_USERCODE,
+                {
+                    ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+                    ATTR_CODE_SLOT: 3,
+                    ATTR_USERCODE: usercode,
+                },
+                blocking=True,
+            )
+
+
+async def test_get_loaded_config_entry_wrong_domain(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Test get_loaded_config_entry raises when entry belongs to another domain."""
+    # mock_lock_config_entry is a config entry for the "test" domain, not LCM
+    with pytest.raises(ServiceValidationError, match="No lock code manager"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SLOT_CONDITION,
+            {
+                "config_entry_id": mock_lock_config_entry.entry_id,
+                ATTR_SLOT: 1,
+                CONF_ENTITY_ID: "binary_sensor.test_condition",
             },
             blocking=True,
         )

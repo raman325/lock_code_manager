@@ -1252,6 +1252,10 @@ async def ws_set_slot_condition(
         else:
             code = websocket_api.const.ERR_UNKNOWN_ERROR
         connection.send_error(msg["id"], code, error_str)
+    except Exception as err:
+        connection.send_error(
+            msg["id"], websocket_api.const.ERR_UNKNOWN_ERROR, str(err)
+        )
 
 
 @websocket_api.websocket_command(
@@ -1276,3 +1280,7 @@ async def ws_clear_slot_condition(
         connection.send_result(msg["id"], {"success": True})
     except ServiceValidationError as err:
         connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+    except Exception as err:
+        connection.send_error(
+            msg["id"], websocket_api.const.ERR_UNKNOWN_ERROR, str(err)
+        )
