@@ -45,6 +45,7 @@ from homeassistant.core import (
     callback,
     split_entity_id,
 )
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util, slugify
@@ -1164,6 +1165,105 @@ def _get_lock_or_error(
     return lock
 
 
+# =============================================================================
+# Shared Logic Functions (used by both websocket handlers and services)
+# =============================================================================
+
+
+def _get_managed_lock(hass: HomeAssistant, lock_entity_id: str) -> BaseLock:
+    """Get a managed lock by entity ID, raising if not found."""
+    lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
+    if not lock:
+        raise ServiceValidationError(
+            f"Lock {lock_entity_id} is not managed by Lock Code Manager"
+        )
+    return lock
+
+
+async def async_set_usercode(
+    hass: HomeAssistant, lock_entity_id: str, code_slot: int, usercode: str
+) -> None:
+    """Set a usercode on a lock slot."""
+    lock = _get_managed_lock(hass, lock_entity_id)
+    await lock.async_internal_set_usercode(code_slot, usercode)
+
+
+async def async_clear_usercode(
+    hass: HomeAssistant, lock_entity_id: str, code_slot: int
+) -> None:
+    """Clear a usercode from a lock slot."""
+    lock = _get_managed_lock(hass, lock_entity_id)
+    await lock.async_internal_clear_usercode(code_slot)
+
+
+def _get_slot_config(config_entry: ConfigEntry, slot_num: int) -> dict[str, Any]:
+    """Get slot config dict, raising if not found."""
+    slots = get_entry_data(config_entry, CONF_SLOTS, {})
+    slot_key = slot_num if slot_num in slots else str(slot_num)
+    if slot_key not in slots:
+        raise ServiceValidationError(f"Slot {slot_num} not found in config entry")
+    return slots[slot_key]
+
+
+def _get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> ConfigEntry:
+    """Get a loaded config entry by ID, raising if not found or not loaded."""
+    config_entry = hass.config_entries.async_get_entry(config_entry_id)
+    if not config_entry:
+        raise ServiceValidationError(
+            f"No lock code manager config entry with ID `{config_entry_id}` found"
+        )
+    if config_entry.state is not ConfigEntryState.LOADED:
+        raise ServiceValidationError(f"Config entry {config_entry.entry_id} not loaded")
+    return config_entry
+
+
+async def async_set_slot_condition(
+    hass: HomeAssistant, config_entry_id: str, slot: int, entity_id: str
+) -> None:
+    """Set a condition entity for a slot."""
+    config_entry = _get_loaded_config_entry(hass, config_entry_id)
+    _get_slot_config(config_entry, slot)
+
+    # Verify entity exists
+    if not hass.states.get(entity_id):
+        raise ServiceValidationError(f"Entity {entity_id} not found")
+
+    # Check for excluded platforms
+    ent_reg = er.async_get(hass)
+    entity_entry = ent_reg.async_get(entity_id)
+    if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
+        raise ServiceValidationError(
+            f"Entities from the '{entity_entry.platform}' integration are not "
+            "supported as condition entities. See the wiki for details: "
+            "https://github.com/raman325/lock_code_manager/wiki/"
+            "Unsupported-Condition-Entity-Integrations"
+        )
+
+    # Update config entry data
+    data = copy.deepcopy(dict(config_entry.data))
+    slot_key = slot if slot in data[CONF_SLOTS] else str(slot)
+    data[CONF_SLOTS][slot_key][CONF_ENTITY_ID] = entity_id
+
+    if data != config_entry.data:
+        hass.config_entries.async_update_entry(config_entry, options=data)
+
+
+async def async_clear_slot_condition(
+    hass: HomeAssistant, config_entry_id: str, slot: int
+) -> None:
+    """Clear the condition entity from a slot."""
+    config_entry = _get_loaded_config_entry(hass, config_entry_id)
+    _get_slot_config(config_entry, slot)
+
+    # Update config entry data
+    data = copy.deepcopy(dict(config_entry.data))
+    slot_key = slot if slot in data[CONF_SLOTS] else str(slot)
+    data[CONF_SLOTS][slot_key].pop(CONF_ENTITY_ID, None)
+
+    if data != config_entry.data:
+        hass.config_entries.async_update_entry(config_entry, options=data)
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "lock_code_manager/set_usercode",
@@ -1183,13 +1283,13 @@ async def ws_set_usercode(
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
     """
-    lock = _get_lock_or_error(hass, connection, msg)
-    if lock is None:
-        return
-
     try:
-        await lock.async_internal_set_usercode(msg[ATTR_CODE_SLOT], msg[ATTR_USERCODE])
+        await async_set_usercode(
+            hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT], msg[ATTR_USERCODE]
+        )
         connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
     except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
         connection.send_error(
             msg["id"],
@@ -1216,13 +1316,11 @@ async def ws_clear_usercode(
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
     """
-    lock = _get_lock_or_error(hass, connection, msg)
-    if lock is None:
-        return
-
     try:
-        await lock.async_internal_clear_usercode(msg[ATTR_CODE_SLOT])
+        await async_clear_usercode(hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT])
         connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
     except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
         connection.send_error(
             msg["id"],
@@ -1288,45 +1386,20 @@ async def ws_set_slot_condition(
     The condition entity must exist in hass.states and must not belong to an
     excluded platform (for example, the scheduler integration).
     """
-    slot_num = msg[ATTR_SLOT]
-    entity_id = msg[CONF_ENTITY_ID]
-
-    if _get_slot_config_or_error(config_entry, connection, msg, slot_num) is None:
-        return
-
-    # Verify entity exists
-    if not hass.states.get(entity_id):
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_FOUND,
-            f"Entity {entity_id} not found",
+    try:
+        await async_set_slot_condition(
+            hass, config_entry.entry_id, msg[ATTR_SLOT], msg[CONF_ENTITY_ID]
         )
-        return
-
-    # Check for excluded platforms with a single registry lookup
-    ent_reg = er.async_get(hass)
-    entity_entry = ent_reg.async_get(entity_id)
-    if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_SUPPORTED,
-            f"Entities from the '{entity_entry.platform}' integration are not "
-            "supported as condition entities. See the wiki for details: "
-            "https://github.com/raman325/lock_code_manager/wiki/"
-            "Unsupported-Condition-Entity-Integrations",
-        )
-        return
-
-    # Update config entry data
-    data = copy.deepcopy(dict(config_entry.data))
-    slot_key = slot_num if slot_num in data[CONF_SLOTS] else str(slot_num)
-    data[CONF_SLOTS][slot_key][CONF_ENTITY_ID] = entity_id
-
-    # Only update if data actually changed
-    if data != config_entry.data:
-        hass.config_entries.async_update_entry(config_entry, options=data)
-
-    connection.send_result(msg["id"], {"success": True})
+        connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        error_str = str(err)
+        if "not found" in error_str.lower():
+            code = websocket_api.const.ERR_NOT_FOUND
+        elif "not supported" in error_str.lower():
+            code = websocket_api.const.ERR_NOT_SUPPORTED
+        else:
+            code = websocket_api.const.ERR_UNKNOWN_ERROR
+        connection.send_error(msg["id"], code, error_str)
 
 
 @websocket_api.websocket_command(
@@ -1346,18 +1419,8 @@ async def ws_clear_slot_condition(
     config_entry: ConfigEntry,
 ) -> None:
     """Clear the condition entity from a slot."""
-    slot_num = msg[ATTR_SLOT]
-
-    if _get_slot_config_or_error(config_entry, connection, msg, slot_num) is None:
-        return
-
-    # Update config entry data
-    data = copy.deepcopy(dict(config_entry.data))
-    slot_key = slot_num if slot_num in data[CONF_SLOTS] else str(slot_num)
-    data[CONF_SLOTS][slot_key].pop(CONF_ENTITY_ID, None)
-
-    # Only update if data actually changed
-    if data != config_entry.data:
-        hass.config_entries.async_update_entry(config_entry, options=data)
-
-    connection.send_result(msg["id"], {"success": True})
+    try:
+        await async_clear_slot_condition(hass, config_entry.entry_id, msg[ATTR_SLOT])
+        connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))

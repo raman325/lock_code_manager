@@ -56,6 +56,10 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from .const import (
+    ATTR_CODE_SLOT,
+    ATTR_LOCK_ENTITY_ID,
+    ATTR_SLOT,
+    ATTR_USERCODE,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
@@ -64,7 +68,11 @@ from .const import (
     EVENT_PIN_USED,
     PLATFORM_MAP,
     PLATFORMS,
+    SERVICE_CLEAR_SLOT_CONDITION,
+    SERVICE_CLEAR_USERCODE,
     SERVICE_HARD_REFRESH_USERCODES,
+    SERVICE_SET_SLOT_CONDITION,
+    SERVICE_SET_USERCODE,
     STRATEGY_FILENAME,
     STRATEGY_PATH,
     Platform,
@@ -73,7 +81,14 @@ from .data import get_entry_data
 from .helpers import async_create_lock_instance, get_locks_from_targets
 from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryData
 from .providers import BaseLock
-from .websocket import async_setup as async_websocket_setup
+from .websocket import (
+    CONDITION_ENTITY_DOMAINS,
+    async_clear_slot_condition,
+    async_clear_usercode,
+    async_set_slot_condition,
+    async_set_usercode,
+    async_setup as async_websocket_setup,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -276,6 +291,104 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             ),
             cv.has_at_least_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
             cv.has_at_most_one_key(ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID),
+        ),
+    )
+
+    # Set usercode
+    async def _set_usercode(service: ServiceCall) -> None:
+        """Set a usercode on a lock slot."""
+        await async_set_usercode(
+            hass,
+            service.data[ATTR_LOCK_ENTITY_ID],
+            service.data[ATTR_CODE_SLOT],
+            service.data[ATTR_USERCODE],
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_USERCODE,
+        _set_usercode,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
+                vol.Required(ATTR_CODE_SLOT): vol.All(
+                    vol.Coerce(int), vol.Range(min=1)
+                ),
+                vol.Required(ATTR_USERCODE): cv.string,
+            }
+        ),
+    )
+
+    # Clear usercode
+    async def _clear_usercode(service: ServiceCall) -> None:
+        """Clear a usercode from a lock slot."""
+        await async_clear_usercode(
+            hass,
+            service.data[ATTR_LOCK_ENTITY_ID],
+            service.data[ATTR_CODE_SLOT],
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_USERCODE,
+        _clear_usercode,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_LOCK_ENTITY_ID): cv.entity_domain("lock"),
+                vol.Required(ATTR_CODE_SLOT): vol.All(
+                    vol.Coerce(int), vol.Range(min=1)
+                ),
+            }
+        ),
+    )
+
+    # Set slot condition
+    async def _set_slot_condition(service: ServiceCall) -> None:
+        """Set a condition entity for a slot."""
+        await async_set_slot_condition(
+            hass,
+            service.data["config_entry_id"],
+            service.data[ATTR_SLOT],
+            service.data[CONF_ENTITY_ID],
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_SLOT_CONDITION,
+        _set_slot_condition,
+        schema=vol.Schema(
+            {
+                vol.Required("config_entry_id"): cv.string,
+                vol.Required(ATTR_SLOT): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=9999)
+                ),
+                vol.Required(CONF_ENTITY_ID): cv.entity_domain(
+                    CONDITION_ENTITY_DOMAINS
+                ),
+            }
+        ),
+    )
+
+    # Clear slot condition
+    async def _clear_slot_condition(service: ServiceCall) -> None:
+        """Clear the condition entity from a slot."""
+        await async_clear_slot_condition(
+            hass,
+            service.data["config_entry_id"],
+            service.data[ATTR_SLOT],
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_SLOT_CONDITION,
+        _clear_slot_condition,
+        schema=vol.Schema(
+            {
+                vol.Required("config_entry_id"): cv.string,
+                vol.Required(ATTR_SLOT): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=9999)
+                ),
+            }
         ),
     )
 
