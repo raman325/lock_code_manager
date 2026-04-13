@@ -56,6 +56,8 @@ blueprint:
 
 mode: single
 
+# Synthetic trigger that never fires naturally. The user manually runs
+# this automation once from the Automations page to wire the condition.
 triggers:
   - trigger: event
     event_type: lock_code_manager_condition_linker
