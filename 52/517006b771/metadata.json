@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "52517006b771",
+  "strategy": "manual-commit",
+  "branch": "fix/replace-mwc-button-with-ha-button",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/lock-codes-card-editor.ts",
+    "ts/slot-card-editor.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/52/517006b771/0/metadata.json",
+      "transcript": "/52/517006b771/0/full.jsonl",
+      "content_hash": "/52/517006b771/0/content_hash.txt",
+      "prompt": "/52/517006b771/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 8376,
+    "cache_read_tokens": 1233218,
+    "output_tokens": 2679,
+    "api_call_count": 15
+  }
+}
