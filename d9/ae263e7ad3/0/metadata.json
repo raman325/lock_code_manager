@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d9ae263e7ad3",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-13T01:12:05.817078Z",
+  "branch": "fix/replace-mwc-button-with-ha-button",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "ts/slot-card.integration.test.ts",
+    "ts/no-mwc-components.test.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "d07d5e7e14dd",
+  "checkpoint_transcript_start": 246,
+  "transcript_lines_at_start": 246,
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 27265,
+    "cache_read_tokens": 3532238,
+    "output_tokens": 7098,
+    "api_call_count": 36
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-13T01:12:05.604449Z",
+    "agent_lines": 70,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 72,
+    "agent_percentage": 97.22222222222221
+  }
+}

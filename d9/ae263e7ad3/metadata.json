@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d9ae263e7ad3",
+  "strategy": "manual-commit",
+  "branch": "fix/replace-mwc-button-with-ha-button",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "ts/no-mwc-components.test.ts",
+    "ts/slot-card.integration.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/ae263e7ad3/0/metadata.json",
+      "transcript": "/d9/ae263e7ad3/0/full.jsonl",
+      "content_hash": "/d9/ae263e7ad3/0/content_hash.txt",
+      "prompt": "/d9/ae263e7ad3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 27265,
+    "cache_read_tokens": 3532238,
+    "output_tokens": 7098,
+    "api_call_count": 36
+  }
+}
