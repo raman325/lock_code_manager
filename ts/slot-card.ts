@@ -864,7 +864,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     static getStubConfig(): Partial<LockCodeManagerSlotCardConfig> {
-        return { config_entry_id: '', slot: 1 };
+        return { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {

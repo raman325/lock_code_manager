@@ -409,7 +409,7 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     static getStubConfig(): Partial<LockCodesCardConfig> {
-        return { lock_entity_id: '' };
+        return { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
     }
 
     setConfig(config: LockCodesCardConfig): void {
