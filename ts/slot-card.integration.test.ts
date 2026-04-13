@@ -304,4 +304,45 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(card2._data?.locks[1].code).toBe('empty');
         });
     });
+
+    describe('dialog templates use ha-button instead of mwc-button', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Join a TemplateResult's static strings to inspect element tags */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function templateStrings(result: any): string {
+            return (result?.strings ?? []).join('');
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('condition dialog renders ha-button for actions', () => {
+            (card as any)._showConditionDialog = true;
+            (card as any)._dialogMode = 'add-entity';
+            const tmpl = (card as any)._renderConditionDialog();
+            const joined = templateStrings(tmpl);
+            expect(joined).toContain('ha-button');
+            expect(joined).not.toContain('mwc-button');
+        });
+
+        it('confirm dialog renders ha-button for actions', () => {
+            (card as any)._confirmDialog = {
+                onConfirm: () => {},
+                text: 'Test confirmation',
+                title: 'Confirm'
+            };
+            const tmpl = (card as any)._renderConfirmDialog();
+            const joined = templateStrings(tmpl);
+            expect(joined).toContain('ha-button');
+            expect(joined).not.toContain('mwc-button');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });

@@ -122,8 +122,7 @@ class LcmSlotCardEditor extends LitElement {
                     naturalMenuWidth
                 >
                     ${CODE_DISPLAY_OPTIONS.map(
-                        (opt) =>
-                            html`<ha-list-item .value=${opt.value}>${opt.label}</ha-list-item>`
+                        (opt) => html`<ha-list-item .value=${opt.value}>${opt.label}</ha-list-item>`
                     )}
                 </ha-select>
             </div>
