@@ -1,0 +1,68 @@
+---
+blueprint:
+  name: "Lock Code Manager: Condition Linker"
+  description: >
+    A one-shot automation that calls `lock_code_manager.set_slot_condition`
+    to wire a condition entity to a code slot. This blueprint provides a
+    UI-friendly way to assign condition entities without editing YAML.
+
+
+    **Usage**
+
+    1. Import this blueprint and create an automation from it.
+
+    2. Configure the LCM config entry, slot number, and condition entity.
+
+    3. Manually run the automation once from the Automations page
+       (three-dot menu -> Run).
+
+    4. The condition entity is now assigned to the slot. You can delete
+       the automation afterward or keep it for reference.
+
+
+    **Note:** This automation uses a synthetic event trigger that never
+    fires on its own. You must manually run it from the UI.
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/condition_linker.yaml
+  input:
+    config_entry:
+      name: Lock Code Manager config entry
+      description: The Lock Code Manager config entry that manages your lock(s).
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    slot_number:
+      name: Slot number
+      description: The code slot number to assign the condition entity to (1-9999).
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box
+    condition_entity:
+      name: Condition entity
+      description: >
+        The entity to use as the condition for this slot. The slot's PIN
+        will only be active when this entity's state is `on`.
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - calendar
+            - input_boolean
+            - schedule
+            - switch
+
+mode: single
+
+trigger:
+  - trigger: event
+    event_type: lock_code_manager_condition_linker
+
+action:
+  - action: lock_code_manager.set_slot_condition
+    data:
+      config_entry_id: !input config_entry
+      slot: !input slot_number
+      entity_id: !input condition_entity
