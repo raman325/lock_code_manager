@@ -388,6 +388,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
             .condition-helper-row {
                 align-items: center;
+                cursor: pointer;
                 display: flex;
                 gap: 12px;
                 padding: 4px 0;
@@ -1317,7 +1318,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           .filter((eid: string) => this._hass?.states[eid])
                           .map(
                               (eid: string) => html`
-                                  <div class="condition-helper-row">
+                                  <div
+                                      class="condition-helper-row"
+                                      @click=${() => {
+                                          if (this._hass) {
+                                              this.dispatchEvent(
+                                                  new CustomEvent('hass-more-info', {
+                                                      bubbles: true,
+                                                      composed: true,
+                                                      detail: { entityId: eid }
+                                                  })
+                                              );
+                                          }
+                                      }}
+                                  >
                                       <state-badge
                                           .hass=${this._hass}
                                           .stateObj=${this._hass!.states[eid]}

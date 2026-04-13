@@ -216,6 +216,15 @@ class LcmSlotCardEditor extends LitElement {
                     .hass=${this._hass}
                     .value=${''}
                     .label=${'Add helper entity'}
+                    .includeDomains=${[
+                        'input_boolean',
+                        'input_datetime',
+                        'input_number',
+                        'input_text',
+                        'input_select',
+                        'timer',
+                        'counter'
+                    ]}
                     @value-changed=${this._addConditionHelper}
                 ></ha-entity-picker>
             </div>
@@ -323,7 +332,9 @@ class LcmSlotCardEditor extends LitElement {
     ): void {
         const current = this._config?.collapsed_sections ?? [];
         const updated = collapsed
-            ? [...current, section]
+            ? current.includes(section)
+                ? current
+                : [...current, section]
             : current.filter((s: string) => s !== section);
         this._updateConfig('collapsed_sections', updated.length > 0 ? updated : undefined);
     }
