@@ -1252,11 +1252,11 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
     )
     await hass.async_block_till_done()
 
-    # Call update_slot_condition WebSocket command to set condition entity
+    # Call set_slot_condition WebSocket command to set condition entity
     await ws_client.send_json(
         {
             "id": 2,
-            "type": "lock_code_manager/update_slot_condition",
+            "type": "lock_code_manager/set_slot_condition",
             ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
             ATTR_SLOT: 1,
             "entity_id": condition_entity_id,
@@ -2040,17 +2040,17 @@ class TestGetNextCalendarEvent:
             hass.services.async_remove(CALENDAR_DOMAIN, SERVICE_GET_EVENTS)
 
 
-class TestUpdateSlotCondition:
-    """Tests for update_slot_condition websocket command."""
+class TestSetSlotCondition:
+    """Tests for set_slot_condition websocket command."""
 
-    async def test_update_entity_id(
+    async def test_set_entity_id(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
         hass_ws_client: WebSocketGenerator,
     ) -> None:
-        """Test updating the condition entity_id for a slot."""
+        """Test setting the condition entity_id for a slot."""
         ws_client = await hass_ws_client(hass)
 
         # Create a test entity
@@ -2059,11 +2059,11 @@ class TestUpdateSlotCondition:
         )
         await hass.async_block_till_done()
 
-        # Update slot 1's entity_id
+        # Set slot 1's entity_id
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2079,128 +2079,6 @@ class TestUpdateSlotCondition:
             == BINARY_SENSOR_TEST_ENTITY_ID
         )
 
-    async def test_clear_entity_id(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test clearing the condition entity_id for a slot."""
-        ws_client = await hass_ws_client(hass)
-
-        # Slot 2 has a calendar entity configured
-        assert "entity_id" in lock_code_manager_config_entry.data[CONF_SLOTS][2]
-
-        # Clear slot 2's entity_id by passing null
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 2,
-                "entity_id": None,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify entity_id was removed from config
-        assert "entity_id" not in lock_code_manager_config_entry.data[CONF_SLOTS][2]
-
-    async def test_update_number_of_uses(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test updating number_of_uses for a slot that already has it."""
-        ws_client = await hass_ws_client(hass)
-
-        # Update slot 2's number_of_uses (slot 2 has number_of_uses=5 in BASE_CONFIG)
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 2,
-                CONF_NUMBER_OF_USES: 10,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify config entry was updated
-        assert (
-            lock_code_manager_config_entry.data[CONF_SLOTS][2][CONF_NUMBER_OF_USES]
-            == 10
-        )
-
-    async def test_clear_number_of_uses(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test clearing number_of_uses for a slot that has it."""
-        ws_client = await hass_ws_client(hass)
-
-        # Slot 2 has number_of_uses=5 in BASE_CONFIG — clear it
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 2,
-                CONF_NUMBER_OF_USES: None,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify number_of_uses was removed
-        assert (
-            CONF_NUMBER_OF_USES
-            not in lock_code_manager_config_entry.data[CONF_SLOTS][2]
-        )
-
-    async def test_update_both_conditions(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test updating both entity_id and number_of_uses in one call."""
-        ws_client = await hass_ws_client(hass)
-
-        # Create a test entity
-        hass.states.async_set(
-            SCHEDULE_TEST_ENTITY_ID, STATE_ON, {"friendly_name": "Test Schedule"}
-        )
-        await hass.async_block_till_done()
-
-        # Update both conditions for slot 2 (which has number_of_uses in BASE_CONFIG)
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 2,
-                "entity_id": SCHEDULE_TEST_ENTITY_ID,
-                CONF_NUMBER_OF_USES: 3,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert msg["success"]
-
-        # Verify both were updated
-        slot_config = lock_code_manager_config_entry.data[CONF_SLOTS][2]
-        assert slot_config["entity_id"] == SCHEDULE_TEST_ENTITY_ID
-        assert slot_config[CONF_NUMBER_OF_USES] == 3
-
     async def test_invalid_slot(
         self,
         hass: HomeAssistant,
@@ -2211,10 +2089,15 @@ class TestUpdateSlotCondition:
         """Test error when slot doesn't exist."""
         ws_client = await hass_ws_client(hass)
 
+        hass.states.async_set(
+            BINARY_SENSOR_TEST_ENTITY_ID, STATE_ON, {"friendly_name": "Test Sensor"}
+        )
+        await hass.async_block_till_done()
+
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 999,
                 "entity_id": BINARY_SENSOR_TEST_ENTITY_ID,
@@ -2241,7 +2124,7 @@ class TestUpdateSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "sensor.temperature",
@@ -2264,7 +2147,7 @@ class TestUpdateSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "binary_sensor.nonexistent",
@@ -2273,29 +2156,6 @@ class TestUpdateSlotCondition:
         msg = await ws_client.receive_json()
         assert not msg["success"]
         assert "not found" in msg["error"]["message"].lower()
-
-    async def test_invalid_number_of_uses(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test error when number_of_uses is not positive."""
-        ws_client = await hass_ws_client(hass)
-
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 2,
-                CONF_NUMBER_OF_USES: 0,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert not msg["success"]
-        assert "at least 1" in msg["error"]["message"].lower()
 
     async def test_with_config_entry_title(
         self,
@@ -2316,7 +2176,7 @@ class TestUpdateSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
                 "slot": 1,
                 "entity_id": INPUT_BOOLEAN_TEST_ENTITY_ID,
@@ -2362,7 +2222,7 @@ class TestUpdateSlotCondition:
             await ws_client.send_json(
                 {
                     "id": i + 1,
-                    "type": "lock_code_manager/update_slot_condition",
+                    "type": "lock_code_manager/set_slot_condition",
                     ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                     "slot": 1,
                     "entity_id": entity_id,
@@ -2370,30 +2230,6 @@ class TestUpdateSlotCondition:
             )
             msg = await ws_client.receive_json()
             assert msg["success"], f"Failed for domain {domain}: {msg}"
-
-    async def test_add_number_of_uses_to_new_slot_rejected(
-        self,
-        hass: HomeAssistant,
-        mock_lock_config_entry,
-        lock_code_manager_config_entry,
-        hass_ws_client: WebSocketGenerator,
-    ) -> None:
-        """Test that adding number_of_uses to a slot that doesn't have it is rejected."""
-        ws_client = await hass_ws_client(hass)
-
-        # Slot 1 does not have number_of_uses — adding should be rejected
-        await ws_client.send_json(
-            {
-                "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
-                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-                "slot": 1,
-                CONF_NUMBER_OF_USES: 10,
-            }
-        )
-        msg = await ws_client.receive_json()
-        assert not msg["success"]
-        assert "deprecated" in msg["error"]["code"]
 
     async def test_reject_scheduler_condition_entity(
         self,
@@ -2419,7 +2255,7 @@ class TestUpdateSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "switch.my_schedule",
@@ -2455,7 +2291,7 @@ class TestUpdateSlotCondition:
         await ws_client.send_json(
             {
                 "id": 1,
-                "type": "lock_code_manager/update_slot_condition",
+                "type": "lock_code_manager/set_slot_condition",
                 ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
                 "slot": 1,
                 "entity_id": "schedule.work_hours",
@@ -2464,6 +2300,84 @@ class TestUpdateSlotCondition:
         result = await ws_client.receive_json()
 
         assert result["success"] is True
+
+
+class TestClearSlotCondition:
+    """Tests for clear_slot_condition websocket command."""
+
+    async def test_clear_entity_id(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """Test clearing the condition entity_id for a slot."""
+        ws_client = await hass_ws_client(hass)
+
+        # Slot 2 has a calendar entity configured
+        assert "entity_id" in lock_code_manager_config_entry.data[CONF_SLOTS][2]
+
+        # Clear slot 2's entity_id
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/clear_slot_condition",
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+                "slot": 2,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+        # Verify entity_id was removed from config
+        assert "entity_id" not in lock_code_manager_config_entry.data[CONF_SLOTS][2]
+
+    async def test_clear_already_empty(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """Test clearing a slot that has no condition entity is a no-op success."""
+        ws_client = await hass_ws_client(hass)
+
+        # Slot 1 has no entity_id configured
+        assert "entity_id" not in lock_code_manager_config_entry.data[CONF_SLOTS][1]
+
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/clear_slot_condition",
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+                "slot": 1,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert msg["success"]
+
+    async def test_invalid_slot(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        hass_ws_client: WebSocketGenerator,
+    ) -> None:
+        """Test error when slot doesn't exist."""
+        ws_client = await hass_ws_client(hass)
+
+        await ws_client.send_json(
+            {
+                "id": 1,
+                "type": "lock_code_manager/clear_slot_condition",
+                ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+                "slot": 999,
+            }
+        )
+        msg = await ws_client.receive_json()
+        assert not msg["success"]
+        assert "not found" in msg["error"]["message"].lower()
 
 
 # =============================================================================
