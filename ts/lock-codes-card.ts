@@ -526,12 +526,21 @@ class LockCodesCard extends LockCodesCardBase {
         const usercode = this._editValue.trim();
 
         try {
-            await this._hass.connection.sendMessagePromise({
-                code_slot: typeof slot === 'string' ? parseInt(slot, 10) : slot,
-                lock_entity_id: this._config.lock_entity_id,
-                type: 'lock_code_manager/set_lock_usercode',
-                usercode: usercode || undefined
-            });
+            const slotNum = typeof slot === 'string' ? parseInt(slot, 10) : slot;
+            if (usercode) {
+                await this._hass.connection.sendMessagePromise({
+                    code_slot: slotNum,
+                    lock_entity_id: this._config.lock_entity_id,
+                    type: 'lock_code_manager/set_usercode',
+                    usercode
+                });
+            } else {
+                await this._hass.connection.sendMessagePromise({
+                    code_slot: slotNum,
+                    lock_entity_id: this._config.lock_entity_id,
+                    type: 'lock_code_manager/clear_usercode'
+                });
+            }
             // Success - exit edit mode
             this._editingSlot = null;
             this._editValue = '';

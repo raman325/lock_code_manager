@@ -349,4 +349,107 @@ describe('LockCodesCard integration', () => {
             expect(card2._data?.slots[2].code).toBe('empty');
         });
     });
+
+    describe('_saveCode set/clear usercode paths', () => {
+        let card: LockCodesCardElement & Record<string, unknown>;
+        let sendMessagePromiseMock: ReturnType<typeof vi.fn>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            sendMessagePromiseMock = vi.fn().mockResolvedValue({});
+            const hass = createMockHassWithConnection();
+            // Add sendMessagePromise to the connection mock
+            (hass.connection as Record<string, unknown>).sendMessagePromise =
+                sendMessagePromiseMock;
+            card.hass = hass;
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('sends set_usercode when usercode is provided', async () => {
+            (card as any)._editValue = '5678';
+            (card as any)._saving = false;
+            await (card as any)._saveCode(1);
+            expect(sendMessagePromiseMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    code_slot: 1,
+                    lock_entity_id: 'lock.front_door',
+                    type: 'lock_code_manager/set_usercode',
+                    usercode: '5678'
+                })
+            );
+        });
+
+        it('sends clear_usercode when usercode is empty', async () => {
+            (card as any)._editValue = '';
+            (card as any)._saving = false;
+            await (card as any)._saveCode(2);
+            expect(sendMessagePromiseMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    code_slot: 2,
+                    lock_entity_id: 'lock.front_door',
+                    type: 'lock_code_manager/clear_usercode'
+                })
+            );
+        });
+
+        it('sends clear_usercode when usercode is whitespace only', async () => {
+            (card as any)._editValue = '   ';
+            (card as any)._saving = false;
+            await (card as any)._saveCode(3);
+            expect(sendMessagePromiseMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    code_slot: 3,
+                    type: 'lock_code_manager/clear_usercode'
+                })
+            );
+        });
+
+        it('handles string slot numbers', async () => {
+            (card as any)._editValue = '1234';
+            (card as any)._saving = false;
+            await (card as any)._saveCode('5');
+            expect(sendMessagePromiseMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    code_slot: 5,
+                    type: 'lock_code_manager/set_usercode'
+                })
+            );
+        });
+
+        it('exits edit mode on success', async () => {
+            (card as any)._editValue = '9999';
+            (card as any)._editingSlot = 1;
+            (card as any)._saving = false;
+            await (card as any)._saveCode(1);
+            expect((card as any)._editingSlot).toBeNull();
+            expect((card as any)._editValue).toBe('');
+            expect((card as any)._saving).toBe(false);
+        });
+
+        it('does not send when already saving', async () => {
+            (card as any)._editValue = '1234';
+            (card as any)._saving = true;
+            await (card as any)._saveCode(1);
+            expect(sendMessagePromiseMock).not.toHaveBeenCalled();
+        });
+
+        it('handles sendMessagePromise errors gracefully', async () => {
+            (card as any)._editValue = '1234';
+            (card as any)._saving = false;
+            sendMessagePromiseMock.mockRejectedValueOnce(new Error('Network error'));
+            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+            await (card as any)._saveCode(1);
+            expect(consoleSpy).toHaveBeenCalled();
+            expect((card as any)._saving).toBe(false);
+            consoleSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });
