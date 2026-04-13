@@ -857,6 +857,86 @@ describe('generateView', () => {
         expect(strategies[1].type).toBe('custom:lock-code-manager-slot');
         expect(strategies[1].slot).toBe(2);
     });
+    it('narrows conditionHelpers per slot in section strategies', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: { 1: null, 2: null, 3: null }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            codeDisplay: 'masked_with_reveal',
+            conditionHelpers: {
+                1: ['input_boolean.helper1'],
+                3: ['input_boolean.helper3a', 'input_boolean.helper3b']
+            },
+            showCodeSensors: false,
+            showLockCards: false,
+            showLockSync: false,
+            useSlotCards: true
+        });
+
+        const strategies = result.sections.map((s) => s.strategy) as Array<{
+            condition_helpers?: string[];
+            slot: number;
+        }>;
+
+        // Slot 1 has helpers
+        expect(strategies[0].slot).toBe(1);
+        expect(strategies[0].condition_helpers).toEqual(['input_boolean.helper1']);
+
+        // Slot 2 has no helpers - should not have condition_helpers property
+        expect(strategies[1].slot).toBe(2);
+        expect(strategies[1].condition_helpers).toBeUndefined();
+
+        // Slot 3 has helpers
+        expect(strategies[2].slot).toBe(3);
+        expect(strategies[2].condition_helpers).toEqual([
+            'input_boolean.helper3a',
+            'input_boolean.helper3b'
+        ]);
+    });
+
+    it('omits condition_helpers when conditionHelpers is undefined', async () => {
+        const configEntryData: LockCodeManagerConfigEntryDataResponse = {
+            config_entry: testConfigEntry,
+            entities: [],
+            locks: [{ entity_id: 'lock.front', name: 'Front Lock' }],
+            slots: { 1: null }
+        };
+
+        const hass = createMockHass({
+            callWS: (msg) => {
+                if (msg.type === 'lock_code_manager/get_config_entry_data') {
+                    return configEntryData;
+                }
+                return undefined;
+            }
+        });
+
+        const result = await generateView(hass, testConfigEntry, {
+            codeDisplay: 'masked_with_reveal',
+            showCodeSensors: false,
+            showLockCards: false,
+            showLockSync: false,
+            useSlotCards: true
+        });
+
+        const strategy = result.sections[0].strategy as {
+            condition_helpers?: string[];
+        };
+        expect(strategy.condition_helpers).toBeUndefined();
+    });
 });
 
 describe('generateView lock codes cards', () => {

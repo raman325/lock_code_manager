@@ -31,6 +31,7 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
         const {
             code_display = DEFAULT_CODE_DISPLAY,
             collapsed_sections,
+            condition_helpers,
             config_entry_id,
             show_code_sensors = DEFAULT_SHOW_CODE_SENSORS,
             show_conditions = DEFAULT_SHOW_CONDITIONS,
@@ -57,6 +58,10 @@ export class LockCodeManagerSlotSectionStrategy extends ReactiveElement {
 
             if (collapsed_sections && collapsed_sections.length > 0) {
                 card.collapsed_sections = collapsed_sections;
+            }
+
+            if (condition_helpers?.length) {
+                card.condition_helpers = condition_helpers;
             }
 
             return {
