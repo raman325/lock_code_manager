@@ -774,16 +774,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 padding: 8px 0;
             }
 
-            mwc-button.destructive {
+            ha-button.destructive {
                 --mdc-theme-primary: var(--error-color);
             }
 
             /* Make dialog buttons more obviously interactive */
-            ha-dialog mwc-button {
+            ha-dialog ha-button {
                 cursor: pointer;
             }
 
-            ha-dialog mwc-button:hover {
+            ha-dialog ha-button:hover {
                 opacity: 0.8;
             }
         `
@@ -1896,16 +1896,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           `
                         : nothing}
                 </div>
-                <mwc-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
+                <ha-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
                     Cancel
-                </mwc-button>
-                <mwc-button
+                </ha-button>
+                <ha-button
                     slot="primaryAction"
                     @click=${() => this._saveConditionChanges()}
                     .disabled=${this._dialogSaving}
                 >
                     ${this._dialogSaving ? 'Saving...' : 'Save'}
-                </mwc-button>
+                </ha-button>
             </ha-dialog>
         `;
     }
@@ -1917,10 +1917,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             <ha-dialog open @closed=${() => (this._confirmDialog = null)}>
                 <div slot="heading">${this._confirmDialog.title}</div>
                 <div class="confirm-dialog-content">${this._confirmDialog.text}</div>
-                <mwc-button slot="secondaryAction" @click=${() => (this._confirmDialog = null)}>
+                <ha-button slot="secondaryAction" @click=${() => (this._confirmDialog = null)}>
                     Cancel
-                </mwc-button>
-                <mwc-button
+                </ha-button>
+                <ha-button
                     slot="primaryAction"
                     class="destructive"
                     @click=${() => {
@@ -1929,7 +1929,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     }}
                 >
                     Remove
-                </mwc-button>
+                </ha-button>
             </ha-dialog>
         `;
     }
