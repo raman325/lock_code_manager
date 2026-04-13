@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ba9bce32bcc0",
+  "strategy": "manual-commit",
+  "branch": "docs/update-brand-icons",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ba/9bce32bcc0/0/metadata.json",
+      "transcript": "/ba/9bce32bcc0/0/full.jsonl",
+      "content_hash": "/ba/9bce32bcc0/0/content_hash.txt",
+      "prompt": "/ba/9bce32bcc0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 554,
+    "cache_creation_tokens": 1020099,
+    "cache_read_tokens": 68680178,
+    "output_tokens": 104126,
+    "api_call_count": 388
+  }
+}
