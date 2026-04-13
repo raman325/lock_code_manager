@@ -57,7 +57,9 @@ binary_sensor:
       {% if start in ['unknown', 'unavailable'] or end in ['unknown', 'unavailable'] %}
         false
       {% else %}
-        {{ start <= now().strftime('%Y-%m-%d %H:%M:%S') <= end }}
+        {% set start_dt = as_datetime(start) %}
+        {% set end_dt = as_datetime(end) %}
+        {{ start_dt <= now() <= end_dt }}
       {% endif %}
     availability: >-
       {% set start = states(start_entity) %}
