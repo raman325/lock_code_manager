@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "dd9914999a8a",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-13T05:03:29.398956Z",
+  "branch": "feat/blueprints-date-range-linker",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "8f9fd107ab1b",
+  "token_usage": {
+    "input_tokens": 534,
+    "cache_creation_tokens": 704381,
+    "cache_read_tokens": 64103429,
+    "output_tokens": 101673,
+    "api_call_count": 372
+  },
+  "session_metrics": {
+    "turn_count": 52
+  }
+}

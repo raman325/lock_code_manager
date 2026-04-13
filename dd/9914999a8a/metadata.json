@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "dd9914999a8a",
+  "strategy": "manual-commit",
+  "branch": "feat/blueprints-date-range-linker",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/dd/9914999a8a/0/metadata.json",
+      "transcript": "/dd/9914999a8a/0/full.jsonl",
+      "content_hash": "/dd/9914999a8a/0/content_hash.txt",
+      "prompt": "/dd/9914999a8a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 534,
+    "cache_creation_tokens": 704381,
+    "cache_read_tokens": 64103429,
+    "output_tokens": 101673,
+    "api_call_count": 372
+  }
+}
