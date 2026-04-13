@@ -271,6 +271,121 @@ describe('LcmSlotCardEditor logic', () => {
         });
     });
 
+    describe('collapsed sections toggle', () => {
+        type CollapsedSection = 'conditions' | 'lock_status';
+
+        /**
+         * Toggles a section in the collapsed_sections array.
+         * Mirrors the _toggleCollapsedSection handler logic.
+         */
+        function toggleCollapsedSection(
+            current: CollapsedSection[] | undefined,
+            section: CollapsedSection,
+            collapsed: boolean
+        ): CollapsedSection[] | undefined {
+            const sections = current ?? [];
+            const updated = collapsed
+                ? [...sections, section]
+                : sections.filter((s) => s !== section);
+            return updated.length > 0 ? updated : undefined;
+        }
+
+        it('adds a section when collapsed', () => {
+            const result = toggleCollapsedSection(undefined, 'conditions', true);
+            expect(result).toEqual(['conditions']);
+        });
+
+        it('adds a second section', () => {
+            const result = toggleCollapsedSection(['conditions'], 'lock_status', true);
+            expect(result).toEqual(['conditions', 'lock_status']);
+        });
+
+        it('removes a section when uncollapsed', () => {
+            const result = toggleCollapsedSection(
+                ['conditions', 'lock_status'],
+                'conditions',
+                false
+            );
+            expect(result).toEqual(['lock_status']);
+        });
+
+        it('returns undefined when last section is removed', () => {
+            const result = toggleCollapsedSection(['conditions'], 'conditions', false);
+            expect(result).toBeUndefined();
+        });
+
+        it('returns undefined for empty initial array uncollapse', () => {
+            const result = toggleCollapsedSection([], 'conditions', false);
+            expect(result).toBeUndefined();
+        });
+    });
+
+    describe('condition helpers', () => {
+        /**
+         * Adds a condition helper entity ID to the list.
+         * Mirrors the _addConditionHelper handler logic.
+         */
+        function addConditionHelper(
+            current: string[] | undefined,
+            entityId: string
+        ): string[] | undefined {
+            if (!entityId) return current;
+            const helpers = current ?? [];
+            if (helpers.includes(entityId)) return current;
+            return [...helpers, entityId];
+        }
+
+        /**
+         * Removes a condition helper by index.
+         * Mirrors the _removeConditionHelper handler logic.
+         */
+        function removeConditionHelper(
+            current: string[] | undefined,
+            idx: number
+        ): string[] | undefined {
+            const helpers = [...(current ?? [])];
+            helpers.splice(idx, 1);
+            return helpers.length > 0 ? helpers : undefined;
+        }
+
+        it('adds a helper to empty list', () => {
+            const result = addConditionHelper(undefined, 'input_boolean.test');
+            expect(result).toEqual(['input_boolean.test']);
+        });
+
+        it('adds a helper to existing list', () => {
+            const result = addConditionHelper(['input_boolean.a'], 'input_boolean.b');
+            expect(result).toEqual(['input_boolean.a', 'input_boolean.b']);
+        });
+
+        it('does not add duplicate helper', () => {
+            const current = ['input_boolean.a'];
+            const result = addConditionHelper(current, 'input_boolean.a');
+            expect(result).toBe(current);
+        });
+
+        it('does not add empty entity ID', () => {
+            const current = ['input_boolean.a'];
+            const result = addConditionHelper(current, '');
+            expect(result).toBe(current);
+        });
+
+        it('removes a helper by index', () => {
+            const result = removeConditionHelper(['input_boolean.a', 'input_boolean.b'], 0);
+            expect(result).toEqual(['input_boolean.b']);
+        });
+
+        it('returns undefined when last helper is removed', () => {
+            const result = removeConditionHelper(['input_boolean.a'], 0);
+            expect(result).toBeUndefined();
+        });
+
+        it('returns undefined when removing from single-item list', () => {
+            const result = removeConditionHelper(['input_boolean.only'], 0);
+            expect(result).toBeUndefined();
+        });
+    });
+
     describe('config change detection', () => {
         /**
          * Checks if a new value differs from the current config value.
