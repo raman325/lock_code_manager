@@ -11,6 +11,7 @@ from .akuvox import AkuvoxLock
 from .matter import MatterLock
 from .schlage import SchlageLock
 from .virtual import VirtualLock
+from .zha import ZHALock
 from .zwave_js import ZWaveJSLock
 
 INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
@@ -18,5 +19,6 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "matter": MatterLock,
     "schlage": SchlageLock,
     "virtual": VirtualLock,
+    "zha": ZHALock,
     "zwave_js": ZWaveJSLock,
 }
