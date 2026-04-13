@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "04395dbffe20",
+  "strategy": "manual-commit",
+  "branch": "fix/card-picker-stub-config",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/04/395dbffe20/0/metadata.json",
+      "transcript": "/04/395dbffe20/0/full.jsonl",
+      "content_hash": "/04/395dbffe20/0/content_hash.txt",
+      "prompt": "/04/395dbffe20/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 596,
+    "cache_creation_tokens": 1349379,
+    "cache_read_tokens": 77238824,
+    "output_tokens": 108571,
+    "api_call_count": 416
+  }
+}
