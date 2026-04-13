@@ -1736,7 +1736,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._confirmDialog = {
             onConfirm: async () => {
                 try {
-                    await this._updateSlotCondition({ entity_id: null });
+                    await this._clearSlotCondition();
                     // Force re-subscribe to get updated data
                     this._unsubscribe();
                     void this._subscribe();
@@ -1755,7 +1755,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._confirmDialog = {
             onConfirm: async () => {
                 try {
-                    await this._updateSlotCondition({ number_of_uses: null });
+                    await this._clearSlotCondition();
                     // Force re-subscribe to get updated data
                     this._unsubscribe();
                     void this._subscribe();
@@ -1770,26 +1770,32 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         };
     }
 
-    private async _updateSlotCondition(updates: {
-        entity_id?: string | null;
-        number_of_uses?: number | null;
-    }): Promise<void> {
-        if (!this._hass || !this._config) {
-            throw new Error('Not initialized');
-        }
-
+    private async _setSlotCondition(entity_id: string): Promise<void> {
+        if (!this._hass || !this._config) return;
         const msg: MessageBase & Record<string, unknown> = {
+            entity_id,
             slot: this._config.slot,
-            type: 'lock_code_manager/update_slot_condition',
-            ...updates
+            type: 'lock_code_manager/set_slot_condition'
         };
-
         if (this._config.config_entry_id) {
             msg.config_entry_id = this._config.config_entry_id;
         } else if (this._config.config_entry_title) {
             msg.config_entry_title = this._config.config_entry_title;
         }
+        await this._hass.callWS(msg);
+    }
 
+    private async _clearSlotCondition(): Promise<void> {
+        if (!this._hass || !this._config) return;
+        const msg: MessageBase & Record<string, unknown> = {
+            slot: this._config.slot,
+            type: 'lock_code_manager/clear_slot_condition'
+        };
+        if (this._config.config_entry_id) {
+            msg.config_entry_id = this._config.config_entry_id;
+        } else if (this._config.config_entry_title) {
+            msg.config_entry_title = this._config.config_entry_title;
+        }
         await this._hass.callWS(msg);
     }
 
@@ -1943,28 +1949,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._dialogSaving = true;
 
         try {
-            const msg: MessageBase & Record<string, unknown> = {
-                slot: this._config.slot,
-                type: 'lock_code_manager/update_slot_condition'
-            };
-
-            if (this._config.config_entry_id) {
-                msg.config_entry_id = this._config.config_entry_id;
-            } else if (this._config.config_entry_title) {
-                msg.config_entry_title = this._config.config_entry_title;
-            } else {
-                throw new Error('No config entry identifier');
-            }
-
             if (this._dialogMode === 'add-entity' || this._dialogMode === 'edit-entity') {
-                msg.entity_id = this._dialogEntityId;
+                await this._setSlotCondition(this._dialogEntityId!);
             } else if (this._dialogMode === 'add-uses') {
-                msg.number_of_uses = this._dialogNumberOfUses ?? 5;
+                // number_of_uses is deprecated; use set_slot_condition with the entity
+                throw new Error('Use tracking is no longer supported');
             } else {
                 throw new Error(`Unknown dialog mode: ${this._dialogMode}`);
             }
 
-            await this._hass.callWS(msg);
             this._closeConditionDialog();
             // Force re-subscribe to get updated data since config changes
             // don't trigger entity state changes
