@@ -60,6 +60,7 @@ from .const import (
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
     ATTR_USERCODE,
+    CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_NUMBER_OF_USES,
@@ -88,10 +89,7 @@ from .helpers import (
 )
 from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryData
 from .providers import BaseLock
-from .websocket import (
-    CONDITION_ENTITY_DOMAINS,
-    async_setup as async_websocket_setup,
-)
+from .websocket import async_setup as async_websocket_setup
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -85,6 +85,7 @@ from .const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_USERCODE,
+    CONDITION_ENTITY_DOMAINS,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
     CONF_ENTITIES,
@@ -1151,23 +1152,6 @@ async def subscribe_code_slot(
     _send_update(calendar_next_event)
 
 
-def _get_lock_or_error(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-) -> BaseLock | None:
-    """Validate lock exists and return it, or send error and return None."""
-    lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
-    lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
-    if not lock:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_FOUND,
-            f"Lock {lock_entity_id} is not managed by Lock Code Manager",
-        )
-        return None
-    return lock
-
 
 @websocket_api.websocket_command(
     {
@@ -1233,40 +1217,6 @@ async def ws_clear_usercode(
             str(err),
         )
 
-
-# Supported domains for condition entities
-CONDITION_ENTITY_DOMAINS = frozenset(
-    {
-        BINARY_SENSOR_DOMAIN,
-        CALENDAR_DOMAIN,
-        INPUT_BOOLEAN_DOMAIN,
-        SCHEDULE_DOMAIN,
-        SWITCH_DOMAIN,
-    }
-)
-
-
-def _get_slot_config_or_error(
-    config_entry: ConfigEntry,
-    connection: websocket_api.ActiveConnection,
-    msg: dict[str, Any],
-    slot_num: int,
-) -> dict[str, Any] | None:
-    """Validate slot exists in config entry and return slot config dict.
-
-    Handles both int and str slot keys. Sends an error response and returns
-    None if the slot is not found.
-    """
-    slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_key = slot_num if slot_num in slots else str(slot_num)
-    if slot_key not in slots:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_FOUND,
-            f"Slot {slot_num} not found in config entry",
-        )
-        return None
-    return slots[slot_key]
 
 
 @websocket_api.websocket_command(

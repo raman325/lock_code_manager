@@ -178,13 +178,15 @@ async def async_set_slot_condition(
             "Unsupported-Condition-Entity-Integrations"
         )
 
-    # Update config entry data
-    data = copy.deepcopy(dict(config_entry.data))
+    # Update config entry data using effective config (handles data vs options)
+    data = {
+        CONF_LOCKS: copy.deepcopy(get_entry_data(config_entry, CONF_LOCKS, [])),
+        CONF_SLOTS: copy.deepcopy(get_entry_data(config_entry, CONF_SLOTS, {})),
+    }
     slot_key = slot if slot in data[CONF_SLOTS] else str(slot)
     data[CONF_SLOTS][slot_key][CONF_ENTITY_ID] = entity_id
 
-    if data != config_entry.data:
-        hass.config_entries.async_update_entry(config_entry, options=data)
+    hass.config_entries.async_update_entry(config_entry, options=data)
 
 
 async def async_clear_slot_condition(
@@ -194,10 +196,12 @@ async def async_clear_slot_condition(
     config_entry = get_loaded_config_entry(hass, config_entry_id)
     get_slot_config(config_entry, slot)
 
-    # Update config entry data
-    data = copy.deepcopy(dict(config_entry.data))
+    # Update config entry data using effective config (handles data vs options)
+    data = {
+        CONF_LOCKS: copy.deepcopy(get_entry_data(config_entry, CONF_LOCKS, [])),
+        CONF_SLOTS: copy.deepcopy(get_entry_data(config_entry, CONF_SLOTS, {})),
+    }
     slot_key = slot if slot in data[CONF_SLOTS] else str(slot)
     data[CONF_SLOTS][slot_key].pop(CONF_ENTITY_ID, None)
 
-    if data != config_entry.data:
-        hass.config_entries.async_update_entry(config_entry, options=data)
+    hass.config_entries.async_update_entry(config_entry, options=data)
