@@ -1,0 +1,101 @@
+switch to main, ff, clean up stale branches, including this one
+
+---
+
+its possible to create a blueprint that would allow a user to create a calendar event on a calendar right? how about updating an existing calendar event?
+
+---
+
+the same user who posted the issue we just resolved posted a feature asking for it. I am trying to figure out how to offer it without building out an entire new custom calendar card
+
+---
+
+let's ignore edits. Why do you prefer 1 over 2 long term? The direction of exposing blueprints and deprecating number of uses points to less of the conditional logic living in LCM
+
+---
+
+can blueprints be exposed in lovelace dashboards?
+
+---
+
+this might be overengineered/wrong but could we grab all entity references from the condition entity template and display an entity card or something as an optional configuration?
+
+---
+
+I like it. Let's do this plan - create the blueprint to create the template sensor, add support to add condition helpers explicitly, and they can be any entity type in theory right? We should also stage wiki changes for the configuration, the blueprints, etc.
+
+---
+
+YAML per card, but maybe for the view strategy config we can add a map of slot num to list of entities. at the dahsboard strategy config maybe it's a map of config entry id/title to slot num to list of entities. Use the natural structure of how we pass things down from the dashboard down to the card and allow users to define all of this in the UI as it really is a UI only change
+
+---
+
+yes
+
+---
+
+agreed. Is it possible to test that the entity renders and that manipulating it via the UI updates the condition state in the card correctly?
+
+---
+
+no that's fine
+
+---
+
+agreed
+
+---
+
+can we create a blueprint that does the wiring? that should work for both blueprints and that makes everything modular. Let's make sure we make that clear in the wiki in our updates
+
+---
+
+that's correct
+
+---
+
+yes
+
+---
+
+are you referring to the websocket command?
+
+---
+
+option1
+
+---
+
+yes, lets call it condition_linker though. Separately, are there other websocket commands that we should consider exposing as actions?
+
+---
+
+lets expose set_lock_usercode, but should we have set and clear and do the same for the websocket command for DRYness and modularity?
+
+---
+
+let's split both. Let's plan to submit the actions and websocket changes up front as a PR that we merge and release before any of the other work continues. The blueprints require them and are not getting released, they're pulled directly from main
+
+---
+
+yes. Are all configuration options exposed through the card editor for both cards?
+
+---
+
+Let's include those as a second prerequisite PR we will release alongside actions
+
+---
+
+We should probably note something about condition helpers in blueprints
+
+---
+
+yes
+
+---
+
+lets move step 3 into phase 1 since all of those are releaseable changes, and the card editor changes would have to be split otherwise
+
+---
+
+yes
