@@ -1212,7 +1212,7 @@ async def test_set_usercode_reflects_in_subscribe_lock_codes(
     assert slots_by_num[3][ATTR_MANAGED] is False
 
 
-async def test_update_slot_condition_reflects_in_subscribe_code_slot(
+async def test_set_slot_condition_reflects_in_subscribe_code_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
@@ -1222,7 +1222,7 @@ async def test_update_slot_condition_reflects_in_subscribe_code_slot(
 
     The subscribe_code_slot handler resolves tracked entities at subscription
     time, so a condition added after subscribing requires a new subscription
-    to be tracked. This test verifies the full round-trip: update_slot_condition
+    to be tracked. This test verifies the full round-trip: set_slot_condition
     persists the condition, then a fresh subscription includes it.
     """
     ws_client = await hass_ws_client(hass)
