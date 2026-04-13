@@ -17,7 +17,6 @@ from homeassistant.components.calendar import (
     SERVICE_GET_EVENTS,
 )
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
-from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.schedule import (
     ATTR_NEXT_EVENT as SCHEDULE_ATTR_NEXT_EVENT,
@@ -1152,7 +1151,6 @@ async def subscribe_code_slot(
     _send_update(calendar_next_event)
 
 
-
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "lock_code_manager/set_usercode",
@@ -1216,7 +1214,6 @@ async def ws_clear_usercode(
             websocket_api.const.ERR_UNKNOWN_ERROR,
             str(err),
         )
-
 
 
 @websocket_api.websocket_command(
