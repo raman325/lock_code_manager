@@ -378,6 +378,41 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 font-style: italic;
             }
 
+            /* Condition helper entity rows */
+            .condition-helpers {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                margin-top: 8px;
+            }
+
+            .condition-helper-row {
+                align-items: center;
+                display: flex;
+                gap: 12px;
+                padding: 4px 0;
+            }
+
+            .condition-helper-info {
+                display: flex;
+                flex-direction: column;
+                min-width: 0;
+            }
+
+            .condition-helper-name {
+                color: var(--primary-text-color);
+                font-size: 14px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .condition-helper-state {
+                color: var(--secondary-text-color);
+                font-size: 12px;
+                text-transform: capitalize;
+            }
+
             /* Unified condition entity styles */
             .condition-entity {
                 display: flex;
@@ -951,10 +986,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const showLockStatus = this._config.show_lock_status !== false;
 
         // Only show conditions section if at least one condition is configured
+        const hasConditionHelpers =
+            (this._config?.condition_helpers?.length ?? 0) > 0 &&
+            this._config!.condition_helpers!.some((eid: string) => this._hass?.states[eid]);
         const hasConditions =
             (conditions.number_of_uses !== undefined && conditions.number_of_uses !== null) ||
             conditions.condition_entity !== undefined ||
-            conditions.calendar !== undefined;
+            conditions.calendar !== undefined ||
+            hasConditionHelpers;
         const showConditions = this._config.show_conditions !== false && hasConditions;
         // Show "Manage Conditions" row when no conditions exist
         const showManageConditions = this._config.show_conditions !== false && !hasConditions;
@@ -1284,6 +1323,31 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                   </div>`
                 : nothing}
             ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
+            ${this._config?.condition_helpers?.length
+                ? html`<div class="condition-helpers">
+                      ${this._config.condition_helpers
+                          .filter((eid: string) => this._hass?.states[eid])
+                          .map(
+                              (eid: string) => html`
+                                  <div class="condition-helper-row">
+                                      <state-badge
+                                          .hass=${this._hass}
+                                          .stateObj=${this._hass!.states[eid]}
+                                      ></state-badge>
+                                      <div class="condition-helper-info">
+                                          <span class="condition-helper-name">
+                                              ${this._hass!.states[eid]?.attributes
+                                                  ?.friendly_name ?? eid}
+                                          </span>
+                                          <span class="condition-helper-state">
+                                              ${this._hass!.states[eid]?.state}
+                                          </span>
+                                      </div>
+                                  </div>
+                              `
+                          )}
+                  </div>`
+                : nothing}
             ${canAddUses || canAddEntity
                 ? html`<div class="add-condition-links">
                       ${canAddUses

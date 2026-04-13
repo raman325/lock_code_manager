@@ -367,4 +367,41 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('condition_helpers config', () => {
+        it('stores condition_helpers in config when provided', () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                condition_helpers: ['input_boolean.test_helper', 'input_datetime.date_helper'],
+                config_entry_id: 'abc',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            expect((el._config as Record<string, unknown>)?.condition_helpers).toEqual([
+                'input_boolean.test_helper',
+                'input_datetime.date_helper'
+            ]);
+        });
+
+        it('stores config without condition_helpers when not provided', () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                config_entry_id: 'abc',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            expect((el._config as Record<string, unknown>)?.condition_helpers).toBeUndefined();
+        });
+
+        it('stores empty condition_helpers array when configured as empty', () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                condition_helpers: [],
+                config_entry_id: 'abc',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            expect((el._config as Record<string, unknown>)?.condition_helpers).toEqual([]);
+        });
+    });
 });
