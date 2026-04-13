@@ -1,0 +1,67 @@
+---
+blueprint:
+  name: "Lock Code Manager: Date Range Condition"
+  description: >
+    Creates a binary sensor that turns ON when the current time is between
+    two `input_datetime` helper entities. Assign the resulting binary sensor
+    as the condition entity for a Lock Code Manager code slot.
+
+
+    **Setup**
+
+    1. Create two `input_datetime` helpers (Settings -> Devices & Services ->
+       Helpers) — one for the start date/time and one for the end date/time.
+       Enable both "Date" and "Time" on each helper.
+
+    2. Import this blueprint and configure it with your start and end
+       date/time helpers.
+
+    3. The blueprint creates a binary sensor — assign it as the condition
+       entity for your code slot.
+
+
+    **How it works**
+
+    The sensor is ON when `now()` is between the start and end date/times.
+    If either helper is `unknown` or `unavailable`, the sensor becomes
+    unavailable (condition blocks access).
+  domain: template
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/template/lock_code_manager/date_range_condition.yaml
+  input:
+    start_datetime:
+      name: Start date/time
+      description: >
+        An `input_datetime` helper that defines when the access window
+        begins.
+      selector:
+        entity:
+          domain: input_datetime
+    end_datetime:
+      name: End date/time
+      description: >
+        An `input_datetime` helper that defines when the access window
+        ends.
+      selector:
+        entity:
+          domain: input_datetime
+
+variables:
+  start_entity: !input start_datetime
+  end_entity: !input end_datetime
+
+binary_sensor:
+  - state: >-
+      {% set start = states(start_entity) %}
+      {% set end = states(end_entity) %}
+      {% if start in ['unknown', 'unavailable'] or end in ['unknown', 'unavailable'] %}
+        false
+      {% else %}
+        {% set start_dt = start | as_datetime | as_utc %}
+        {% set end_dt = end | as_datetime | as_utc %}
+        {{ start_dt <= utcnow() <= end_dt }}
+      {% endif %}
+    availability: >-
+      {% set start = states(start_entity) %}
+      {% set end = states(end_entity) %}
+      {{ start not in ['unknown', 'unavailable'] and end not in ['unknown', 'unavailable'] }}
