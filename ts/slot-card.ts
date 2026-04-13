@@ -889,7 +889,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
         this._conditionsExpanded = !collapsed.includes('conditions');
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        void this._subscribe();
+        this._isStub = config.config_entry_id === 'stub';
+        if (!this._isStub) {
+            void this._subscribe();
+        }
     }
 
     // Mixin abstract method implementations
@@ -948,6 +951,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     protected render(): TemplateResult {
         if (!this._hass || !this._config) {
             return html`<ha-card><div class="message">Loading...</div></ha-card>`;
+        }
+
+        // Show static preview for card picker (stub config)
+        if (this._config.config_entry_id === 'stub') {
+            return html`<ha-card>
+                <div class="message">Lock Code Manager Slot Card</div>
+            </ha-card>`;
         }
 
         if (this._error) {

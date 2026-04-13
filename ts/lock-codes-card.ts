@@ -421,7 +421,10 @@ class LockCodesCard extends LockCodesCardBase {
             this._data = undefined;
         }
         this._config = config;
-        void this._subscribe();
+        this._isStub = config.lock_entity_id === 'lock.stub';
+        if (!this._isStub) {
+            void this._subscribe();
+        }
     }
 
     // Mixin abstract method implementations
@@ -447,6 +450,16 @@ class LockCodesCard extends LockCodesCardBase {
     // connectedCallback and disconnectedCallback provided by mixin
 
     protected render(): TemplateResult {
+        // Show static preview for card picker (stub config)
+        if (this._config?.lock_entity_id === 'lock.stub') {
+            return html`<ha-card>
+                <div class="card-header">
+                    <div class="header-icon"><ha-icon icon="mdi:lock-smart"></ha-icon></div>
+                    <span class="card-header-title">Lock Code Manager Lock Codes</span>
+                </div>
+            </ha-card>`;
+        }
+
         const hassLockName =
             this._hass?.states[this._config?.lock_entity_id ?? '']?.attributes?.friendly_name;
         const lockName =
