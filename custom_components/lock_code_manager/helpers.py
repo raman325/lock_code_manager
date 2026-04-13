@@ -8,7 +8,12 @@ from typing import Any
 
 from homeassistant.components.lock import DOMAIN as LOCK_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID, CONF_ENTITY_ID
+from homeassistant.const import (
+    ATTR_AREA_ID,
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
+    CONF_ENTITY_ID,
+)
 from homeassistant.core import HomeAssistant, callback, split_entity_id
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import (

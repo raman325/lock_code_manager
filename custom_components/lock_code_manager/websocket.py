@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
-import copy
 from datetime import timedelta
 from functools import wraps
 import logging
@@ -95,7 +94,6 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
-    EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
 from .helpers import (
