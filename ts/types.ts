@@ -52,6 +52,8 @@ export interface LockCodeManagerStrategyConfig {
 }
 
 export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {
+    /** Condition helper entity IDs per config entry and slot */
+    condition_helpers?: Record<string, Record<number, string[]>>;
     /** Show lock cards in per-config-entry views (default: true). Feeds show_lock_cards to views. */
     show_per_configuration_lock_cards?: boolean;
     type: 'custom:lock-code-manager';
@@ -69,6 +71,8 @@ export interface SlotMapping {
 }
 
 export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrategyConfig {
+    /** Condition helper entity IDs per slot */
+    condition_helpers?: Record<number, string[]>;
     config_entry_id?: string;
     config_entry_title?: string;
     type: 'custom:lock-code-manager';
@@ -79,6 +83,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
     collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Condition helper entity IDs for this slot */
+    condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
     config_entry_id: string;
     /** Show code sensors in lock status section */
@@ -170,6 +176,8 @@ export interface LockCodeManagerSlotCardConfig {
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
     collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Condition helper entity IDs for this slot */
+    condition_helpers?: string[];
     /** Config entry ID for the LCM instance (use this OR config_entry_title) */
     config_entry_id?: string;
     /** Config entry title for the LCM instance (use this OR config_entry_id) */
@@ -319,6 +327,7 @@ export type GetConfigEntriesResponse = ConfigEntryJSONFragment[];
 export interface GenerateViewOptions {
     codeDisplay: CodeDisplayMode;
     collapsedSections?: ('conditions' | 'lock_status')[];
+    conditionHelpers?: Record<number, string[]>;
     showCodeSensors: boolean;
     showConditions?: boolean;
     showLockCards: boolean;

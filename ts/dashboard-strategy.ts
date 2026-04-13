@@ -49,6 +49,7 @@ export class LockCodeManagerDashboardStrategy extends ReactiveElement {
                 strategy: {
                     code_display: config.code_display,
                     collapsed_sections: config.collapsed_sections,
+                    condition_helpers: config.condition_helpers?.[configEntry.entry_id],
                     config_entry_id: configEntry.entry_id,
                     show_code_sensors: config.show_code_sensors,
                     show_conditions: config.show_conditions,

@@ -123,6 +123,13 @@ describe('LockCodeManagerViewStrategy', () => {
                     )[]
                 },
                 { collapsedSections: ['conditions', 'lock_status'] }
+            ],
+            [
+                'condition_helpers',
+                {
+                    condition_helpers: { 1: ['input_boolean.helper1'] } as Record<number, string[]>
+                },
+                { conditionHelpers: { 1: ['input_boolean.helper1'] } }
             ]
         ] as const)('passes %s to generateView', async (_name, strategyConfig, expectedOptions) => {
             const hass = createMockHass({
