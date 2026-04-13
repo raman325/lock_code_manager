@@ -56,11 +56,11 @@ blueprint:
 
 mode: single
 
-trigger:
+triggers:
   - trigger: event
     event_type: lock_code_manager_condition_linker
 
-action:
+actions:
   - action: lock_code_manager.set_slot_condition
     data:
       config_entry_id: !input config_entry

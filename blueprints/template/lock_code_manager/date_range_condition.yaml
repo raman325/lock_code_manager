@@ -51,8 +51,7 @@ variables:
   end_entity: !input end_datetime
 
 binary_sensor:
-  - name: "Date Range Condition"
-    state: >-
+  - state: >-
       {% set start = states(start_entity) %}
       {% set end = states(end_entity) %}
       {% if start in ['unknown', 'unavailable'] or end in ['unknown', 'unavailable'] %}
