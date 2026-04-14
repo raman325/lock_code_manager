@@ -1081,6 +1081,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
     name: 'LCM Lock Codes Card',
-    preview: false,
+    preview: true,
     type: 'custom:lcm-lock-codes'
 });
