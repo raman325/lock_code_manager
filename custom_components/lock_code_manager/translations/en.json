@@ -2,7 +2,6 @@
   "config": {
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
-      "lock_reset_cancelled": "Setup cancelled. Unmanaged codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated."
     },
     "error": {
@@ -20,15 +19,6 @@
         },
         "title": "Choose Path"
       },
-      "lock_reset": {
-        "description": "Unmanaged codes were found on the selected locks:\n\n{slot_summary}\n\nChoose how to handle them before proceeding.",
-        "menu_options": {
-          "lock_reset_clear": "Clear all unmanaged codes",
-          "lock_reset_adopt": "Adopt readable codes into Lock Code Manager",
-          "lock_reset_cancel": "Cancel"
-        },
-        "title": "Unmanaged Codes Found"
-      },
       "code_slot": {
         "data": {
           "entity_id": "Condition Entity",
@@ -37,7 +27,7 @@
           "number_of_uses": "Number of Uses",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:** You can link a slot to a condition entity (calendar, binary_sensor, switch, schedule, or input_boolean). When linked, the slot will only be active when the entity is 'on' (for calendars, this means an event is in progress). Number of Uses will only be enabled if set to a number greater than 0. Set to empty to disable.",
+        "description": "**Configure slot {slot_num}:**{existing_code_msg}\n\nA slot is active when all conditions are met: the condition entity (if configured) is 'on', and Number of Uses (if configured) is greater than 0. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
         "title": "Configure Slot {slot_num}"
       },
       "reauth": {
@@ -62,6 +52,13 @@
         },
         "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it.",
         "title": "Lock Code Manager"
+      },
+      "yaml_slot_review": {
+        "data": {
+          "adopt": "Adopt existing PIN"
+        },
+        "description": "**Slot {slot_num}:**{existing_code_msg}",
+        "title": "Review Existing Code — Slot {slot_num}"
       },
       "yaml": {
         "data": {

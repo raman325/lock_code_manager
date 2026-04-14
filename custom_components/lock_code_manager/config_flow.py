@@ -35,7 +35,7 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import get_entry_data, get_managed_slots
+from .data import get_entry_data
 from .exceptions import LockCodeManagerError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
@@ -164,20 +164,19 @@ async def _async_check_existing_usercodes(
     return lock_instance, usercodes
 
 
-async def _async_get_unmanaged_codes(
+async def _async_get_all_codes(
     hass: HomeAssistant,
     dev_reg: dr.DeviceRegistry,
     ent_reg: er.EntityRegistry,
     lock_entity_ids: list[str],
 ) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
-    """Query locks for usercodes and return only unmanaged ones.
+    """Query locks for all existing usercodes.
 
     Returns a tuple of:
     - Dict keyed by lock entity ID, each value being a dict of slot number to
-      code value for slots not managed by any Lock Code Manager config entry.
-      Empty slots (SlotCode.EMPTY) are excluded.
+      code value. Empty slots (SlotCode.EMPTY) are excluded.
     - Dict keyed by lock entity ID to temporary lock provider instances, for
-      reuse in clear/adopt steps.
+      reuse in clearing slots.
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
     lock_instances: dict[str, Any] = {}
@@ -190,20 +189,19 @@ async def _async_get_unmanaged_codes(
             pass
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
-                "Failed to get usercodes from %s during lock reset check; "
+                "Failed to get usercodes from %s; "
                 "this lock's codes will not be shown",
                 lock_entity_id,
                 exc_info=True,
             )
         else:
-            managed = get_managed_slots(hass, lock_entity_id)
-            unmanaged = {
+            occupied = {
                 slot: code
                 for slot, code in usercodes.items()
-                if code is not SlotCode.EMPTY and slot not in managed
+                if code is not SlotCode.EMPTY
             }
-            if unmanaged:
-                result[lock_entity_id] = unmanaged
+            if occupied:
+                result[lock_entity_id] = occupied
                 lock_instances[lock_entity_id] = lock_instance
     return result, lock_instances
 
@@ -221,8 +219,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self.slots_to_configure: list[int] = []
-        self._unmanaged_codes: dict[str, dict[int, str | SlotCode]] = {}
+        self._existing_codes: dict[str, dict[int, str | SlotCode]] = {}
         self._lock_instances: dict[str, Any] = {}
+        self._yaml_slots_to_review: list[int] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -238,7 +237,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(slugify(self.title))
             self._abort_if_unique_id_configured()
             self.data = user_input
-            return await self.async_step_lock_reset()
+            # Scan locks for existing codes once upfront
+            (
+                self._existing_codes,
+                self._lock_instances,
+            ) = await _async_get_all_codes(
+                self.hass, self.dev_reg, self.ent_reg, user_input[CONF_LOCKS]
+            )
+            return await self.async_step_choose_path()
 
         return self.async_show_form(
             step_id="user",
@@ -251,122 +257,58 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             last_step=False,
         )
 
-    async def async_step_lock_reset(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Check for unmanaged codes on selected locks and show reset options."""
-        if not self._unmanaged_codes:
-            (
-                self._unmanaged_codes,
-                self._lock_instances,
-            ) = await _async_get_unmanaged_codes(
-                self.hass, self.dev_reg, self.ent_reg, self.data[CONF_LOCKS]
-            )
-        if not self._unmanaged_codes:
-            return await self.async_step_choose_path()
+    def _get_existing_code_for_slot(
+        self, slot_num: int
+    ) -> tuple[str | None, str | None]:
+        """Check cached unmanaged codes for a slot across all locks.
 
-        has_readable = any(
-            not isinstance(code, SlotCode)
-            for codes in self._unmanaged_codes.values()
-            for code in codes.values()
-        )
+        Returns (status, pin) where status is one of:
+        - ("readable", pin_value) — all locks agree on the same readable code
+        - ("unreadable", None) — code exists but is masked on all locks
+        - ("conflict", None) — different readable codes across locks
+        - (None, None) — no existing code for this slot
+        """
+        codes_for_slot: list[str | SlotCode] = [
+            codes[slot_num]
+            for codes in self._existing_codes.values()
+            if slot_num in codes
+        ]
+        if not codes_for_slot:
+            return None, None
 
-        menu_options = ["lock_reset_clear", "lock_reset_cancel"]
-        if has_readable:
-            menu_options = [
-                "lock_reset_clear",
-                "lock_reset_adopt",
-                "lock_reset_cancel",
-            ]
+        readable = [c for c in codes_for_slot if not isinstance(c, SlotCode)]
+        if not readable:
+            return "unreadable", None
 
-        slot_summary = ", ".join(
-            f"{lock_id} (slots: {', '.join(str(s) for s in sorted(codes))})"
-            for lock_id, codes in self._unmanaged_codes.items()
-        )
-        return self.async_show_menu(
-            step_id="lock_reset",
-            menu_options=menu_options,
-            description_placeholders={"slot_summary": slot_summary},
-        )
+        unique_pins = {str(c) for c in readable}
+        if len(unique_pins) == 1:
+            return "readable", str(readable[0])
+        return "conflict", None
 
-    async def _clear_slots(self, slots_to_clear: dict[str, list[int]]) -> None:
-        """Clear specified slots on each lock, logging failures."""
-        for lock_entity_id, slots in slots_to_clear.items():
+    async def _clear_unmanaged_slot(self, slot_num: int) -> None:
+        """Clear a specific slot on all locks that have an unmanaged code in it."""
+        for lock_entity_id, codes in self._existing_codes.items():
+            if slot_num not in codes:
+                continue
             lock_instance = self._lock_instances.get(lock_entity_id)
             if not lock_instance:
                 _LOGGER.warning(
-                    "No lock instance for %s; cannot clear codes",
+                    "No lock instance for %s; cannot clear slot %s",
                     lock_entity_id,
+                    slot_num,
                 )
                 continue
-            for slot in slots:
-                try:
-                    await lock_instance.async_internal_clear_usercode(
-                        slot, source="direct"
-                    )
-                except Exception:  # noqa: BLE001
-                    _LOGGER.warning(
-                        "Failed to clear slot %s on %s",
-                        slot,
-                        lock_entity_id,
-                        exc_info=True,
-                    )
-
-    async def async_step_lock_reset_clear(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Clear all unmanaged codes from the selected locks."""
-        await self._clear_slots(
-            {lid: list(codes) for lid, codes in self._unmanaged_codes.items()}
-        )
-        self._unmanaged_codes = {}
-        self._lock_instances = {}
-        return await self.async_step_choose_path()
-
-    async def async_step_lock_reset_adopt(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Adopt readable unmanaged codes into the Lock Code Manager configuration."""
-        self.data.setdefault(CONF_SLOTS, {})
-        for lock_entity_id, codes in self._unmanaged_codes.items():
-            for slot, code in codes.items():
-                if code is SlotCode.UNKNOWN:
-                    continue
-                if slot in self.data[CONF_SLOTS]:
-                    existing_pin = self.data[CONF_SLOTS][slot].get(CONF_PIN)
-                    if existing_pin != str(code):
-                        _LOGGER.warning(
-                            "Slot %s has conflicting PINs across locks "
-                            "(keeping first seen PIN, skipping %s)",
-                            slot,
-                            lock_entity_id,
-                        )
-                        continue
-                    # Same PIN — skip, keep existing slot config intact
-                    continue
-                self.data[CONF_SLOTS][slot] = {
-                    CONF_NAME: f"Slot {slot}",
-                    CONF_PIN: str(code),
-                    CONF_ENABLED: True,
-                }
-
-        # Clear masked codes that were not adopted
-        await self._clear_slots(
-            {
-                lid: [s for s, c in codes.items() if c is SlotCode.UNKNOWN]
-                for lid, codes in self._unmanaged_codes.items()
-            }
-        )
-
-        self._unmanaged_codes = {}
-        self._lock_instances = {}
-        return await self.async_step_choose_path()
-
-    async def async_step_lock_reset_cancel(
-        self, user_input: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Cancel the config flow when user declines to handle unmanaged codes."""
-        return self.async_abort(reason="lock_reset_cancelled")
+            try:
+                await lock_instance.async_internal_clear_usercode(
+                    slot_num, source="direct"
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Failed to clear slot %s on %s",
+                    slot_num,
+                    lock_entity_id,
+                    exc_info=True,
+                )
 
     async def async_step_choose_path(
         self, user_input: dict[str, Any] | None = None
@@ -412,9 +354,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> dict[str, Any]:
         """Handle code slots step."""
         errors: dict[str, str] = {}
-        description_placeholders: dict[str, Any] = {
-            "slot_num": self.slots_to_configure[0]
-        }
+        current_slot = self.slots_to_configure[0]
+        description_placeholders: dict[str, Any] = {"slot_num": current_slot}
         self.data.setdefault(CONF_SLOTS, {})
 
         if user_input is not None:
@@ -437,16 +378,45 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     )
 
             if not errors:
-                self.data[CONF_SLOTS][int(self.slots_to_configure.pop(0))] = (
-                    CODE_SLOT_SCHEMA(user_input)
-                )
+                slot_num = int(self.slots_to_configure.pop(0))
+                self.data[CONF_SLOTS][slot_num] = CODE_SLOT_SCHEMA(user_input)
+                # Clear unmanaged code on locks for this slot since user
+                # provided explicit config
+                await self._clear_unmanaged_slot(slot_num)
                 if not self.slots_to_configure:
                     return self.async_create_entry(title=self.title, data=self.data)
-                description_placeholders["slot_num"] = self.slots_to_configure[0]
+                current_slot = self.slots_to_configure[0]
+                description_placeholders["slot_num"] = current_slot
+
+        # Check for existing code on locks for the current slot
+        status, existing_pin = self._get_existing_code_for_slot(current_slot)
+        suggested_values: dict[str, Any] = {}
+        if status == "readable":
+            description_placeholders["existing_code_msg"] = (
+                f"An existing PIN ({existing_pin}) was detected and imported. "
+                "You can keep it or enter a new one."
+            )
+            suggested_values[CONF_PIN] = existing_pin
+        elif status == "unreadable":
+            description_placeholders["existing_code_msg"] = (
+                "An existing PIN was detected but could not be read. "
+                "It will be replaced when this slot is configured."
+            )
+        elif status == "conflict":
+            description_placeholders["existing_code_msg"] = (
+                "Different PINs were detected across your locks for this slot. "
+                "The existing codes will be replaced."
+            )
+        else:
+            description_placeholders["existing_code_msg"] = ""
+
+        schema = self.add_suggested_values_to_schema(
+            UI_CODE_SLOT_SCHEMA, suggested_values
+        )
 
         return self.async_show_form(
             step_id="code_slot",
-            data_schema=UI_CODE_SLOT_SCHEMA,
+            data_schema=schema,
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=len(self.slots_to_configure) == 1,
@@ -473,6 +443,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
                 if not errors:
                     self.data[CONF_SLOTS] = slots
+                    # Check for existing codes in configured slots
+                    self._yaml_slots_to_review = [
+                        slot_num
+                        for slot_num in slots
+                        if self._get_existing_code_for_slot(slot_num)[0] is not None
+                    ]
+                    if self._yaml_slots_to_review:
+                        return await self.async_step_yaml_slot_review()
                     return self.async_create_entry(title=self.title, data=self.data)
 
         return self.async_show_form(
@@ -483,6 +461,53 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
+        )
+
+    async def async_step_yaml_slot_review(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Review existing codes for YAML-configured slots one at a time."""
+        if user_input is not None:
+            slot_num = self._yaml_slots_to_review.pop(0)
+            if user_input.get("adopt"):
+                status, pin = self._get_existing_code_for_slot(slot_num)
+                if status == "readable" and pin:
+                    self.data[CONF_SLOTS][slot_num][CONF_PIN] = pin
+                    self.data[CONF_SLOTS][slot_num][CONF_ENABLED] = True
+            # Clear the existing code on locks regardless (user is taking over)
+            await self._clear_unmanaged_slot(slot_num)
+            if not self._yaml_slots_to_review:
+                return self.async_create_entry(title=self.title, data=self.data)
+
+        current_slot = self._yaml_slots_to_review[0]
+        status, pin = self._get_existing_code_for_slot(current_slot)
+
+        description_placeholders: dict[str, Any] = {"slot_num": current_slot}
+        if status == "readable":
+            description_placeholders["existing_code_msg"] = (
+                f" An existing PIN ({pin}) was detected."
+            )
+            schema = vol.Schema(
+                {vol.Required("adopt", default=True): cv.boolean}
+            )
+        elif status == "conflict":
+            description_placeholders["existing_code_msg"] = (
+                " Different PINs were detected across your locks. "
+                "The existing codes will be cleared."
+            )
+            schema = vol.Schema({})
+        else:
+            description_placeholders["existing_code_msg"] = (
+                " An existing PIN was detected but could not be read. "
+                "It will be cleared."
+            )
+            schema = vol.Schema({})
+
+        return self.async_show_form(
+            step_id="yaml_slot_review",
+            data_schema=schema,
+            description_placeholders=description_placeholders,
+            last_step=len(self._yaml_slots_to_review) == 1,
         )
 
     async def async_step_reauth(self, user_input: dict[str, Any]):
