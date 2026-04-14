@@ -870,18 +870,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const stub = { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
         try {
-            const entries = await hass.callWS<GetConfigEntriesResponse>({
-                domain: 'lock_code_manager',
-                type: 'config_entries/get'
-            });
-            if (entries.length > 0) {
-                return { config_entry_id: entries[0].entry_id, slot: 1, type: 'custom:lcm-slot' };
-            }
+            return await Promise.race([
+                (async () => {
+                    const entries = await hass.callWS<GetConfigEntriesResponse>({
+                        domain: 'lock_code_manager',
+                        type: 'config_entries/get'
+                    });
+                    if (entries.length > 0) {
+                        return {
+                            config_entry_id: entries[0].entry_id,
+                            slot: 1,
+                            type: 'custom:lcm-slot'
+                        };
+                    }
+                    return stub;
+                })(),
+                new Promise<Record<string, unknown>>((resolve) =>
+                    setTimeout(() => resolve(stub), 2000)
+                )
+            ]);
         } catch {
-            // Fall through to stub
+            return stub;
         }
-        return { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {
@@ -1341,7 +1353,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
             ${!this._isStub && this._config?.condition_helpers?.length
                 ? html`<div class="condition-helpers">
-                      ${this._config.condition_helpers
+                      ${[...new Set(this._config.condition_helpers)]
                           .filter((eid: string) => this._hass?.states[eid])
                           .map(
                               (eid: string) =>

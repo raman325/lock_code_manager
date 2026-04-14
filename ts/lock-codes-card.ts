@@ -414,27 +414,35 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const stub = { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
         try {
-            const entries = await hass.callWS<GetConfigEntriesResponse>({
-                domain: 'lock_code_manager',
-                type: 'config_entries/get'
-            });
-            if (entries.length > 0) {
-                const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
-                    config_entry_id: entries[0].entry_id,
-                    type: 'lock_code_manager/get_config_entry_data'
-                });
-                if (data.locks.length > 0) {
-                    return {
-                        lock_entity_id: data.locks[0].entity_id,
-                        type: 'custom:lcm-lock-codes'
-                    };
-                }
-            }
+            return await Promise.race([
+                (async () => {
+                    const entries = await hass.callWS<GetConfigEntriesResponse>({
+                        domain: 'lock_code_manager',
+                        type: 'config_entries/get'
+                    });
+                    if (entries.length > 0) {
+                        const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
+                            config_entry_id: entries[0].entry_id,
+                            type: 'lock_code_manager/get_config_entry_data'
+                        });
+                        if (data.locks.length > 0) {
+                            return {
+                                lock_entity_id: data.locks[0].entity_id,
+                                type: 'custom:lcm-lock-codes'
+                            };
+                        }
+                    }
+                    return stub;
+                })(),
+                new Promise<Record<string, unknown>>((resolve) =>
+                    setTimeout(() => resolve(stub), 2000)
+                )
+            ]);
         } catch {
-            // Fall through to stub
+            return stub;
         }
-        return { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
     }
 
     setConfig(config: LockCodesCardConfig): void {
