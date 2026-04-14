@@ -183,15 +183,17 @@ class LcmSlotCardEditor extends LitElement {
                 <label @click=${this._toggleShowLockCount}>Lock Count</label>
             </div>
 
-            <div class="section-label">Initially Collapsed</div>
+            <div class="section-label">Initially Expanded</div>
 
             <div class="checkbox-row">
                 <ha-checkbox
-                    .checked=${(this._config.collapsed_sections ?? []).includes('conditions')}
+                    .checked=${!(
+                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                    ).includes('conditions')}
                     @change=${(e: Event) =>
                         this._toggleCollapsedSection(
                             'conditions',
-                            (e.target as HTMLInputElement).checked
+                            !(e.target as HTMLInputElement).checked
                         )}
                 ></ha-checkbox>
                 <label>Conditions</label>
@@ -199,11 +201,13 @@ class LcmSlotCardEditor extends LitElement {
 
             <div class="checkbox-row">
                 <ha-checkbox
-                    .checked=${(this._config.collapsed_sections ?? []).includes('lock_status')}
+                    .checked=${!(
+                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                    ).includes('lock_status')}
                     @change=${(e: Event) =>
                         this._toggleCollapsedSection(
                             'lock_status',
-                            (e.target as HTMLInputElement).checked
+                            !(e.target as HTMLInputElement).checked
                         )}
                 ></ha-checkbox>
                 <label>Lock Status</label>

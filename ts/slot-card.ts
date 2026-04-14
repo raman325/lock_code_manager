@@ -1339,7 +1339,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                   </div>`
                 : nothing}
             ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
-            ${this._config?.condition_helpers?.length
+            ${!this._isStub && this._config?.condition_helpers?.length
                 ? html`<div class="condition-helpers">
                       ${this._config.condition_helpers
                           .filter((eid: string) => this._hass?.states[eid])
