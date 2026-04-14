@@ -11,7 +11,7 @@ from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PI
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.config_flow import _async_get_unmanaged_codes
+from custom_components.lock_code_manager.config_flow import _async_get_all_codes
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_SLOTS,
@@ -48,9 +48,13 @@ async def _start_config_flow(hass: HomeAssistant):
     assert result["step_id"] == "user"
     flow_id = result["flow_id"]
 
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-    )
+    with patch(
+        "custom_components.lock_code_manager.config_flow._async_get_all_codes",
+        return_value=({}, {}),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
 
     assert result["type"] == "menu"
     assert result["step_id"] == "choose_path"
@@ -293,10 +297,10 @@ async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
     assert result["description_placeholders"].get("integration") == "scheduler"
 
 
-# --- Lock reset step tests ---
+# --- Per-slot existing code handling tests ---
 
-LOCK_RESET_PATCH = (
-    "custom_components.lock_code_manager.config_flow._async_get_unmanaged_codes"
+GET_ALL_CODES_PATCH = (
+    "custom_components.lock_code_manager.config_flow._async_get_all_codes"
 )
 
 
@@ -310,249 +314,148 @@ async def _init_flow_to_user_step(hass: HomeAssistant) -> str:
     return result["flow_id"]
 
 
-async def test_lock_reset_no_unmanaged_codes_skips(hass: HomeAssistant):
-    """Test that lock reset step is skipped when no unmanaged codes exist."""
-    with patch(LOCK_RESET_PATCH, return_value=({}, {})):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-
-    # Should skip lock_reset and go straight to choose_path
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
+# --- UI path tests ---
 
 
-async def test_lock_reset_readable_codes_clear(hass: HomeAssistant):
-    """Test clearing unmanaged readable codes."""
+async def test_code_slot_readable_code_prefilled(hass: HomeAssistant):
+    """Test that a readable existing code is prefilled and message shown."""
     mock_clear = AsyncMock(return_value=True)
     mock_lock = AsyncMock()
     mock_lock.async_internal_clear_usercode = mock_clear
-    unmanaged = {LOCK_1_ENTITY_ID: {3: "9999", 4: "8888"}}
+    existing = {LOCK_1_ENTITY_ID: {1: "1234"}}
     lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
 
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
 
-        assert result["type"] == "menu"
-        assert result["step_id"] == "lock_reset"
-        assert "lock_reset_clear" in result["menu_options"]
-        assert "lock_reset_adopt" in result["menu_options"]
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_clear"}
-        )
-
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
-    assert mock_clear.call_count == 2
-
-
-async def test_lock_reset_readable_codes_adopt(hass: HomeAssistant):
-    """Test adopting unmanaged readable codes creates slots in config."""
-    unmanaged = {LOCK_1_ENTITY_ID: {3: "9999", 5: "7777"}}
-    lock_instances = {LOCK_1_ENTITY_ID: AsyncMock()}
-
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-
-        assert result["type"] == "menu"
-        assert result["step_id"] == "lock_reset"
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_adopt"}
-        )
-
     assert result["type"] == "menu"
     assert result["step_id"] == "choose_path"
 
-    # Verify adopted slots by completing the flow through YAML
+    # Go to UI path
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "yaml"}
+        flow_id, {"next_step_id": "ui"}
     )
-    assert result["type"] == "form"
-    assert result["step_id"] == "yaml"
+    assert result["step_id"] == "ui"
 
-    # Submit the adopted slots (they were pre-populated in flow data)
     result = await hass.config_entries.flow.async_configure(
-        flow_id,
-        {
-            CONF_SLOTS: {
-                3: {CONF_ENABLED: True, CONF_PIN: "9999", CONF_NAME: "Slot 3"},
-                5: {CONF_ENABLED: True, CONF_PIN: "7777", CONF_NAME: "Slot 5"},
-            }
-        },
+        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
     )
 
-    assert result["type"] == "create_entry"
-    assert result["data"][CONF_SLOTS][3] == {
-        CONF_ENABLED: True,
-        CONF_PIN: "9999",
-        CONF_NAME: "Slot 3",
-    }
-    assert result["data"][CONF_SLOTS][5] == {
-        CONF_ENABLED: True,
-        CONF_PIN: "7777",
-        CONF_NAME: "Slot 5",
-    }
+    assert result["step_id"] == "code_slot"
+    assert (
+        "detected and imported"
+        in result["description_placeholders"]["existing_code_msg"]
+    )
+
+    # Submit slot 1
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["step_id"] == "code_slot"
+    # Verify clear was called for slot 1
+    mock_clear.assert_called_once_with(1, source="direct")
 
 
-async def test_lock_reset_masked_codes_only_clear_or_cancel(hass: HomeAssistant):
-    """Test that only clear and cancel are shown for masked-only codes."""
-    unmanaged = {LOCK_1_ENTITY_ID: {3: SlotCode.UNKNOWN, 4: SlotCode.UNKNOWN}}
+async def test_code_slot_unreadable_code_message(hass: HomeAssistant):
+    """Test that an unreadable existing code shows appropriate message."""
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCode.UNKNOWN}}
     lock_instances = {LOCK_1_ENTITY_ID: AsyncMock()}
 
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
 
-    assert result["type"] == "menu"
-    assert result["step_id"] == "lock_reset"
-    assert "lock_reset_clear" in result["menu_options"]
-    assert "lock_reset_cancel" in result["menu_options"]
-    assert "lock_reset_adopt" not in result["menu_options"]
-
-
-async def test_lock_reset_cancel_aborts(hass: HomeAssistant):
-    """Test that cancel aborts the config flow."""
-    unmanaged = {LOCK_1_ENTITY_ID: {3: "9999"}}
-    lock_instances = {LOCK_1_ENTITY_ID: AsyncMock()}
-
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-
-        assert result["type"] == "menu"
-        assert result["step_id"] == "lock_reset"
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_cancel"}
-        )
-
-    assert result["type"] == "abort"
-    assert result["reason"] == "lock_reset_cancelled"
-
-
-async def test_lock_reset_mixed_codes_adopt_clears_masked(hass: HomeAssistant):
-    """Test that adopt with mixed codes adopts readable and clears masked."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
-    unmanaged = {LOCK_1_ENTITY_ID: {3: "9999", 4: SlotCode.UNKNOWN}}
-    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
-
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-
-        assert result["type"] == "menu"
-        assert result["step_id"] == "lock_reset"
-        # Both adopt and clear should be available for mixed codes
-        assert "lock_reset_adopt" in result["menu_options"]
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_adopt"}
-        )
-
-    assert result["type"] == "menu"
     assert result["step_id"] == "choose_path"
-    # Only the masked slot (4) should have been cleared
-    mock_clear.assert_called_once_with(4, source="direct")
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
+    )
+
+    assert result["step_id"] == "code_slot"
+    assert (
+        "could not be read" in result["description_placeholders"]["existing_code_msg"]
+    )
 
 
-async def test_lock_reset_clear_missing_lock_instance(hass: HomeAssistant):
-    """Test that clear skips locks without a lock_instance."""
-    unmanaged = {
-        LOCK_1_ENTITY_ID: {3: "9999"},
-        LOCK_2_ENTITY_ID: {5: "1111"},
-    }
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
-    # Only LOCK_1 has an instance; LOCK_2 is missing from lock_instances
-    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
-
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-        assert result["step_id"] == "lock_reset"
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_clear"}
-        )
-
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
-    # Only slot 3 on LOCK_1 should have been cleared; LOCK_2 was skipped
-    mock_clear.assert_called_once_with(3, source="direct")
-
-
-async def test_lock_reset_clear_exception_during_clear(hass: HomeAssistant):
-    """Test that an exception during slot clearing is caught and logged."""
-    mock_clear = AsyncMock(side_effect=RuntimeError("device unavailable"))
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
-    unmanaged = {LOCK_1_ENTITY_ID: {3: "9999"}}
-    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
-
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-        assert result["step_id"] == "lock_reset"
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_clear"}
-        )
-
-    # Flow should continue to choose_path despite the exception
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
-    mock_clear.assert_called_once_with(3, source="direct")
-
-
-async def test_lock_reset_adopt_pin_conflict(hass: HomeAssistant):
-    """Test that conflicting PINs across locks keep the first-seen PIN."""
-    # Two locks have the same slot but different PINs
-    unmanaged = {
-        LOCK_1_ENTITY_ID: {3: "9999"},
-        LOCK_2_ENTITY_ID: {3: "1111"},
+async def test_code_slot_conflict_code_message(hass: HomeAssistant):
+    """Test that conflicting codes across locks shows conflict message."""
+    existing = {
+        LOCK_1_ENTITY_ID: {1: "1234"},
+        LOCK_2_ENTITY_ID: {1: "5678"},
     }
     lock_instances = {
         LOCK_1_ENTITY_ID: AsyncMock(),
         LOCK_2_ENTITY_ID: AsyncMock(),
     }
 
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
-        assert result["step_id"] == "lock_reset"
 
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_adopt"}
-        )
-
-    assert result["type"] == "menu"
     assert result["step_id"] == "choose_path"
 
-    # Verify adopted slots: only the first-seen PIN should be kept
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
+    )
+
+    assert result["step_id"] == "code_slot"
+    assert "Different PINs" in result["description_placeholders"]["existing_code_msg"]
+
+
+async def test_code_slot_no_existing_code(hass: HomeAssistant):
+    """Test that no existing code results in empty message."""
+    with patch(GET_ALL_CODES_PATCH, return_value=({}, {})):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    assert result["step_id"] == "choose_path"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
+    )
+
+    assert result["step_id"] == "code_slot"
+    assert result["description_placeholders"]["existing_code_msg"] == ""
+
+
+# --- YAML path tests ---
+
+
+async def test_yaml_slot_review_adopt_readable(hass: HomeAssistant):
+    """Test that adopting a readable code in YAML review updates the slot config."""
+    mock_clear = AsyncMock(return_value=True)
+    mock_lock = AsyncMock()
+    mock_lock.async_internal_clear_usercode = mock_clear
+    existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
+    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    assert result["step_id"] == "choose_path"
+
     result = await hass.config_entries.flow.async_configure(
         flow_id, {"next_step_id": "yaml"}
     )
@@ -560,65 +463,87 @@ async def test_lock_reset_adopt_pin_conflict(hass: HomeAssistant):
 
     result = await hass.config_entries.flow.async_configure(
         flow_id,
-        {CONF_SLOTS: {3: {CONF_ENABLED: True, CONF_PIN: "9999", CONF_NAME: "Slot 3"}}},
+        {CONF_SLOTS: {1: {CONF_ENABLED: False, CONF_PIN: "0000"}}},
     )
+
+    assert result["step_id"] == "yaml_slot_review"
+    assert "detected" in result["description_placeholders"]["existing_code_msg"]
+
+    # Adopt the existing PIN
+    result = await hass.config_entries.flow.async_configure(flow_id, {"adopt": True})
+
     assert result["type"] == "create_entry"
-    # The first-seen PIN ("9999" from LOCK_1) should be kept
-    assert result["data"][CONF_SLOTS][3][CONF_PIN] == "9999"
+    # PIN should be adopted from the existing code
+    assert result["data"][CONF_SLOTS][1][CONF_PIN] == "9999"
+    assert result["data"][CONF_SLOTS][1][CONF_ENABLED] is True
+    mock_clear.assert_called_once_with(1, source="direct")
 
 
-async def test_lock_reset_adopt_missing_lock_instance_for_masked(hass: HomeAssistant):
-    """Test that masked slot clear is skipped when lock_instance is missing."""
-    unmanaged = {
-        LOCK_1_ENTITY_ID: {3: "9999"},
-        LOCK_2_ENTITY_ID: {5: SlotCode.UNKNOWN},
-    }
-    # Only LOCK_1 has an instance; LOCK_2 masked slot should be skipped
-    lock_instances = {LOCK_1_ENTITY_ID: AsyncMock()}
-
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
-        flow_id = await _init_flow_to_user_step(hass)
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-        )
-        assert result["step_id"] == "lock_reset"
-
-        result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_adopt"}
-        )
-
-    assert result["type"] == "menu"
-    assert result["step_id"] == "choose_path"
-
-
-async def test_lock_reset_adopt_exception_clearing_masked(hass: HomeAssistant):
-    """Test that exceptions while clearing a masked slot are caught."""
-    mock_clear = AsyncMock(side_effect=RuntimeError("device unavailable"))
+async def test_yaml_slot_review_skip_readable(hass: HomeAssistant):
+    """Test that declining adoption keeps the original YAML PIN."""
+    mock_clear = AsyncMock(return_value=True)
     mock_lock = AsyncMock()
     mock_lock.async_internal_clear_usercode = mock_clear
-    unmanaged = {LOCK_1_ENTITY_ID: {3: "9999", 4: SlotCode.UNKNOWN}}
+    existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
     lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
 
-    with patch(LOCK_RESET_PATCH, return_value=(unmanaged, lock_instances)):
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
         flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
             flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
-        assert result["step_id"] == "lock_reset"
 
+    assert result["step_id"] == "choose_path"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "0000"}}},
+    )
+
+    assert result["step_id"] == "yaml_slot_review"
+
+    # Decline adoption
+    result = await hass.config_entries.flow.async_configure(flow_id, {"adopt": False})
+
+    assert result["type"] == "create_entry"
+    # Original YAML PIN should be kept
+    assert result["data"][CONF_SLOTS][1][CONF_PIN] == "0000"
+    # Clear should still be called (user is taking over the slot)
+    mock_clear.assert_called_once_with(1, source="direct")
+
+
+async def test_yaml_no_review_when_no_existing_codes(hass: HomeAssistant):
+    """Test that YAML flow goes directly to create_entry with no existing codes."""
+    with patch(GET_ALL_CODES_PATCH, return_value=({}, {})):
+        flow_id = await _init_flow_to_user_step(hass)
         result = await hass.config_entries.flow.async_configure(
-            flow_id, {"next_step_id": "lock_reset_adopt"}
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
         )
 
-    # Flow should continue despite the exception during masked slot clear
-    assert result["type"] == "menu"
     assert result["step_id"] == "choose_path"
-    # The masked slot (4) clear was attempted and failed
-    mock_clear.assert_called_once_with(4, source="direct")
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    assert result["step_id"] == "yaml"
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
 
 
-async def test_async_get_unmanaged_codes_exception(hass: HomeAssistant):
-    """Test _async_get_unmanaged_codes catches exception from usercodes fetch."""
+# --- _async_get_all_codes tests ---
+
+
+async def test_async_get_all_codes_exception(hass: HomeAssistant):
+    """Test _async_get_all_codes catches exception from usercodes fetch."""
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
         side_effect=RuntimeError("node not ready")
@@ -642,7 +567,7 @@ async def test_async_get_unmanaged_codes_exception(hass: HomeAssistant):
             return_value=MockConfigEntry(domain="zwave_js"),
         ),
     ):
-        result, instances = await _async_get_unmanaged_codes(
+        result, instances = await _async_get_all_codes(
             hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
         )
 
@@ -651,8 +576,8 @@ async def test_async_get_unmanaged_codes_exception(hass: HomeAssistant):
     assert instances == {}
 
 
-async def test_async_get_unmanaged_codes_returns_unmanaged(hass: HomeAssistant):
-    """Test _async_get_unmanaged_codes returns only unmanaged non-empty codes."""
+async def test_async_get_all_codes_returns_all_non_empty(hass: HomeAssistant):
+    """Test _async_get_all_codes returns all non-empty codes including managed ones."""
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
         return_value={1: "1234", 3: "9999", 4: SlotCode.EMPTY}
@@ -665,7 +590,7 @@ async def test_async_get_unmanaged_codes_returns_unmanaged(hass: HomeAssistant):
     )
     dev_reg = dr.async_get(hass)
 
-    # Create an LCM config entry that manages slot 1 on this lock
+    # Create an existing Lock Code Manager config entry that manages slot 1
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -686,12 +611,12 @@ async def test_async_get_unmanaged_codes_returns_unmanaged(hass: HomeAssistant):
             return_value=MockConfigEntry(domain="zwave_js"),
         ),
     ):
-        result, instances = await _async_get_unmanaged_codes(
+        result, instances = await _async_get_all_codes(
             hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
         )
 
-    # Slot 1 is managed by the LCM entry, slot 4 is empty
-    # Only slot 3 should be returned as unmanaged
+    # _async_get_all_codes returns ALL non-empty codes (not filtered by managed status)
+    # Slot 4 is empty, so only slots 1 and 3 should be returned
     assert LOCK_1_ENTITY_ID in result
-    assert result[LOCK_1_ENTITY_ID] == {3: "9999"}
+    assert result[LOCK_1_ENTITY_ID] == {1: "1234", 3: "9999"}
     assert LOCK_1_ENTITY_ID in instances
