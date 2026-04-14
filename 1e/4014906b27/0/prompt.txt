@@ -650,3 +650,7 @@ what shows first, the on/off entity or the condition_helpers?
 ---
 
 that's perfect thanks
+
+---
+
+CI failed for lint and build
