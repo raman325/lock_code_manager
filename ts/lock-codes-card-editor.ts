@@ -22,7 +22,7 @@ class LockCodesCardEditor extends LitElement {
         }
 
         ha-entity-picker,
-        ha-textfield,
+        ha-input,
         ha-select {
             display: block;
             width: 100%;
@@ -78,11 +78,11 @@ class LockCodesCardEditor extends LitElement {
             </div>
 
             <div class="editor-row">
-                <ha-textfield
+                <ha-input
                     .label=${'Title (optional)'}
                     .value=${this._config.title ?? ''}
                     @input=${this._titleChanged}
-                ></ha-textfield>
+                ></ha-input>
             </div>
 
             <div class="editor-row">
