@@ -320,7 +320,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return "conflict", None
 
     async def _create_entry_and_clear_slots(self) -> dict[str, Any]:
-        """Create the config entry and then clear any existing codes from locks."""
+        """Build entry creation result, clear existing codes, then return."""
         result = self.async_create_entry(title=self.title, data=self.data)
         for slot_num in self._slots_to_clear:
             await self._clear_existing_slot(slot_num)
