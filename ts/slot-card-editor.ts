@@ -340,7 +340,7 @@ class LcmSlotCardEditor extends LitElement {
                 ? current
                 : [...current, section]
             : current.filter((s: string) => s !== section);
-        this._updateConfig('collapsed_sections', updated.length > 0 ? updated : undefined);
+        this._updateConfig('collapsed_sections', updated);
     }
 
     private _addConditionHelper(e: CustomEvent): void {
