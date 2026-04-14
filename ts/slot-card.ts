@@ -852,6 +852,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     } | null = null;
 
     _hass?: HomeAssistant;
+    private _entityRowCache = new Map<string, HTMLElement>();
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -1341,38 +1342,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 ? html`<div class="condition-helpers">
                       ${this._config.condition_helpers
                           .filter((eid: string) => this._hass?.states[eid])
-                          .map(
-                              (eid: string) => html`
-                                  <div
-                                      class="condition-helper-row"
-                                      @click=${() => {
-                                          if (this._hass) {
-                                              this.dispatchEvent(
-                                                  new CustomEvent('hass-more-info', {
-                                                      bubbles: true,
-                                                      composed: true,
-                                                      detail: { entityId: eid }
-                                                  })
-                                              );
-                                          }
-                                      }}
-                                  >
-                                      <state-badge
-                                          .hass=${this._hass}
-                                          .stateObj=${this._hass!.states[eid]}
-                                      ></state-badge>
-                                      <div class="condition-helper-info">
-                                          <span class="condition-helper-name">
-                                              ${this._hass!.states[eid]?.attributes
-                                                  ?.friendly_name ?? eid}
-                                          </span>
-                                          <span class="condition-helper-state">
-                                              ${this._hass!.states[eid]?.state}
-                                          </span>
-                                      </div>
-                                  </div>
-                              `
-                          )}
+                          .map((eid: string) => this._getEntityRow(eid))}
                   </div>`
                 : nothing}
             ${canAddEntity
@@ -1472,6 +1442,31 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * Render a unified condition entity display.
      * Consistent structure across all domain types with domain-specific context.
      */
+    private _getEntityRow(entityId: string): HTMLElement {
+        let el = this._entityRowCache.get(entityId);
+        if (!el) {
+            const [domain] = entityId.split('.');
+            const domainToRow: Record<string, string> = {
+                input_boolean: 'toggle',
+                input_datetime: 'input-datetime',
+                input_number: 'input-number',
+                input_select: 'input-select',
+                input_text: 'input-text',
+                switch: 'toggle',
+                timer: 'timer'
+            };
+            const rowType = domainToRow[domain] ?? 'simple';
+            const tag = `hui-${rowType}-entity-row`;
+            el = document.createElement(tag);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (el as any).setConfig({ entity: entityId });
+            this._entityRowCache.set(entityId, el);
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (el as any).hass = this._hass;
+        return el;
+    }
+
     private _renderConditionEntity(entity: ConditionEntityInfo, showEdit = false): TemplateResult {
         const isActive = entity.state === 'on';
         const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
