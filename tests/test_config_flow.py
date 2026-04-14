@@ -68,12 +68,13 @@ async def _start_ui_config_flow(hass: HomeAssistant):
     assert result["step_id"] == "ui"
 
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
+        flow_id, {CONF_NUM_SLOTS: 4, CONF_START_SLOT: 1}
     )
 
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
     assert not result["last_step"]
+    assert result["description_placeholders"]["slot_num"] == 1
 
     return flow_id
 
@@ -93,28 +94,34 @@ async def _start_yaml_config_flow(hass: HomeAssistant):
 
 
 async def test_config_flow_ui(hass: HomeAssistant):
-    """Test UI based config flow."""
+    """Test UI based config flow with slot number incrementing correctly."""
     flow_id = await _start_ui_config_flow(hass)
 
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_ENABLED: True, CONF_PIN: "1234"}
-    )
+    pins = ["1234", "5678", "9012", "3456"]
+    for i, pin in enumerate(pins):
+        slot_num = i + 1
+        is_last = slot_num == len(pins)
 
-    assert result["type"] == "form"
-    assert result["step_id"] == "code_slot"
-    assert result["last_step"]
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_ENABLED: True, CONF_PIN: pin}
+        )
 
-    result = await hass.config_entries.flow.async_configure(
-        flow_id, {CONF_ENABLED: True, CONF_PIN: "5678"}
-    )
+        if is_last:
+            assert result["type"] == "create_entry"
+        else:
+            assert result["type"] == "form"
+            assert result["step_id"] == "code_slot"
+            assert result["last_step"] == (slot_num == len(pins) - 1)
+            assert result["description_placeholders"]["slot_num"] == slot_num + 1
 
-    assert result["type"] == "create_entry"
     assert result["title"] == "test"
     assert result["data"] == {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
             1: {CONF_ENABLED: True, CONF_PIN: "1234"},
             2: {CONF_ENABLED: True, CONF_PIN: "5678"},
+            3: {CONF_ENABLED: True, CONF_PIN: "9012"},
+            4: {CONF_ENABLED: True, CONF_PIN: "3456"},
         },
     }
 
@@ -253,6 +260,7 @@ async def test_config_flow_two_entries_same_locks(
         {CONF_SLOTS: {3: {CONF_ENABLED: False, CONF_PIN: "0123"}}},
     )
     assert result["type"] == "create_entry"
+
 
 
 async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
