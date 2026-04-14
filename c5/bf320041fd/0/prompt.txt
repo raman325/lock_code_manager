@@ -483,3 +483,7 @@ the lock card is mostly ok, it's the summary table at the end that flows off the
 ---
 
 wow much cleaner. Also notice that the + On/Off Entity button is visible but the one for # of uses isn't
+
+---
+
+commit the fixes and update the PR title and description.
