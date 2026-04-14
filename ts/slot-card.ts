@@ -1457,29 +1457,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             return cached;
         }
 
-        const [domain] = entityId.split('.');
-        const domainToRow: Record<string, string> = {
-            input_boolean: 'toggle',
-            input_datetime: 'input-datetime',
-            input_number: 'input-number',
-            input_select: 'input-select',
-            input_text: 'input-text',
-            switch: 'toggle',
-            timer: 'timer'
-        };
-        const rowType = domainToRow[domain] ?? 'simple';
-        const tag = `hui-${rowType}-entity-row`;
-
-        // Ensure the element class is loaded (HA lazy-loads entity rows)
-        if (!customElements.get(tag)) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (window as any).loadCardHelpers?.();
-            await customElements.whenDefined(tag);
-        }
-
-        const el = document.createElement(tag);
+        // Use HA's loadCardHelpers to get createRowElement, which handles
+        // lazy-loading and domain-to-row mapping automatically
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (el as any).setConfig({ entity: entityId });
+        const helpers = await (window as any).loadCardHelpers();
+        const el = helpers.createRowElement({ entity: entityId }) as HTMLElement;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (el as any).hass = this._hass;
         this._entityRowCache.set(entityId, el);
