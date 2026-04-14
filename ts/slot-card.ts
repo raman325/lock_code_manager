@@ -19,6 +19,7 @@ import {
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
+import { until } from 'lit/directives/until.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import {
@@ -1342,7 +1343,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 ? html`<div class="condition-helpers">
                       ${this._config.condition_helpers
                           .filter((eid: string) => this._hass?.states[eid])
-                          .map((eid: string) => this._getEntityRow(eid))}
+                          .map(
+                              (eid: string) =>
+                                  html`${until(
+                                      this._getEntityRow(eid),
+                                      html`<div>Loading...</div>`
+                                  )}`
+                          )}
                   </div>`
                 : nothing}
             ${canAddEntity
@@ -1442,28 +1449,40 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * Render a unified condition entity display.
      * Consistent structure across all domain types with domain-specific context.
      */
-    private _getEntityRow(entityId: string): HTMLElement {
-        let el = this._entityRowCache.get(entityId);
-        if (!el) {
-            const [domain] = entityId.split('.');
-            const domainToRow: Record<string, string> = {
-                input_boolean: 'toggle',
-                input_datetime: 'input-datetime',
-                input_number: 'input-number',
-                input_select: 'input-select',
-                input_text: 'input-text',
-                switch: 'toggle',
-                timer: 'timer'
-            };
-            const rowType = domainToRow[domain] ?? 'simple';
-            const tag = `hui-${rowType}-entity-row`;
-            el = document.createElement(tag);
+    private async _getEntityRow(entityId: string): Promise<HTMLElement> {
+        const cached = this._entityRowCache.get(entityId);
+        if (cached) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (el as any).setConfig({ entity: entityId });
-            this._entityRowCache.set(entityId, el);
+            (cached as any).hass = this._hass;
+            return cached;
         }
+
+        const [domain] = entityId.split('.');
+        const domainToRow: Record<string, string> = {
+            input_boolean: 'toggle',
+            input_datetime: 'input-datetime',
+            input_number: 'input-number',
+            input_select: 'input-select',
+            input_text: 'input-text',
+            switch: 'toggle',
+            timer: 'timer'
+        };
+        const rowType = domainToRow[domain] ?? 'simple';
+        const tag = `hui-${rowType}-entity-row`;
+
+        // Ensure the element class is loaded (HA lazy-loads entity rows)
+        if (!customElements.get(tag)) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (window as any).loadCardHelpers?.();
+            await customElements.whenDefined(tag);
+        }
+
+        const el = document.createElement(tag);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (el as any).setConfig({ entity: entityId });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (el as any).hass = this._hass;
+        this._entityRowCache.set(entityId, el);
         return el;
     }
 
