@@ -334,7 +334,7 @@ class LcmSlotCardEditor extends LitElement {
         section: 'conditions' | 'lock_status',
         collapsed: boolean
     ): void {
-        const current = this._config?.collapsed_sections ?? [];
+        const current = this._config?.collapsed_sections ?? ['conditions', 'lock_status'];
         const updated = collapsed
             ? current.includes(section)
                 ? current
