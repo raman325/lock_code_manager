@@ -8,6 +8,8 @@ import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
+    GetConfigEntriesResponse,
+    LockCodeManagerConfigEntryDataResponse,
     LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData,
@@ -319,13 +321,16 @@ class LockCodesCard extends LockCodesCardBase {
                 border-collapse: collapse;
                 font-size: 12px;
                 margin-top: 16px;
+                table-layout: fixed;
                 width: 100%;
             }
 
             .summary-table th,
             .summary-table td {
-                padding: 6px 8px;
+                overflow: hidden;
+                padding: 6px 4px;
                 text-align: center;
+                text-overflow: ellipsis;
             }
 
             .summary-table th {
@@ -408,8 +413,36 @@ class LockCodesCard extends LockCodesCardBase {
         return document.createElement('lcm-lock-codes-editor');
     }
 
-    static getStubConfig(): Partial<LockCodesCardConfig> {
-        return { lock_entity_id: '' };
+    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const stub = { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
+        try {
+            return await Promise.race([
+                (async () => {
+                    const entries = await hass.callWS<GetConfigEntriesResponse>({
+                        domain: 'lock_code_manager',
+                        type: 'config_entries/get'
+                    });
+                    if (entries.length > 0) {
+                        const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
+                            config_entry_id: entries[0].entry_id,
+                            type: 'lock_code_manager/get_config_entry_data'
+                        });
+                        if (data.locks.length > 0) {
+                            return {
+                                lock_entity_id: data.locks[0].entity_id,
+                                type: 'custom:lcm-lock-codes'
+                            };
+                        }
+                    }
+                    return stub;
+                })(),
+                new Promise<Record<string, unknown>>((resolve) =>
+                    setTimeout(() => resolve(stub), 2000)
+                )
+            ]);
+        } catch {
+            return stub;
+        }
     }
 
     setConfig(config: LockCodesCardConfig): void {
@@ -421,7 +454,10 @@ class LockCodesCard extends LockCodesCardBase {
             this._data = undefined;
         }
         this._config = config;
-        void this._subscribe();
+        this._isStub = config.lock_entity_id === 'lock.stub';
+        if (!this._isStub) {
+            void this._subscribe();
+        }
     }
 
     // Mixin abstract method implementations
@@ -447,6 +483,16 @@ class LockCodesCard extends LockCodesCardBase {
     // connectedCallback and disconnectedCallback provided by mixin
 
     protected render(): TemplateResult {
+        // Show static preview for card picker (stub config)
+        if (this._isStub) {
+            return html`<ha-card>
+                <div class="card-header">
+                    <div class="header-icon"><ha-icon icon="mdi:lock-smart"></ha-icon></div>
+                    <span class="card-header-title">Lock Code Manager Lock Codes</span>
+                </div>
+            </ha-card>`;
+        }
+
         const hassLockName =
             this._hass?.states[this._config?.lock_entity_id ?? '']?.attributes?.friendly_name;
         const lockName =
@@ -1055,7 +1101,12 @@ customElements.define('lcm-lock-codes', LockCodesCard);
 
 declare global {
     interface Window {
-        customCards?: Array<{ description: string; name: string; type: string }>;
+        customCards?: Array<{
+            description: string;
+            name: string;
+            preview?: boolean;
+            type: string;
+        }>;
     }
 }
 
@@ -1063,5 +1114,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
     name: 'LCM Lock Codes Card',
-    type: 'custom:lcm-lock-codes'
+    preview: true,
+    type: 'lcm-lock-codes'
 });

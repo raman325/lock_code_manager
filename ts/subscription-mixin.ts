@@ -47,6 +47,7 @@ export function LcmSubscriptionMixin<T extends Constructor<LitElement & LcmSubsc
         // Properties
         @state() protected _revealed = false;
 
+        protected _isStub = false;
         protected _unsub?: () => void;
         protected _subscribing = false;
 
@@ -82,7 +83,7 @@ export function LcmSubscriptionMixin<T extends Constructor<LitElement & LcmSubsc
         }
 
         protected async _subscribe(): Promise<void> {
-            if (!this._hass || !this._config || this._unsub || this._subscribing) {
+            if (this._isStub || !this._hass || !this._config || this._unsub || this._subscribing) {
                 return;
             }
             if (!this._hass.connection?.subscribeMessage) {

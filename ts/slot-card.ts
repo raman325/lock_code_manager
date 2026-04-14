@@ -19,6 +19,7 @@ import {
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
+import { until } from 'lit/directives/until.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import {
@@ -33,6 +34,7 @@ import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
     ConditionEntityInfo,
+    GetConfigEntriesResponse,
     LockCodeManagerSlotCardConfig,
     SLOT_CODE_UNKNOWN,
     SlotCardConditions,
@@ -94,7 +96,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             .header-top {
                 align-items: center;
                 display: flex;
-                gap: 12px;
+                flex-wrap: wrap;
+                gap: 8px 12px;
             }
 
             .header-icon {
@@ -125,15 +128,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 color: var(--primary-text-color);
                 font-size: 18px;
                 font-weight: 500;
+                white-space: nowrap;
             }
 
             .header-pills {
                 align-items: center;
                 display: flex;
-                flex-shrink: 0;
                 flex-wrap: wrap;
                 gap: 4px;
-                justify-content: flex-end;
             }
 
             .header-pill {
@@ -144,7 +146,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 display: flex;
                 font-size: 11px;
                 gap: 4px;
+                max-width: 100%;
+                overflow: hidden;
                 padding: 4px 8px;
+                text-overflow: ellipsis;
                 white-space: nowrap;
             }
 
@@ -848,6 +853,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     } | null = null;
 
     _hass?: HomeAssistant;
+    private _entityRowCache = new Map<string, HTMLElement>();
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -863,8 +869,31 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return document.createElement('lcm-slot-editor');
     }
 
-    static getStubConfig(): Partial<LockCodeManagerSlotCardConfig> {
-        return { config_entry_id: '', slot: 1 };
+    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const stub = { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
+        try {
+            return await Promise.race([
+                (async () => {
+                    const entries = await hass.callWS<GetConfigEntriesResponse>({
+                        domain: 'lock_code_manager',
+                        type: 'config_entries/get'
+                    });
+                    if (entries.length > 0) {
+                        return {
+                            config_entry_id: entries[0].entry_id,
+                            slot: 1,
+                            type: 'custom:lcm-slot'
+                        };
+                    }
+                    return stub;
+                })(),
+                new Promise<Record<string, unknown>>((resolve) =>
+                    setTimeout(() => resolve(stub), 2000)
+                )
+            ]);
+        } catch {
+            return stub;
+        }
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {
@@ -889,7 +918,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
         this._conditionsExpanded = !collapsed.includes('conditions');
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        void this._subscribe();
+        this._isStub = config.config_entry_id === 'stub';
+        if (!this._isStub) {
+            void this._subscribe();
+        }
     }
 
     // Mixin abstract method implementations
@@ -948,6 +980,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     protected render(): TemplateResult {
         if (!this._hass || !this._config) {
             return html`<ha-card><div class="message">Loading...</div></ha-card>`;
+        }
+
+        // Show static preview for card picker (stub config)
+        if (this._isStub) {
+            return html`<ha-card>
+                <div class="message">Lock Code Manager Slot Card</div>
+            </ha-card>`;
         }
 
         if (this._error) {
@@ -1312,41 +1351,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                   </div>`
                 : nothing}
             ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
-            ${this._config?.condition_helpers?.length
+            ${!this._isStub && this._config?.condition_helpers?.length
                 ? html`<div class="condition-helpers">
-                      ${this._config.condition_helpers
+                      ${[...new Set(this._config.condition_helpers)]
                           .filter((eid: string) => this._hass?.states[eid])
                           .map(
-                              (eid: string) => html`
-                                  <div
-                                      class="condition-helper-row"
-                                      @click=${() => {
-                                          if (this._hass) {
-                                              this.dispatchEvent(
-                                                  new CustomEvent('hass-more-info', {
-                                                      bubbles: true,
-                                                      composed: true,
-                                                      detail: { entityId: eid }
-                                                  })
-                                              );
-                                          }
-                                      }}
-                                  >
-                                      <state-badge
-                                          .hass=${this._hass}
-                                          .stateObj=${this._hass!.states[eid]}
-                                      ></state-badge>
-                                      <div class="condition-helper-info">
-                                          <span class="condition-helper-name">
-                                              ${this._hass!.states[eid]?.attributes
-                                                  ?.friendly_name ?? eid}
-                                          </span>
-                                          <span class="condition-helper-state">
-                                              ${this._hass!.states[eid]?.state}
-                                          </span>
-                                      </div>
-                                  </div>
-                              `
+                              (eid: string) =>
+                                  html`${until(
+                                      this._getEntityRow(eid),
+                                      html`<div>Loading...</div>`
+                                  )}`
                           )}
                   </div>`
                 : nothing}
@@ -1447,6 +1461,31 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * Render a unified condition entity display.
      * Consistent structure across all domain types with domain-specific context.
      */
+    private async _getEntityRow(entityId: string): Promise<HTMLElement> {
+        const cached = this._entityRowCache.get(entityId);
+        if (cached) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (cached as any).hass = this._hass;
+            return cached;
+        }
+
+        // Use HA's loadCardHelpers to get createRowElement, which handles
+        // lazy-loading and domain-to-row mapping automatically
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const loadHelpers = (window as any).loadCardHelpers;
+        if (!loadHelpers) {
+            const fallback = document.createElement('div');
+            fallback.textContent = entityId;
+            return fallback;
+        }
+        const helpers = await loadHelpers();
+        const el = helpers.createRowElement({ entity: entityId }) as HTMLElement;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (el as any).hass = this._hass;
+        this._entityRowCache.set(entityId, el);
+        return el;
+    }
+
     private _renderConditionEntity(entity: ConditionEntityInfo, showEdit = false): TemplateResult {
         const isActive = entity.state === 'on';
         const statusIcon = this._getConditionEntityIcon(entity.domain, isActive);
@@ -2114,7 +2153,12 @@ customElements.define('lcm-slot', LockCodeManagerSlotCard);
 
 declare global {
     interface Window {
-        customCards?: Array<{ description: string; name: string; type: string }>;
+        customCards?: Array<{
+            description: string;
+            name: string;
+            preview?: boolean;
+            type: string;
+        }>;
     }
 }
 
@@ -2122,5 +2166,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays and controls a Lock Code Manager code slot',
     name: 'LCM Slot Card',
-    type: 'custom:lcm-slot'
+    preview: true,
+    type: 'lcm-slot'
 });

@@ -183,15 +183,17 @@ class LcmSlotCardEditor extends LitElement {
                 <label @click=${this._toggleShowLockCount}>Lock Count</label>
             </div>
 
-            <div class="section-label">Initially Collapsed</div>
+            <div class="section-label">Initially Expanded</div>
 
             <div class="checkbox-row">
                 <ha-checkbox
-                    .checked=${(this._config.collapsed_sections ?? []).includes('conditions')}
+                    .checked=${!(
+                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                    ).includes('conditions')}
                     @change=${(e: Event) =>
                         this._toggleCollapsedSection(
                             'conditions',
-                            (e.target as HTMLInputElement).checked
+                            !(e.target as HTMLInputElement).checked
                         )}
                 ></ha-checkbox>
                 <label>Conditions</label>
@@ -199,11 +201,13 @@ class LcmSlotCardEditor extends LitElement {
 
             <div class="checkbox-row">
                 <ha-checkbox
-                    .checked=${(this._config.collapsed_sections ?? []).includes('lock_status')}
+                    .checked=${!(
+                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                    ).includes('lock_status')}
                     @change=${(e: Event) =>
                         this._toggleCollapsedSection(
                             'lock_status',
-                            (e.target as HTMLInputElement).checked
+                            !(e.target as HTMLInputElement).checked
                         )}
                 ></ha-checkbox>
                 <label>Lock Status</label>
@@ -330,13 +334,13 @@ class LcmSlotCardEditor extends LitElement {
         section: 'conditions' | 'lock_status',
         collapsed: boolean
     ): void {
-        const current = this._config?.collapsed_sections ?? [];
+        const current = this._config?.collapsed_sections ?? ['conditions', 'lock_status'];
         const updated = collapsed
             ? current.includes(section)
                 ? current
                 : [...current, section]
             : current.filter((s: string) => s !== section);
-        this._updateConfig('collapsed_sections', updated.length > 0 ? updated : undefined);
+        this._updateConfig('collapsed_sections', updated);
     }
 
     private _addConditionHelper(e: CustomEvent): void {
