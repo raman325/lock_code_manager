@@ -346,17 +346,24 @@ async def test_code_slot_readable_code_prefilled(hass: HomeAssistant):
 
     assert result["step_id"] == "code_slot"
     assert (
-        "detected and imported"
+        "detected and prefilled"
         in result["description_placeholders"]["existing_code_msg"]
     )
 
-    # Submit slot 1
+    # Submit slot 1 — clear is deferred until entry creation
     result = await hass.config_entries.flow.async_configure(
         flow_id, {CONF_ENABLED: True, CONF_PIN: "1234"}
     )
 
     assert result["step_id"] == "code_slot"
-    # Verify clear was called for slot 1
+    mock_clear.assert_not_called()
+
+    # Submit slot 2 to complete flow and trigger deferred clear
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_ENABLED: True, CONF_PIN: "5678"}
+    )
+
+    assert result["type"] == "create_entry"
     mock_clear.assert_called_once_with(1, source="direct")
 
 

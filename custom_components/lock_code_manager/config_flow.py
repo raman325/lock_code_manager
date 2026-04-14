@@ -221,6 +221,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.slots_to_configure: list[int] = []
         self._existing_codes: dict[str, dict[int, str | SlotCode]] = {}
         self._lock_instances: dict[str, Any] = {}
+        self._slots_to_clear: list[int] = []
         self._yaml_slots_to_review: list[int] = []
 
     async def async_step_user(
@@ -260,10 +261,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     def _get_existing_code_for_slot(
         self, slot_num: int
     ) -> tuple[str | None, str | None]:
-        """Check cached unmanaged codes for a slot across all locks.
+        """Check cached existing codes for a slot across all locks.
 
         Returns (status, pin) where status is one of:
-        - ("readable", pin_value) — all locks agree on the same readable code
+        - ("readable", pin_value) — all locks have the same readable code
         - ("unreadable", None) — code exists but is masked on all locks
         - ("conflict", None) — different readable codes across locks
         - (None, None) — no existing code for this slot
@@ -280,13 +281,26 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if not readable:
             return "unreadable", None
 
+        # All locks must have readable codes and agree on the same PIN
+        if len(readable) != len(codes_for_slot):
+            return "conflict", None
         unique_pins = {str(c) for c in readable}
         if len(unique_pins) == 1:
             return "readable", str(readable[0])
         return "conflict", None
 
-    async def _clear_unmanaged_slot(self, slot_num: int) -> None:
-        """Clear a specific slot on all locks that have an unmanaged code in it."""
+    async def _create_entry_and_clear_slots(self) -> dict[str, Any]:
+        """Create the config entry and then clear any existing codes from locks."""
+        result = self.async_create_entry(title=self.title, data=self.data)
+        for slot_num in self._slots_to_clear:
+            await self._clear_existing_slot(slot_num)
+        self._slots_to_clear = []
+        self._existing_codes = {}
+        self._lock_instances = {}
+        return result
+
+    async def _clear_existing_slot(self, slot_num: int) -> None:
+        """Clear a specific slot on all locks that have an existing code in it."""
         for lock_entity_id, codes in self._existing_codes.items():
             if slot_num not in codes:
                 continue
@@ -380,11 +394,11 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             if not errors:
                 slot_num = int(self.slots_to_configure.pop(0))
                 self.data[CONF_SLOTS][slot_num] = CODE_SLOT_SCHEMA(user_input)
-                # Clear unmanaged code on locks for this slot since user
-                # provided explicit config
-                await self._clear_unmanaged_slot(slot_num)
+                # Track slot for clearing after entry creation
+                if self._get_existing_code_for_slot(slot_num)[0] is not None:
+                    self._slots_to_clear.append(slot_num)
                 if not self.slots_to_configure:
-                    return self.async_create_entry(title=self.title, data=self.data)
+                    return await self._create_entry_and_clear_slots()
                 current_slot = self.slots_to_configure[0]
                 description_placeholders["slot_num"] = current_slot
 
@@ -393,18 +407,18 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         suggested_values: dict[str, Any] = {}
         if status == "readable":
             description_placeholders["existing_code_msg"] = (
-                f"An existing PIN ({existing_pin}) was detected and imported. "
+                f" An existing PIN ({existing_pin}) was detected and prefilled. "
                 "You can keep it or enter a new one."
             )
             suggested_values[CONF_PIN] = existing_pin
         elif status == "unreadable":
             description_placeholders["existing_code_msg"] = (
-                "An existing PIN was detected but could not be read. "
+                " An existing PIN was detected but could not be read. "
                 "It will be replaced when this slot is configured."
             )
         elif status == "conflict":
             description_placeholders["existing_code_msg"] = (
-                "Different PINs were detected across your locks for this slot. "
+                " Different PINs were detected across your locks for this slot. "
                 "The existing codes will be replaced."
             )
         else:
@@ -474,10 +488,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 if status == "readable" and pin:
                     self.data[CONF_SLOTS][slot_num][CONF_PIN] = pin
                     self.data[CONF_SLOTS][slot_num][CONF_ENABLED] = True
-            # Clear the existing code on locks regardless (user is taking over)
-            await self._clear_unmanaged_slot(slot_num)
+            # Track slot for clearing after entry creation
+            self._slots_to_clear.append(slot_num)
             if not self._yaml_slots_to_review:
-                return self.async_create_entry(title=self.title, data=self.data)
+                return await self._create_entry_and_clear_slots()
 
         current_slot = self._yaml_slots_to_review[0]
         status, pin = self._get_existing_code_for_slot(current_slot)
