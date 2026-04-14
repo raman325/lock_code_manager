@@ -864,7 +864,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     static async getStubConfig(): Promise<Record<string, unknown>> {
-        return { _stub: true, config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
+        return { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {
@@ -889,7 +889,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
         this._conditionsExpanded = !collapsed.includes('conditions');
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        this._isStub = '_stub' in (config as unknown as Record<string, unknown>);
+        this._isStub = config.config_entry_id === 'stub';
         if (!this._isStub) {
             void this._subscribe();
         }

@@ -409,7 +409,7 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     static async getStubConfig(): Promise<Record<string, unknown>> {
-        return { _stub: true, lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
+        return { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
     }
 
     setConfig(config: LockCodesCardConfig): void {
@@ -421,7 +421,7 @@ class LockCodesCard extends LockCodesCardBase {
             this._data = undefined;
         }
         this._config = config;
-        this._isStub = '_stub' in (config as unknown as Record<string, unknown>);
+        this._isStub = config.lock_entity_id === 'lock.stub';
         if (!this._isStub) {
             void this._subscribe();
         }
