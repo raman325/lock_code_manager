@@ -21,7 +21,7 @@ class LcmSlotCardEditor extends LitElement {
             margin-bottom: 16px;
         }
 
-        ha-textfield,
+        ha-input,
         ha-select {
             display: block;
             width: 100%;
@@ -116,14 +116,14 @@ class LcmSlotCardEditor extends LitElement {
             </div>
 
             <div class="editor-row">
-                <ha-textfield
+                <ha-input
                     .label=${'Slot Number'}
                     .value=${String(this._config.slot ?? '')}
                     type="number"
                     min="1"
                     max="9999"
                     @input=${this._slotChanged}
-                ></ha-textfield>
+                ></ha-input>
             </div>
 
             <div class="editor-row">
