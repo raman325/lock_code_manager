@@ -2138,5 +2138,5 @@ window.customCards.push({
     description: 'Displays and controls a Lock Code Manager code slot',
     name: 'LCM Slot Card',
     preview: true,
-    type: 'custom:lcm-slot'
+    type: 'lcm-slot'
 });
