@@ -95,7 +95,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             .header-top {
                 align-items: center;
                 display: flex;
-                gap: 12px;
+                flex-wrap: wrap;
+                gap: 8px 12px;
             }
 
             .header-icon {
@@ -126,15 +127,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 color: var(--primary-text-color);
                 font-size: 18px;
                 font-weight: 500;
+                white-space: nowrap;
             }
 
             .header-pills {
                 align-items: center;
                 display: flex;
-                flex-shrink: 0;
                 flex-wrap: wrap;
                 gap: 4px;
-                justify-content: flex-end;
             }
 
             .header-pill {
@@ -145,7 +145,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 display: flex;
                 font-size: 11px;
                 gap: 4px;
+                max-width: 100%;
+                overflow: hidden;
                 padding: 4px 8px;
+                text-overflow: ellipsis;
                 white-space: nowrap;
             }
 

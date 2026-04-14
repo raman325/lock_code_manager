@@ -321,13 +321,16 @@ class LockCodesCard extends LockCodesCardBase {
                 border-collapse: collapse;
                 font-size: 12px;
                 margin-top: 16px;
+                table-layout: fixed;
                 width: 100%;
             }
 
             .summary-table th,
             .summary-table td {
-                padding: 6px 8px;
+                overflow: hidden;
+                padding: 6px 4px;
                 text-align: center;
+                text-overflow: ellipsis;
             }
 
             .summary-table th {
