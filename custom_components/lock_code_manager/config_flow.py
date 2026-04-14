@@ -295,7 +295,8 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         Returns (status, pin) where status is one of:
         - ("readable", pin_value) — all locks have the same readable code
         - ("unreadable", None) — code exists but is masked on all locks
-        - ("conflict", None) — different readable codes across locks
+        - ("conflict", None) — locks disagree (different readable codes, or
+          mixed readable and unreadable)
         - (None, None) — no existing code for this slot
         """
         codes_for_slot: list[str | SlotCode] = [
@@ -514,6 +515,9 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             self._slots_to_clear.append(slot_num)
             if not self._yaml_slots_to_review:
                 return await self._create_entry_and_clear_slots()
+
+        if not self._yaml_slots_to_review:
+            return await self._create_entry_and_clear_slots()
 
         current_slot = self._yaml_slots_to_review[0]
         status, pin = self._get_existing_code_for_slot(current_slot)

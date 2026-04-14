@@ -172,7 +172,7 @@ async def test_config_flow_yaml(hass: HomeAssistant):
 
 
 async def test_config_flow_yaml_error(hass: HomeAssistant):
-    """Test YAML based config flow."""
+    """Test error handling in YAML based config flow."""
     flow_id = await _start_yaml_config_flow(hass)
 
     result = await hass.config_entries.flow.async_configure(
@@ -217,7 +217,7 @@ async def test_options_flow(hass: HomeAssistant):
 async def test_config_flow_reauth(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ):
-    """Test UI based config flow."""
+    """Test reauth flow for updating locks."""
     lock_code_manager_config_entry.async_start_reauth(
         hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
     )
