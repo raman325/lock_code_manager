@@ -451,3 +451,7 @@ Uncaught (in promise) Error: Custom element not found: custom:lcm-lock-codes
     at create-element-base.ts:342:22
 (anonymous) @ create-element-base.ts:342Understand this error
 create-element-base.ts:342 Uncaught (in promise) Error: Custom element not found: custom:lcm-slot
+
+---
+
+are there any other changes we made that we should revert given that this was an issue?
