@@ -262,7 +262,6 @@ async def test_config_flow_two_entries_same_locks(
     assert result["type"] == "create_entry"
 
 
-
 async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
     """Test that scheduler-component entities are rejected during config flow."""
     # Create a mock scheduler entity in registry
