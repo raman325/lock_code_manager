@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "288bd0c93e34",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-14T02:14:44.394138Z",
+  "branch": "fix/card-picker-stub-config",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "8a1bcd791414",
+  "token_usage": {
+    "input_tokens": 772,
+    "cache_creation_tokens": 1743131,
+    "cache_read_tokens": 131833260,
+    "output_tokens": 139727,
+    "api_call_count": 568
+  },
+  "session_metrics": {
+    "turn_count": 72
+  }
+}
