@@ -231,6 +231,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 if not self.slots_to_configure:
                     return self.async_create_entry(title=self.title, data=self.data)
+                description_placeholders["slot_num"] = self.slots_to_configure[0]
 
         return self.async_show_form(
             step_id="code_slot",
