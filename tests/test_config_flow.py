@@ -546,6 +546,109 @@ async def test_yaml_no_review_when_no_existing_codes(hass: HomeAssistant):
     assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
 
 
+async def test_yaml_slot_review_unreadable(hass: HomeAssistant):
+    """Test YAML review with unreadable code shows info and clears."""
+    mock_clear = AsyncMock(return_value=True)
+    mock_lock = AsyncMock()
+    mock_lock.async_internal_clear_usercode = mock_clear
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCode.UNKNOWN}}
+    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+    )
+
+    assert result["step_id"] == "yaml_slot_review"
+    assert "could not be read" in result["description_placeholders"]["existing_code_msg"]
+
+    # Submit empty form (no adopt option for unreadable)
+    result = await hass.config_entries.flow.async_configure(flow_id, {})
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
+    mock_clear.assert_called_once_with(1, source="direct")
+
+
+async def test_yaml_slot_review_conflict(hass: HomeAssistant):
+    """Test YAML review with conflicting codes across locks."""
+    mock_clear_1 = AsyncMock(return_value=True)
+    mock_clear_2 = AsyncMock(return_value=True)
+    mock_lock_1 = AsyncMock()
+    mock_lock_1.async_internal_clear_usercode = mock_clear_1
+    mock_lock_2 = AsyncMock()
+    mock_lock_2.async_internal_clear_usercode = mock_clear_2
+    existing = {
+        LOCK_1_ENTITY_ID: {1: "1234"},
+        LOCK_2_ENTITY_ID: {1: "5678"},
+    }
+    lock_instances = {
+        LOCK_1_ENTITY_ID: mock_lock_1,
+        LOCK_2_ENTITY_ID: mock_lock_2,
+    }
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "0000"}}},
+    )
+
+    assert result["step_id"] == "yaml_slot_review"
+    assert "Different PINs" in result["description_placeholders"]["existing_code_msg"]
+
+    result = await hass.config_entries.flow.async_configure(flow_id, {})
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SLOTS][1][CONF_PIN] == "0000"
+    mock_clear_1.assert_called_once_with(1, source="direct")
+    mock_clear_2.assert_called_once_with(1, source="direct")
+
+
+async def test_code_slot_mixed_readable_unreadable(hass: HomeAssistant):
+    """Test that mixed readable+unreadable across locks returns conflict status."""
+    existing = {
+        LOCK_1_ENTITY_ID: {1: "1234"},
+        LOCK_2_ENTITY_ID: {1: SlotCode.UNKNOWN},
+    }
+    lock_instances = {
+        LOCK_1_ENTITY_ID: AsyncMock(),
+        LOCK_2_ENTITY_ID: AsyncMock(),
+    }
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_NUM_SLOTS: 1, CONF_START_SLOT: 1}
+    )
+
+    assert result["step_id"] == "code_slot"
+    assert "Different PINs" in result["description_placeholders"]["existing_code_msg"]
+
+
 # --- _async_get_all_codes tests ---
 
 
