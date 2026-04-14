@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "3f25c9d5dd97",
+  "strategy": "manual-commit",
+  "branch": "fix/migrate-ha-textfield-to-ha-input",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card-editor.ts",
+    "ts/slot-card-editor.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3f/25c9d5dd97/0/metadata.json",
+      "transcript": "/3f/25c9d5dd97/0/full.jsonl",
+      "content_hash": "/3f/25c9d5dd97/0/content_hash.txt",
+      "prompt": "/3f/25c9d5dd97/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1120,
+    "cache_creation_tokens": 1864536,
+    "cache_read_tokens": 249299789,
+    "output_tokens": 191456,
+    "api_call_count": 825
+  }
+}

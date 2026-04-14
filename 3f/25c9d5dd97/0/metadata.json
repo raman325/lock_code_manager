@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "3f25c9d5dd97",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-14T03:43:02.473078Z",
+  "branch": "fix/migrate-ha-textfield-to-ha-input",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card-editor.ts",
+    "ts/slot-card-editor.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "f2a438075ffe",
+  "token_usage": {
+    "input_tokens": 1120,
+    "cache_creation_tokens": 1864536,
+    "cache_read_tokens": 249299789,
+    "output_tokens": 191456,
+    "api_call_count": 825
+  },
+  "session_metrics": {
+    "turn_count": 112
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-14T03:42:59.710988Z",
+    "agent_lines": 0,
+    "human_added": 3,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 0
+  }
+}
