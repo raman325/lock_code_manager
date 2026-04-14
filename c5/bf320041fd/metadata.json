@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c5bf320041fd",
+  "strategy": "manual-commit",
+  "branch": "fix/card-picker-stub-config",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/lock-codes-card.ts",
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c5/bf320041fd/0/metadata.json",
+      "transcript": "/c5/bf320041fd/0/full.jsonl",
+      "content_hash": "/c5/bf320041fd/0/content_hash.txt",
+      "prompt": "/c5/bf320041fd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 849,
+    "cache_creation_tokens": 1773157,
+    "cache_read_tokens": 153625831,
+    "output_tokens": 151284,
+    "api_call_count": 621
+  }
+}

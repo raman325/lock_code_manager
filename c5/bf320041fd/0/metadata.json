@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c5bf320041fd",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-14T02:40:49.403369Z",
+  "branch": "fix/card-picker-stub-config",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/lock-codes-card.ts",
+    "ts/slot-card.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "766e9b71857b",
+  "token_usage": {
+    "input_tokens": 849,
+    "cache_creation_tokens": 1773157,
+    "cache_read_tokens": 153625831,
+    "output_tokens": 151284,
+    "api_call_count": 621
+  },
+  "session_metrics": {
+    "turn_count": 84
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-14T02:40:47.492077Z",
+    "agent_lines": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 11,
+    "agent_percentage": 100
+  }
+}
