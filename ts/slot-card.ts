@@ -1460,7 +1460,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Use HA's loadCardHelpers to get createRowElement, which handles
         // lazy-loading and domain-to-row mapping automatically
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const helpers = await (window as any).loadCardHelpers();
+        const loadHelpers = (window as any).loadCardHelpers;
+        if (!loadHelpers) {
+            const fallback = document.createElement('div');
+            fallback.textContent = entityId;
+            return fallback;
+        }
+        const helpers = await loadHelpers();
         const el = helpers.createRowElement({ entity: entityId }) as HTMLElement;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (el as any).hass = this._hass;

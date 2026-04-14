@@ -285,16 +285,18 @@ describe('LcmSlotCardEditor logic', () => {
             current: CollapsedSection[] | undefined,
             section: CollapsedSection,
             collapsed: boolean
-        ): CollapsedSection[] | undefined {
-            const sections = current ?? [];
+        ): CollapsedSection[] {
+            const sections = current ?? ['conditions', 'lock_status'];
             const updated = collapsed
-                ? [...sections, section]
+                ? sections.includes(section)
+                    ? sections
+                    : [...sections, section]
                 : sections.filter((s) => s !== section);
-            return updated.length > 0 ? updated : undefined;
+            return updated;
         }
 
-        it('adds a section when collapsed', () => {
-            const result = toggleCollapsedSection(undefined, 'conditions', true);
+        it('adds a section when collapsed from empty', () => {
+            const result = toggleCollapsedSection([], 'conditions', true);
             expect(result).toEqual(['conditions']);
         });
 
@@ -312,14 +314,14 @@ describe('LcmSlotCardEditor logic', () => {
             expect(result).toEqual(['lock_status']);
         });
 
-        it('returns undefined when last section is removed', () => {
+        it('returns empty array when last section is removed', () => {
             const result = toggleCollapsedSection(['conditions'], 'conditions', false);
-            expect(result).toBeUndefined();
+            expect(result).toEqual([]);
         });
 
-        it('returns undefined for empty initial array uncollapse', () => {
-            const result = toggleCollapsedSection([], 'conditions', false);
-            expect(result).toBeUndefined();
+        it('uses default when current is undefined', () => {
+            const result = toggleCollapsedSection(undefined, 'conditions', false);
+            expect(result).toEqual(['lock_status']);
         });
     });
 
@@ -597,7 +599,7 @@ describe('LcmSlotCardEditor integration', () => {
 
     describe('_toggleCollapsedSection', () => {
         it('adds conditions to collapsed_sections', async () => {
-            el = createEditor();
+            el = createEditor({ collapsed_sections: [] });
             el.hass = createMockHass({ callWS: () => [] });
             container.appendChild(el);
             await flush();
@@ -626,7 +628,7 @@ describe('LcmSlotCardEditor integration', () => {
             expect(events[0].detail.config.collapsed_sections).toEqual(['lock_status']);
         });
 
-        it('sets collapsed_sections to undefined when last is removed', async () => {
+        it('sets collapsed_sections to empty array when last is removed', async () => {
             el = createEditor({ collapsed_sections: ['conditions'] });
             el.hass = createMockHass({ callWS: () => [] });
             container.appendChild(el);
@@ -638,7 +640,7 @@ describe('LcmSlotCardEditor integration', () => {
             (el as any)._toggleCollapsedSection('conditions', false);
 
             expect(events).toHaveLength(1);
-            expect(events[0].detail.config.collapsed_sections).toBeUndefined();
+            expect(events[0].detail.config.collapsed_sections).toEqual([]);
         });
 
         it('does not duplicate when section already collapsed', async () => {
@@ -838,7 +840,7 @@ describe('LcmSlotCardEditor integration', () => {
 
             const tmpl = (el as any).render();
             const joined = templateStrings(tmpl);
-            expect(joined).toContain('Initially Collapsed');
+            expect(joined).toContain('Initially Expanded');
         });
 
         it('renders show_lock_count checkbox', async () => {
