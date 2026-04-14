@@ -39,10 +39,14 @@
       },
       "ui": {
         "data": {
+          "auto_clear_existing": "Auto-clear existing codes",
           "num_slots": "Number of slots",
           "start_slot": "Start from slot #"
         },
-        "description": "Configure slots for all codes you want on the lock (existing user codes for the slot range specified will be cleared). You can add and remove slots later using the integration services.",
+        "data_description": {
+          "auto_clear_existing": "When enabled, any existing codes on the lock for the selected slots will be automatically cleared without prompting. When disabled, you will be shown detected codes and given the option to keep or replace them."
+        },
+        "description": "Configure slots for all codes you want on the lock. You can add and remove slots later using the integration services.",
         "title": "How Many Slots?"
       },
       "user": {
@@ -62,7 +66,11 @@
       },
       "yaml": {
         "data": {
+          "auto_clear_existing": "Auto-clear existing codes",
           "slots": "Slots YAML"
+        },
+        "data_description": {
+          "auto_clear_existing": "When enabled, any existing codes on the lock for the configured slots will be automatically cleared without prompting. When disabled, you will be asked to adopt or clear each detected code individually."
         },
         "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
         "title": "Configure slots"

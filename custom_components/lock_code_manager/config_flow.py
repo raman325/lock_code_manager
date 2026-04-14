@@ -218,8 +218,7 @@ async def _async_get_all_codes(
             )
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
-                "Failed to get usercodes from %s; "
-                "this lock's codes will not be shown",
+                "Failed to get usercodes from %s; this lock's codes will not be shown",
                 lock_entity_id,
                 exc_info=True,
             )
@@ -248,6 +247,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self.slots_to_configure: list[int] = []
+        self._auto_clear = False
         self._existing_codes: dict[str, dict[int, str | SlotCode]] = {}
         self._lock_instances: dict[str, Any] = {}
         self._slots_to_clear: list[int] = []
@@ -369,6 +369,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             start = user_input[CONF_START_SLOT]
             num_slots = user_input[CONF_NUM_SLOTS]
+            self._auto_clear = user_input.get("auto_clear_existing", False)
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass, self.data[CONF_LOCKS], list(range(start, start + num_slots))
             )
@@ -386,6 +387,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_NUM_SLOTS, default=DEFAULT_NUM_SLOTS
                     ): POSITIVE_INT,
+                    vol.Optional("auto_clear_existing", default=False): cv.boolean,
                 }
             ),
             errors=errors,
@@ -433,19 +435,26 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 description_placeholders["slot_num"] = current_slot
 
         # Check for existing code on locks for the current slot
-        status, existing_pin = self._get_existing_code_for_slot(current_slot)
         suggested_values: dict[str, Any] = {}
-        if status == "readable":
-            description_placeholders["existing_code_msg"] = (
-                EXISTING_CODE_MSG_READABLE.format(existing_pin=existing_pin)
-            )
-            suggested_values[CONF_PIN] = existing_pin
-        elif status == "unreadable":
-            description_placeholders["existing_code_msg"] = EXISTING_CODE_MSG_UNREADABLE
-        elif status == "conflict":
-            description_placeholders["existing_code_msg"] = EXISTING_CODE_MSG_CONFLICT
-        else:
+        if self._auto_clear:
             description_placeholders["existing_code_msg"] = ""
+        else:
+            status, existing_pin = self._get_existing_code_for_slot(current_slot)
+            if status == "readable":
+                description_placeholders["existing_code_msg"] = (
+                    EXISTING_CODE_MSG_READABLE.format(existing_pin=existing_pin)
+                )
+                suggested_values[CONF_PIN] = existing_pin
+            elif status == "unreadable":
+                description_placeholders["existing_code_msg"] = (
+                    EXISTING_CODE_MSG_UNREADABLE
+                )
+            elif status == "conflict":
+                description_placeholders["existing_code_msg"] = (
+                    EXISTING_CODE_MSG_CONFLICT
+                )
+            else:
+                description_placeholders["existing_code_msg"] = ""
 
         schema = self.add_suggested_values_to_schema(
             UI_CODE_SLOT_SCHEMA, suggested_values
@@ -466,6 +475,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if not user_input:
             user_input = {}
         if user_input:
+            self._auto_clear = user_input.get("auto_clear_existing", False)
             try:
                 slots = CODE_SLOTS_SCHEMA(user_input[CONF_SLOTS])
             except vol.Invalid as err:
@@ -480,6 +490,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
                 if not errors:
                     self.data[CONF_SLOTS] = slots
+                    if self._auto_clear:
+                        # Auto-clear all slots with existing codes
+                        self._slots_to_clear = [
+                            slot_num
+                            for slot_num in slots
+                            if self._get_existing_code_for_slot(slot_num)[0] is not None
+                        ]
+                        return await self._create_entry_and_clear_slots()
                     # Check for existing codes in configured slots
                     self._yaml_slots_to_review = [
                         slot_num
@@ -493,7 +511,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="yaml",
             data_schema=vol.Schema(
-                {vol.Required(CONF_SLOTS, default=user_input): SLOTS_YAML_SELECTOR}
+                {
+                    vol.Required(CONF_SLOTS, default=user_input): SLOTS_YAML_SELECTOR,
+                    vol.Optional("auto_clear_existing", default=False): cv.boolean,
+                }
             ),
             errors=errors,
             description_placeholders=description_placeholders,
@@ -527,9 +548,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders["existing_code_msg"] = (
                 EXISTING_CODE_MSG_READABLE_YAML.format(existing_pin=pin)
             )
-            schema = vol.Schema(
-                {vol.Required("adopt", default=True): cv.boolean}
-            )
+            schema = vol.Schema({vol.Required("adopt", default=True): cv.boolean})
         elif status == "conflict":
             description_placeholders["existing_code_msg"] = (
                 EXISTING_CODE_MSG_CONFLICT_YAML

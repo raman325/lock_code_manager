@@ -444,6 +444,72 @@ async def test_code_slot_no_existing_code(hass: HomeAssistant):
     assert result["description_placeholders"]["existing_code_msg"] == ""
 
 
+async def test_code_slot_auto_clear_skips_messages(hass: HomeAssistant):
+    """Test that auto_clear_existing skips existing code messages and clears on entry creation."""
+    mock_clear = AsyncMock(return_value=True)
+    mock_lock = AsyncMock()
+    mock_lock.async_internal_clear_usercode = mock_clear
+    existing = {LOCK_1_ENTITY_ID: {1: "1234"}}
+    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "ui"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_NUM_SLOTS: 1, CONF_START_SLOT: 1, "auto_clear_existing": True},
+    )
+
+    assert result["step_id"] == "code_slot"
+    # With auto_clear, no existing code message shown
+    assert result["description_placeholders"]["existing_code_msg"] == ""
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_ENABLED: True, CONF_PIN: "5678"}
+    )
+
+    assert result["type"] == "create_entry"
+    # Existing code should have been auto-cleared after entry creation
+    mock_clear.assert_called_once_with(1, source="direct")
+
+
+async def test_yaml_auto_clear_skips_review(hass: HomeAssistant):
+    """Test that auto_clear_existing in YAML path skips slot review."""
+    mock_clear = AsyncMock(return_value=True)
+    mock_lock = AsyncMock()
+    mock_lock.async_internal_clear_usercode = mock_clear
+    existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
+    lock_instances = {LOCK_1_ENTITY_ID: mock_lock}
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, lock_instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {
+            CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "1234"}},
+            "auto_clear_existing": True,
+        },
+    )
+
+    # Should go directly to create_entry, no yaml_slot_review
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
+    mock_clear.assert_called_once_with(1, source="direct")
+
+
 # --- YAML path tests ---
 
 
@@ -569,7 +635,9 @@ async def test_yaml_slot_review_unreadable(hass: HomeAssistant):
     )
 
     assert result["step_id"] == "yaml_slot_review"
-    assert "could not be read" in result["description_placeholders"]["existing_code_msg"]
+    assert (
+        "could not be read" in result["description_placeholders"]["existing_code_msg"]
+    )
 
     # Submit empty form (no adopt option for unreadable)
     result = await hass.config_entries.flow.async_configure(flow_id, {})
