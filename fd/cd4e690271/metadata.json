@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "fdcd4e690271",
+  "strategy": "manual-commit",
+  "branch": "fix/card-picker-stub-config",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fd/cd4e690271/0/metadata.json",
+      "transcript": "/fd/cd4e690271/0/full.jsonl",
+      "content_hash": "/fd/cd4e690271/0/content_hash.txt",
+      "prompt": "/fd/cd4e690271/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 701,
+    "cache_creation_tokens": 1717710,
+    "cache_read_tokens": 108645880,
+    "output_tokens": 126645,
+    "api_call_count": 507
+  }
+}
