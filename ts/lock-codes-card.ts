@@ -410,7 +410,8 @@ class LockCodesCard extends LockCodesCardBase {
         return document.createElement('lcm-lock-codes-editor');
     }
 
-    static async getStubConfig(hass: HomeAssistant): Promise<Partial<LockCodesCardConfig>> {
+    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const base = { _stub: true, type: 'custom:lcm-lock-codes' };
         try {
             const entries = await hass.callWS<GetConfigEntriesResponse>({
                 domain: 'lock_code_manager',
@@ -422,16 +423,13 @@ class LockCodesCard extends LockCodesCardBase {
                     type: 'lock_code_manager/get_config_entry_data'
                 });
                 if (data.locks.length > 0) {
-                    return {
-                        lock_entity_id: data.locks[0].entity_id,
-                        type: 'custom:lcm-lock-codes'
-                    };
+                    return { ...base, lock_entity_id: data.locks[0].entity_id };
                 }
             }
         } catch {
             // Fall through to stub
         }
-        return { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
+        return { ...base, lock_entity_id: 'lock.stub' };
     }
 
     setConfig(config: LockCodesCardConfig): void {
@@ -443,7 +441,7 @@ class LockCodesCard extends LockCodesCardBase {
             this._data = undefined;
         }
         this._config = config;
-        this._isStub = config.lock_entity_id === 'lock.stub';
+        this._isStub = '_stub' in (config as unknown as Record<string, unknown>);
         if (!this._isStub) {
             void this._subscribe();
         }
@@ -473,7 +471,7 @@ class LockCodesCard extends LockCodesCardBase {
 
     protected render(): TemplateResult {
         // Show static preview for card picker (stub config)
-        if (this._config?.lock_entity_id === 'lock.stub') {
+        if (this._isStub) {
             return html`<ha-card>
                 <div class="card-header">
                     <div class="header-icon"><ha-icon icon="mdi:lock-smart"></ha-icon></div>

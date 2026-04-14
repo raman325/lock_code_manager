@@ -864,21 +864,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return document.createElement('lcm-slot-editor');
     }
 
-    static async getStubConfig(
-        hass: HomeAssistant
-    ): Promise<Partial<LockCodeManagerSlotCardConfig>> {
+    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const base = { _stub: true, slot: 1, type: 'custom:lcm-slot' };
         try {
             const entries = await hass.callWS<GetConfigEntriesResponse>({
                 domain: 'lock_code_manager',
                 type: 'config_entries/get'
             });
             if (entries.length > 0) {
-                return { config_entry_id: entries[0].entry_id, slot: 1, type: 'custom:lcm-slot' };
+                return { ...base, config_entry_id: entries[0].entry_id };
             }
         } catch {
             // Fall through to stub
         }
-        return { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
+        return { ...base, config_entry_id: 'stub' };
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {
@@ -903,7 +902,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
         this._conditionsExpanded = !collapsed.includes('conditions');
         this._lockStatusExpanded = !collapsed.includes('lock_status');
-        this._isStub = config.config_entry_id === 'stub';
+        this._isStub = '_stub' in (config as unknown as Record<string, unknown>);
         if (!this._isStub) {
             void this._subscribe();
         }
@@ -968,7 +967,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
 
         // Show static preview for card picker (stub config)
-        if (this._config.config_entry_id === 'stub') {
+        if (this._isStub) {
             return html`<ha-card>
                 <div class="message">Lock Code Manager Slot Card</div>
             </ha-card>`;
