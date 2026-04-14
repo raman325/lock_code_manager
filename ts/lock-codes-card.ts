@@ -8,6 +8,8 @@ import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
+    GetConfigEntriesResponse,
+    LockCodeManagerConfigEntryDataResponse,
     LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData,
@@ -408,7 +410,27 @@ class LockCodesCard extends LockCodesCardBase {
         return document.createElement('lcm-lock-codes-editor');
     }
 
-    static getStubConfig(): Partial<LockCodesCardConfig> {
+    static async getStubConfig(hass: HomeAssistant): Promise<Partial<LockCodesCardConfig>> {
+        try {
+            const entries = await hass.callWS<GetConfigEntriesResponse>({
+                domain: 'lock_code_manager',
+                type: 'config_entries/get'
+            });
+            if (entries.length > 0) {
+                const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
+                    config_entry_id: entries[0].entry_id,
+                    type: 'lock_code_manager/get_config_entry_data'
+                });
+                if (data.locks.length > 0) {
+                    return {
+                        lock_entity_id: data.locks[0].entity_id,
+                        type: 'custom:lcm-lock-codes'
+                    };
+                }
+            }
+        } catch {
+            // Fall through to stub
+        }
         return { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
     }
 
@@ -1068,7 +1090,12 @@ customElements.define('lcm-lock-codes', LockCodesCard);
 
 declare global {
     interface Window {
-        customCards?: Array<{ description: string; name: string; type: string }>;
+        customCards?: Array<{
+            description: string;
+            name: string;
+            preview?: boolean;
+            type: string;
+        }>;
     }
 }
 
@@ -1076,5 +1103,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
     name: 'LCM Lock Codes Card',
+    preview: true,
     type: 'custom:lcm-lock-codes'
 });

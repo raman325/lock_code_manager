@@ -33,6 +33,7 @@ import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
     ConditionEntityInfo,
+    GetConfigEntriesResponse,
     LockCodeManagerSlotCardConfig,
     SLOT_CODE_UNKNOWN,
     SlotCardConditions,
@@ -863,7 +864,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return document.createElement('lcm-slot-editor');
     }
 
-    static getStubConfig(): Partial<LockCodeManagerSlotCardConfig> {
+    static async getStubConfig(
+        hass: HomeAssistant
+    ): Promise<Partial<LockCodeManagerSlotCardConfig>> {
+        try {
+            const entries = await hass.callWS<GetConfigEntriesResponse>({
+                domain: 'lock_code_manager',
+                type: 'config_entries/get'
+            });
+            if (entries.length > 0) {
+                return { config_entry_id: entries[0].entry_id, slot: 1, type: 'custom:lcm-slot' };
+            }
+        } catch {
+            // Fall through to stub
+        }
         return { config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
     }
 
@@ -2124,7 +2138,12 @@ customElements.define('lcm-slot', LockCodeManagerSlotCard);
 
 declare global {
     interface Window {
-        customCards?: Array<{ description: string; name: string; type: string }>;
+        customCards?: Array<{
+            description: string;
+            name: string;
+            preview?: boolean;
+            type: string;
+        }>;
     }
 }
 
@@ -2132,5 +2151,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays and controls a Lock Code Manager code slot',
     name: 'LCM Slot Card',
+    preview: true,
     type: 'custom:lcm-slot'
 });
