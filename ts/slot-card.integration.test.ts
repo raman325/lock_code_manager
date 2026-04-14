@@ -1072,4 +1072,151 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('getStubConfig', () => {
+        it('returns first config entry when entries exist', async () => {
+            const SlotCard = customElements.get('lcm-slot') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi.fn().mockResolvedValue([{ entry_id: 'real-entry-123' }]);
+
+            const result = await SlotCard.getStubConfig(hass);
+            expect(result).toEqual({
+                config_entry_id: 'real-entry-123',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+        });
+
+        it('returns stub config when no entries exist', async () => {
+            const SlotCard = customElements.get('lcm-slot') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi.fn().mockResolvedValue([]);
+
+            const result = await SlotCard.getStubConfig(hass);
+            expect(result).toEqual({
+                config_entry_id: 'stub',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+        });
+
+        it('returns stub config when callWS throws', async () => {
+            const SlotCard = customElements.get('lcm-slot') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi.fn().mockRejectedValue(new Error('fail'));
+
+            const result = await SlotCard.getStubConfig(hass);
+            expect(result).toEqual({
+                config_entry_id: 'stub',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+        });
+    });
+
+    describe('stub config behavior', () => {
+        it('sets _isStub to true when config_entry_id is stub', () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                config_entry_id: 'stub',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            expect((el as Record<string, unknown>)._isStub).toBe(true);
+        });
+
+        it('sets _isStub to false when config_entry_id is real', () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                config_entry_id: 'real-entry',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            expect((el as Record<string, unknown>)._isStub).toBe(false);
+        });
+
+        it('render returns static preview when _isStub is true', async () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                config_entry_id: 'stub',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            el.hass = createMockHassWithConnection();
+            container.appendChild(el);
+            await flush();
+
+            /* eslint-disable @typescript-eslint/no-explicit-any */
+            const result = (el as any).render();
+            // The stub render returns a template containing "Lock Code Manager Slot Card"
+            expect(result).toBeDefined();
+            expect(result.strings?.join('')).toContain('Lock Code Manager Slot Card');
+            /* eslint-enable @typescript-eslint/no-explicit-any */
+        });
+    });
+
+    describe('_getEntityRow', () => {
+        afterEach(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            delete (window as any).loadCardHelpers;
+        });
+
+        it('returns fallback div when loadCardHelpers is not available', async () => {
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                config_entry_id: 'real-entry',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            el.hass = createMockHassWithConnection();
+            container.appendChild(el);
+            await flush();
+
+            /* eslint-disable @typescript-eslint/no-explicit-any */
+            const result = await (el as any)._getEntityRow('binary_sensor.test');
+            expect(result.tagName).toBe('DIV');
+            expect(result.textContent).toBe('binary_sensor.test');
+            /* eslint-enable @typescript-eslint/no-explicit-any */
+        });
+
+        it('creates element via loadCardHelpers and caches it', async () => {
+            const mockCreateRowElement = vi.fn((config: { entity: string }) => {
+                const elem = document.createElement('div');
+                elem.setAttribute('data-entity', config.entity);
+                return elem;
+            });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (window as any).loadCardHelpers = vi.fn().mockResolvedValue({
+                createRowElement: mockCreateRowElement
+            });
+
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            el.setConfig({
+                config_entry_id: 'real-entry',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            });
+            el.hass = createMockHassWithConnection();
+            container.appendChild(el);
+            await flush();
+
+            /* eslint-disable @typescript-eslint/no-explicit-any */
+            const result1 = await (el as any)._getEntityRow('binary_sensor.test');
+            expect(result1.getAttribute('data-entity')).toBe('binary_sensor.test');
+            expect(mockCreateRowElement).toHaveBeenCalledTimes(1);
+
+            // Second call should return cached element
+            const result2 = await (el as any)._getEntityRow('binary_sensor.test');
+            expect(result2).toBe(result1);
+            // loadCardHelpers should not be called again
+            expect(mockCreateRowElement).toHaveBeenCalledTimes(1);
+            /* eslint-enable @typescript-eslint/no-explicit-any */
+        });
+    });
 });

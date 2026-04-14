@@ -350,6 +350,109 @@ describe('LockCodesCard integration', () => {
         });
     });
 
+    describe('getStubConfig', () => {
+        it('returns lock entity from first config entry when data exists', async () => {
+            const LockCodesCard = customElements.get('lcm-lock-codes') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi
+                .fn()
+                .mockResolvedValueOnce([{ entry_id: 'entry-1' }])
+                .mockResolvedValueOnce({
+                    locks: [{ entity_id: 'lock.front_door' }]
+                });
+
+            const result = await LockCodesCard.getStubConfig(hass);
+            expect(result).toEqual({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+        });
+
+        it('returns stub config when no entries exist', async () => {
+            const LockCodesCard = customElements.get('lcm-lock-codes') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi.fn().mockResolvedValue([]);
+
+            const result = await LockCodesCard.getStubConfig(hass);
+            expect(result).toEqual({
+                lock_entity_id: 'lock.stub',
+                type: 'custom:lcm-lock-codes'
+            });
+        });
+
+        it('returns stub config when callWS throws', async () => {
+            const LockCodesCard = customElements.get('lcm-lock-codes') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi.fn().mockRejectedValue(new Error('fail'));
+
+            const result = await LockCodesCard.getStubConfig(hass);
+            expect(result).toEqual({
+                lock_entity_id: 'lock.stub',
+                type: 'custom:lcm-lock-codes'
+            });
+        });
+
+        it('returns stub config when entries exist but no locks', async () => {
+            const LockCodesCard = customElements.get('lcm-lock-codes') as unknown as {
+                getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>>;
+            };
+            const hass = createMockHassWithConnection();
+            hass.callWS = vi
+                .fn()
+                .mockResolvedValueOnce([{ entry_id: 'entry-1' }])
+                .mockResolvedValueOnce({ locks: [] });
+
+            const result = await LockCodesCard.getStubConfig(hass);
+            expect(result).toEqual({
+                lock_entity_id: 'lock.stub',
+                type: 'custom:lcm-lock-codes'
+            });
+        });
+    });
+
+    describe('stub config behavior', () => {
+        it('sets _isStub to true when lock_entity_id is lock.stub', () => {
+            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            el.setConfig({
+                lock_entity_id: 'lock.stub',
+                type: 'custom:lcm-lock-codes'
+            });
+            expect((el as Record<string, unknown>)._isStub).toBe(true);
+        });
+
+        it('sets _isStub to false when lock_entity_id is real', () => {
+            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            el.setConfig({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            expect((el as Record<string, unknown>)._isStub).toBe(false);
+        });
+
+        it('render returns static preview when _isStub is true', async () => {
+            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            el.setConfig({
+                lock_entity_id: 'lock.stub',
+                type: 'custom:lcm-lock-codes'
+            });
+            el.hass = createMockHassWithConnection();
+            container.appendChild(el);
+            await flush();
+
+            /* eslint-disable @typescript-eslint/no-explicit-any */
+            const result = (el as any).render();
+            expect(result).toBeDefined();
+            expect(result.strings?.join('')).toContain('Lock Code Manager Lock Codes');
+            /* eslint-enable @typescript-eslint/no-explicit-any */
+        });
+    });
+
     describe('_saveCode set/clear usercode paths', () => {
         let card: LockCodesCardElement & Record<string, unknown>;
         let sendMessagePromiseMock: ReturnType<typeof vi.fn>;
