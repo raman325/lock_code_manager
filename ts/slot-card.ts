@@ -863,7 +863,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return document.createElement('lcm-slot-editor');
     }
 
-    static getStubConfig(): Record<string, unknown> {
+    static async getStubConfig(): Promise<Record<string, unknown>> {
         return { _stub: true, config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
     }
 

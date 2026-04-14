@@ -408,7 +408,7 @@ class LockCodesCard extends LockCodesCardBase {
         return document.createElement('lcm-lock-codes-editor');
     }
 
-    static getStubConfig(): Record<string, unknown> {
+    static async getStubConfig(): Promise<Record<string, unknown>> {
         return { _stub: true, lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
     }
 
