@@ -88,6 +88,31 @@ SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
+# Existing code status messages for description_placeholders.
+# These are set dynamically because HA config flows don't support conditional
+# description templates — the step description is a single string in strings.json
+# with {existing_code_msg} as a placeholder.
+EXISTING_CODE_MSG_READABLE = (
+    " An existing PIN ({existing_pin}) was detected and prefilled."
+    " You can keep it or enter a new one."
+)
+EXISTING_CODE_MSG_UNREADABLE = (
+    " An existing PIN was detected but could not be read."
+    " It will be replaced when this slot is configured."
+)
+EXISTING_CODE_MSG_CONFLICT = (
+    " Different PINs were detected across your locks for this slot."
+    " The existing codes will be replaced."
+)
+EXISTING_CODE_MSG_READABLE_YAML = " An existing PIN ({existing_pin}) was detected."
+EXISTING_CODE_MSG_UNREADABLE_YAML = (
+    " An existing PIN was detected but could not be read. It will be cleared."
+)
+EXISTING_CODE_MSG_CONFLICT_YAML = (
+    " Different PINs were detected across your locks."
+    " The existing codes will be cleared."
+)
+
 
 def _check_common_slots(
     hass: HomeAssistant,
@@ -185,8 +210,12 @@ async def _async_get_all_codes(
             lock_instance, usercodes = await _async_check_existing_usercodes(
                 hass, dev_reg, ent_reg, lock_entity_id
             )
-        except LockCodeManagerError:
-            pass
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "Skipping usercode check for %s: %s",
+                lock_entity_id,
+                err,
+            )
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Failed to get usercodes from %s; "
@@ -407,20 +436,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         suggested_values: dict[str, Any] = {}
         if status == "readable":
             description_placeholders["existing_code_msg"] = (
-                f" An existing PIN ({existing_pin}) was detected and prefilled. "
-                "You can keep it or enter a new one."
+                EXISTING_CODE_MSG_READABLE.format(existing_pin=existing_pin)
             )
             suggested_values[CONF_PIN] = existing_pin
         elif status == "unreadable":
-            description_placeholders["existing_code_msg"] = (
-                " An existing PIN was detected but could not be read. "
-                "It will be replaced when this slot is configured."
-            )
+            description_placeholders["existing_code_msg"] = EXISTING_CODE_MSG_UNREADABLE
         elif status == "conflict":
-            description_placeholders["existing_code_msg"] = (
-                " Different PINs were detected across your locks for this slot. "
-                "The existing codes will be replaced."
-            )
+            description_placeholders["existing_code_msg"] = EXISTING_CODE_MSG_CONFLICT
         else:
             description_placeholders["existing_code_msg"] = ""
 
@@ -499,21 +521,19 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         description_placeholders: dict[str, Any] = {"slot_num": current_slot}
         if status == "readable":
             description_placeholders["existing_code_msg"] = (
-                f" An existing PIN ({pin}) was detected."
+                EXISTING_CODE_MSG_READABLE_YAML.format(existing_pin=pin)
             )
             schema = vol.Schema(
                 {vol.Required("adopt", default=True): cv.boolean}
             )
         elif status == "conflict":
             description_placeholders["existing_code_msg"] = (
-                " Different PINs were detected across your locks. "
-                "The existing codes will be cleared."
+                EXISTING_CODE_MSG_CONFLICT_YAML
             )
             schema = vol.Schema({})
         else:
             description_placeholders["existing_code_msg"] = (
-                " An existing PIN was detected but could not be read. "
-                "It will be cleared."
+                EXISTING_CODE_MSG_UNREADABLE_YAML
             )
             schema = vol.Schema({})
 
