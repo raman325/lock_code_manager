@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "882c1b40019b",
+  "strategy": "manual-commit",
+  "branch": "fix/config-flow-slot-number-display",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/88/2c1b40019b/0/metadata.json",
+      "transcript": "/88/2c1b40019b/0/full.jsonl",
+      "content_hash": "/88/2c1b40019b/0/content_hash.txt",
+      "prompt": "/88/2c1b40019b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1146,
+    "cache_creation_tokens": 1871543,
+    "cache_read_tokens": 258588893,
+    "output_tokens": 194530,
+    "api_call_count": 843
+  }
+}
