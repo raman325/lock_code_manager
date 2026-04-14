@@ -33,7 +33,6 @@ import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
     ConditionEntityInfo,
-    GetConfigEntriesResponse,
     LockCodeManagerSlotCardConfig,
     SLOT_CODE_UNKNOWN,
     SlotCardConditions,
@@ -864,20 +863,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return document.createElement('lcm-slot-editor');
     }
 
-    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
-        const base = { _stub: true, slot: 1, type: 'custom:lcm-slot' };
-        try {
-            const entries = await hass.callWS<GetConfigEntriesResponse>({
-                domain: 'lock_code_manager',
-                type: 'config_entries/get'
-            });
-            if (entries.length > 0) {
-                return { ...base, config_entry_id: entries[0].entry_id };
-            }
-        } catch {
-            // Fall through to stub
-        }
-        return { ...base, config_entry_id: 'stub' };
+    static getStubConfig(): Record<string, unknown> {
+        return { _stub: true, config_entry_id: 'stub', slot: 1, type: 'custom:lcm-slot' };
     }
 
     setConfig(config: LockCodeManagerSlotCardConfig): void {

@@ -8,8 +8,6 @@ import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
-    GetConfigEntriesResponse,
-    LockCodeManagerConfigEntryDataResponse,
     LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData,
@@ -410,26 +408,8 @@ class LockCodesCard extends LockCodesCardBase {
         return document.createElement('lcm-lock-codes-editor');
     }
 
-    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
-        const base = { _stub: true, type: 'custom:lcm-lock-codes' };
-        try {
-            const entries = await hass.callWS<GetConfigEntriesResponse>({
-                domain: 'lock_code_manager',
-                type: 'config_entries/get'
-            });
-            if (entries.length > 0) {
-                const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
-                    config_entry_id: entries[0].entry_id,
-                    type: 'lock_code_manager/get_config_entry_data'
-                });
-                if (data.locks.length > 0) {
-                    return { ...base, lock_entity_id: data.locks[0].entity_id };
-                }
-            }
-        } catch {
-            // Fall through to stub
-        }
-        return { ...base, lock_entity_id: 'lock.stub' };
+    static getStubConfig(): Record<string, unknown> {
+        return { _stub: true, lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
     }
 
     setConfig(config: LockCodesCardConfig): void {
