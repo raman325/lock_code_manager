@@ -7,20 +7,20 @@ See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Blueprints) fo
 ## Table of Contents
 
 **Access Control**
-- [Slot Usage Limiter](#slot-usage-limiter) — Disable a slot after a set number of uses
-- [Calendar Condition](#calendar-condition) — Control slot access based on calendar events
-- [Date Range Condition](#date-range-condition) — Control slot access based on start/end dates
-- [Calendar PIN Setter](#calendar-pin-setter) — Extract and set PINs from calendar events
+- [Slot Usage Limiter](#slot-usage-limiter) *(automation)* — Disable a slot after a set number of uses
+- [Calendar Condition](#calendar-condition) *(template)* — Control slot access based on calendar events
+- [Date Range Condition](#date-range-condition) *(template)* — Control slot access based on start/end dates
+- [Calendar PIN Setter](#calendar-pin-setter) *(automation)* — Extract and set PINs from calendar events
 
 **Lock Automation**
-- [Auto Re-lock](#auto-re-lock) — Automatically re-lock after a configurable delay
-- [Lock on Door Close](#lock-on-door-close) — Lock when a door sensor detects the door closed
+- [Auto Re-lock](#auto-re-lock) *(automation)* — Automatically re-lock after a configurable delay
+- [Lock on Door Close](#lock-on-door-close) *(automation)* — Lock when a door sensor detects the door closed
 
 **Notifications**
-- [Slot Usage Notifier](#slot-usage-notifier) — Send a notification when a code slot PIN is used
+- [Slot Usage Notifier](#slot-usage-notifier) *(automation)* — Send a notification when a code slot PIN is used
 
 **Setup Helpers**
-- [Condition Linker](#condition-linker) — Assign a condition entity to a slot via the UI
+- [Condition Linker](#condition-linker) *(automation)* — Assign a condition entity to a slot via the UI
 
 ---
 

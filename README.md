@@ -74,13 +74,16 @@ Pre-built automations and templates for common lock management patterns. See **[
 <details>
 <summary>Available blueprints</summary>
 
+**Template blueprints** *(create entities)*
+- **Calendar Condition** — Binary sensor for calendar-based slot access
+- **Date Range Condition** — Binary sensor for start/end date access windows
+
+**Automation blueprints** *(trigger on events)*
 - **Slot Usage Limiter** — Disable a slot after a set number of uses
-- **Calendar Condition** — Control slot access based on calendar events
-- **Date Range Condition** — Control slot access based on start/end dates
 - **Calendar PIN Setter** — Extract and set PINs from calendar events
-- **Auto Re-lock** — Automatically re-lock after a configurable delay
+- **Auto Re-lock** — Re-lock after a configurable delay with day/night support
 - **Lock on Door Close** — Lock when a door sensor detects the door closed
-- **Slot Usage Notifier** — Send a notification when a code slot PIN is used
+- **Slot Usage Notifier** — Notify when a code slot PIN is used
 - **Condition Linker** — Assign a condition entity to a slot via the UI
 
 </details>
