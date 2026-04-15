@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "4de0e112789f",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-15T02:45:14.991943Z",
+  "branch": "feat/new-blueprints",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "da092bc42eef",
+  "token_usage": {
+    "input_tokens": 2261,
+    "cache_creation_tokens": 3379498,
+    "cache_read_tokens": 410392939,
+    "output_tokens": 264955,
+    "api_call_count": 1095
+  },
+  "session_metrics": {
+    "turn_count": 136
+  }
+}
