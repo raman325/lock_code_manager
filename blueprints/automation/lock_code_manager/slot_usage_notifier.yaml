@@ -53,6 +53,7 @@ blueprint:
       selector:
         entity:
           domain: event
+          integration: lock_code_manager
     notify_actions:
       name: Actions
       description: >
@@ -86,6 +87,6 @@ variables:
        | default('') %}
     {{ state_attr(lock_eid, 'friendly_name')
        | default('Unknown lock') }}
-  timestamp: "{{ now().strftime('%H:%M:%S') }}"
+  timestamp: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
 actions: !input notify_actions

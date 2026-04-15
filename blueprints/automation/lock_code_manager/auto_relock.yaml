@@ -32,6 +32,11 @@ blueprint:
 
     4. Optionally set a night delay (in minutes). Set to 0 to use the day
        delay for both. Default: 0 (disabled).
+
+
+    **Note:** Night detection uses the `sun.sun` entity (Home Assistant
+    Sun integration). If the Sun integration is not enabled, the night
+    delay will never apply.
   domain: automation
   # yamllint disable-line rule:line-length
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/auto_relock.yaml

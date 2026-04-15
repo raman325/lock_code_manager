@@ -83,7 +83,7 @@ input tables, and import buttons.
 - **Slot Usage Limiter** — Disable a slot after a set number of uses
 - **Calendar PIN Setter** — Extract and set PINs from calendar events
 - **Auto Re-lock** — Re-lock after a delay with day/night support
-- **Lock on Door Close** — Lock when a door sensor detects close
+- **Lock on Door Close** — Lock when a door sensor detects closure
 - **Slot Usage Notifier** — Notify when a code slot PIN is used
 - **Condition Linker** — Assign a condition entity to a slot via UI
 
