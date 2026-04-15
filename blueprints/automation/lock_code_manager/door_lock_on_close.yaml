@@ -1,0 +1,85 @@
+---
+blueprint:
+  name: "Lock Code Manager: Lock on Door Close"
+  description: >
+    Automatically locks a lock when a door sensor detects the door has
+    closed while the lock is unlocked. Optionally adds a short delay
+    before locking to allow the door to fully close.
+
+
+    **How it works**
+
+    When the door sensor changes to closed (off), the automation checks
+    if the lock is currently unlocked. If so, it waits for the optional
+    delay and then locks the door. If the lock is already locked when
+    the door closes, nothing happens.
+
+
+    **Setup**
+
+    1. Import this blueprint and create an automation from it.
+
+    2. Select the lock entity to control.
+
+    3. Select the door sensor (binary_sensor) that detects open/closed
+       state.
+
+    4. Optionally set a delay (in seconds) before locking. Default: 5
+       seconds. Set to 0 to lock immediately.
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/door_lock_on_close.yaml
+  input:
+    lock_entity:
+      name: Lock
+      description: The lock entity to control.
+      selector:
+        entity:
+          domain: lock
+    door_sensor:
+      name: Door sensor
+      description: >
+        A binary sensor that detects whether the door is open or closed.
+        The sensor should be "on" when the door is open and "off" when
+        closed.
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: door
+    lock_delay:
+      name: Lock delay (seconds)
+      description: >
+        How long to wait (in seconds) after the door closes before
+        locking. Set to 0 to lock immediately.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: seconds
+          mode: box
+
+mode: single
+
+triggers:
+  - trigger: state
+    entity_id: !input door_sensor
+    to: "off"
+
+conditions:
+  - condition: state
+    entity_id: !input lock_entity
+    state: unlocked
+
+actions:
+  - variables:
+      delay_seconds: !input lock_delay
+  - if:
+      - condition: template
+        value_template: "{{ delay_seconds | int(0) > 0 }}"
+    then:
+      - delay:
+          seconds: "{{ delay_seconds | int }}"
+  - action: lock.lock
+    target:
+      entity_id: !input lock_entity

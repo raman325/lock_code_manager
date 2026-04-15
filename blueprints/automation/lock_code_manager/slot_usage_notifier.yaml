@@ -1,0 +1,119 @@
+---
+blueprint:
+  name: "Lock Code Manager: Slot Usage Notifier"
+  description: >
+    Sends a notification when a Lock Code Manager code slot PIN is used
+    on a lock. Supports any HA notification service (mobile app, email,
+    Slack, etc.) and customizable message templates.
+
+
+    **How it works**
+
+    When a code slot event fires (PIN used on lock), the automation sends
+    a notification via the selected notification service. The message
+    template can include details about which slot was used, the slot name,
+    and when it happened.
+
+
+    **Available template variables**
+
+    Your message template can use these variables:
+
+    - `slot_num` — the code slot number that was used
+
+    - `slot_name` — the friendly name of the code slot (from the event
+      entity's friendly name)
+
+    - `lock_name` — the friendly name of the lock
+
+    - `timestamp` — the time the event occurred
+
+
+    **Example message templates**
+
+    - Default: `{{ slot_name }} (slot {{ slot_num }}) was used on
+      {{ lock_name }} at {{ timestamp }}`
+
+    - Short: `Slot {{ slot_num }} used on {{ lock_name }}`
+
+
+    **Requirements**
+
+    This blueprint requires at least one lock that supports code slot
+    events (i.e. produces `*_code_slot_*_pin_used` events).
+
+
+    **Setup**
+
+    1. Import this blueprint and create an automation from it.
+
+    2. Select the code slot event entity to monitor.
+
+    3. Select the notification service to use (e.g., `notify.mobile_app_phone`).
+
+    4. Optionally customize the message template.
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_notifier.yaml
+  input:
+    event_entity:
+      name: Code slot event entity
+      description: >
+        The Lock Code Manager event entity that fires when a PIN is used.
+        These are named like "Code slot X PIN used".
+      selector:
+        entity:
+          domain: event
+    notify_service:
+      name: Notification service
+      description: >
+        The notification service to use (e.g., `notify.mobile_app_phone`,
+        `notify.email`, `notify.slack`).
+      selector:
+        text:
+    message_template:
+      name: Message template
+      description: >
+        The notification message template. Available variables:
+        `slot_name`, `slot_num`, `lock_name`, `timestamp`.
+      default: >-
+        {{ slot_name }} (slot {{ slot_num }}) was used on {{ lock_name }}
+        at {{ timestamp }}
+      selector:
+        template:
+    notification_title:
+      name: Notification title
+      description: The title for the notification.
+      default: Lock Code Used
+      selector:
+        text:
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input event_entity
+    not_to:
+      - unknown
+      - unavailable
+
+variables:
+  event_entity_id: !input event_entity
+  slot_name: "{{ state_attr(event_entity_id, 'friendly_name') | default('Unknown slot') }}"
+  slot_num: >-
+    {{ state_attr(event_entity_id, 'friendly_name')
+       | default('')
+       | regex_findall('\\d+')
+       | first
+       | default('?') }}
+  lock_name: >-
+    {{ device_attr(device_id(event_entity_id), 'name')
+       | default('Unknown lock') }}
+  timestamp: "{{ now().strftime('%H:%M:%S') }}"
+
+actions:
+  - action: "{{ notify_service }}"
+    data:
+      title: !input notification_title
+      message: !input message_template
