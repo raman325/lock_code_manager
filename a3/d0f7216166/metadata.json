@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a3d0f7216166",
+  "strategy": "manual-commit",
+  "branch": "feat/new-blueprints",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "blueprints/automation/lock_code_manager/auto_relock.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a3/d0f7216166/0/metadata.json",
+      "transcript": "/a3/d0f7216166/0/full.jsonl",
+      "content_hash": "/a3/d0f7216166/0/content_hash.txt",
+      "prompt": "/a3/d0f7216166/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2388,
+    "cache_creation_tokens": 4061605,
+    "cache_read_tokens": 481414705,
+    "output_tokens": 284665,
+    "api_call_count": 1201
+  }
+}

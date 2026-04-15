@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a3d0f7216166",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-15T03:09:09.003847Z",
+  "branch": "feat/new-blueprints",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "blueprints/automation/lock_code_manager/auto_relock.yaml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "cbca3c0709b2",
+  "token_usage": {
+    "input_tokens": 2388,
+    "cache_creation_tokens": 4061605,
+    "cache_read_tokens": 481414705,
+    "output_tokens": 284665,
+    "api_call_count": 1201
+  },
+  "session_metrics": {
+    "turn_count": 141
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-15T03:09:05.597113Z",
+    "agent_lines": 0,
+    "human_added": 7,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 0
+  }
+}
