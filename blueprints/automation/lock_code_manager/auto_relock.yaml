@@ -1,0 +1,103 @@
+---
+blueprint:
+  name: "Lock Code Manager: Auto Re-lock"
+  description: >
+    Automatically re-locks a lock after it has been unlocked for a
+    configurable amount of time. Supports separate day and night delays
+    based on the sun entity's state.
+
+
+    **How it works**
+
+    When the lock is unlocked, a timer starts. If the lock is not manually
+    locked before the timer expires, the automation locks it automatically.
+    If the lock is locked before the timer expires (manually or by another
+    automation), the timer is cancelled.
+
+
+    **Day/night support**
+
+    Optionally configure a shorter delay for nighttime (between sunset and
+    sunrise). If night delay is set to 0, the day delay is used for both
+    day and night.
+
+
+    **Setup**
+
+    1. Import this blueprint and create an automation from it.
+
+    2. Select the lock entity to auto-relock.
+
+    3. Set the day delay (in minutes). Default: 5 minutes.
+
+    4. Optionally set a night delay (in minutes). Set to 0 to use the day
+       delay for both. Default: 0 (disabled).
+
+
+    **Note:** Night detection uses the `sun.sun` entity (Home Assistant
+    Sun integration). If the Sun integration is not enabled, the night
+    delay will never apply.
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/auto_relock.yaml
+  input:
+    lock_entity:
+      name: Lock
+      description: The lock entity to auto-relock.
+      selector:
+        entity:
+          domain: lock
+    day_delay:
+      name: Day delay (minutes)
+      description: >
+        How long to wait (in minutes) before auto-relocking during the day.
+      default: 5
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: minutes
+          mode: box
+    night_delay:
+      name: Night delay (minutes)
+      description: >
+        How long to wait (in minutes) before auto-relocking at night
+        (between sunset and sunrise). Set to 0 to use the day delay
+        for both day and night.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: minutes
+          mode: box
+
+mode: restart
+
+triggers:
+  - trigger: state
+    entity_id: !input lock_entity
+    to: unlocked
+
+actions:
+  - variables:
+      night_delay_input: !input night_delay
+      day_delay_input: !input day_delay
+      use_night: >-
+        {{ night_delay_input | int(0) > 0
+           and is_state('sun.sun', 'below_horizon') }}
+      delay_minutes: >-
+        {{ night_delay_input if use_night else day_delay_input }}
+  - wait_for_trigger:
+      - trigger: state
+        entity_id: !input lock_entity
+        to: locked
+    timeout:
+      minutes: "{{ delay_minutes | int }}"
+    continue_on_timeout: true
+  - condition: state
+    entity_id: !input lock_entity
+    state: unlocked
+  - action: lock.lock
+    target:
+      entity_id: !input lock_entity

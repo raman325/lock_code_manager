@@ -69,20 +69,23 @@ The best way to install this integration is via HACS.
 
 ## Blueprints
 
-Pre-built automations for common patterns:
+Pre-built automations and templates for common lock management
+patterns. See [BLUEPRINTS.md](BLUEPRINTS.md) for full details,
+input tables, and import buttons.
+
+### Template blueprints
+
+- **Calendar Condition** — Binary sensor for calendar-based slot access
+- **Date Range Condition** — Binary sensor for start/end date access
+
+### Automation blueprints
 
 - **Slot Usage Limiter** — Disable a slot after a set number of uses
-  [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_limiter.yaml)
-- **Calendar PIN Setter** — Extract and set PINs from calendar event attributes
-  [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fcalendar_pin_setter.yaml)
-- **Calendar Condition** — Control slot access based on calendar events
-  [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Ftemplate%2Flock_code_manager%2Fcalendar_condition.yaml)
-- **Date Range Condition** — Control slot access based on start/end date and time helpers
-  [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Ftemplate%2Flock_code_manager%2Fdate_range_condition.yaml)
-- **Condition Linker** — Assign a condition entity to a slot via the UI
-  [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fcondition_linker.yaml)
-
-See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Blueprints) for detailed setup and configuration.
+- **Calendar PIN Setter** — Extract and set PINs from calendar events
+- **Auto Re-lock** — Re-lock after a delay with day/night support
+- **Lock on Door Close** — Lock when a door sensor detects closure
+- **Slot Usage Notifier** — Notify when a code slot PIN is used
+- **Condition Linker** — Assign a condition entity to a slot via UI
 
 ## Learn More
 
