@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "bf00c47b1d15",
+  "strategy": "manual-commit",
+  "branch": "fix/blueprint-review-fixes",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/bf/00c47b1d15/0/metadata.json",
+      "transcript": "/bf/00c47b1d15/0/full.jsonl",
+      "content_hash": "/bf/00c47b1d15/0/content_hash.txt",
+      "prompt": "/bf/00c47b1d15/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2417,
+    "cache_creation_tokens": 4072425,
+    "cache_read_tokens": 496875505,
+    "output_tokens": 289633,
+    "api_call_count": 1224
+  }
+}
