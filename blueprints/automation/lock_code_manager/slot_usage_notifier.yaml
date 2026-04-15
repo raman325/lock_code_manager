@@ -88,7 +88,7 @@ variables:
     {{ state_attr(lock_eid, 'friendly_name')
        | default('Unknown lock') }}
   timestamp: >-
-    {{ trigger.to_state.last_changed | as_local
+    {{ trigger.to_state.last_updated | as_local
        | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
 
 actions: !input notify_actions
