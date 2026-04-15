@@ -41,7 +41,7 @@ Optionally resets the counter when the slot is re-enabled.
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Config entry | LCM config entry that manages your locks | Required |
-| Slot number | Code slot to monitor (1-9999) | Required |
+| Slot number | Code slot to monitor | Required |
 | Uses counter | `input_number` helper for tracking remaining uses | Required |
 | Initial uses | Number of uses to reset to when slot is re-enabled (0 = no reset) | 0 |
 
@@ -111,7 +111,7 @@ Automatically re-locks a lock after it has been unlocked for a
 configurable amount of time. Supports separate day and night delays
 based on the sun entity's state (sunrise/sunset).
 
-- If the lock is manually locked before the timer expires, it cancels
+- If the lock is locked before the timer expires, the lock is skipped
 - Set night delay to 0 to use the same delay for both day and night
 - Uses `mode: restart` so a new unlock resets the timer
 
@@ -146,12 +146,11 @@ has closed while the lock is unlocked.
 
 ### Slot Usage Notifier
 
-Sends a notification when a code slot PIN is used on a lock.
-Works with any Home Assistant notification service (mobile app,
-email, Slack, etc.) and supports customizable message templates.
+Runs actions when a code slot PIN is used on a lock. Use it to
+send notifications, trigger scripts, or run any HA action.
 
 - Requires a lock that supports code slot events
-- Message template includes slot name, number, lock name, timestamp
+- Template variables: `slot_name`, `slot_num`, `lock_name`, `timestamp`
 - Uses `mode: queued` to handle rapid successive uses
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fslot_usage_notifier.yaml)
@@ -159,9 +158,7 @@ email, Slack, etc.) and supports customizable message templates.
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Event entity | Code slot event entity (fires on PIN use) | Required |
-| Notification service | HA notify service (e.g., `notify.mobile_app_phone`) | Required |
-| Message template | Notification message with template variables | See default |
-| Notification title | Title for the notification | `Lock Code Used` |
+| Actions | HA actions to run (notifications, scripts, etc.) | Required |
 
 ---
 

@@ -80,6 +80,9 @@ actions:
     then:
       - delay:
           seconds: "{{ delay_seconds | int }}"
+  - condition: state
+    entity_id: !input lock_entity
+    state: unlocked
   - action: lock.lock
     target:
       entity_id: !input lock_entity

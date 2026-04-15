@@ -83,8 +83,16 @@ actions:
            and is_state('sun.sun', 'below_horizon') }}
       delay_minutes: >-
         {{ night_delay_input if use_night else day_delay_input }}
-  - delay:
+  - wait_for_trigger:
+      - trigger: state
+        entity_id: !input lock_entity
+        to: locked
+    timeout:
       minutes: "{{ delay_minutes | int }}"
+    continue_on_timeout: true
+  - condition: state
+    entity_id: !input lock_entity
+    state: unlocked
   - action: lock.lock
     target:
       entity_id: !input lock_entity
