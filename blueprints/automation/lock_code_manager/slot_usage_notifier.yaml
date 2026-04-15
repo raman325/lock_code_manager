@@ -76,16 +76,15 @@ triggers:
 variables:
   event_entity_id: !input event_entity
   slot_name: >-
-    {{ state_attr(event_entity_id, 'friendly_name')
+    {{ trigger.to_state.attributes.code_slot_name
        | default('Unknown slot') }}
   slot_num: >-
-    {{ state_attr(event_entity_id, 'friendly_name')
-       | default('')
-       | regex_findall('\\d+')
-       | first
+    {{ trigger.to_state.attributes.code_slot
        | default('?') }}
   lock_name: >-
-    {{ device_attr(device_id(event_entity_id), 'name')
+    {% set lock_eid = trigger.to_state.attributes.entity_id
+       | default('') %}
+    {{ state_attr(lock_eid, 'friendly_name')
        | default('Unknown lock') }}
   timestamp: "{{ now().strftime('%H:%M:%S') }}"
 
