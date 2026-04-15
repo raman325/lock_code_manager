@@ -7,6 +7,17 @@ Home Assistant with one click.
 See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
 for additional setup guides and examples.
 
+## Table of Contents
+
+1. [Slot Usage Limiter](#slot-usage-limiter) *(automation)*
+1. [Calendar Condition](#calendar-condition) *(template)*
+1. [Date Range Condition](#date-range-condition) *(template)*
+1. [Calendar PIN Setter](#calendar-pin-setter) *(automation)*
+1. [Auto Re-lock](#auto-re-lock) *(automation)*
+1. [Lock on Door Close](#lock-on-door-close) *(automation)*
+1. [Slot Usage Notifier](#slot-usage-notifier) *(automation)*
+1. [Condition Linker](#condition-linker) *(automation)*
+
 ---
 
 ## Access Control
