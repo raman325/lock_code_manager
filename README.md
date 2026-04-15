@@ -69,26 +69,23 @@ The best way to install this integration is via HACS.
 
 ## Blueprints
 
-Pre-built automations and templates for common lock management patterns. See **[BLUEPRINTS.md](BLUEPRINTS.md)** for full details, input tables, and import buttons.
+Pre-built automations and templates for common lock management
+patterns. See [BLUEPRINTS.md](BLUEPRINTS.md) for full details,
+input tables, and import buttons.
 
-<details>
-<summary>Available blueprints</summary>
-
-**Template blueprints** *(create entities)*
+### Template blueprints
 
 - **Calendar Condition** — Binary sensor for calendar-based slot access
-- **Date Range Condition** — Binary sensor for start/end date access windows
+- **Date Range Condition** — Binary sensor for start/end date access
 
-**Automation blueprints** *(trigger on events)*
+### Automation blueprints
 
 - **Slot Usage Limiter** — Disable a slot after a set number of uses
 - **Calendar PIN Setter** — Extract and set PINs from calendar events
-- **Auto Re-lock** — Re-lock after a configurable delay with day/night support
-- **Lock on Door Close** — Lock when a door sensor detects the door closed
+- **Auto Re-lock** — Re-lock after a delay with day/night support
+- **Lock on Door Close** — Lock when a door sensor detects close
 - **Slot Usage Notifier** — Notify when a code slot PIN is used
-- **Condition Linker** — Assign a condition entity to a slot via the UI
-
-</details>
+- **Condition Linker** — Assign a condition entity to a slot via UI
 
 ## Learn More
 
