@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "080f896f83cb",
+  "strategy": "manual-commit",
+  "branch": "fix/blueprint-review-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "blueprints/automation/lock_code_manager/slot_usage_notifier.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/08/0f896f83cb/0/metadata.json",
+      "transcript": "/08/0f896f83cb/0/full.jsonl",
+      "content_hash": "/08/0f896f83cb/0/content_hash.txt",
+      "prompt": "/08/0f896f83cb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2410,
+    "cache_creation_tokens": 4070916,
+    "cache_read_tokens": 493494477,
+    "output_tokens": 288717,
+    "api_call_count": 1219
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "080f896f83cb",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-15T03:25:13.342575Z",
+  "branch": "fix/blueprint-review-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "blueprints/automation/lock_code_manager/slot_usage_notifier.yaml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "1002c70dcaf1",
+  "token_usage": {
+    "input_tokens": 2410,
+    "cache_creation_tokens": 4070916,
+    "cache_read_tokens": 493494477,
+    "output_tokens": 288717,
+    "api_call_count": 1219
+  },
+  "session_metrics": {
+    "turn_count": 142
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-15T03:25:09.892693Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  }
+}
