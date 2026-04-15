@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d8d7b41c7bc7",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-15T03:29:04.486608Z",
+  "branch": "fix/blueprint-review-fixes",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "d941e960eee8",
+  "token_usage": {
+    "input_tokens": 2423,
+    "cache_creation_tokens": 4073636,
+    "cache_read_tokens": 499585633,
+    "output_tokens": 290273,
+    "api_call_count": 1228
+  },
+  "session_metrics": {
+    "turn_count": 144
+  }
+}
