@@ -20,12 +20,12 @@ blueprint:
 
     - `slot_num` — the code slot number that was used
 
-    - `slot_name` — the friendly name of the code slot (from the
-      event entity's friendly name)
+    - `slot_name` — the user-configured name of the code slot
 
-    - `lock_name` — the friendly name of the lock
+    - `lock_name` — the friendly name of the lock where the PIN
+      was used
 
-    - `timestamp` — the time the event occurred
+    - `timestamp` — the date and time the event occurred
 
 
     **Requirements**
@@ -87,6 +87,8 @@ variables:
        | default('') %}
     {{ state_attr(lock_eid, 'friendly_name')
        | default('Unknown lock') }}
-  timestamp: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+  timestamp: >-
+    {{ trigger.to_state.last_changed | as_local
+       | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
 
 actions: !input notify_actions
