@@ -83,9 +83,7 @@ variables:
     {{ trigger.to_state.attributes.code_slot
        | default('?') }}
   lock_name: >-
-    {% set lock_eid = trigger.to_state.attributes.entity_id
-       | default('') %}
-    {{ state_attr(lock_eid, 'friendly_name')
+    {{ state_attr(trigger.to_state.state, 'friendly_name')
        | default('Unknown lock') }}
   timestamp: >-
     {{ trigger.to_state.last_updated | as_local
