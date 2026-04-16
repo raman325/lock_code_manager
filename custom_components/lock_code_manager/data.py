@@ -308,11 +308,23 @@ def compute_entry_config_diff(
     }
 
     return EntryConfigDiff(
+        # Inner slot configs are wrapped (not just held by reference) so
+        # the diff is genuinely deeply immutable — matches the pattern
+        # in EntryConfig.from_mapping. dict(v) snapshots the source so a
+        # later mutation in the caller doesn't leak into the diff view.
         slots_added=MappingProxyType(
-            {k: v for k, v in new_slots.items() if k not in old_slots}
+            {
+                k: MappingProxyType(dict(v))
+                for k, v in new_slots.items()
+                if k not in old_slots
+            }
         ),
         slots_removed=MappingProxyType(
-            {k: v for k, v in old_slots.items() if k not in new_slots}
+            {
+                k: MappingProxyType(dict(v))
+                for k, v in old_slots.items()
+                if k not in new_slots
+            }
         ),
         slots_unchanged=frozenset(old_keys & new_keys),
         locks_added=tuple(lock for lock in new_locks if lock not in old_lock_set),

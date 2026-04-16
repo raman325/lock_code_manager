@@ -153,17 +153,30 @@ def test_diff_is_deeply_immutable() -> None:
     (``MappingProxyType`` / ``frozenset`` / ``tuple``), so callers
     cannot mutate the diff after the fact.
     """
+    # Build a diff with both an added slot AND a removed slot so we can
+    # exercise inner-mutation guards on both
     diff = compute_entry_config_diff(
-        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}, {}
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {2: _slot()}},
     )
 
     # Attribute reassignment blocked
     with pytest.raises(FrozenInstanceError):
         diff.slots_added = {99: _slot()}  # type: ignore[misc]
 
-    # Contained dicts are read-only
+    # Outer dicts are read-only
     with pytest.raises(TypeError):
         diff.slots_removed[99] = _slot()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        diff.slots_added[99] = _slot()  # type: ignore[index]
+
+    # INNER per-slot dicts are also read-only (deep immutability).
+    # Without this, callers could do diff.slots_added[2]["pin"] = "X"
+    # and mutate cached state — defeating the whole point of frozen.
+    with pytest.raises(TypeError):
+        diff.slots_added[2]["pin"] = "9999"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        diff.slots_removed[1]["pin"] = "9999"  # type: ignore[index]
 
     # Contained sets cannot grow
     assert not hasattr(diff.slots_unchanged, "add")
@@ -174,6 +187,25 @@ def test_diff_is_deeply_immutable() -> None:
     assert not hasattr(diff.locks_removed, "append")
 
     assert isinstance(diff, EntryConfigDiff)
+
+
+def test_diff_snapshots_inner_slot_dicts() -> None:
+    """Mutating the source slot config after diff() doesn't leak into the diff.
+
+    The defensive ``dict(v)`` copy in compute_entry_config_diff means
+    the diff captures a snapshot of slot configs at construction time —
+    later mutations to the original mapping don't change the diff view.
+    """
+    inner_slot = {"pin": "1234", "enabled": True}
+    new = {CONF_SLOTS: {1: inner_slot}}
+
+    diff = compute_entry_config_diff({}, new)
+
+    # Mutate the original inner slot dict after the diff is built
+    inner_slot["pin"] = "9999"
+
+    # Diff snapshot is unaffected
+    assert diff.slots_added[1]["pin"] == "1234"
 
 
 # --- EntryConfig tests ---
