@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a97f1ff2b5c2",
+  "strategy": "manual-commit",
+  "branch": "refactor/provider-error-hierarchy",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a9/7f1ff2b5c2/0/metadata.json",
+      "transcript": "/a9/7f1ff2b5c2/0/full.jsonl",
+      "content_hash": "/a9/7f1ff2b5c2/0/content_hash.txt",
+      "prompt": "/a9/7f1ff2b5c2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11403,
+    "cache_creation_tokens": 6328775,
+    "cache_read_tokens": 589908062,
+    "output_tokens": 414337,
+    "api_call_count": 1466
+  }
+}
