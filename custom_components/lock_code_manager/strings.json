@@ -118,6 +118,10 @@
     }
   },
   "options": {
+    "abort": {
+      "existing_codes_cancelled": "Update cancelled. Existing codes were not modified.",
+      "unknown": "An unexpected error occurred while updating options."
+    },
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}."
@@ -130,6 +134,14 @@
         },
         "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"
+      },
+      "existing_codes_confirm": {
+        "title": "Existing Codes Detected",
+        "description": "Existing codes were detected on newly-added slot(s): {slots}\n\nProceeding will clear these codes from the lock(s). Cancel to back out without saving any changes.",
+        "menu_options": {
+          "existing_codes_clear": "Clear existing codes and continue",
+          "existing_codes_cancel": "Cancel update"
+        }
       }
     }
   },
