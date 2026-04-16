@@ -82,15 +82,14 @@
   to `EntryConfig` (`__init__.py`, `helpers.py`, `config_flow.py`,
   `websocket.py`).
 
-  **Stage 3 still pending: listener int-normalization** (was
-  [PR #1028][pr-1028] review item #3). With readers and writers all
-  consuming `EntryConfig` (which is always int-keyed internally), the
-  listener can finally normalize its `curr_slots` / `new_slots` locals
-  to int keys without breaking downstream. Closes the latent
-  `slots_unchanged` `KeyError` risk and lets `EntryConfigDiff` drop its
-  source-key-type preservation gymnastics (all dict outputs can be
-  `Mapping[int, ...]`, the int-normalization-for-comparison-only special
-  case in `compute_entry_config_diff` simplifies to plain set ops).
+  **Stage 3 delivered (this PR)**: listener now uses `EntryConfig` views
+  for its locals (`curr_slots = old_config.slots`, etc.) — int-keyed
+  throughout, closing the latent `slots_unchanged` `KeyError`
+  ([PR #1028][pr-1028] review item #3 plus the post-merge Copilot
+  comments on #1030). `EntryConfigDiff` slot outputs are now typed
+  `Mapping[int, Mapping[str, Any]]` and `frozenset[int]` —
+  source-key-type preservation gymnastics gone. The listener writes
+  back via `new_config.to_dict()` so persisted data stays JSON-safe.
 
   **Stage 4 still pending: API cleanup**:
 
