@@ -2,15 +2,6 @@
 
 ## User-Facing Features
 
-- **Config flow: lock reset in options flow** — Extend the lock reset step
-  (clear/adopt unmanaged codes) to the options flow when new locks are added.
-  Adopt should merge into existing slot config (preserve names, settings) rather
-  than creating fresh entries. Key considerations: (1) compute "unmanaged" against
-  the *new* slot config being submitted, not the current stored config, so removing
-  a slot doesn't immediately offer to clear it; (2) existing managed slots on
-  write-only locks (Matter) show as UNKNOWN — filter these out using the new config
-  rather than offering to reset them; (3) if re-setting managed PINs for safety
-  after lock reset, note this to the user.
 - **Config flow: conflicting integration detection** — Warn if Keymaster or other
   code management integrations are detected at setup.
 - **Clear all unmanaged codes** — Button or service to clear unmanaged code slots
@@ -61,6 +52,19 @@
 
 ## Code Quality
 
+- **Config flow + update listener: shared diff helper** — The options flow's
+  added-`(lock, slot)`-pair calculation in
+  `LockCodeManagerOptionsFlow._maybe_confirm_then_persist` and the
+  `slots_to_add/remove` + `locks_to_add/remove` calculation in
+  `__init__.py:async_update_listener` compute related views of the same
+  old-vs-new diff. Extract a single `compute_entry_config_diff(old, new)`
+  helper in `data.py` returning a frozen dataclass with all three views
+  (slot dict diff, lock list diff, cartesian pair diff). Single source of
+  truth for slot-key int/str normalization. While there: collapse the two
+  near-identical `_create_entry_and_clear_slots` /
+  `_persist_options_and_clear_slots` methods into one mixin helper, and
+  extract the `scoped_codes` builder in `_maybe_confirm_then_persist` into
+  a named helper for readability.
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.
   Document when to use each.
 - **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
