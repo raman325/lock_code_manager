@@ -48,48 +48,17 @@ class LockCodeManagerConfigEntryData:
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]
 
 
-@dataclass(frozen=True)
-class SlotState:
-    """Snapshot of entity states for a slot on a specific lock."""
-
-    active_state: str
-    pin_state: str
-    name_state: str | None
-    code_state: str
-    coordinator_code: str | SlotCode | None
-
-
 @dataclass
-class SlotEntityIds:
-    """Entity IDs for a single slot's LCM entities."""
+class SlotEntities:
+    """Entity IDs for a single slot's LCM entities.
+
+    All entity ID fields are optional so callers that only need a subset
+    can populate what they have. ``config_entry_id`` is included for
+    callers iterating across entries who need to track origin.
+    """
 
     slot_num: int
     config_entry_id: str | None = None
-    name: str | None = None
-    pin: str | None = None
-    active: str | None = None
-    enabled: str | None = None
-
-    def all_ids(self) -> list[str]:
-        """Return all non-None entity IDs."""
-        return [eid for eid in (self.name, self.pin, self.active, self.enabled) if eid]
-
-
-@dataclass
-class SlotMetadata:
-    """Metadata for a single slot from LCM entities."""
-
-    name: str | None = None
-    configured_pin: str | None = None
-    active: bool | None = None
-    enabled: bool | None = None
-
-
-@dataclass
-class SlotEntityData:
-    """Entity IDs and data for a single slot."""
-
-    slot_num: int
     name_entity_id: str | None = None
     pin_entity_id: str | None = None
     enabled_entity_id: str | None = None
@@ -98,7 +67,7 @@ class SlotEntityData:
     event_entity_id: str | None = None
 
     def all_entity_ids(self) -> list[str]:
-        """Return all non-None entity IDs for state tracking."""
+        """Return all non-None entity IDs (excluding config_entry_id)."""
         return [
             eid
             for eid in (
@@ -111,3 +80,13 @@ class SlotEntityData:
             )
             if eid
         ]
+
+
+@dataclass
+class SlotMetadata:
+    """Metadata for a single slot from LCM entities."""
+
+    name: str | None = None
+    configured_pin: str | None = None
+    active: bool | None = None
+    enabled: bool | None = None

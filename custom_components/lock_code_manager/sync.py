@@ -13,6 +13,7 @@ Extracted from binary_sensor.py to separate domain logic from entity state displ
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 import logging
 from typing import TYPE_CHECKING, Any
@@ -52,7 +53,7 @@ from .const import (
     TICK_INTERVAL,
 )
 from .exceptions import CodeRejectedError, LockDisconnected
-from .models import SlotCode, SlotState
+from .models import SlotCode
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
@@ -60,7 +61,26 @@ if TYPE_CHECKING:
     from .models import LockCodeManagerConfigEntry
     from .providers import BaseLock
 
+
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SlotState:
+    """Snapshot of entity states for a slot on a specific lock.
+
+    Used by SlotSyncManager to compare desired (entity) vs actual
+    (coordinator) state. Includes raw HA state strings (rather than
+    parsed values) because sync logic needs to distinguish between
+    "off" and "unavailable" — both look like the same parsed bool but
+    mean different things for retry decisions.
+    """
+
+    active_state: str
+    pin_state: str
+    name_state: str | None
+    code_state: str
+    coordinator_code: str | SlotCode | None
 
 
 class SlotSyncManager:
