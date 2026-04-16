@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d9be895cf99b",
+  "strategy": "manual-commit",
+  "branch": "refactor/tier-1-housekeeping",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/be895cf99b/0/metadata.json",
+      "transcript": "/d9/be895cf99b/0/full.jsonl",
+      "content_hash": "/d9/be895cf99b/0/content_hash.txt",
+      "prompt": "/d9/be895cf99b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12197,
+    "cache_creation_tokens": 8178733,
+    "cache_read_tokens": 1003117883,
+    "output_tokens": 822904,
+    "api_call_count": 2106
+  }
+}
