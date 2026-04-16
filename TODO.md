@@ -85,9 +85,10 @@
   After Stage 2, `runtime_data.config.slots` is the only authoritative view
   and writers go through it.
 
-  **Stage 3: listener int-normalization** (was [PR #1028 review item #3](https://github.com/raman325/lock_code_manager/pull/1028)) — Once writers are
-  migrated, the listener's `curr_slots` / `new_slots` locals can normalize to
-  int keys without breaking downstream consumers. Closes the latent
+  **Stage 3: listener int-normalization** (was [PR #1028][pr-1028] review
+  item #3) — Once writers are migrated, the listener's `curr_slots` /
+  `new_slots` locals can normalize to int keys without breaking downstream
+  consumers. Closes the latent
   `slots_unchanged` `KeyError` risk and lets `EntryConfigDiff` drop its
   source-key-type preservation gymnastics (all dict outputs can be
   `Mapping[int, ...]`, the int-normalization-for-comparison-only special
@@ -145,3 +146,5 @@
   changes.
 - Review TODOs after completing current work, when starting new features, during
   refactoring sessions, or on `/todos`.
+
+[pr-1028]: https://github.com/raman325/lock_code_manager/pull/1028
