@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ef5c09f627bf",
+  "strategy": "manual-commit",
+  "branch": "cleanup/docstring-comment-audit",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ef/5c09f627bf/0/metadata.json",
+      "transcript": "/ef/5c09f627bf/0/full.jsonl",
+      "content_hash": "/ef/5c09f627bf/0/content_hash.txt",
+      "prompt": "/ef/5c09f627bf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13150,
+    "cache_creation_tokens": 8511776,
+    "cache_read_tokens": 1033315099,
+    "output_tokens": 937261,
+    "api_call_count": 2244
+  }
+}
