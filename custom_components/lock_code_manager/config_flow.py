@@ -651,11 +651,11 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
                 if not errors:
                     return await self._maybe_confirm_then_persist(user_input)
 
-        current_config = get_entry_config(self.config_entry)
-        defaults = {
-            CONF_LOCKS: list(current_config.locks),
-            CONF_SLOTS: dict(current_config.slots),
-        }
+        # Use to_dict() rather than .locks / .slots directly — to_dict
+        # returns plain mutable dict/list, while EntryConfig.slots is a
+        # deeply read-only MappingProxyType which the form selectors
+        # can't JSON-serialize.
+        defaults = get_entry_config(self.config_entry).to_dict()
 
         return self.async_show_form(
             step_id="init",
