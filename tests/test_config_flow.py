@@ -22,7 +22,7 @@ from custom_components.lock_code_manager.const import (
     CONF_START_SLOT,
     DOMAIN,
 )
-from custom_components.lock_code_manager.exceptions import LockCodeManagerError
+from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.models import SlotCode
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
@@ -590,15 +590,16 @@ async def test_async_get_all_codes_exception(hass: HomeAssistant):
 async def test_async_get_all_codes_provider_failure_logs_warning(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ):
-    """Provider raising LockCodeManagerError logs WARNING (not DEBUG).
+    """Provider raising LockCodeManagerProviderError logs WARNING (not DEBUG).
 
-    Distinguishes a real failure (e.g. LockDisconnected) from the expected
-    setup-time skip cases (missing entity / unsupported platform / missing
-    config entry) so users see actionable signal when a lock is unreachable.
+    Distinguishes a real failure (LockDisconnected, a provider error) from
+    the expected setup-time skip cases (missing entity / unsupported
+    platform / missing config entry) so users see actionable signal when a
+    lock is unreachable.
     """
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
-        side_effect=LockCodeManagerError("lock disconnected")
+        side_effect=LockDisconnected("lock offline")
     )
     mock_lock_cls = MagicMock(return_value=mock_instance)
 

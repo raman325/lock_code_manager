@@ -14,6 +14,7 @@ from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     EntityNotFoundError,
     LockCodeManagerError,
+    LockCodeManagerProviderError,
     LockDisconnected,
     ProviderNotImplementedError,
 )
@@ -99,6 +100,7 @@ def test_provider_not_implemented_error_inherits_correctly():
 
     err = ProviderNotImplementedError(FakeProvider(), "test")
 
+    assert isinstance(err, LockCodeManagerProviderError)
     assert isinstance(err, LockCodeManagerError)
     assert isinstance(err, NotImplementedError)
 
@@ -147,11 +149,28 @@ def test_lock_code_manager_error_is_base():
     assert str(err) == "test error"
 
 
-def test_lock_disconnected_inherits_from_base():
-    """Test LockDisconnected inherits from LockCodeManagerError."""
+def test_lock_disconnected_inherits_from_provider_error():
+    """LockDisconnected is a provider error and a LockCodeManagerError."""
     err = LockDisconnected("lock offline")
+    assert isinstance(err, LockCodeManagerProviderError)
     assert isinstance(err, LockCodeManagerError)
     assert "lock offline" in str(err)
+
+
+def test_entity_not_found_is_not_a_provider_error(hass: HomeAssistant):
+    """EntityNotFoundError is LCM-internal, NOT a provider error.
+
+    This split lets callers catch only real provider failures via
+    ``except LockCodeManagerProviderError`` without also swallowing
+    LCM-internal entity-registry misses.
+    """
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock = create_minimal_lock(hass, config_entry)
+    err = EntityNotFoundError(lock, 1, "pin")
+    assert isinstance(err, LockCodeManagerError)
+    assert not isinstance(err, LockCodeManagerProviderError)
 
 
 async def test_entity_not_found_error(hass: HomeAssistant):
@@ -193,9 +212,10 @@ def test_code_rejected_error_custom_reason():
     assert "appears to reject" not in str(err)
 
 
-def test_code_rejected_error_inherits_from_base():
-    """Test CodeRejectedError inherits from LockCodeManagerError."""
+def test_code_rejected_error_inherits_from_provider_error():
+    """CodeRejectedError is a provider error and a LockCodeManagerError."""
     err = CodeRejectedError(code_slot=1, lock_entity_id="lock.test")
+    assert isinstance(err, LockCodeManagerProviderError)
     assert isinstance(err, LockCodeManagerError)
 
 
@@ -242,4 +262,5 @@ def test_duplicate_code_error_inherits_from_code_rejected():
         lock_entity_id="lock.test",
     )
     assert isinstance(err, CodeRejectedError)
+    assert isinstance(err, LockCodeManagerProviderError)
     assert isinstance(err, LockCodeManagerError)
