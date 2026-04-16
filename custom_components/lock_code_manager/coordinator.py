@@ -84,7 +84,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
 
     def get_expected_pin(self, slot_num: int) -> str | None:
         """Return configured PIN for a slot, or None if disabled/unconfigured."""
-        slot_data = get_entry_config(self._config_entry).slots.get(int(slot_num), {})
+        slot_data = get_entry_config(self._config_entry).slot(slot_num)
         if not slot_data.get(CONF_ENABLED):
             return None
         return slot_data.get(CONF_PIN) or None

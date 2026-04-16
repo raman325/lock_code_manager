@@ -91,9 +91,23 @@ class EntryConfig:
         """Return True if this entry manages the given lock."""
         return lock_entity_id in self.locks
 
-    def has_slot(self, slot_num: int) -> bool:
-        """Return True if this entry manages the given slot number."""
-        return slot_num in self.slots
+    def has_slot(self, slot_num: int | str) -> bool:
+        """Return True if this entry manages the given slot number.
+
+        Accepts ``int`` or ``str`` to absorb the slot-key type variance
+        in the codebase (entities created during the listener may carry
+        either type as ``self.slot_num``). Internal storage is always
+        ``int``-keyed.
+        """
+        return int(slot_num) in self.slots
+
+    def slot(self, slot_num: int | str) -> Mapping[str, Any]:
+        """Return the slot config dict, or an empty mapping if absent.
+
+        Like :meth:`has_slot`, accepts ``int`` or ``str`` so callers
+        don't need to cast at every read site.
+        """
+        return self.slots.get(int(slot_num), {})
 
 
 def get_entry_config(entry: ConfigEntry) -> EntryConfig:
@@ -122,14 +136,13 @@ def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
     return config_entry.options.get(key, config_entry.data.get(key, default))
 
 
-def get_slot_data(config_entry, slot_num: int) -> Mapping[str, Any]:
+def get_slot_data(config_entry, slot_num: int | str) -> Mapping[str, Any]:
     """Get the slot config dict for ``slot_num`` (empty mapping if absent).
 
-    Goes via :class:`EntryConfig` so the returned mapping is found
-    regardless of whether the underlying storage uses ``str`` or ``int``
-    slot keys. Callers may pass either type for ``slot_num``.
+    Thin wrapper around :meth:`EntryConfig.slot` for callers that don't
+    have an :class:`EntryConfig` in hand.
     """
-    return get_entry_config(config_entry).slots.get(int(slot_num), {})
+    return get_entry_config(config_entry).slot(slot_num)
 
 
 def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
@@ -144,7 +157,7 @@ def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
 
 
 def find_entry_for_lock_slot(
-    hass: HomeAssistant, lock_entity_id: str, code_slot: int
+    hass: HomeAssistant, lock_entity_id: str, code_slot: int | str
 ) -> ConfigEntry | None:
     """Find the config entry that manages a specific lock + slot combination.
 
@@ -156,7 +169,7 @@ def find_entry_for_lock_slot(
             entry
             for entry in hass.config_entries.async_entries(DOMAIN)
             for config in [get_entry_config(entry)]
-            if config.has_lock(lock_entity_id) and config.has_slot(int(code_slot))
+            if config.has_lock(lock_entity_id) and config.has_slot(code_slot)
         ),
         None,
     )

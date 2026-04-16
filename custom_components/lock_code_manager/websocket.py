@@ -190,8 +190,7 @@ def _get_slot_condition_entity_id(
     config_entry: ConfigEntry, slot_num: int
 ) -> str | None:
     """Get condition entity ID from slot config."""
-    slot_config = get_entry_config(config_entry).slots.get(int(slot_num), {})
-    return slot_config.get(CONF_ENTITY_ID)
+    return get_entry_config(config_entry).slot(slot_num).get(CONF_ENTITY_ID)
 
 
 def async_get_entry(
@@ -1011,7 +1010,7 @@ async def subscribe_code_slot(
     reveal = msg["reveal"]
 
     # Validate slot exists in config
-    if not get_entry_config(config_entry).has_slot(int(slot_num)):
+    if not get_entry_config(config_entry).has_slot(slot_num):
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_NOT_FOUND,

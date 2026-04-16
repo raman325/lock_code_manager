@@ -199,8 +199,24 @@ def test_entry_config_from_mapping_normalizes_str_slot_keys_to_int() -> None:
     )
     assert set(config.slots.keys()) == {1, 2}
     assert all(isinstance(k, int) for k in config.slots.keys())
+
+
+def test_entry_config_accessors_absorb_str_or_int_slot_num() -> None:
+    """has_slot / slot accept either type and normalize internally.
+
+    Lets callers stop carrying ``int(slot_num)`` casts at every read
+    site. The internal storage is still ``int``-keyed; the accessors
+    just absorb the type variance.
+    """
+    config = EntryConfig.from_mapping({CONF_SLOTS: {"1": _slot(pin="abc")}})
+
     assert config.has_slot(1)
-    assert not config.has_slot("1")  # type: ignore[arg-type]  # str does not match
+    assert config.has_slot("1")
+    assert config.slot(1) == {"pin": "abc", "enabled": True}
+    assert config.slot("1") == {"pin": "abc", "enabled": True}
+    # Missing slot returns empty mapping (not KeyError)
+    assert config.slot(99) == {}
+    assert config.slot("99") == {}
 
 
 def test_entry_config_from_mapping_preserves_int_slot_keys() -> None:
