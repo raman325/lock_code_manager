@@ -586,8 +586,12 @@ async def test_async_get_all_codes_exception(hass: HomeAssistant):
     assert instances == {}
 
 
-async def test_async_get_all_codes_returns_all_non_empty(hass: HomeAssistant):
-    """Test _async_get_all_codes returns all non-empty codes including managed ones."""
+async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
+    """Test _async_get_all_codes returns every slot the lock reports.
+
+    Filtering empty slots is the caller's responsibility, so this function
+    must not drop them.
+    """
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
         return_value={1: "1234", 3: "9999", 4: SlotCode.EMPTY}
@@ -625,10 +629,10 @@ async def test_async_get_all_codes_returns_all_non_empty(hass: HomeAssistant):
             hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
         )
 
-    # _async_get_all_codes returns ALL non-empty codes (not filtered by managed status)
-    # Slot 4 is empty, so only slots 1 and 3 should be returned
+    # _async_get_all_codes returns ALL codes — including empty slots.
+    # Callers (e.g. _slots_with_existing_codes) filter as needed.
     assert LOCK_1_ENTITY_ID in result
-    assert result[LOCK_1_ENTITY_ID] == {1: "1234", 3: "9999"}
+    assert result[LOCK_1_ENTITY_ID] == {1: "1234", 3: "9999", 4: SlotCode.EMPTY}
     assert LOCK_1_ENTITY_ID in instances
 
 
@@ -693,17 +697,21 @@ async def test_clear_existing_slot_handles_failures(hass: HomeAssistant):
     mock_lock_fail = MagicMock()
     mock_lock_fail.async_internal_clear_usercode = mock_clear_fail
 
-    # Three locks: one without an instance (skipped), one OK, one that fails
+    # Locks: one without an instance (skipped), one OK, one that fails,
+    # one whose slot 1 is reported as EMPTY (must not be cleared), and one
+    # that doesn't have slot 1 at all (must not be cleared)
     existing = {
         "lock.no_instance": {1: "1111"},
         "lock.ok": {1: "2222"},
         "lock.fails": {1: "3333"},
-        "lock.skipped": {2: "4444"},  # slot 2, not 1 — should be skipped
+        "lock.empty_slot": {1: SlotCode.EMPTY},
+        "lock.different_slot": {2: "4444"},
     }
     instances = {
         "lock.ok": mock_lock_ok,
         "lock.fails": mock_lock_fail,
-        "lock.skipped": MagicMock(),
+        "lock.empty_slot": MagicMock(),
+        "lock.different_slot": MagicMock(),
     }
 
     with patch(GET_ALL_CODES_PATCH, return_value=(existing, instances)):
@@ -728,10 +736,12 @@ async def test_clear_existing_slot_handles_failures(hass: HomeAssistant):
 
     assert result["type"] == "create_entry"
     # OK lock cleared, failing lock attempted (exception swallowed),
-    # no_instance skipped, lock.skipped not touched (different slot)
+    # no_instance skipped, empty_slot skipped (no code to clear),
+    # different_slot not touched (slot 1 not present)
     mock_clear_ok.assert_called_once_with(1, source="direct")
     mock_clear_fail.assert_called_once_with(1, source="direct")
-    instances["lock.skipped"].async_internal_clear_usercode.assert_not_called()
+    instances["lock.empty_slot"].async_internal_clear_usercode.assert_not_called()
+    instances["lock.different_slot"].async_internal_clear_usercode.assert_not_called()
 
 
 async def test_continue_after_confirm_unknown_state(hass: HomeAssistant):

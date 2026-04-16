@@ -170,11 +170,12 @@ async def _async_get_all_codes(
     ent_reg: er.EntityRegistry,
     lock_entity_ids: list[str],
 ) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
-    """Query locks for all existing usercodes.
+    """Query locks for all usercodes.
 
     Returns a tuple of:
     - Dict keyed by lock entity ID, each value being a dict of slot number to
-      code value. Empty slots (SlotCode.EMPTY) are excluded.
+      code value (including SlotCode.EMPTY for empty slots). Callers must
+      filter as needed.
     - Dict keyed by lock entity ID to temporary lock provider instances, for
       reuse in clearing slots.
     """
@@ -200,13 +201,8 @@ async def _async_get_all_codes(
                 exc_info=True,
             )
         else:
-            occupied = {
-                slot: code
-                for slot, code in usercodes.items()
-                if code is not SlotCode.EMPTY
-            }
-            if occupied:
-                result[lock_entity_id] = occupied
+            if usercodes:
+                result[lock_entity_id] = usercodes
                 lock_instances[lock_entity_id] = lock_instance
     return result, lock_instances
 
@@ -224,7 +220,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self.slots_to_configure: list[int] = []
-        self._existing_codes: dict[str, dict[int, str | SlotCode]] = {}
+        self._all_codes: dict[str, dict[int, str | SlotCode]] = {}
         self._lock_instances: dict[str, Any] = {}
         self._slots_to_clear: list[int] = []
         self._next_after_confirm: str = ""
@@ -245,7 +241,7 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             self.data = user_input
             # Scan locks for existing codes once upfront
             (
-                self._existing_codes,
+                self._all_codes,
                 self._lock_instances,
             ) = await _async_get_all_codes(
                 self.hass, self.dev_reg, self.ent_reg, user_input[CONF_LOCKS]
@@ -264,11 +260,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     def _slots_with_existing_codes(self, slot_nums: Iterable[int]) -> list[int]:
-        """Return sorted list of slot numbers that have existing codes on any lock."""
+        """Return sorted list of slot numbers with non-empty codes on any lock."""
         return sorted(
             slot_num
             for slot_num in slot_nums
-            if any(slot_num in codes for codes in self._existing_codes.values())
+            if any(
+                codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
+                for codes in self._all_codes.values()
+            )
         )
 
     async def _create_entry_and_clear_slots(self) -> dict[str, Any]:
@@ -282,14 +281,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         for slot_num in self._slots_to_clear:
             await self._clear_existing_slot(slot_num)
         self._slots_to_clear = []
-        self._existing_codes = {}
+        self._all_codes = {}
         self._lock_instances = {}
         return self.async_create_entry(title=self.title, data=self.data)
 
     async def _clear_existing_slot(self, slot_num: int) -> None:
-        """Clear a specific slot on all locks that have an existing code in it."""
-        for lock_entity_id, codes in self._existing_codes.items():
-            if slot_num not in codes:
+        """Clear a specific slot on all locks that have a non-empty code in it."""
+        for lock_entity_id, codes in self._all_codes.items():
+            if codes.get(slot_num, SlotCode.EMPTY) == SlotCode.EMPTY:
                 continue
             lock_instance = self._lock_instances.get(lock_entity_id)
             if not lock_instance:
