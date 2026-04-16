@@ -489,6 +489,9 @@ async def async_setup_entry(
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
     else:
+        # async_listen_once self-unsubscribes when it fires, so calling
+        # unsub() again would error. Track whether it fired so unload only
+        # tears down the listener if HA never started before unload.
         started = [False]
 
         @callback
@@ -540,13 +543,7 @@ async def async_unload_lock(
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
-    """Handle removal of an entry.
-
-    Routes through the same lock-removed and slot-removed callbacks that
-    async_update_listener uses, so that entities are notified symmetrically
-    on unload just as they are during a config update that removes all
-    slots and locks.
-    """
+    """Unload an entry, firing slot- and lock-removed callbacks before tearing down platforms."""
     hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
@@ -581,9 +578,7 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_lock(hass, config_entry)
 
-        # Clean up repair issues for this config entry. EntryConfig handles
-        # the data-vs-options precedence (matters during the data→options
-        # migration that happens early in setup).
+        # Clean up repair issues for this config entry.
         entry_id = config_entry.entry_id
         config = get_entry_config(config_entry)
         for slot_num in config.slots:
@@ -795,9 +790,6 @@ async def async_update_listener(
         )
     await asyncio.gather(*setup_tasks.values())
 
-    # Identify changes that need to be made. The `-` operator on
-    # EntryConfig is sugar for EntryConfigDiff(old=..., new=...) — both
-    # configs are int-keyed by construction so no normalization needed.
     diff = old_config - new_config
     slots_to_add = diff.slots_added
     slots_to_remove = diff.slots_removed

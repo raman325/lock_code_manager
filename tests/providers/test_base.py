@@ -208,13 +208,8 @@ async def test_rate_limiting_set_usercode(
     lock_code_manager_config_entry,
 ):
     """Test that operations are rate limited with minimum delay between calls."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-
-    # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
 
     # First operation should execute immediately
@@ -243,12 +238,8 @@ async def test_rate_limiting_mixed_operations(
     lock_code_manager_config_entry,
 ):
     """Test that rate limiting applies across different operation types."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    # Reset the last operation time to ensure clean test isolation
     lock_provider._last_operation_time = 0.0
 
     # First operation: set usercode
@@ -269,13 +260,8 @@ async def test_rate_limiting_get_usercodes(
     lock_code_manager_config_entry,
 ):
     """Test that get operations are also rate limited."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-
-    # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
 
     # First get should be fast
@@ -297,12 +283,8 @@ async def test_operations_are_serialized(
     lock_code_manager_config_entry,
 ):
     """Test that multiple parallel operations are serialized by the lock."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    # Reset the last operation time to ensure clean test isolation
     lock_provider._last_operation_time = 0.0
 
     # Start multiple operations in parallel

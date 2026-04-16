@@ -90,7 +90,6 @@ from .common import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Test entity IDs
 CALENDAR_TEST_ENTITY_ID = f"{CALENDAR_DOMAIN}.test_cal"
 BINARY_SENSOR_TEST_ENTITY_ID = "binary_sensor.test_motion"
 SWITCH_TEST_ENTITY_ID = "switch.test_switch"
@@ -1321,7 +1320,7 @@ async def test_subscribe_code_slot_response_shape(
     assert event["type"] == "event"
     data = event["event"]
 
-    # Assert all expected top-level keys are present (matching SlotCardData interface)
+    # Matches SlotCardData interface in frontend types.
     expected_keys = {
         ATTR_SLOT_NUM,
         ATTR_CONFIG_ENTRY_ID,
@@ -1338,7 +1337,7 @@ async def test_subscribe_code_slot_response_shape(
         f"Missing keys: {expected_keys - data.keys()}"
     )
 
-    # Assert entities dictionary has expected keys (matching SlotCardEntities interface)
+    # Matches SlotCardEntities interface in frontend types.
     entities = data[CONF_ENTITIES]
     expected_entity_keys = {
         ATTR_ACTIVE,
@@ -1349,7 +1348,7 @@ async def test_subscribe_code_slot_response_shape(
     }
     assert expected_entity_keys == set(entities.keys())
 
-    # Assert each lock has expected keys (matching SlotCardLockStatus interface)
+    # Matches SlotCardLockStatus interface in frontend types.
     assert len(data[CONF_LOCKS]) > 0
     for lock_data in data[CONF_LOCKS]:
         assert ATTR_ENTITY_ID in lock_data
@@ -1357,7 +1356,7 @@ async def test_subscribe_code_slot_response_shape(
         assert ATTR_IN_SYNC in lock_data
         assert ATTR_CODE in lock_data
 
-    # Assert correct types (matching TypeScript types)
+    # Type assertions mirror the TypeScript types in frontend types.
     assert isinstance(data[ATTR_SLOT_NUM], int)
     assert isinstance(data[CONF_NAME], str)
     assert isinstance(data[CONF_ENABLED], bool) or data[CONF_ENABLED] is None
@@ -1389,12 +1388,12 @@ async def test_subscribe_lock_codes_response_shape(
     assert event["type"] == "event"
     data = event["event"]
 
-    # Assert top-level keys match LockCoordinatorData interface
+    # Matches LockCoordinatorData interface in frontend types.
     assert isinstance(data[ATTR_LOCK_ENTITY_ID], str)
     assert isinstance(data[ATTR_LOCK_NAME], str)
     assert isinstance(data[CONF_SLOTS], list)
 
-    # Assert each slot matches LockCoordinatorSlotData interface
+    # Matches LockCoordinatorSlotData interface in frontend types.
     assert len(data[CONF_SLOTS]) > 0
     for slot in data[CONF_SLOTS]:
         assert isinstance(slot[ATTR_SLOT], int)

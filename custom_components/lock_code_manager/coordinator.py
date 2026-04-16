@@ -97,16 +97,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
     def _normalize_keys(
         data: dict[Any, str | SlotCode],
     ) -> dict[int, str | SlotCode]:
-        """Coerce slot keys to ``int``.
-
-        The single chokepoint that enforces the ``coordinator.data`` int-key
-        invariant. Applied at every write site (poll, push, drift-check) so
-        downstream consumers (websocket serializer, listeners) can rely on
-        plain int membership/sorting without defensive str/int gymnastics.
-
-        Raises ``ValueError``/``TypeError`` if a key cannot be cast — that's
-        a programming error worth surfacing rather than poisoning the cache.
-        """
+        """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
         return {int(k): v for k, v in data.items()}
 
     @callback
@@ -190,18 +181,15 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Update usercodes.
-
-        Routes the provider response through ``_normalize_keys`` — the
-        chokepoint that guarantees ``coordinator.data`` is always int-keyed,
-        regardless of which provider produced it. See ``_normalize_keys``
-        for rationale.
-        """
+        """Fetch usercodes from the provider, normalize slot keys to int, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
             self._apply_backoff()
-            # We can silently fail if we've never been able to retrieve data
+            # During cold start (no successful poll yet) we must not raise
+            # UpdateFailed — it would mark entities unavailable forever
+            # instead of letting them appear and recover when the lock
+            # connects.
             if not self.last_update_success:
                 return {}
             raise UpdateFailed from err
@@ -249,10 +237,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         # Push subscription retry is handled by BaseLock's OneShotRetry
         # and the config entry state listener — no need to retry here.
 
-        # Compare with current data and notify if changed.
-        # Both sides are int-keyed (poll path normalized, this path normalized
-        # above) so the equality check won't spuriously trigger on key-type
-        # mismatch.
         if new_data != self.data:
             _LOGGER.debug(
                 "Drift detected for %s, updating coordinator data",

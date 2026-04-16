@@ -1,9 +1,7 @@
-"""
-Typed callback registry for entity lifecycle management.
+"""Typed callback registry for entity lifecycle management.
 
-This module replaces the HA dispatcher mechanism with a type-safe callback
-registry pattern. Platforms register callbacks for entity creation, and entities
-register callbacks for their own removal.
+Platforms register entity-creation callbacks; entities register
+their own removal callbacks.
 """
 
 from __future__ import annotations
@@ -65,12 +63,7 @@ UnregisterFunc = Callable[[], None]
 
 @dataclass
 class EntityCallbackRegistry:
-    """
-    Registry of entity lifecycle callbacks.
-
-    This replaces the HA dispatcher pattern with explicit, typed callbacks.
-    Platforms register their entity creation callbacks here, and entities
-    register their removal callbacks.
+    """Registry of entity lifecycle callbacks.
 
     Entity Types:
         Standard: Entities created once per slot (e.g., enabled switch, name/PIN

@@ -8,8 +8,7 @@ device are automatically tagged and assigned to the next available slot
 number.
 
 All operations go through the Home Assistant ``local_akuvox`` integration
-services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``)
-rather than importing pylocal-akuvox directly.
+services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``).
 """
 
 from __future__ import annotations
@@ -78,14 +77,6 @@ class AkuvoxLock(BaseLock):
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=2)
-
-    # ------------------------------------------------------------------
-    # Connection
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     async def _async_list_users(self) -> list[dict[str, Any]]:
         """Call ``local_akuvox.list_users`` and return the user list.
@@ -179,17 +170,9 @@ class AkuvoxLock(BaseLock):
                 f"Failed to delete user {device_user_id} on {entity_id}: {err}"
             ) from err
 
-    # ------------------------------------------------------------------
-    # Managed slot helpers
-    # ------------------------------------------------------------------
-
     def _get_managed_slots(self) -> set[int]:
         """Return managed slot numbers for this lock."""
         return get_managed_slots(self.hass, self.lock.entity_id)
-
-    # ------------------------------------------------------------------
-    # Setup and refresh
-    # ------------------------------------------------------------------
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by tagging any pre-existing unmanaged users."""
@@ -200,10 +183,6 @@ class AkuvoxLock(BaseLock):
         """Re-tag unmanaged users, then return all codes."""
         await self._async_tag_unmanaged_users()
         return await self.async_get_usercodes()
-
-    # ------------------------------------------------------------------
-    # Auto-tagging
-    # ------------------------------------------------------------------
 
     async def _async_tag_unmanaged_users(self) -> None:
         """Discover untagged local users and tag them with a slot number.
@@ -268,10 +247,6 @@ class AkuvoxLock(BaseLock):
                 slot_num,
                 tagged_name,
             )
-
-    # ------------------------------------------------------------------
-    # Code slot operations
-    # ------------------------------------------------------------------
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes.

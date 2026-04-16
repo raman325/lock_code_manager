@@ -22,11 +22,8 @@ class LockCodeManagerProviderError(LockCodeManagerError):
     ``DuplicateCodeError``), or the provider declining to implement an
     operation (``ProviderNotImplementedError``).
 
-    LCM-internal exceptions (e.g. ``EntityNotFoundError``, the
-    ``_LockQuerySkipped`` sentinel in the config flow) stay at the
-    ``LockCodeManagerError`` level. Catching this class lets callers say
-    "did this error come from the lock provider?" without enumerating
-    every provider error type.
+    Catching this class lets callers ask "did this error come from the
+    lock provider?" without enumerating every provider error type.
     """
 
 
@@ -87,14 +84,7 @@ class LockDisconnected(LockCodeManagerProviderError):
 
 
 class ProviderNotImplementedError(LockCodeManagerProviderError, NotImplementedError):
-    """
-    Raised when a provider method is not implemented.
-
-    This exception should be raised by BaseLock methods that must be overridden
-    by provider subclasses. It combines LockCodeManagerProviderError (so the
-    coordinator can catch it uniformly with other provider failures) with
-    NotImplementedError (for standard Python semantics).
-    """
+    """Raised when a provider method that subclasses must override is called."""
 
     def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
         """Initialize the error."""

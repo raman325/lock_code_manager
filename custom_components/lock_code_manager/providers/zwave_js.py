@@ -119,12 +119,7 @@ class ZWaveJSLock(BaseLock):
 
     @property
     def supports_push(self) -> bool:
-        """
-        Return whether this lock supports push-based updates.
-
-        Z-Wave JS emits value update events when the cache changes, so we
-        subscribe to those instead of polling.
-        """
+        """Return whether this lock supports push-based updates."""
         return True
 
     @property
@@ -167,11 +162,7 @@ class ZWaveJSLock(BaseLock):
             return None
 
     def _slot_expects_pin(self, code_slot: int) -> bool:
-        """Check if LCM expects a PIN on this slot (enabled with PIN configured).
-
-        Used to ignore stale userIdStatus=AVAILABLE events from locks that
-        report old status after a code was successfully set.
-        """
+        """Return True if this slot is enabled and has a PIN configured."""
         if not self.coordinator:
             return False
         return self.coordinator.slot_expects_pin(code_slot)
@@ -213,11 +204,14 @@ class ZWaveJSLock(BaseLock):
         else:
             value = str(new_value)
             slot_in_use = self.code_slot_in_use(code_slot)
+            # Asymmetric in_use checks: masked codes count as UNKNOWN even
+            # when in_use is None (some firmwares mask before reporting
+            # status), but all-zeros only counts as EMPTY when in_use is
+            # explicitly False (zeros from a partially-loaded cache must
+            # not be misread as cleared).
             if value == "*" * len(value) and slot_in_use is not False:
-                # Masked code: treat as UNKNOWN whether in_use is True or None
                 resolved = SlotCode.UNKNOWN
             elif value.strip("0") == "" and slot_in_use is False:
-                # All-zeros with slot explicitly not in use means cleared
                 resolved = SlotCode.EMPTY
             else:
                 resolved = value
@@ -326,6 +320,9 @@ class ZWaveJSLock(BaseLock):
         # Mark the slot as rejected so the sync manager raises DuplicateCodeError
         # on the next tick, routing through the standard CodeRejectedError flow
         # (tracker reset, circuit breaker awareness, notification).
+        # Some Z-Wave lock firmwares report this notification with userId=0
+        # instead of the offending slot; treat 0 as referring to the slot
+        # we're currently setting.
         if (
             evt.data[ATTR_EVENT]
             == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
@@ -391,13 +388,7 @@ class ZWaveJSLock(BaseLock):
             return False
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh and return all codes.
-
-        Uses Z-Wave JS's refresh_cc_values which handles checksum optimization
-        internally - it will skip re-fetching codes if the checksum hasn't changed.
-        Returns codes in the same format as async_get_usercodes().
-        """
+        """Refresh the User Code CC cache from the device and return all codes."""
         await self._async_refresh_usercode_cache()
         return await self.async_get_usercodes()
 
@@ -409,11 +400,12 @@ class ZWaveJSLock(BaseLock):
 
         Returns True if the value was changed, False if already set to this value.
         """
-        # Check if the code is already set to this value (avoid unnecessary network call)
+        # Cache lookup short-circuits no-op writes. Bare-except is intentional:
+        # a stale or missing cache entry must not block the set operation.
         try:
             if (current := get_usercode(self.node, code_slot)).get("in_use"):
                 current_code = str(current.get("usercode", ""))
-                # If masked (all asterisks), skip duplicate check since we cannot compare
+                # Skip the duplicate check if the current code is masked.
                 if current_code != "*" * len(current_code) and usercode == current_code:
                     _LOGGER.debug(
                         "Lock %s slot %s already has this PIN, skipping set",
@@ -421,8 +413,7 @@ class ZWaveJSLock(BaseLock):
                         code_slot,
                     )
                     return False
-        except Exception:
-            # If we can't check the cache, proceed with the set
+        except Exception:  # noqa: BLE001
             pass
 
         self._set_in_progress_code_slot = code_slot
@@ -456,7 +447,8 @@ class ZWaveJSLock(BaseLock):
 
         Returns True if the value was changed, False if already cleared.
         """
-        # Check if the slot is already cleared (avoid unnecessary network call)
+        # Cache lookup short-circuits no-op clears. Bare-except is intentional:
+        # see async_set_usercode for rationale.
         try:
             current = get_usercode(self.node, code_slot)
             if not current.get("in_use"):
@@ -466,8 +458,7 @@ class ZWaveJSLock(BaseLock):
                     code_slot,
                 )
                 return False
-        except Exception:
-            # If we can't check the cache, proceed with the clear
+        except Exception:  # noqa: BLE001
             pass
 
         service_data = {

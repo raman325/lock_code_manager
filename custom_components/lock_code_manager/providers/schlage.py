@@ -8,7 +8,7 @@ available slot number.
 
 All lock operations go through the Home Assistant Schlage integration
 services (``schlage.get_codes``, ``schlage.add_code``,
-``schlage.delete_code``) rather than importing pyschlage directly.
+``schlage.delete_code``).
 
 PINs are write-only from the Schlage API perspective: the ``get_codes``
 service returns masked PINs (``****``), so occupied slots report

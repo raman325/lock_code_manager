@@ -283,26 +283,7 @@ async def get_config_entry_data(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """
-    Return complete config entry data for Lock Code Manager.
-
-    This is the primary data-fetching command for the frontend. It returns all
-    static configuration and entity registry data needed to render the dashboard.
-
-    Frontend usage:
-    - generate-view.ts: Fetches slot numbers for section generation, lock entity
-      IDs for badges, and lock names for sorting/display
-    - slot-section-strategy.ts: Fetches entities for legacy slot card generation
-    - dashboard-strategy.ts: Fetches data for dashboard view generation
-    - view-strategy.ts: Fetches config entry and entities for view rendering
-
-    Sends:
-        config_entry: The config entry JSON fragment (entry_id, title, etc.)
-        entities: List of entity registry entries for this config entry
-        locks: List of lock objects with entity_id and friendly name
-        slots: Mapping of slot numbers to calendar entity IDs (or null)
-
-    """
+    """Return the config entry fragment, entity registry entries, lock list, and slot calendar mapping."""
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
     entry_config = get_entry_config(config_entry)
 
@@ -343,16 +324,7 @@ def _serialize_slot(
     enabled: bool | None = None,
     config_entry_id: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Serialize a single slot, optionally masking the code.
-
-    - code/code_length: What's actually on the lock (actual state)
-    - configured_code/configured_code_length: What LCM has configured (desired state)
-      Always included for managed slots, even if code is active on lock.
-    - active: True if enabled + conditions met, False if inactive, None if unknown
-    - enabled: True if enabled switch is ON, False if OFF, None if unknown
-    - config_entry_id: ID of the LCM config entry managing this slot (for navigation)
-    """
+    """Serialize a slot dict, masking the code unless ``reveal`` is True."""
     result: dict[str, Any] = {ATTR_SLOT: slot}
     if name:
         result[CONF_NAME] = name
@@ -388,12 +360,7 @@ def _serialize_slot(
 
 @dataclass
 class SlotEntities:
-    """Entity IDs for a single slot's LCM entities.
-
-    All entity ID fields are optional so callers that only need a subset
-    can populate what they have. ``config_entry_id`` is included for
-    callers iterating across entries who need to track origin.
-    """
+    """Entity IDs for a single slot's LCM entities."""
 
     slot_num: int
     config_entry_id: str | None = None
@@ -422,12 +389,7 @@ class SlotEntities:
 
 @dataclass
 class SlotMetadata:
-    """Parsed values for a single slot, derived from LCM entity states.
-
-    Used as the per-slot shape inside websocket subscription responses.
-    Fields are typed (bool / str) rather than raw HA states because
-    consumers want clean JSON-serializable values.
-    """
+    """Parsed values for a single slot, derived from LCM entity states."""
 
     name: str | None = None
     configured_pin: str | None = None
@@ -438,18 +400,7 @@ class SlotMetadata:
 def _get_slot_entity_ids(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotEntities]:
-    """
-    Get entity IDs for all slots managed by LCM for a lock.
-
-    Returns a dict mapping slot number to SlotEntities containing the entity IDs
-    for name, PIN, active, and enabled entities. ``number_of_uses_entity_id`` and
-    ``event_entity_id`` are left unset because this function is used for
-    state-tracking subscriptions which only care about the four primary entities.
-
-    Note: If multiple config entries manage the same lock with overlapping slot
-    numbers (which shouldn't happen in normal use), the last entry wins. This is
-    expected behavior since slot conflicts are validated during config flow.
-    """
+    """Return a dict of slot number to SlotEntities for the four primary per-slot entities."""
     slot_entities: dict[int, SlotEntities] = {}
     ent_reg = er.async_get(hass)
 
@@ -488,15 +439,7 @@ def _get_slot_entity_ids(
 def _get_slot_metadata(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotMetadata]:
-    """
-    Get all slot metadata from LCM entities for a lock in one pass.
-
-    Returns a dict mapping slot number to SlotMetadata containing:
-    - name: From text entity
-    - configured_pin: From text entity
-    - active: From binary sensor (True=on, False=off, None=unknown)
-    - enabled: From switch (True=on, False=off, None=unknown)
-    """
+    """Return a dict of slot number to SlotMetadata for all slots LCM manages on a lock."""
     slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
     return {
         slot_num: SlotMetadata(
@@ -544,9 +487,6 @@ def _serialize_lock_coordinator(
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
 
     slots = []
-    # `data` is int-keyed (coordinator normalizes); managed_slots is also
-    # int-keyed (built from EntryConfig.slots). All slot lookups below are
-    # plain int operations — no str/int variant gymnastics needed.
     for slot, code in sorted(data.items()):
         meta = slot_metadata.get(slot)
         slot_ids = slot_entity_ids.get(slot)
@@ -647,10 +587,6 @@ async def subscribe_lock_codes(
             _send_update()
 
     # Track coordinator updates (lock code changes).
-    # Note: if coordinator is None AND the initial entity set is empty, nothing
-    # drives re-resolution of entities. This is acceptable because coordinators
-    # are always present for real lock providers; None only occurs in degenerate
-    # test scenarios where no actual lock hardware is involved.
     unsub_coordinator = (
         coordinator.async_add_listener(_send_update) if coordinator else lambda: None
     )

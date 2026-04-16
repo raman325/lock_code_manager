@@ -435,19 +435,7 @@ async def test_set_usercode_optimistic_update_prevents_stale_read(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """
-    Test that optimistic update prevents sync loops from stale cache reads.
-
-    This test verifies the fix for the reported issue where out-of-sync slots
-    cause constant lock activity. The scenario:
-    1. LCM sets a code on the lock
-    2. Z-Wave command succeeds (lock acknowledges)
-    3. Without optimistic update: coordinator.data still has old value
-    4. Binary sensor sees mismatch → triggers another sync → loop
-
-    With the fix, push_update immediately sets coordinator.data to the new value,
-    so the binary sensor sees the expected value and doesn't retry.
-    """
+    """Test that optimistic update prevents sync loops from stale cache reads."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
