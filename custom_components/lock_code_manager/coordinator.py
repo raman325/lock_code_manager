@@ -186,10 +186,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
             self._apply_backoff()
-            # During cold start (no successful poll yet) we must not raise
-            # UpdateFailed — it would mark entities unavailable forever
-            # instead of letting them appear and recover when the lock
-            # connects.
+            # During cold start (before the first successful poll), do not
+            # raise UpdateFailed. That would fail the initial refresh and
+            # keep coordinator-backed entities unavailable until a
+            # successful poll completes.
             if not self.last_update_success:
                 return {}
             raise UpdateFailed from err
