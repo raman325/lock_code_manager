@@ -112,8 +112,13 @@ class MatterLock(BaseLock):
     ) -> dict[str, Any]:
         """Call a Matter service and return the per-entity response data.
 
-        Validates the response contains data for this lock's entity ID and
-        returns the per-entity dict directly.
+        Intentionally does NOT route through ``BaseLock.async_call_service``:
+        Matter services return ``{entity_id: {...}}``-shaped responses that
+        need per-entity unwrapping plus structural validation, and the
+        bespoke ``LockCodeManagerProviderError`` raised on malformed data
+        is meaningfully different from the generic ``LockDisconnected``
+        the shared wrapper raises. Future refactors should preserve this
+        bypass rather than "unifying" it back into the base helper.
         """
         entity_id = self.lock.entity_id
         try:
