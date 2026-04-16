@@ -60,12 +60,7 @@ class VirtualLock(BaseLock):
         return True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh and return all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync with
-        the lock. Returns codes in the same format as async_get_usercodes().
-        """
+        """Reload from store and return all codes."""
         self._data = data if (data := await self._store.async_load()) else {}
         return await self.async_get_usercodes()
 

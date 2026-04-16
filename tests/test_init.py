@@ -676,11 +676,7 @@ async def test_unload_fires_lock_removed_callbacks(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that unloading an entry fires lock-removed callbacks for each lock.
-
-    Before the symmetric-unload refactor, async_unload_entry bypassed
-    the update listener path, so lock-removed callbacks never fired.
-    """
+    """Test that unloading an entry fires lock-removed callbacks for each lock."""
     runtime_data = lock_code_manager_config_entry.runtime_data
     callbacks = runtime_data.callbacks
 
@@ -792,9 +788,7 @@ async def test_number_of_uses_repair_flow_strips_data(
 
     assert result["type"] == "create_entry"
 
-    # Verify number_of_uses was stripped from the config entry. The
-    # listener normalizes slot keys to int when it writes back to data,
-    # so look up by int rather than the str key the test originally wrote.
+    # Listener normalizes slot keys to int before persisting; look up by int.
     assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][2]
     # Slot 1 should be unchanged
     assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][1]

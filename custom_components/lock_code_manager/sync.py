@@ -479,8 +479,10 @@ class SlotSyncManager:
             if slot_state.active_state not in (STATE_ON, STATE_OFF):
                 self._invalid_state_count += 1
 
+                # Exact `== MAX+1` (not `>=`) is intentional: we log the
+                # warning exactly once. Subsequent invalid-state ticks fall
+                # through to neither branch and stay silent to avoid spam.
                 if self._invalid_state_count == MAX_SYNC_ATTEMPTS + 1:
-                    # Log warning once after threshold, then stay silent
                     _LOGGER.warning(
                         "%s: Active entity has invalid state '%s' for %s consecutive checks. "
                         "Entity may be unavailable or misconfigured. Check that the active "

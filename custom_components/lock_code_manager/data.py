@@ -19,23 +19,16 @@ _EMPTY_SLOTS: Mapping[int, Mapping[str, Any]] = MappingProxyType({})
 class EntryConfig:
     """Typed, normalized view of an LCM entry's configuration.
 
-    Single chokepoint for reading entry config: the on-disk representation
-    has ``str`` slot keys (JSON storage) while voluptuous-validated user
-    input has ``int`` keys. ``EntryConfig`` normalizes to ``int`` keys
-    once at construction so every downstream consumer can treat slot
-    numbers uniformly. The defensive ``slot if slot in d else str(slot)``
-    patterns scattered across the codebase exist precisely because there
-    was no such chokepoint before.
+    Slot keys are normalized to ``int`` at construction (the on-disk
+    JSON representation uses ``str``; voluptuous-validated user input
+    uses ``int``). ``slots`` is a deeply read-only mapping
+    (``MappingProxyType`` at both levels) so instances can be cached
+    without defensive copies.
 
-    ``slots`` is a deeply read-only mapping (``MappingProxyType`` at both
-    levels) so callers can keep an ``EntryConfig`` as cached state without
-    defensive copies.
-
-    Lifecycle: an instance is cached on
-    ``LockCodeManagerConfigEntryData.config`` and refreshed by the update
-    listener whenever the entry is mutated. Most callers should access it
-    via ``entry.runtime_data.config`` directly. Iteration helpers that
-    walk ``hass.config_entries.async_entries(DOMAIN)`` use
+    An instance is cached on ``LockCodeManagerConfigEntryData.config``
+    and refreshed by the update listener. Most callers should access it
+    via ``entry.runtime_data.config``. Iteration helpers that walk
+    ``hass.config_entries.async_entries(DOMAIN)`` use
     :func:`get_entry_config` to handle the unloaded-entry case.
     """
 
@@ -260,21 +253,9 @@ class EntryConfigDiff:
       uses to detect existing-codes hazards on newly-added pairs (catches
       both "new slot on existing lock" and "new lock with existing slot").
 
-    All slot keys (in ``slots_added`` / ``slots_removed`` /
-    ``slots_unchanged`` / ``pairs_added`` / ``pairs_removed``) are
-    guaranteed ``int`` — :class:`EntryConfig` already normalizes its
-    storage so the diff inherits that.
-
-    **Immutability**: the dataclass is frozen, and all containers are
-    deeply immutable (``MappingProxyType`` for dicts, ``frozenset`` for
-    sets, ``tuple`` for lists) so callers can use this safely as cached
-    state without defensive copies.
+    All slot keys are ``int``, inherited from :class:`EntryConfig`.
     """
 
-    # Source configs — readable after construction (useful for logging,
-    # debugging, and tests). Default to EntryConfig.empty() so callers
-    # can omit either side for the "all added" / "all removed" cases:
-    # ``EntryConfigDiff(new=cfg)`` reads as "diff from nothing to cfg".
     old: EntryConfig = field(default_factory=EntryConfig.empty)
     new: EntryConfig = field(default_factory=EntryConfig.empty)
 
@@ -302,13 +283,8 @@ class EntryConfigDiff:
             (lock, slot) for lock in self.new.locks for slot in new_keys
         }
 
-        # Frozen dataclass blocks normal assignment; bypass via
-        # object.__setattr__ for the computed fields. Standard idiom for
-        # frozen dataclasses with __post_init__-computed state.
-        # Inner slot configs are wrapped (not just referenced) so the
-        # diff is genuinely deeply immutable — matches the pattern in
-        # EntryConfig.from_mapping. dict(v) snapshots the source so
-        # caller-side mutation can't leak into the diff view.
+        # dict(v) + MappingProxyType wrapping snapshots inner slot configs
+        # so caller-side mutation can't leak into the diff view.
         set_field = object.__setattr__
         set_field(
             self,

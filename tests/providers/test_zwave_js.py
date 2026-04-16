@@ -344,6 +344,37 @@ async def test_set_usercode_proceeds_when_masked(
     await zwave_js_lock.async_unload(False)
 
 
+async def test_set_usercode_proceeds_on_cache_failure(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that set_usercode proceeds when the cache lookup raises.
+
+    A stale or missing cache entry must not block the set operation —
+    the bare-except in the cache short-circuit guards against this.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+            side_effect=ValueError("cache miss"),
+        ),
+        patch.object(
+            zwave_js_lock, "async_call_service", new_callable=AsyncMock
+        ) as mock_service,
+    ):
+        result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+
+        assert result is True
+        mock_service.assert_called_once()
+
+    await zwave_js_lock.async_unload(False)
+
+
 async def test_clear_usercode_calls_service(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -394,6 +425,36 @@ async def test_clear_usercode_skips_when_already_cleared(
     await zwave_js_lock.async_unload(False)
 
 
+async def test_clear_usercode_proceeds_on_cache_failure(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Test that clear_usercode proceeds when the cache lookup raises.
+
+    Mirrors test_set_usercode_proceeds_on_cache_failure for the clear path.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+            side_effect=ValueError("cache miss"),
+        ),
+        patch.object(
+            zwave_js_lock, "async_call_service", new_callable=AsyncMock
+        ) as mock_service,
+    ):
+        result = await zwave_js_lock.async_clear_usercode(2)
+
+        assert result is True
+        mock_service.assert_called_once()
+
+    await zwave_js_lock.async_unload(False)
+
+
 async def test_set_usercode_optimistic_update(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -435,19 +496,7 @@ async def test_set_usercode_optimistic_update_prevents_stale_read(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """
-    Test that optimistic update prevents sync loops from stale cache reads.
-
-    This test verifies the fix for the reported issue where out-of-sync slots
-    cause constant lock activity. The scenario:
-    1. LCM sets a code on the lock
-    2. Z-Wave command succeeds (lock acknowledges)
-    3. Without optimistic update: coordinator.data still has old value
-    4. Binary sensor sees mismatch → triggers another sync → loop
-
-    With the fix, push_update immediately sets coordinator.data to the new value,
-    so the binary sensor sees the expected value and doesn't retry.
-    """
+    """Test that optimistic update prevents sync loops from stale cache reads."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)

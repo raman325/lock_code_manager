@@ -1,8 +1,4 @@
-"""
-Integrations module.
-
-There should be one file per integration, named after the integration.
-"""
+"""Lock provider implementations."""
 
 from __future__ import annotations
 

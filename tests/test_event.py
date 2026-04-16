@@ -128,13 +128,7 @@ async def test_event_entity_unavailable_when_no_supported_locks(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """
-    Test that event entity is unavailable when no locks support code slot events.
-
-    Note: When the entity is unavailable, extra_state_attributes (including
-    unsupported_locks) won't be visible in the state.
-    """
-    # Create config with mock lock that doesn't support events
+    """Test that event entity is unavailable when no locks support code slot events."""
     with patch(
         "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockNoEvents},
@@ -148,8 +142,8 @@ async def test_event_entity_unavailable_when_no_supported_locks(
 
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
-
-        # Entity should be unavailable when no locks support code slot events
+        # While unavailable, extra_state_attributes (e.g. unsupported_locks)
+        # are not exposed on the state.
         assert state.state == STATE_UNAVAILABLE
 
         await hass.config_entries.async_unload(config_entry.entry_id)
@@ -161,20 +155,16 @@ async def test_event_without_lock_entity_id_logs_warning(
     lock_code_manager_config_entry,
     caplog,
 ):
-    """
-    Test that event without lock entity ID logs a warning.
-
-    Note: We call _handle_event directly because the event filter accesses
-    ATTR_ENTITY_ID directly (would raise KeyError before reaching handler).
-    This tests the defensive code in _handle_event.
-    """
+    """Test that event without lock entity ID logs a warning."""
     ent_reg = er.async_get(hass)
     entry = ent_reg.async_get(SLOT_1_EVENT_ENTITY)
     assert entry
     entity = hass.data["entity_components"]["event"].get_entity(entry.entity_id)
     assert entity
 
-    # Call _handle_event directly with event missing ATTR_ENTITY_ID
+    # Bypass the event filter (which would raise KeyError on missing
+    # ATTR_ENTITY_ID before reaching the handler) so we exercise the
+    # defensive path in _handle_event itself.
     entity._handle_event(Event("test_event", {"slot_num": 1}))
 
     assert "Received event without lock entity ID" in caplog.text

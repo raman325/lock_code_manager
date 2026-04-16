@@ -713,7 +713,7 @@ def _create_push_coordinator(
 async def test_backoff_failure_counter_increments(hass: HomeAssistant) -> None:
     """Test that consecutive failure counter increments on each failure."""
     coordinator, lock = _create_poll_coordinator(hass)
-    # Simulate that we previously had a successful update so UpdateFailed is raised
+    # last_update_success=True is required for UpdateFailed to be raised on next failure.
     coordinator.last_update_success = True
 
     mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))

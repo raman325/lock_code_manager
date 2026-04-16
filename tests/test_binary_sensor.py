@@ -333,7 +333,6 @@ async def test_startup_out_of_sync_slots_sync_once(
     With coordinator-triggered syncs, out-of-sync slots are detected and synced
     automatically during startup via coordinator update callbacks.
     """
-    # Arrange two slots that need syncing on startup
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
@@ -1123,11 +1122,9 @@ async def test_sync_manager_handles_string_slot_num(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Regression test: slot_num from config entry is a string, coordinator keys are int."""
+    """Test sync manager normalizes string slot keys to int before coordinator lookup."""
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
     manager = in_sync_entity_obj._sync_manager
 
-    # Config entry stores slot numbers as strings (JSON keys), but
-    # coordinator.data uses int keys. The sync manager must cast to int.
     assert isinstance(manager._slot_num, int)
     assert manager._slot_num in manager._coordinator.data

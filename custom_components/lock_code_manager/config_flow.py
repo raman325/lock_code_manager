@@ -119,14 +119,7 @@ def _check_common_slots(
 
 
 class _LockQuerySkipped(LockCodeManagerError):
-    """Raised when a lock should be skipped before any provider call.
-
-    Used internally by ``_async_build_lock_instance`` to signal one of the
-    three expected setup-time skip conditions (missing entity, unsupported
-    platform, missing config entry). Subclasses ``LockCodeManagerError`` (not
-    ``LockCodeManagerProviderError``) because it doesn't originate from a
-    provider — the lock provider is never even constructed.
-    """
+    """Raised when a lock should be skipped before any provider call."""
 
 
 def _async_build_lock_instance(
@@ -139,10 +132,7 @@ def _async_build_lock_instance(
 
     Performs setup-time checks (entity in registry, supported platform,
     parent config entry exists) and instantiates the provider class.
-
-    Raises ``_LockQuerySkipped`` if any setup-time check fails. The provider
-    constructor itself is not wrapped — failures there propagate as
-    unexpected exceptions and are caught one level up.
+    Raises ``_LockQuerySkipped`` if any setup-time check fails.
     """
     lock_entry = ent_reg.async_get(lock_entity_id)
     if not lock_entry:
@@ -179,19 +169,11 @@ async def _async_get_all_codes(
 ) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
     """Query locks for all usercodes.
 
-    Returns a tuple of:
-    - Dict keyed by lock entity ID, each value being a dict of slot number to
-      code value (including SlotCode.EMPTY for empty slots). Callers must
-      filter as needed.
-    - Dict keyed by lock entity ID to temporary lock provider instances, for
-      reuse in clearing slots.
-
-    Locks are skipped (with logging) for these failure modes:
-    - Setup-time skip (entity missing, unsupported platform, etc.) → DEBUG
-    - Provider failure (e.g. ``LockDisconnected``) → WARNING with details
-    - Bare ``LockCodeManagerError`` from a provider that hasn't migrated
-      to ``LockCodeManagerProviderError`` → WARNING with details
-    - Unexpected exception → WARNING with traceback
+    Returns ``(codes_by_lock, lock_instances_by_lock)`` where ``codes_by_lock``
+    maps each lock entity ID to its slot/code dict (``SlotCode.EMPTY`` for
+    empty slots) and ``lock_instances_by_lock`` retains the provider
+    instances so the caller can reuse them when clearing slots. Locks that
+    fail to query are skipped with logging.
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
     lock_instances: dict[str, Any] = {}
@@ -217,12 +199,8 @@ async def _async_get_all_codes(
             )
             continue
         except LockCodeManagerError as err:
-            # Defensive: a provider raised the bare base class. Treat as
-            # a real failure (not a setup-time skip — those use
-            # _LockQuerySkipped) but warn without traceback so it stays
-            # actionable. All in-tree providers raise
-            # LockCodeManagerProviderError; this catches third-party or
-            # not-yet-migrated providers.
+            # Defensive fallback for third-party providers that raise the
+            # bare base class instead of LockCodeManagerProviderError.
             _LOGGER.warning(
                 "Failed to get usercodes from %s: %s",
                 lock_entity_id,
@@ -230,6 +208,10 @@ async def _async_get_all_codes(
             )
             continue
         except Exception:  # noqa: BLE001
+            # Last-resort catch: this runs in the user-facing config flow.
+            # Any provider exception (including programmer error in a
+            # third-party provider) must degrade to "no codes shown" rather
+            # than aborting the flow.
             _LOGGER.warning(
                 "Failed to get usercodes from %s; this lock's codes will not be shown",
                 lock_entity_id,
@@ -248,14 +230,7 @@ def _scope_codes_to_pairs(
     lock_instances: dict[str, Any],
     pairs: Iterable[tuple[str, int]],
 ) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
-    """Filter raw query results to only the ``(lock, slot)`` pairs given.
-
-    Used by the options flow so the mixin's clearing logic cannot touch
-    already-managed ``(lock, slot)`` pairs even though they appear in the
-    raw query result. The mixin's ``_clear_existing_slot`` only iterates
-    pairs present in ``_all_codes``, so scoping there constrains the blast
-    radius without the mixin needing to know about pairs.
-    """
+    """Filter raw query results to only the ``(lock, slot)`` pairs given."""
     scoped_codes: dict[str, dict[int, str | SlotCode]] = {}
     for lock, slot in pairs:
         if (code := all_codes.get(lock, {}).get(slot)) is not None:
@@ -265,15 +240,7 @@ def _scope_codes_to_pairs(
 
 
 class _ExistingCodesFlowMixin:
-    """Mixin providing existing-codes detection, confirm UI, and clearing.
-
-    Inheriting flow must call ``_init_existing_codes_state()`` from its
-    ``__init__``. Before showing the confirm step, populate ``_all_codes``
-    and ``_lock_instances`` (typically from ``_async_get_all_codes``),
-    set ``_slots_to_clear`` (typically via ``_slots_with_existing_codes``),
-    and assign ``_next_step`` to the coroutine to run after the user
-    confirms clearing.
-    """
+    """Mixin providing existing-codes detection, confirm UI, and clearing for config/options flows."""
 
     _all_codes: dict[str, dict[int, str | SlotCode]]
     _lock_instances: dict[str, Any]
@@ -334,17 +301,7 @@ class _ExistingCodesFlowMixin:
     async def _clear_then_create_entry(
         self, *, title: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Clear pending slots, then create the entry.
-
-        Used by both the config flow and the options flow as the persist
-        target after the user confirms clearing. Bind ``title``/``data``
-        via ``functools.partial`` when assigning ``_next_step``, or call
-        directly when no confirmation step is required.
-
-        Clearing happens BEFORE ``async_create_entry()`` because
-        ``async_create_entry()`` only builds a FlowResult dict — the entry
-        isn't persisted until after this step returns.
-        """
+        """Clear pending slots, then create the entry."""
         await self._clear_all_pending_slots()
         return self.async_create_entry(  # type: ignore[attr-defined]
             title=title, data=data
@@ -685,10 +642,6 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
         current configuration. If any newly-added pair has a non-empty
         code on its lock, show the confirmation step before persisting.
         """
-        # Same diff API as the update listener — the `-` operator on
-        # EntryConfig returns an EntryConfigDiff. user_input has int slot
-        # keys (voluptuous coerced) and current entry data is normalized
-        # by EntryConfig.from_mapping, so the diff is consistent.
         diff = get_entry_config(self.config_entry) - EntryConfig.from_mapping(
             user_input
         )
