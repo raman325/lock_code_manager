@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9f12528558d0",
+  "strategy": "manual-commit",
+  "branch": "docs/post-tier-1-cleanups",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9f/12528558d0/0/metadata.json",
+      "transcript": "/9f/12528558d0/0/full.jsonl",
+      "content_hash": "/9f/12528558d0/0/content_hash.txt",
+      "prompt": "/9f/12528558d0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12567,
+    "cache_creation_tokens": 8300285,
+    "cache_read_tokens": 1008727239,
+    "output_tokens": 854272,
+    "api_call_count": 2145
+  }
+}

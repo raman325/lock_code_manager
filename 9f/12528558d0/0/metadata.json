@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9f12528558d0",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-16T18:48:43.487009Z",
+  "branch": "docs/post-tier-1-cleanups",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "173d02b3e67a",
+  "token_usage": {
+    "input_tokens": 12567,
+    "cache_creation_tokens": 8300285,
+    "cache_read_tokens": 1008727239,
+    "output_tokens": 854272,
+    "api_call_count": 2145
+  },
+  "session_metrics": {
+    "turn_count": 179
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-16T18:48:37.49219Z",
+    "agent_lines": 0,
+    "human_added": 15,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 15,
+    "agent_percentage": 0
+  }
+}
