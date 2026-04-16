@@ -1,6 +1,7 @@
 """Test the exceptions module."""
 
 from dataclasses import dataclass
+import inspect
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -138,7 +139,7 @@ async def test_base_lock_raises_provider_not_implemented(
         # async methods return coroutines that raise on await; sync raise
         # immediately when called — this with block captures both shapes.
         result = call(lock)
-        if hasattr(result, "__await__"):
+        if inspect.isawaitable(result):
             await result
 
     assert "MinimalMockLock" in str(exc_info.value)
