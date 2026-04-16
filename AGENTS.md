@@ -179,6 +179,15 @@ scripts/setup
 
 Creates Python 3.13 venv, installs dependencies with uv, sets up pre-commit hooks, and installs Node dependencies.
 
+**pre-commit on Python 3.14 (macOS)**: `scripts/setup` installs pre-commit
+as a uv tool pinned to Python 3.13 (`uv tool install --python 3.13
+pre-commit`). If your `pre-commit` was previously installed via Homebrew
+and Homebrew's Python is 3.14, it will fail on macOS with
+`Symbol not found: _XML_SetAllocTrackerActivationThreshold` — Python 3.14's
+bundled `pyexpat` is built against a newer `libexpat` than the one
+`/usr/lib/libexpat.1.dylib` provides. Run `brew uninstall pre-commit` so
+the uv-managed binary at `~/.local/bin/pre-commit` is the one in `PATH`.
+
 ### Testing
 
 **Python tests:**

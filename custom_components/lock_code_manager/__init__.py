@@ -79,7 +79,7 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import compute_entry_config_diff, get_entry_data
+from .data import EntryConfig, compute_entry_config_diff, get_entry_data
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -448,7 +448,9 @@ async def async_setup_entry(
 
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
     await _async_register_strategy_resource(hass)
-    config_entry.runtime_data = LockCodeManagerConfigEntryData()
+    config_entry.runtime_data = LockCodeManagerConfigEntryData(
+        config=EntryConfig.from_entry(config_entry),
+    )
 
     dev_reg = dr.async_get(hass)
     dev_reg.async_get_or_create(
@@ -742,12 +744,20 @@ async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
     """Update listener."""
-    # No need to update if there are no options because that only happens at the end
-    # of this function
+    # Refresh the cached EntryConfig on EVERY update — including entity-driven
+    # writes that go straight to data with empty options (e.g. a slot's name or
+    # PIN being edited via its text entity). The early-return below skips the
+    # entity-creation pass for those cases, but downstream readers via
+    # runtime_data.config still need to see the current data.
+    runtime_data = config_entry.runtime_data
+    runtime_data.config = EntryConfig.from_entry(config_entry)
+
+    # No need to do entity creation/removal work if there are no options
+    # because that only happens at the end of this function (data + empty
+    # options = the post-listener state we just wrote ourselves).
     if not config_entry.options:
         return
 
-    runtime_data = config_entry.runtime_data
     ent_reg = er.async_get(hass)
 
     entry_id = config_entry.entry_id
@@ -892,6 +902,8 @@ async def async_update_listener(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
     hass.config_entries.async_update_entry(config_entry, data=new_data, options={})
+    # The async_update_entry above re-triggers this listener, which
+    # refreshes runtime_data.config at the top before the early-return.
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update
