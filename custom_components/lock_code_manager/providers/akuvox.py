@@ -16,23 +16,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-import re
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import HomeAssistantError
 
 from ..data import get_managed_slots
 from ..exceptions import LockCodeManagerProviderError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
+from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER
 
 AKUVOX_DOMAIN = "local_akuvox"
-
-# Regex to parse the Lock Code Manager slot tag from user names.
-# Format: [LCM:XX] Friendly Name
-_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
 
 # Default schedule/relay values for Lock Code Manager-managed users.
 # These are required by the Akuvox add_user service but are not
@@ -54,24 +50,6 @@ def _is_local_user(user: dict[str, Any]) -> bool:
         return str(source_type) == _LOCAL_SOURCE_TYPE
     # source_type absent -- fall back to user_type (X916 pattern)
     return str(user.get("user_type", "")) == _LOCAL_USER_TYPE
-
-
-def _make_tagged_name(slot_num: int, name: str | None = None) -> str:
-    """Create a tagged user name with Lock Code Manager slot number."""
-    base = name or f"Code Slot {slot_num}"
-    return f"[LCM:{slot_num}] {base}"
-
-
-def _parse_tag(name: str) -> tuple[int | None, str]:
-    """Parse a Lock Code Manager slot tag from a user name.
-
-    Returns ``(slot_num, friendly_name)`` when a tag is present, or
-    ``(None, original_name)`` when no tag is found.
-    """
-    match = _SLOT_TAG_RE.match(name)
-    if match:
-        return int(match.group(1)), match.group(2)
-    return None, name
 
 
 @dataclass(repr=False, eq=False)
@@ -105,12 +83,6 @@ class AkuvoxLock(BaseLock):
     # Connection
     # ------------------------------------------------------------------
 
-    async def async_is_integration_connected(self) -> bool:
-        """Return whether the local_akuvox integration is loaded."""
-        if not self.lock_config_entry:
-            return False
-        return self.lock_config_entry.state == ConfigEntryState.LOADED
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -122,19 +94,13 @@ class AkuvoxLock(BaseLock):
         private_pin, card_code, schedule_relay, lift_floor_num, etc.
         """
         entity_id = self.lock.entity_id
-        try:
-            response = await self.hass.services.async_call(
-                AKUVOX_DOMAIN,
-                "list_users",
-                service_data={},
-                target={"entity_id": entity_id},
-                blocking=True,
-                return_response=True,
-            )
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Failed to list users on {entity_id}: {err}"
-            ) from err
+        response = await self.async_call_service(
+            AKUVOX_DOMAIN,
+            "list_users",
+            service_data={},
+            target={"entity_id": entity_id},
+            return_response=True,
+        )
 
         if not isinstance(response, dict):
             raise LockCodeManagerProviderError(

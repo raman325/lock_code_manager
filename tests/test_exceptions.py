@@ -1,6 +1,7 @@
 """Test the exceptions module."""
 
 from dataclasses import dataclass
+import inspect
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -30,7 +31,7 @@ class MinimalMockLock(BaseLock):
         """Return integration domain."""
         return "test"
 
-    def is_integration_connected(self) -> bool:
+    async def async_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
         return True
 
@@ -108,10 +109,13 @@ def test_provider_not_implemented_error_inherits_correctly():
 @pytest.mark.parametrize(
     ("method_name", "call"),
     [
-        ("get_usercodes", lambda lock: lock.get_usercodes()),
-        ("set_usercode", lambda lock: lock.set_usercode(1, "1234")),
-        ("clear_usercode", lambda lock: lock.clear_usercode(1)),
-        ("hard_refresh_codes", lambda lock: lock.hard_refresh_codes()),
+        ("async_get_usercodes", lambda lock: lock.async_get_usercodes()),
+        ("async_set_usercode", lambda lock: lock.async_set_usercode(1, "1234")),
+        ("async_clear_usercode", lambda lock: lock.async_clear_usercode(1)),
+        ("async_hard_refresh_codes", lambda lock: lock.async_hard_refresh_codes()),
+        # setup_push_subscription / teardown_push_subscription are still sync
+        # — they're called synchronously in the push lifecycle code paths and
+        # raise NotImplementedError directly when not overridden.
         (
             "setup_push_subscription",
             lambda lock: lock.setup_push_subscription(),
@@ -125,14 +129,18 @@ def test_provider_not_implemented_error_inherits_correctly():
 async def test_base_lock_raises_provider_not_implemented(
     hass: HomeAssistant, method_name: str, call
 ):
-    """Test that BaseLock raises ProviderNotImplementedError for unimplemented methods."""
+    """Test BaseLock raises ProviderNotImplementedError for unimplemented methods."""
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
 
     lock = create_minimal_lock(hass, config_entry)
 
     with pytest.raises(ProviderNotImplementedError) as exc_info:
-        call(lock)
+        # async methods return coroutines that raise on await; sync raise
+        # immediately when called — this with block captures both shapes.
+        result = call(lock)
+        if inspect.isawaitable(result):
+            await result
 
     assert "MinimalMockLock" in str(exc_info.value)
     assert method_name in str(exc_info.value)

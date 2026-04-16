@@ -93,13 +93,29 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         """Return whether LCM expects a PIN on this slot (enabled with PIN)."""
         return self.get_expected_pin(slot_num) is not None
 
+    @staticmethod
+    def _normalize_keys(
+        data: dict[Any, str | SlotCode],
+    ) -> dict[int, str | SlotCode]:
+        """Coerce slot keys to ``int``.
+
+        The single chokepoint that enforces the ``coordinator.data`` int-key
+        invariant. Applied at every write site (poll, push, drift-check) so
+        downstream consumers (websocket serializer, listeners) can rely on
+        plain int membership/sorting without defensive str/int gymnastics.
+
+        Raises ``ValueError``/``TypeError`` if a key cannot be cast — that's
+        a programming error worth surfacing rather than poisoning the cache.
+        """
+        return {int(k): v for k, v in data.items()}
+
     @callback
     def push_update(self, updates: dict[int, str | SlotCode]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
 
-        new_data = {**self.data, **updates}
+        new_data = {**self.data, **self._normalize_keys(updates)}
         # Skip update if data hasn't actually changed to avoid redundant logging
         # and unnecessary listener notifications
         if new_data == self.data:
@@ -174,7 +190,13 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Update usercodes."""
+        """Update usercodes.
+
+        Routes the provider response through ``_normalize_keys`` — the
+        chokepoint that guarantees ``coordinator.data`` is always int-keyed,
+        regardless of which provider produced it. See ``_normalize_keys``
+        for rationale.
+        """
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
@@ -185,7 +207,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             raise UpdateFailed from err
 
         self._reset_backoff()
-        return data
+        return self._normalize_keys(data)
 
     async def _async_drift_check(self, now: datetime) -> None:
         """
@@ -212,7 +234,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             self._lock.lock.entity_id,
         )
         try:
-            new_data = await self._lock.async_internal_hard_refresh_codes()
+            new_data = self._normalize_keys(
+                await self._lock.async_internal_hard_refresh_codes()
+            )
         except LockCodeManagerError as err:
             self._apply_backoff()
             _LOGGER.warning(
@@ -225,7 +249,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         # Push subscription retry is handled by BaseLock's OneShotRetry
         # and the config entry state listener — no need to retry here.
 
-        # Compare with current data and notify if changed
+        # Compare with current data and notify if changed.
+        # Both sides are int-keyed (poll path normalized, this path normalized
+        # above) so the equality check won't spuriously trigger on key-type
+        # mismatch.
         if new_data != self.data:
             _LOGGER.debug(
                 "Drift detected for %s, updating coordinator data",

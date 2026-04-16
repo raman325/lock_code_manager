@@ -19,40 +19,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-import re
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..data import get_managed_slots
 from ..exceptions import LockCodeManagerProviderError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
+from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER
 
 SCHLAGE_DOMAIN = "schlage"
-
-# Regex to parse the Lock Code Manager slot tag from code names.
-# Format: [LCM:XX] Friendly Name
-_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
-
-
-def _make_tagged_name(slot_num: int, name: str | None = None) -> str:
-    """Create a tagged code name with Lock Code Manager slot number."""
-    base = name or f"Code Slot {slot_num}"
-    return f"[LCM:{slot_num}] {base}"
-
-
-def _parse_tag(name: str) -> tuple[int | None, str]:
-    """Parse a Lock Code Manager slot tag from a code name.
-
-    Returns ``(slot_num, friendly_name)`` when a tag is present, or
-    ``(None, original_name)`` when no tag is found.
-    """
-    match = _SLOT_TAG_RE.match(name)
-    if match:
-        return int(match.group(1)), match.group(2)
-    return None, name
 
 
 @dataclass(repr=False, eq=False)
@@ -93,18 +71,12 @@ class SchlageLock(BaseLock):
         Returns a dict mapping access-code IDs to ``{"name": ..., "code": ...}``.
         """
         entity_id = self.lock.entity_id
-        try:
-            response = await self.hass.services.async_call(
-                SCHLAGE_DOMAIN,
-                "get_codes",
-                service_data={"entity_id": entity_id},
-                blocking=True,
-                return_response=True,
-            )
-        except (ServiceValidationError, HomeAssistantError) as err:
-            raise LockDisconnected(
-                f"Schlage get_codes failed for {entity_id}: {err}"
-            ) from err
+        response = await self.async_call_service(
+            SCHLAGE_DOMAIN,
+            "get_codes",
+            service_data={"entity_id": entity_id},
+            return_response=True,
+        )
 
         if not isinstance(response, dict):
             raise LockCodeManagerProviderError(
@@ -150,12 +122,6 @@ class SchlageLock(BaseLock):
             raise LockDisconnected(
                 f"Schlage delete_code failed for {entity_id}: {err}"
             ) from err
-
-    async def async_is_integration_connected(self) -> bool:
-        """Return whether the Schlage integration is loaded."""
-        if not self.lock_config_entry:
-            return False
-        return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     async def async_is_device_available(self) -> bool:
         """Return whether the Schlage lock device is available for commands."""

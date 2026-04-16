@@ -96,7 +96,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
-from .data import get_entry_config
+from .data import get_entry_config, get_managed_slots
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -331,14 +331,6 @@ async def get_config_entry_data(
     )
 
 
-def _slot_sort_key(slot: Any) -> tuple[int, str]:
-    """Return a stable sort key for slot numbers that may be non-numeric."""
-    try:
-        return (0, f"{int(slot):010d}")
-    except (TypeError, ValueError):
-        return (1, str(slot))
-
-
 def _serialize_slot(
     slot: Any,
     code: str | SlotCode | None,
@@ -392,31 +384,6 @@ def _serialize_slot(
             result[ATTR_CONFIGURED_CODE_LENGTH] = len(configured_code)
 
     return result
-
-
-def _slot_variants(slot: Any) -> set[Any]:
-    """Return comparable variants of a slot identifier (string/int)."""
-    variants: set[Any] = {slot}
-    try:
-        slot_int = int(slot)
-    except (TypeError, ValueError):
-        variants.add(str(slot))
-    else:
-        variants.add(slot_int)
-        variants.add(str(slot_int))
-    return variants
-
-
-def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
-    """Return slot identifiers managed by LCM for a given lock."""
-    managed_slots: set[Any] = set()
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        config = get_entry_config(entry)
-        if not config.has_lock(lock_entity_id):
-            continue
-        for slot_num in config.slots:
-            managed_slots.update(_slot_variants(slot_num))
-    return managed_slots
 
 
 @dataclass
@@ -572,35 +539,28 @@ def _serialize_lock_coordinator(
     """Serialize coordinator data for a lock."""
     coordinator = lock.coordinator
     data = coordinator.data if coordinator is not None else {}
-    managed_slots = _get_managed_slots(hass, lock.lock.entity_id)
+    managed_slots = get_managed_slots(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
 
-    def _get_metadata(slot: Any) -> SlotMetadata | None:
-        if str(slot).isdigit():
-            return slot_metadata.get(int(slot))
-        return None
-
-    def _get_config_entry_id(slot: Any) -> str | None:
-        if str(slot).isdigit():
-            slot_ids = slot_entity_ids.get(int(slot))
-            return slot_ids.config_entry_id if slot_ids else None
-        return None
-
     slots = []
-    for slot, code in sorted(data.items(), key=lambda item: _slot_sort_key(item[0])):
-        meta = _get_metadata(slot)
+    # `data` is int-keyed (coordinator normalizes); managed_slots is also
+    # int-keyed (built from EntryConfig.slots). All slot lookups below are
+    # plain int operations — no str/int variant gymnastics needed.
+    for slot, code in sorted(data.items()):
+        meta = slot_metadata.get(slot)
+        slot_ids = slot_entity_ids.get(slot)
         slots.append(
             _serialize_slot(
                 slot,
                 code,
                 reveal=reveal,
                 name=meta.name if meta else None,
-                managed=slot in managed_slots or str(slot) in managed_slots,
+                managed=slot in managed_slots,
                 configured_code=meta.configured_pin if meta else None,
                 active=meta.active if meta else None,
                 enabled=meta.enabled if meta else None,
-                config_entry_id=_get_config_entry_id(slot),
+                config_entry_id=slot_ids.config_entry_id if slot_ids else None,
             )
         )
 
