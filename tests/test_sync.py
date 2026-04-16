@@ -16,8 +16,8 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.models import SlotCode, SlotState
-from custom_components.lock_code_manager.sync import SlotSyncManager
+from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
 from .common import SLOT_1_IN_SYNC_ENTITY
 from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj

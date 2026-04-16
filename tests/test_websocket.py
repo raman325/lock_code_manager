@@ -64,9 +64,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.models import SlotCode, SlotEntityData
+from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
+    SlotEntities,
     _find_config_entry_by_title,
     _get_bool_state,
     _get_condition_entity_data,
@@ -2528,8 +2529,8 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
         if call_count <= 1:
             return real_entity_data
         # Return entity data with the new entity added via name_entity_id
-        # (using a new SlotEntityData with an extra entity)
-        return SlotEntityData(
+        # (using a new SlotEntities with an extra entity)
+        return SlotEntities(
             slot_num=real_entity_data.slot_num,
             name_entity_id=new_entity_id,
             pin_entity_id=real_entity_data.pin_entity_id,
@@ -2754,7 +2755,7 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
     ws_client = await hass_ws_client(hass)
 
     # Mock entity data to return empty entity data so unsub_state_ref stays empty
-    empty_entity_data = SlotEntityData(slot_num=1)
+    empty_entity_data = SlotEntities(slot_num=1)
 
     with (
         patch(
