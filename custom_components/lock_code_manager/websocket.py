@@ -103,7 +103,7 @@ from .helpers import (
     async_set_slot_condition,
     async_set_usercode,
 )
-from .models import SlotCode, SlotEntities
+from .models import SlotCode
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -419,6 +419,55 @@ def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
     return managed_slots
 
 
+@dataclass
+class SlotEntities:
+    """Entity IDs for a single slot's LCM entities.
+
+    All entity ID fields are optional so callers that only need a subset
+    can populate what they have. ``config_entry_id`` is included for
+    callers iterating across entries who need to track origin.
+    """
+
+    slot_num: int
+    config_entry_id: str | None = None
+    name_entity_id: str | None = None
+    pin_entity_id: str | None = None
+    enabled_entity_id: str | None = None
+    active_entity_id: str | None = None
+    number_of_uses_entity_id: str | None = None
+    event_entity_id: str | None = None
+
+    def all_entity_ids(self) -> list[str]:
+        """Return all non-None entity IDs (excluding config_entry_id)."""
+        return [
+            eid
+            for eid in (
+                self.name_entity_id,
+                self.pin_entity_id,
+                self.enabled_entity_id,
+                self.active_entity_id,
+                self.number_of_uses_entity_id,
+                self.event_entity_id,
+            )
+            if eid
+        ]
+
+
+@dataclass
+class SlotMetadata:
+    """Parsed values for a single slot, derived from LCM entity states.
+
+    Used as the per-slot shape inside websocket subscription responses.
+    Fields are typed (bool / str) rather than raw HA states because
+    consumers want clean JSON-serializable values.
+    """
+
+    name: str | None = None
+    configured_pin: str | None = None
+    active: bool | None = None
+    enabled: bool | None = None
+
+
 def _get_slot_entity_ids(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotEntities]:
@@ -467,21 +516,6 @@ def _get_slot_entity_ids(
             )
 
     return slot_entities
-
-
-@dataclass
-class SlotMetadata:
-    """Parsed values for a single slot, derived from LCM entity states.
-
-    Used as the per-slot shape inside websocket subscription responses.
-    Fields are typed (bool / str) rather than raw HA states because
-    consumers want clean JSON-serializable values.
-    """
-
-    name: str | None = None
-    configured_pin: str | None = None
-    active: bool | None = None
-    enabled: bool | None = None
 
 
 def _get_slot_metadata(

@@ -46,37 +46,3 @@ class LockCodeManagerConfigEntryData:
 
 
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]
-
-
-@dataclass
-class SlotEntities:
-    """Entity IDs for a single slot's LCM entities.
-
-    All entity ID fields are optional so callers that only need a subset
-    can populate what they have. ``config_entry_id`` is included for
-    callers iterating across entries who need to track origin.
-    """
-
-    slot_num: int
-    config_entry_id: str | None = None
-    name_entity_id: str | None = None
-    pin_entity_id: str | None = None
-    enabled_entity_id: str | None = None
-    active_entity_id: str | None = None
-    number_of_uses_entity_id: str | None = None
-    event_entity_id: str | None = None
-
-    def all_entity_ids(self) -> list[str]:
-        """Return all non-None entity IDs (excluding config_entry_id)."""
-        return [
-            eid
-            for eid in (
-                self.name_entity_id,
-                self.pin_entity_id,
-                self.enabled_entity_id,
-                self.active_entity_id,
-                self.number_of_uses_entity_id,
-                self.event_entity_id,
-            )
-            if eid
-        ]
