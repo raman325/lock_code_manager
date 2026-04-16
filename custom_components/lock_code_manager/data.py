@@ -150,8 +150,7 @@ def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
     return {
         slot_num
         for entry in hass.config_entries.async_entries(DOMAIN)
-        for config in [get_entry_config(entry)]
-        if config.has_lock(lock_entity_id)
+        if (config := get_entry_config(entry)).has_lock(lock_entity_id)
         for slot_num in config.slots
     }
 
@@ -168,8 +167,8 @@ def find_entry_for_lock_slot(
         (
             entry
             for entry in hass.config_entries.async_entries(DOMAIN)
-            for config in [get_entry_config(entry)]
-            if config.has_lock(lock_entity_id) and config.has_slot(code_slot)
+            if (config := get_entry_config(entry)).has_lock(lock_entity_id)
+            and config.has_slot(code_slot)
         ),
         None,
     )
