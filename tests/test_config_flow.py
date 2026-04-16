@@ -22,7 +22,10 @@ from custom_components.lock_code_manager.const import (
     CONF_START_SLOT,
     DOMAIN,
 )
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    LockCodeManagerError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.models import SlotCode
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
@@ -632,6 +635,55 @@ async def test_async_get_all_codes_provider_failure_logs_warning(
         record.levelname == "WARNING" and LOCK_1_ENTITY_ID in record.message
         for record in caplog.records
     )
+
+
+async def test_async_get_all_codes_bare_base_error_logs_warning(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+):
+    """Defensive: a provider raising the bare base LockCodeManagerError still warns.
+
+    All in-tree providers raise LockCodeManagerProviderError, but a third-party
+    or not-yet-migrated provider could raise the bare base. We catch and warn
+    rather than letting it fall through to the generic Exception arm (which
+    would log a confusing traceback for what is really a known failure mode).
+    """
+    mock_instance = MagicMock()
+    mock_instance.async_internal_get_usercodes = AsyncMock(
+        side_effect=LockCodeManagerError("bare base")
+    )
+    mock_lock_cls = MagicMock(return_value=mock_instance)
+
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "lock", "zwave_js", "test_lock_1", suggested_object_id="test_1"
+    )
+    dev_reg = dr.async_get(hass)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            {"zwave_js": mock_lock_cls},
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_get_entry",
+            return_value=MockConfigEntry(domain="zwave_js"),
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result, instances = await _async_get_all_codes(
+            hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
+        )
+
+    assert result == {}
+    assert instances == {}
+    # Should be a clean WARNING (no traceback), since this is a known
+    # failure mode — not the generic Exception arm
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any(
+        LOCK_1_ENTITY_ID in r.message and "bare base" in r.message for r in warnings
+    )
+    assert all(r.exc_info is None for r in warnings)
 
 
 async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):

@@ -20,7 +20,11 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..data import get_managed_slots
-from ..exceptions import DuplicateCodeError, LockCodeManagerError, LockDisconnected
+from ..exceptions import (
+    DuplicateCodeError,
+    LockCodeManagerProviderError,
+    LockDisconnected,
+)
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
@@ -126,13 +130,13 @@ class MatterLock(BaseLock):
                 f"{entity_id}: {err}"
             ) from err
         if not isinstance(result, dict) or entity_id not in result:
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Matter service {MATTER_DOMAIN}.{service} returned no data for "
                 f"{entity_id}"
             )
         entity_data = result[entity_id]
         if not isinstance(entity_data, dict):
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Matter service {MATTER_DOMAIN}.{service} returned non-dict data "
                 f"for {entity_id}: {type(entity_data).__name__}"
             )
@@ -145,11 +149,11 @@ class MatterLock(BaseLock):
             {"entity_id": self.lock.entity_id},
         )
         if not lock_info.get("supports_user_management"):
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Matter lock {self.lock.entity_id} does not support user management"
             )
         if "pin" not in (lock_info.get("supported_credential_types") or []):
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Matter lock {self.lock.entity_id} does not support PIN credentials"
             )
         LOGGER.debug(
@@ -171,7 +175,7 @@ class MatterLock(BaseLock):
                 "get_lock_info",
                 {"entity_id": self.lock.entity_id},
             )
-        except (LockDisconnected, LockCodeManagerError) as err:
+        except LockCodeManagerProviderError as err:
             LOGGER.debug(
                 "Lock %s: availability check failed: %s",
                 self.lock.entity_id,
@@ -367,7 +371,7 @@ class MatterLock(BaseLock):
         )
         users = lock_data.get("users")
         if not isinstance(users, list):
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Matter get_lock_users response for {self.lock.entity_id} "
                 f"has unexpected 'users' value: {users!r}"
             )
@@ -444,7 +448,7 @@ class MatterLock(BaseLock):
                         "user_name": name,
                     },
                 )
-            except (LockDisconnected, LockCodeManagerError):
+            except LockCodeManagerProviderError:
                 LOGGER.warning(
                     "Lock %s: credential set on slot %s but failed to set "
                     "user name '%s'",

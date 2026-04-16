@@ -187,9 +187,11 @@ async def _async_get_all_codes(
     - Dict keyed by lock entity ID to temporary lock provider instances, for
       reuse in clearing slots.
 
-    Locks are skipped (with logging) for three failure modes:
+    Locks are skipped (with logging) for these failure modes:
     - Setup-time skip (entity missing, unsupported platform, etc.) → DEBUG
     - Provider failure (e.g. ``LockDisconnected``) → WARNING with details
+    - Bare ``LockCodeManagerError`` from a provider that hasn't migrated
+      to ``LockCodeManagerProviderError`` → WARNING with details
     - Unexpected exception → WARNING with traceback
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
@@ -209,6 +211,19 @@ async def _async_get_all_codes(
         except LockCodeManagerProviderError as err:
             # Real provider failure (e.g. LockDisconnected) — surface it
             # so users can see why a lock's codes weren't checked
+            _LOGGER.warning(
+                "Failed to get usercodes from %s: %s",
+                lock_entity_id,
+                err,
+            )
+            continue
+        except LockCodeManagerError as err:
+            # Defensive: a provider raised the bare base class. Treat as
+            # a real failure (not a setup-time skip — those use
+            # _LockQuerySkipped) but warn without traceback so it stays
+            # actionable. All in-tree providers raise
+            # LockCodeManagerProviderError; this catches third-party or
+            # not-yet-migrated providers.
             _LOGGER.warning(
                 "Failed to get usercodes from %s: %s",
                 lock_entity_id,
