@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
@@ -109,6 +109,23 @@ class EntryConfig:
         """
         return self.slots.get(int(slot_num), {})
 
+    def __sub__(self, other: EntryConfig) -> EntryConfigDiff:
+        """Return the diff from ``self`` (old) to ``other`` (new).
+
+        Sugar for ``EntryConfigDiff(old=self, new=other)``. Reads as
+        ``old_config - new_config`` — note this is a *delta* (both adds
+        and removes), not strict set subtraction. The result includes
+        what changed in either direction.
+
+        Returns ``NotImplemented`` for non-``EntryConfig`` operands so
+        Python's operator protocol falls back to ``__rsub__`` and
+        ultimately raises a clear ``TypeError`` rather than letting the
+        misuse fail deep inside ``EntryConfigDiff.__post_init__``.
+        """
+        if not isinstance(other, EntryConfig):
+            return NotImplemented
+        return EntryConfigDiff(old=self, new=other)
+
     def with_slot_field_set(
         self, slot_num: int | str, key: str, value: Any
     ) -> EntryConfig:
@@ -184,15 +201,6 @@ def get_entry_config(entry: ConfigEntry) -> EntryConfig:
     return EntryConfig.from_entry(entry)
 
 
-def get_slot_data(config_entry, slot_num: int | str) -> Mapping[str, Any]:
-    """Get the slot config dict for ``slot_num`` (empty mapping if absent).
-
-    Thin wrapper around :meth:`EntryConfig.slot` for callers that don't
-    have an :class:`EntryConfig` in hand.
-    """
-    return get_entry_config(config_entry).slot(slot_num)
-
-
 def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
     """Return the set of slot numbers managed by any LCM config entry for a lock."""
     return {
@@ -226,8 +234,20 @@ def find_entry_for_lock_slot(
 class EntryConfigDiff:
     """Diff between two LCM entry configurations.
 
-    Produced by :func:`compute_entry_config_diff`. Provides three views of
-    the same diff so callers can ask the question that fits their need:
+    Constructed directly from the two configs being compared:
+
+    .. code-block:: python
+
+        diff = EntryConfigDiff(old=current_config, new=proposed_config)
+        # or via the operator sugar on EntryConfig:
+        diff = current_config - proposed_config
+
+    Either side may be omitted (defaults to :meth:`EntryConfig.empty`)
+    for the "all added" / "all removed" cases — for example,
+    ``EntryConfigDiff(new=cfg)`` reads as "diff from nothing to cfg".
+
+    Provides three views of the same diff so callers can ask the
+    question that fits their need:
 
     - **By axis** (slot dict + lock list): used by the update listener,
       which adds/removes slot entities and lock providers along independent
@@ -240,11 +260,10 @@ class EntryConfigDiff:
       uses to detect existing-codes hazards on newly-added pairs (catches
       both "new slot on existing lock" and "new lock with existing slot").
 
-    All slot keys (in ``slots_added`` / ``slots_removed`` / ``slots_unchanged``
-    / ``pairs_added`` / ``pairs_removed``) are guaranteed ``int``. Inputs
-    with ``str`` keys (e.g. raw entry data after a JSON round-trip) are
-    normalized internally — typical callers go through
-    :meth:`EntryConfig.to_dict` which already produces ``int`` keys.
+    All slot keys (in ``slots_added`` / ``slots_removed`` /
+    ``slots_unchanged`` / ``pairs_added`` / ``pairs_removed``) are
+    guaranteed ``int`` — :class:`EntryConfig` already normalizes its
+    storage so the diff inherits that.
 
     **Immutability**: the dataclass is frozen, and all containers are
     deeply immutable (``MappingProxyType`` for dicts, ``frozenset`` for
@@ -252,13 +271,80 @@ class EntryConfigDiff:
     state without defensive copies.
     """
 
-    slots_added: Mapping[int, Mapping[str, Any]]
-    slots_removed: Mapping[int, Mapping[str, Any]]
-    slots_unchanged: frozenset[int]
-    locks_added: tuple[str, ...]
-    locks_removed: tuple[str, ...]
-    pairs_added: frozenset[tuple[str, int]]
-    pairs_removed: frozenset[tuple[str, int]]
+    # Source configs — readable after construction (useful for logging,
+    # debugging, and tests). Default to EntryConfig.empty() so callers
+    # can omit either side for the "all added" / "all removed" cases:
+    # ``EntryConfigDiff(new=cfg)`` reads as "diff from nothing to cfg".
+    old: EntryConfig = field(default_factory=EntryConfig.empty)
+    new: EntryConfig = field(default_factory=EntryConfig.empty)
+
+    # Computed in __post_init__ from old/new
+    slots_added: Mapping[int, Mapping[str, Any]] = field(init=False)
+    slots_removed: Mapping[int, Mapping[str, Any]] = field(init=False)
+    slots_unchanged: frozenset[int] = field(init=False)
+    locks_added: tuple[str, ...] = field(init=False)
+    locks_removed: tuple[str, ...] = field(init=False)
+    pairs_added: frozenset[tuple[str, int]] = field(init=False)
+    pairs_removed: frozenset[tuple[str, int]] = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Compute and freeze the diff fields."""
+        old_slots = self.old.slots
+        new_slots = self.new.slots
+        old_keys = old_slots.keys()
+        new_keys = new_slots.keys()
+        old_lock_set = set(self.old.locks)
+        new_lock_set = set(self.new.locks)
+        old_pairs: set[tuple[str, int]] = {
+            (lock, slot) for lock in self.old.locks for slot in old_keys
+        }
+        new_pairs: set[tuple[str, int]] = {
+            (lock, slot) for lock in self.new.locks for slot in new_keys
+        }
+
+        # Frozen dataclass blocks normal assignment; bypass via
+        # object.__setattr__ for the computed fields. Standard idiom for
+        # frozen dataclasses with __post_init__-computed state.
+        # Inner slot configs are wrapped (not just referenced) so the
+        # diff is genuinely deeply immutable — matches the pattern in
+        # EntryConfig.from_mapping. dict(v) snapshots the source so
+        # caller-side mutation can't leak into the diff view.
+        set_field = object.__setattr__
+        set_field(
+            self,
+            "slots_added",
+            MappingProxyType(
+                {
+                    k: MappingProxyType(dict(v))
+                    for k, v in new_slots.items()
+                    if k not in old_slots
+                }
+            ),
+        )
+        set_field(
+            self,
+            "slots_removed",
+            MappingProxyType(
+                {
+                    k: MappingProxyType(dict(v))
+                    for k, v in old_slots.items()
+                    if k not in new_slots
+                }
+            ),
+        )
+        set_field(self, "slots_unchanged", frozenset(old_keys & new_keys))
+        set_field(
+            self,
+            "locks_added",
+            tuple(lock for lock in self.new.locks if lock not in old_lock_set),
+        )
+        set_field(
+            self,
+            "locks_removed",
+            tuple(lock for lock in self.old.locks if lock not in new_lock_set),
+        )
+        set_field(self, "pairs_added", frozenset(new_pairs - old_pairs))
+        set_field(self, "pairs_removed", frozenset(old_pairs - new_pairs))
 
     @property
     def has_changes(self) -> bool:
@@ -269,69 +355,6 @@ class EntryConfigDiff:
             or self.locks_added
             or self.locks_removed
         )
-
-
-def compute_entry_config_diff(
-    old: Mapping[str, Any], new: Mapping[str, Any]
-) -> EntryConfigDiff:
-    """Compute the diff between two LCM entry config mappings.
-
-    Each input is a mapping with ``CONF_LOCKS`` (list[str]) and
-    ``CONF_SLOTS`` (dict[int|str, dict]) keys. Slot keys are normalized
-    to ``int`` so ``str``-keyed stored data and ``int``-keyed voluptuous
-    output compare correctly. All output dicts are int-keyed regardless
-    of source.
-    """
-    raw_old_slots: Mapping[Any, Any] = old.get(CONF_SLOTS, {})
-    raw_new_slots: Mapping[Any, Any] = new.get(CONF_SLOTS, {})
-    # Normalize source dicts up front. After this everything is int-keyed
-    # — the listener's `curr_slots[slot_num]` lookups against
-    # `diff.slots_unchanged` are safe regardless of the source key type.
-    old_slots: dict[int, Mapping[str, Any]] = {
-        int(k): v for k, v in raw_old_slots.items()
-    }
-    new_slots: dict[int, Mapping[str, Any]] = {
-        int(k): v for k, v in raw_new_slots.items()
-    }
-    old_keys = old_slots.keys()
-    new_keys = new_slots.keys()
-
-    old_locks: list[str] = list(old.get(CONF_LOCKS, []))
-    new_locks: list[str] = list(new.get(CONF_LOCKS, []))
-    old_lock_set = set(old_locks)
-    new_lock_set = set(new_locks)
-    old_pairs: set[tuple[str, int]] = {
-        (lock, slot) for lock in old_locks for slot in old_keys
-    }
-    new_pairs: set[tuple[str, int]] = {
-        (lock, slot) for lock in new_locks for slot in new_keys
-    }
-
-    return EntryConfigDiff(
-        # Inner slot configs are wrapped (not just held by reference) so
-        # the diff is genuinely deeply immutable — matches the pattern
-        # in EntryConfig.from_mapping. dict(v) snapshots the source so a
-        # later mutation in the caller doesn't leak into the diff view.
-        slots_added=MappingProxyType(
-            {
-                k: MappingProxyType(dict(v))
-                for k, v in new_slots.items()
-                if k not in old_slots
-            }
-        ),
-        slots_removed=MappingProxyType(
-            {
-                k: MappingProxyType(dict(v))
-                for k, v in old_slots.items()
-                if k not in new_slots
-            }
-        ),
-        slots_unchanged=frozenset(old_keys & new_keys),
-        locks_added=tuple(lock for lock in new_locks if lock not in old_lock_set),
-        locks_removed=tuple(lock for lock in old_locks if lock not in new_lock_set),
-        pairs_added=frozenset(new_pairs - old_pairs),
-        pairs_removed=frozenset(old_pairs - new_pairs),
-    )
 
 
 def build_slot_unique_id(

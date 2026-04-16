@@ -79,7 +79,7 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import EntryConfig, compute_entry_config_diff, get_entry_config
+from .data import EntryConfig, get_entry_config
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -614,7 +614,7 @@ async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     locks_to_add: Sequence[str],
-    new_slots: Mapping[int, Any],
+    new_config: EntryConfig,
     callbacks: Any,
     ent_reg: er.EntityRegistry,
 ) -> None:
@@ -674,7 +674,7 @@ async def _async_setup_new_locks(
                 lock.lock.entity_id,
             )
 
-        for slot_num in new_slots:
+        for slot_num in new_config.slots:
             _LOGGER.debug(
                 "%s (%s): Adding lock %s slot %s sensor and event entity",
                 entry_id,
@@ -777,11 +777,9 @@ async def async_update_listener(
     curr_slots = old_config.slots
     new_slots = new_config.slots
 
-    # Strip number_of_uses from slots that didn't previously have it
-    # (deprecated — only existing values are preserved). Skip on initial
-    # setup (curr_slots empty) since the data just moved from data→options.
-    # Set up any platforms that the new slot configs need that haven't already been
-    # setup
+    # Set up any platforms that the new slot configs need that haven't
+    # already been set up. The number_of_uses deprecation cleanup lives
+    # in the repair flow (NumberOfUsesDeprecatedFlow), not here.
     for platform in {
         platform
         for slot_config in new_slots.values()
@@ -797,10 +795,10 @@ async def async_update_listener(
         )
     await asyncio.gather(*setup_tasks.values())
 
-    # Identify changes that need to be made (single source of truth for the
-    # data-vs-options diff; same helper is used by the options-flow scan).
-    # Both inputs go through EntryConfig.to_dict() so they're int-keyed.
-    diff = compute_entry_config_diff(old_config.to_dict(), new_config.to_dict())
+    # Identify changes that need to be made. The `-` operator on
+    # EntryConfig is sugar for EntryConfigDiff(old=..., new=...) — both
+    # configs are int-keyed by construction so no normalization needed.
+    diff = old_config - new_config
     slots_to_add = diff.slots_added
     slots_to_remove = diff.slots_removed
     locks_to_add = diff.locks_added
@@ -842,7 +840,7 @@ async def async_update_listener(
     # slot PIN sensors for the new locks
     if locks_to_add:
         await _async_setup_new_locks(
-            hass, config_entry, locks_to_add, new_slots, callbacks, ent_reg
+            hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
 
     # For each new slot, add standard entities and configuration entities. We also

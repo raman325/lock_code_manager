@@ -1,4 +1,4 @@
-"""Tests for data helpers (compute_entry_config_diff, EntryConfig, etc)."""
+"""Tests for data helpers (EntryConfig, EntryConfigDiff, etc)."""
 
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
@@ -14,7 +14,6 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.data import (
     EntryConfig,
     EntryConfigDiff,
-    compute_entry_config_diff,
     get_entry_config,
 )
 
@@ -24,9 +23,17 @@ def _slot(pin: str = "1234") -> dict:
     return {"pin": pin, "enabled": True}
 
 
+def _cfg(mapping: dict | None = None) -> EntryConfig:
+    """Build an EntryConfig from a raw mapping (test convenience)."""
+    return EntryConfig.from_mapping(mapping) if mapping else EntryConfig.empty()
+
+
+# --- EntryConfigDiff tests ---
+
+
 def test_diff_empty_inputs() -> None:
     """No old, no new -> empty diff, no changes."""
-    diff = compute_entry_config_diff({}, {})
+    diff = EntryConfigDiff()
 
     assert dict(diff.slots_added) == {}
     assert dict(diff.slots_removed) == {}
@@ -36,13 +43,16 @@ def test_diff_empty_inputs() -> None:
     assert diff.pairs_added == frozenset()
     assert diff.pairs_removed == frozenset()
     assert not diff.has_changes
+    # Source configs are accessible after construction (default to empty)
+    assert diff.old == EntryConfig.empty()
+    assert diff.new == EntryConfig.empty()
 
 
 def test_diff_added_slots_and_locks() -> None:
-    """Brand-new entry: everything is added."""
-    new = {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}}
+    """Brand-new entry: everything is added (omit `old` -> defaults to empty)."""
+    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}})
 
-    diff = compute_entry_config_diff({}, new)
+    diff = EntryConfigDiff(new=new)
 
     assert dict(diff.slots_added) == {1: _slot(), 2: _slot()}
     assert diff.locks_added == ("lock.a",)
@@ -51,10 +61,10 @@ def test_diff_added_slots_and_locks() -> None:
 
 
 def test_diff_removed_slots_and_locks() -> None:
-    """All slots/locks removed."""
-    old = {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    """All slots/locks removed (omit `new` -> defaults to empty)."""
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}})
 
-    diff = compute_entry_config_diff(old, {})
+    diff = EntryConfigDiff(old=old)
 
     assert dict(diff.slots_removed) == {1: _slot()}
     assert diff.locks_removed == ("lock.a",)
@@ -63,10 +73,10 @@ def test_diff_removed_slots_and_locks() -> None:
 
 
 def test_diff_no_changes() -> None:
-    """Same locks and slots -> no diff, no has_changes."""
-    config = {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    """Same config on both sides -> no diff, no has_changes."""
+    config = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}})
 
-    diff = compute_entry_config_diff(config, config)
+    diff = EntryConfigDiff(old=config, new=config)
 
     assert not diff.has_changes
     assert diff.slots_unchanged == frozenset({1})
@@ -77,15 +87,16 @@ def test_diff_no_changes() -> None:
 def test_diff_str_keys_match_int_keys() -> None:
     """Stored data has str slot keys; voluptuous output has int.
 
-    The helper must treat ``"1"`` and ``1`` as the same slot for both
-    set comparisons and pair tuples — otherwise the options flow would
-    flag every existing slot as "newly added" the first time the user
-    edits options.
+    EntryConfig.from_mapping normalizes keys to int up front, so by the
+    time the diff is computed both sides are int-keyed and ``"1"`` /
+    ``1`` are treated as the same slot. Without this, the options flow
+    would flag every existing slot as "newly added" the first time the
+    user edits options.
     """
-    old = {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {"1": _slot(), "2": _slot()}}
-    new = {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}}
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {"1": _slot(), "2": _slot()}})
+    new = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}})
 
-    diff = compute_entry_config_diff(old, new)
+    diff = EntryConfigDiff(old=old, new=new)
 
     assert dict(diff.slots_added) == {}
     assert dict(diff.slots_removed) == {}
@@ -95,18 +106,11 @@ def test_diff_str_keys_match_int_keys() -> None:
 
 
 def test_diff_slot_dicts_always_int_keyed() -> None:
-    """All slot-dict outputs are int-keyed regardless of input key type.
+    """All slot-dict outputs are int-keyed regardless of input key type."""
+    old = _cfg({CONF_SLOTS: {"1": _slot(), "3": _slot()}})
+    new = _cfg({CONF_SLOTS: {1: _slot("9999"), 2: _slot()}})
 
-    Stage 3 of the EntryConfig migration: callers normalize via
-    EntryConfig.to_dict() before passing to compute_entry_config_diff,
-    so the helper guarantees int-keyed outputs and downstream code
-    (notably the listener's reconcile loop) doesn't have to translate.
-    """
-    # Mixed: old has str keys (raw JSON-loaded data), new has int (voluptuous)
-    old = {CONF_SLOTS: {"1": _slot(), "3": _slot()}}
-    new = {CONF_SLOTS: {1: _slot("9999"), 2: _slot()}}
-
-    diff = compute_entry_config_diff(old, new)
+    diff = EntryConfigDiff(old=old, new=new)
 
     assert 2 in diff.slots_added
     assert "2" not in diff.slots_added
@@ -123,10 +127,10 @@ def test_diff_pair_added_for_new_lock_with_existing_slot() -> None:
     then adds lock.b — (lock.b, 1) is a brand-new pair to scan, even
     though slot 1 is "unchanged" in the slot dict view.
     """
-    old = {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
-    new = {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}}
+    old = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}})
+    new = _cfg({CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}})
 
-    diff = compute_entry_config_diff(old, new)
+    diff = EntryConfigDiff(old=old, new=new)
 
     assert diff.locks_added == ("lock.b",)
     assert dict(diff.slots_added) == {}
@@ -136,13 +140,47 @@ def test_diff_pair_added_for_new_lock_with_existing_slot() -> None:
 
 def test_diff_pair_added_for_new_slot_on_existing_lock() -> None:
     """Adding a slot creates a new pair on every existing lock."""
-    old = {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}}
-    new = {CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot(), 2: _slot()}}
+    old = _cfg({CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot()}})
+    new = _cfg({CONF_LOCKS: ["lock.a", "lock.b"], CONF_SLOTS: {1: _slot(), 2: _slot()}})
 
-    diff = compute_entry_config_diff(old, new)
+    diff = EntryConfigDiff(old=old, new=new)
 
     assert dict(diff.slots_added) == {2: _slot()}
     assert diff.pairs_added == frozenset({("lock.a", 2), ("lock.b", 2)})
+
+
+def test_subtraction_operator_is_diff_sugar() -> None:
+    """``a - b`` on EntryConfig returns the same as EntryConfigDiff(old=a, new=b)."""
+    a = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}})
+    b = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot(), 2: _slot()}})
+
+    via_operator = a - b
+    via_constructor = EntryConfigDiff(old=a, new=b)
+
+    # Same diff content (the dataclasses are equal field-for-field;
+    # the source configs are also equal so __eq__ matches)
+    assert dict(via_operator.slots_added) == dict(via_constructor.slots_added)
+    assert via_operator.pairs_added == via_constructor.pairs_added
+    assert via_operator.has_changes is via_constructor.has_changes
+
+
+def test_subtraction_with_non_entry_config_raises_type_error() -> None:
+    """``cfg - non_config`` returns NotImplemented -> Python raises TypeError.
+
+    Without the isinstance guard, the operator would succeed and the
+    error would surface deep inside EntryConfigDiff.__post_init__ as
+    a confusing AttributeError ("'str' has no attribute 'slots'").
+    Returning NotImplemented lets Python's operator protocol surface
+    the standard "unsupported operand type(s)" message instead.
+    """
+    cfg = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}})
+
+    with pytest.raises(TypeError, match="unsupported operand"):
+        cfg - "not a config"  # type: ignore[operator]
+    with pytest.raises(TypeError, match="unsupported operand"):
+        cfg - {"locks": []}  # type: ignore[operator]
+    with pytest.raises(TypeError, match="unsupported operand"):
+        cfg - None  # type: ignore[operator]
 
 
 def test_diff_is_deeply_immutable() -> None:
@@ -155,9 +193,9 @@ def test_diff_is_deeply_immutable() -> None:
     """
     # Build a diff with both an added slot AND a removed slot so we can
     # exercise inner-mutation guards on both
-    diff = compute_entry_config_diff(
-        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}},
-        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {2: _slot()}},
+    diff = EntryConfigDiff(
+        old=_cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}),
+        new=_cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {2: _slot()}}),
     )
 
     # Attribute reassignment blocked
@@ -190,16 +228,16 @@ def test_diff_is_deeply_immutable() -> None:
 
 
 def test_diff_snapshots_inner_slot_dicts() -> None:
-    """Mutating the source slot config after diff() doesn't leak into the diff.
+    """Mutating the source slot config after diff is built doesn't leak in.
 
-    The defensive ``dict(v)`` copy in compute_entry_config_diff means
-    the diff captures a snapshot of slot configs at construction time —
-    later mutations to the original mapping don't change the diff view.
+    The defensive ``dict(v)`` copy inside __post_init__ snapshots slot
+    configs at construction time — later mutations to the original
+    mapping don't change the diff view.
     """
     inner_slot = {"pin": "1234", "enabled": True}
-    new = {CONF_SLOTS: {1: inner_slot}}
+    new = _cfg({CONF_SLOTS: {1: inner_slot}})
 
-    diff = compute_entry_config_diff({}, new)
+    diff = EntryConfigDiff(new=new)
 
     # Mutate the original inner slot dict after the diff is built
     inner_slot["pin"] = "9999"
