@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "858616e5a169",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-16T19:16:35.83298Z",
+  "branch": "cleanup/docstring-comment-audit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/callbacks.py",
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/data.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_zwave_js.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_coordinator.py",
+    "tests/test_event.py",
+    "tests/test_helpers.py",
+    "tests/test_init.py",
+    "tests/test_sensor.py",
+    "tests/test_websocket.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "377be4a6a9ca",
+  "token_usage": {
+    "input_tokens": 13139,
+    "cache_creation_tokens": 8502387,
+    "cache_read_tokens": 1031254628,
+    "output_tokens": 932728,
+    "api_call_count": 2238
+  },
+  "session_metrics": {
+    "turn_count": 183
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-16T19:16:29.604604Z",
+    "agent_lines": 94,
+    "human_added": 26,
+    "human_modified": 7,
+    "human_removed": 0,
+    "total_committed": 127,
+    "agent_percentage": 74.01574803149606
+  }
+}

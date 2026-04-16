@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "858616e5a169",
+  "strategy": "manual-commit",
+  "branch": "cleanup/docstring-comment-audit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/callbacks.py",
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/data.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_zwave_js.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_coordinator.py",
+    "tests/test_event.py",
+    "tests/test_helpers.py",
+    "tests/test_init.py",
+    "tests/test_sensor.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/85/8616e5a169/0/metadata.json",
+      "transcript": "/85/8616e5a169/0/full.jsonl",
+      "content_hash": "/85/8616e5a169/0/content_hash.txt",
+      "prompt": "/85/8616e5a169/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13139,
+    "cache_creation_tokens": 8502387,
+    "cache_read_tokens": 1031254628,
+    "output_tokens": 932728,
+    "api_call_count": 2238
+  }
+}
