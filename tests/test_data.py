@@ -1,13 +1,21 @@
-"""Tests for data helpers (compute_entry_config_diff, etc)."""
+"""Tests for data helpers (compute_entry_config_diff, EntryConfig, etc)."""
 
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.data import (
+    EntryConfig,
     EntryConfigDiff,
     compute_entry_config_diff,
+    get_entry_config,
 )
 
 
@@ -166,3 +174,139 @@ def test_diff_is_deeply_immutable() -> None:
     assert not hasattr(diff.locks_removed, "append")
 
     assert isinstance(diff, EntryConfigDiff)
+
+
+# --- EntryConfig tests ---
+
+
+def test_entry_config_empty() -> None:
+    """EntryConfig.empty() returns a config with no locks or slots."""
+    config = EntryConfig.empty()
+    assert config.locks == ()
+    assert dict(config.slots) == {}
+    assert not config.has_lock("lock.anything")
+    assert not config.has_slot(1)
+
+
+def test_entry_config_from_mapping_normalizes_str_slot_keys_to_int() -> None:
+    """from_mapping normalizes str slot keys (JSON storage) to int.
+
+    The whole point of EntryConfig: every consumer sees int keys
+    regardless of how the config was loaded.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {"1": _slot(), "2": _slot()}}
+    )
+    assert set(config.slots.keys()) == {1, 2}
+    assert all(isinstance(k, int) for k in config.slots.keys())
+    assert config.has_slot(1)
+    assert not config.has_slot("1")  # type: ignore[arg-type]  # str does not match
+
+
+def test_entry_config_from_mapping_preserves_int_slot_keys() -> None:
+    """Int keys (voluptuous output) pass through unchanged."""
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    )
+    assert set(config.slots.keys()) == {1}
+
+
+def test_entry_config_from_entry_options_preferred() -> None:
+    """from_entry prefers options over data, matching get_entry_data."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.old"], CONF_SLOTS: {"1": _slot("old")}},
+        options={CONF_LOCKS: ["lock.new"], CONF_SLOTS: {"2": _slot("new")}},
+    )
+    config = EntryConfig.from_entry(entry)
+    # Options wins entirely (not merged)
+    assert config.locks == ("lock.new",)
+    assert set(config.slots.keys()) == {2}
+
+
+def test_entry_config_from_entry_falls_back_to_data() -> None:
+    """When options is empty, from_entry reads from data."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.a"], CONF_SLOTS: {"1": _slot()}},
+    )
+    config = EntryConfig.from_entry(entry)
+    assert config.locks == ("lock.a",)
+    assert set(config.slots.keys()) == {1}
+
+
+def test_entry_config_is_deeply_immutable() -> None:
+    """EntryConfig is frozen and contains read-only mappings."""
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        config.locks = ("lock.b",)  # type: ignore[misc]
+
+    # Outer slots mapping is read-only
+    with pytest.raises(TypeError):
+        config.slots[99] = _slot()  # type: ignore[index]
+
+    # Inner slot config dict is also read-only
+    with pytest.raises(TypeError):
+        config.slots[1]["pin"] = "9999"  # type: ignore[index]
+
+
+def test_get_entry_config_uses_runtime_data_when_present() -> None:
+    """get_entry_config returns the cached EntryConfig from runtime_data.
+
+    No fresh construction — same instance is returned, allowing the
+    listener's cache to act as a true singleton view of the entry.
+    """
+    cached = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.cached"], CONF_SLOTS: {1: _slot("cached")}}
+    )
+    fake_entry = SimpleNamespace(
+        runtime_data=SimpleNamespace(config=cached),
+        # data/options would normally be here too — proving they're not
+        # consulted when the cache is present:
+        data={CONF_LOCKS: ["lock.different"], CONF_SLOTS: {}},
+        options={},
+    )
+
+    result = get_entry_config(fake_entry)  # type: ignore[arg-type]
+
+    # Returns the cached instance — same object, not a fresh build
+    assert result is cached
+    assert result.locks == ("lock.cached",)
+
+
+def test_get_entry_config_falls_back_when_no_runtime_data() -> None:
+    """get_entry_config builds fresh from raw data if runtime_data is absent.
+
+    Covers iteration over hass.config_entries.async_entries(DOMAIN) which
+    may yield entries not yet loaded.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.fresh"], CONF_SLOTS: {"1": _slot()}},
+    )
+    # MockConfigEntry has no runtime_data attribute by default
+
+    result = get_entry_config(entry)
+
+    assert result.locks == ("lock.fresh",)
+    assert set(result.slots.keys()) == {1}
+
+
+def test_get_entry_config_falls_back_when_runtime_data_lacks_config() -> None:
+    """If runtime_data exists but doesn't have a .config attr, fall back.
+
+    Defends against the brief window during async_setup_entry before
+    runtime_data.config is initialized.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: ["lock.fresh"], CONF_SLOTS: {"1": _slot()}},
+    )
+    entry.runtime_data = SimpleNamespace()  # no config attr
+
+    result = get_entry_config(entry)
+
+    assert result.locks == ("lock.fresh",)

@@ -24,11 +24,10 @@ from .const import (
     BACKOFF_FAILURE_THRESHOLD,
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
-    CONF_SLOTS,
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
-from .data import get_entry_data
+from .data import get_entry_config
 from .exceptions import LockCodeManagerError
 from .models import SlotCode
 
@@ -85,9 +84,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
 
     def get_expected_pin(self, slot_num: int) -> str | None:
         """Return configured PIN for a slot, or None if disabled/unconfigured."""
-        slot_data = get_entry_data(self._config_entry, CONF_SLOTS, {}).get(
-            str(slot_num), {}
-        )
+        slot_data = get_entry_config(self._config_entry).slots.get(int(slot_num), {})
         if not slot_data.get(CONF_ENABLED):
             return None
         return slot_data.get(CONF_PIN) or None

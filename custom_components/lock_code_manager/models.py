@@ -15,6 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 
 from .callbacks import EntityCallbackRegistry
+from .data import EntryConfig
 
 if TYPE_CHECKING:
     from .providers import BaseLock
@@ -38,6 +39,10 @@ class LockCodeManagerConfigEntryData:
     locks: dict[str, BaseLock] = field(default_factory=dict)
     setup_tasks: dict[str | Platform, asyncio.Task[Any]] = field(default_factory=dict)
     callbacks: EntityCallbackRegistry = field(default_factory=EntityCallbackRegistry)
+    # Cached typed view of the entry's current config; refreshed by the
+    # update listener on every change. Readers should prefer this over
+    # parsing config_entry.data/options directly. See data.EntryConfig.
+    config: EntryConfig = field(default_factory=EntryConfig.empty)
 
 
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]

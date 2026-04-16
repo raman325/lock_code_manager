@@ -12,6 +12,105 @@ from homeassistant.core import HomeAssistant
 
 from .const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 
+_EMPTY_SLOTS: Mapping[int, Mapping[str, Any]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class EntryConfig:
+    """Typed, normalized view of an LCM entry's configuration.
+
+    Single chokepoint for reading entry config: the on-disk representation
+    has ``str`` slot keys (JSON storage) while voluptuous-validated user
+    input has ``int`` keys. ``EntryConfig`` normalizes to ``int`` keys
+    once at construction so every downstream consumer can treat slot
+    numbers uniformly. The defensive ``slot if slot in d else str(slot)``
+    patterns scattered across the codebase exist precisely because there
+    was no such chokepoint before.
+
+    ``slots`` is a deeply read-only mapping (``MappingProxyType`` at both
+    levels) so callers can keep an ``EntryConfig`` as cached state without
+    defensive copies.
+
+    Lifecycle: an instance is cached on
+    ``LockCodeManagerConfigEntryData.config`` and refreshed by the update
+    listener whenever the entry is mutated. Most callers should access it
+    via ``entry.runtime_data.config`` directly. Iteration helpers that
+    walk ``hass.config_entries.async_entries(DOMAIN)`` use
+    :func:`get_entry_config` to handle the unloaded-entry case.
+    """
+
+    locks: tuple[str, ...]
+    slots: Mapping[int, Mapping[str, Any]]
+
+    @classmethod
+    def empty(cls) -> EntryConfig:
+        """Return a config representing an entry with no locks or slots.
+
+        Used as the initial value for ``runtime_data.config`` before the
+        entry's data has been read.
+        """
+        return cls(locks=(), slots=_EMPTY_SLOTS)
+
+    @classmethod
+    def from_entry(cls, entry: ConfigEntry) -> EntryConfig:
+        """Build EntryConfig from a config entry, options-preferred.
+
+        Matches the precedence used by :func:`get_entry_data`: during
+        options-flow updates the new config is in ``options`` while
+        ``data`` still holds the old config.
+        """
+        return cls.from_mapping(
+            {
+                CONF_LOCKS: entry.options.get(
+                    CONF_LOCKS, entry.data.get(CONF_LOCKS, [])
+                ),
+                CONF_SLOTS: entry.options.get(
+                    CONF_SLOTS, entry.data.get(CONF_SLOTS, {})
+                ),
+            }
+        )
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any]) -> EntryConfig:
+        """Build EntryConfig from a raw config mapping (data, options, or input).
+
+        Slot keys are normalized to ``int`` regardless of source. Inner
+        slot config dicts are wrapped in ``MappingProxyType`` so the
+        whole structure is read-only.
+        """
+        raw_slots = mapping.get(CONF_SLOTS, {})
+        raw_locks = mapping.get(CONF_LOCKS, [])
+        return cls(
+            locks=tuple(raw_locks),
+            slots=MappingProxyType(
+                {int(k): MappingProxyType(dict(v)) for k, v in raw_slots.items()}
+            ),
+        )
+
+    def has_lock(self, lock_entity_id: str) -> bool:
+        """Return True if this entry manages the given lock."""
+        return lock_entity_id in self.locks
+
+    def has_slot(self, slot_num: int) -> bool:
+        """Return True if this entry manages the given slot number."""
+        return slot_num in self.slots
+
+
+def get_entry_config(entry: ConfigEntry) -> EntryConfig:
+    """Return the EntryConfig view of ``entry``.
+
+    Prefers the cached instance on ``entry.runtime_data.config`` (set by
+    the listener during setup and on every update) and falls back to
+    constructing fresh from the raw entry data. The fallback covers
+    iteration over ``hass.config_entries.async_entries(DOMAIN)`` which
+    may yield entries that haven't been loaded yet (or are mid-teardown)
+    and so don't have ``runtime_data`` populated.
+    """
+    cached = getattr(getattr(entry, "runtime_data", None), "config", None)
+    if isinstance(cached, EntryConfig):
+        return cached
+    return EntryConfig.from_entry(entry)
+
 
 def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
     """
@@ -23,18 +122,24 @@ def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
     return config_entry.options.get(key, config_entry.data.get(key, default))
 
 
-def get_slot_data(config_entry, slot_num: int) -> dict[str, Any]:
-    """Get data for slot."""
-    return get_entry_data(config_entry, CONF_SLOTS, {}).get(slot_num, {})
+def get_slot_data(config_entry, slot_num: int) -> Mapping[str, Any]:
+    """Get the slot config dict for ``slot_num`` (empty mapping if absent).
+
+    Goes via :class:`EntryConfig` so the returned mapping is found
+    regardless of whether the underlying storage uses ``str`` or ``int``
+    slot keys. Callers may pass either type for ``slot_num``.
+    """
+    return get_entry_config(config_entry).slots.get(int(slot_num), {})
 
 
 def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
     """Return the set of slot numbers managed by any LCM config entry for a lock."""
     return {
-        int(code_slot)
+        slot_num
         for entry in hass.config_entries.async_entries(DOMAIN)
-        if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
-        for code_slot in get_entry_data(entry, CONF_SLOTS, {})
+        for config in [get_entry_config(entry)]
+        if config.has_lock(lock_entity_id)
+        for slot_num in config.slots
     }
 
 
@@ -50,8 +155,8 @@ def find_entry_for_lock_slot(
         (
             entry
             for entry in hass.config_entries.async_entries(DOMAIN)
-            if lock_entity_id in get_entry_data(entry, CONF_LOCKS, [])
-            and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
+            for config in [get_entry_config(entry)]
+            if config.has_lock(lock_entity_id) and config.has_slot(int(code_slot))
         ),
         None,
     )

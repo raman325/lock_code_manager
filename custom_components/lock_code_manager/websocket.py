@@ -95,7 +95,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
-from .data import get_entry_data
+from .data import get_entry_config, get_entry_data
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -190,11 +190,8 @@ def _get_slot_condition_entity_id(
     config_entry: ConfigEntry, slot_num: int
 ) -> str | None:
     """Get condition entity ID from slot config."""
-    slots_data = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_config = slots_data.get(slot_num) or slots_data.get(str(slot_num)) or {}
-    if isinstance(slot_config, dict):
-        return slot_config.get(CONF_ENTITY_ID)
-    return None
+    slot_config = get_entry_config(config_entry).slots.get(int(slot_num), {})
+    return slot_config.get(CONF_ENTITY_ID)
 
 
 def async_get_entry(
@@ -1013,9 +1010,8 @@ async def subscribe_code_slot(
     slot_num = msg[ATTR_SLOT]
     reveal = msg["reveal"]
 
-    # Validate slot exists in config (slot keys can be int or str)
-    slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    if slot_num not in slots and str(slot_num) not in slots:
+    # Validate slot exists in config
+    if not get_entry_config(config_entry).has_slot(int(slot_num)):
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_NOT_FOUND,
