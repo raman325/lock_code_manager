@@ -119,21 +119,32 @@ def _check_common_slots(
         }
 
 
-async def _async_check_existing_usercodes(
+class _LockQuerySkipped(Exception):
+    """Raised when a lock should be skipped before any provider call.
+
+    Used internally by ``_async_build_lock_instance`` to signal one of the
+    three expected setup-time skip conditions (missing entity, unsupported
+    platform, missing config entry). This is distinct from
+    ``LockCodeManagerError`` (raised by providers for real failures like
+    ``LockDisconnected``) so the caller can log skips at DEBUG and real
+    failures at WARNING.
+    """
+
+
+def _async_build_lock_instance(
     hass: HomeAssistant,
     dev_reg: dr.DeviceRegistry,
     ent_reg: er.EntityRegistry,
     lock_entity_id: str,
-) -> tuple[Any, dict[int, str | SlotCode]]:
-    """Query a single lock for all existing usercodes.
+) -> Any:
+    """Build a temporary lock provider instance for ``lock_entity_id``.
 
-    Returns (lock_instance, usercodes) where usercodes is the full dict from
-    the provider (managed and unmanaged, including empty slots). Callers are
-    responsible for filtering.
+    Performs setup-time checks (entity in registry, supported platform,
+    parent config entry exists) and instantiates the provider class.
 
-    Raises LockCodeManagerError for expected skip conditions (missing entity,
-    unsupported platform, missing config entry). Unexpected exceptions from
-    the provider propagate directly.
+    Raises ``_LockQuerySkipped`` if any setup-time check fails. The provider
+    constructor itself is not wrapped — failures there propagate as
+    unexpected exceptions and are caught one level up.
     """
     lock_entry = ent_reg.async_get(lock_entity_id)
     if not lock_entry:
@@ -141,27 +152,25 @@ async def _async_check_existing_usercodes(
             "Entity %s not found in registry; skipping usercode check",
             lock_entity_id,
         )
-        raise LockCodeManagerError(lock_entity_id)
+        raise _LockQuerySkipped(lock_entity_id)
     if lock_entry.platform not in INTEGRATIONS_CLASS_MAP:
         _LOGGER.debug(
             "Lock %s uses unsupported platform %s; skipping usercode check",
             lock_entity_id,
             lock_entry.platform,
         )
-        raise LockCodeManagerError(lock_entity_id)
+        raise _LockQuerySkipped(lock_entity_id)
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
     if lock_config_entry is None:
         _LOGGER.warning(
             "Config entry for lock %s not found; skipping usercode check",
             lock_entity_id,
         )
-        raise LockCodeManagerError(lock_entity_id)
+        raise _LockQuerySkipped(lock_entity_id)
 
-    lock_instance = INTEGRATIONS_CLASS_MAP[lock_entry.platform](
+    return INTEGRATIONS_CLASS_MAP[lock_entry.platform](
         hass, dev_reg, ent_reg, lock_config_entry, lock_entry
     )
-    usercodes = await lock_instance.async_internal_get_usercodes()
-    return lock_instance, usercodes
 
 
 async def _async_get_all_codes(
@@ -178,6 +187,11 @@ async def _async_get_all_codes(
       filter as needed.
     - Dict keyed by lock entity ID to temporary lock provider instances, for
       reuse in clearing slots.
+
+    Locks are skipped (with logging) for three failure modes:
+    - Setup-time skip (entity missing, unsupported platform, etc.) → DEBUG
+    - Provider failure (e.g. ``LockDisconnected``) → WARNING with details
+    - Unexpected exception → WARNING with traceback
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
     lock_instances: dict[str, Any] = {}
@@ -185,25 +199,36 @@ async def _async_get_all_codes(
     # with simultaneous requests across multiple locks
     for lock_entity_id in lock_entity_ids:
         try:
-            lock_instance, usercodes = await _async_check_existing_usercodes(
+            lock_instance = _async_build_lock_instance(
                 hass, dev_reg, ent_reg, lock_entity_id
             )
+        except _LockQuerySkipped:
+            # Already logged by _async_build_lock_instance with the
+            # appropriate level for the specific skip reason
+            continue
+
+        try:
+            usercodes = await lock_instance.async_internal_get_usercodes()
         except LockCodeManagerError as err:
-            _LOGGER.debug(
-                "Skipping usercode check for %s: %s",
+            # Real provider failure (e.g. LockDisconnected) — surface it
+            # so users can see why a lock's codes weren't checked
+            _LOGGER.warning(
+                "Failed to get usercodes from %s: %s",
                 lock_entity_id,
                 err,
             )
+            continue
         except Exception:  # noqa: BLE001
             _LOGGER.warning(
                 "Failed to get usercodes from %s; this lock's codes will not be shown",
                 lock_entity_id,
                 exc_info=True,
             )
-        else:
-            if usercodes:
-                result[lock_entity_id] = usercodes
-                lock_instances[lock_entity_id] = lock_instance
+            continue
+
+        if usercodes:
+            result[lock_entity_id] = usercodes
+            lock_instances[lock_entity_id] = lock_instance
     return result, lock_instances
 
 
@@ -483,7 +508,9 @@ class LockCodeManagerFlowHandler(
             step_id="yaml",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_SLOTS, default=user_input): SLOTS_YAML_SELECTOR,
+                    vol.Required(
+                        CONF_SLOTS, default=user_input.get(CONF_SLOTS, {})
+                    ): SLOTS_YAML_SELECTOR,
                 }
             ),
             errors=errors,

@@ -22,6 +22,7 @@ from custom_components.lock_code_manager.const import (
     CONF_START_SLOT,
     DOMAIN,
 )
+from custom_components.lock_code_manager.exceptions import LockCodeManagerError
 from custom_components.lock_code_manager.models import SlotCode
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
@@ -584,6 +585,52 @@ async def test_async_get_all_codes_exception(hass: HomeAssistant):
     # Exception should be caught; result should be empty
     assert result == {}
     assert instances == {}
+
+
+async def test_async_get_all_codes_provider_failure_logs_warning(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+):
+    """Provider raising LockCodeManagerError logs WARNING (not DEBUG).
+
+    Distinguishes a real failure (e.g. LockDisconnected) from the expected
+    setup-time skip cases (missing entity / unsupported platform / missing
+    config entry) so users see actionable signal when a lock is unreachable.
+    """
+    mock_instance = MagicMock()
+    mock_instance.async_internal_get_usercodes = AsyncMock(
+        side_effect=LockCodeManagerError("lock disconnected")
+    )
+    mock_lock_cls = MagicMock(return_value=mock_instance)
+
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "lock", "zwave_js", "test_lock_1", suggested_object_id="test_1"
+    )
+    dev_reg = dr.async_get(hass)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            {"zwave_js": mock_lock_cls},
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_get_entry",
+            return_value=MockConfigEntry(domain="zwave_js"),
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result, instances = await _async_get_all_codes(
+            hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
+        )
+
+    assert result == {}
+    assert instances == {}
+    # Surfaced at WARNING (not DEBUG): failure should be visible in logs
+    assert any(
+        record.levelname == "WARNING" and LOCK_1_ENTITY_ID in record.message
+        for record in caplog.records
+    )
 
 
 async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
