@@ -174,7 +174,15 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Update usercodes."""
+        """Update usercodes.
+
+        Normalizes slot keys to ``int`` here at the coordinator boundary so
+        every downstream consumer of ``coordinator.data`` can rely on int
+        keys regardless of provider implementation. All in-tree providers
+        already return int, but the cast is the contract that makes the
+        guarantee enforceable (and protects against future providers or
+        edge cases like Virtual's str-keyed JSON storage).
+        """
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
@@ -185,7 +193,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             raise UpdateFailed from err
 
         self._reset_backoff()
-        return data
+        return {int(k): v for k, v in data.items()}
 
     async def _async_drift_check(self, now: datetime) -> None:
         """
