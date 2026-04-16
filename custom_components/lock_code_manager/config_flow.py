@@ -119,15 +119,16 @@ def _check_common_slots(
         }
 
 
-class _LockQuerySkipped(Exception):
+class _LockQuerySkipped(LockCodeManagerError):
     """Raised when a lock should be skipped before any provider call.
 
     Used internally by ``_async_build_lock_instance`` to signal one of the
     three expected setup-time skip conditions (missing entity, unsupported
-    platform, missing config entry). This is distinct from
-    ``LockCodeManagerError`` (raised by providers for real failures like
-    ``LockDisconnected``) so the caller can log skips at DEBUG and real
-    failures at WARNING.
+    platform, missing config entry). Subclasses ``LockCodeManagerError`` so
+    it belongs to the project's exception family, but is caught separately
+    from provider-raised ``LockCodeManagerError`` (e.g. ``LockDisconnected``)
+    so setup-time skips log at DEBUG and real provider failures log at
+    WARNING.
     """
 
 
