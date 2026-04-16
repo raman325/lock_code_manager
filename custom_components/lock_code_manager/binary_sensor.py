@@ -42,7 +42,7 @@ from .const import (
     EVENT_PIN_USED,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import get_slot_data
+from .data import get_entry_config
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
@@ -114,7 +114,9 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
     @property
     def _condition_entity_id(self) -> str | None:
         """Return condition entity ID for this slot."""
-        return get_slot_data(self.config_entry, self.slot_num).get(CONF_ENTITY_ID)
+        return (
+            get_entry_config(self.config_entry).slot(self.slot_num).get(CONF_ENTITY_ID)
+        )
 
     @callback
     def _cleanup_condition_subscription(self) -> None:
@@ -134,7 +136,9 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         )
 
         states: dict[str, bool | None] = {}
-        for key, state in get_slot_data(self.config_entry, self.slot_num).items():
+        for key, state in (
+            get_entry_config(self.config_entry).slot(self.slot_num).items()
+        ):
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
 

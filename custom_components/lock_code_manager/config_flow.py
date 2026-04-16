@@ -36,7 +36,7 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import compute_entry_config_diff, get_entry_config
+from .data import EntryConfig, get_entry_config
 from .exceptions import LockCodeManagerError, LockCodeManagerProviderError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
@@ -685,10 +685,12 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
         current configuration. If any newly-added pair has a non-empty
         code on its lock, show the confirmation step before persisting.
         """
-        # Use the same diff helper as the update listener so the "is this
-        # pair new?" definition stays in one place
-        diff = compute_entry_config_diff(
-            get_entry_config(self.config_entry).to_dict(), user_input
+        # Same diff API as the update listener — the `-` operator on
+        # EntryConfig returns an EntryConfigDiff. user_input has int slot
+        # keys (voluptuous coerced) and current entry data is normalized
+        # by EntryConfig.from_mapping, so the diff is consistent.
+        diff = get_entry_config(self.config_entry) - EntryConfig.from_mapping(
+            user_input
         )
         if not diff.pairs_added:
             return self.async_create_entry(title="", data=user_input)

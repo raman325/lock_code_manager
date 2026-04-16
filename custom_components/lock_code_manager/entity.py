@@ -24,7 +24,7 @@ from .const import (
     ATTR_TO,
     DOMAIN,
 )
-from .data import build_slot_unique_id, get_entry_config, get_slot_data
+from .data import build_slot_unique_id, get_entry_config
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 
@@ -77,7 +77,7 @@ class BaseLockCodeManagerEntity(Entity):
     @property
     def _state(self) -> Any:
         """Return state of entity."""
-        return get_slot_data(self.config_entry, self.slot_num).get(self.key)
+        return get_entry_config(self.config_entry).slot(self.slot_num).get(self.key)
 
     @final
     def _get_uid(self, key: str) -> str:
