@@ -821,12 +821,17 @@ class BaseLock:
         Get dictionary of code slots and usercodes.
 
         Called by data coordinator to get data for code slot sensors.
+        Slot keys are always ``int`` — the coordinator's ``_normalize_keys``
+        chokepoint enforces this on the way out, but providers should
+        return int-keyed dicts directly. Values are either a usercode
+        string or a ``SlotCode`` sentinel (``EMPTY``/``UNKNOWN``).
 
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
+        Example::
+
+            {
+                1: '1234',
+                2: SlotCode.EMPTY,
+            }
         """
         return await self._execute_rate_limited("get", self.async_get_usercodes)
 
