@@ -80,13 +80,3 @@ class SlotEntities:
             )
             if eid
         ]
-
-
-@dataclass
-class SlotMetadata:
-    """Metadata for a single slot from LCM entities."""
-
-    name: str | None = None
-    configured_pin: str | None = None
-    active: bool | None = None
-    enabled: bool | None = None

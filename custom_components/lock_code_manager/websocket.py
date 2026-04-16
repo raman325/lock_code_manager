@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
 import logging
@@ -102,7 +103,7 @@ from .helpers import (
     async_set_slot_condition,
     async_set_usercode,
 )
-from .models import SlotCode, SlotEntities, SlotMetadata
+from .models import SlotCode, SlotEntities
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -466,6 +467,21 @@ def _get_slot_entity_ids(
             )
 
     return slot_entities
+
+
+@dataclass
+class SlotMetadata:
+    """Parsed values for a single slot, derived from LCM entity states.
+
+    Used as the per-slot shape inside websocket subscription responses.
+    Fields are typed (bool / str) rather than raw HA states because
+    consumers want clean JSON-serializable values.
+    """
+
+    name: str | None = None
+    configured_pin: str | None = None
+    active: bool | None = None
+    enabled: bool | None = None
 
 
 def _get_slot_metadata(
