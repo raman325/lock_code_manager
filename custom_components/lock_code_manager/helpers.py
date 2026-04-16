@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import copy
+from collections.abc import Mapping
 import logging
 from typing import Any
 
@@ -22,8 +22,8 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
-from .const import CONF_LOCKS, CONF_SLOTS, DOMAIN, EXCLUDED_CONDITION_PLATFORMS
-from .data import get_entry_data
+from .const import CONF_LOCKS, DOMAIN, EXCLUDED_CONDITION_PLATFORMS
+from .data import get_entry_config
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -140,13 +140,12 @@ async def async_clear_usercode(
     await lock.async_internal_clear_usercode(code_slot)
 
 
-def get_slot_config(config_entry: ConfigEntry, slot_num: int) -> dict[str, Any]:
-    """Get slot config dict, raising if not found."""
-    slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_key = slot_num if slot_num in slots else str(slot_num)
-    if slot_key not in slots:
+def get_slot_config(config_entry: ConfigEntry, slot_num: int) -> Mapping[str, Any]:
+    """Get slot config, raising if not found."""
+    config = get_entry_config(config_entry)
+    if not config.has_slot(slot_num):
         raise ServiceValidationError(f"Slot {slot_num} not found in config entry")
-    return slots[slot_key]
+    return config.slot(slot_num)
 
 
 def get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> ConfigEntry:
@@ -183,15 +182,10 @@ async def async_set_slot_condition(
             "Unsupported-Condition-Entity-Integrations"
         )
 
-    # Update config entry data using effective config (handles data vs options)
-    data = {
-        CONF_LOCKS: copy.deepcopy(get_entry_data(config_entry, CONF_LOCKS, [])),
-        CONF_SLOTS: copy.deepcopy(get_entry_data(config_entry, CONF_SLOTS, {})),
-    }
-    slot_key = slot if slot in data[CONF_SLOTS] else str(slot)
-    data[CONF_SLOTS][slot_key][CONF_ENTITY_ID] = entity_id
-
-    hass.config_entries.async_update_entry(config_entry, options=data)
+    new_config = get_entry_config(config_entry).with_slot_field_set(
+        slot, CONF_ENTITY_ID, entity_id
+    )
+    hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())
 
 
 async def async_clear_slot_condition(
@@ -201,12 +195,7 @@ async def async_clear_slot_condition(
     config_entry = get_loaded_config_entry(hass, config_entry_id)
     get_slot_config(config_entry, slot)
 
-    # Update config entry data using effective config (handles data vs options)
-    data = {
-        CONF_LOCKS: copy.deepcopy(get_entry_data(config_entry, CONF_LOCKS, [])),
-        CONF_SLOTS: copy.deepcopy(get_entry_data(config_entry, CONF_SLOTS, {})),
-    }
-    slot_key = slot if slot in data[CONF_SLOTS] else str(slot)
-    data[CONF_SLOTS][slot_key].pop(CONF_ENTITY_ID, None)
-
-    hass.config_entries.async_update_entry(config_entry, options=data)
+    new_config = get_entry_config(config_entry).with_slot_field_removed(
+        slot, CONF_ENTITY_ID
+    )
+    hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())

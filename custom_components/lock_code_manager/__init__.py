@@ -79,7 +79,7 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import EntryConfig, compute_entry_config_diff, get_entry_data
+from .data import EntryConfig, compute_entry_config_diff, get_entry_config
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -435,7 +435,7 @@ async def async_setup_entry(
     try:
         entity_id = next(
             entity_id
-            for entity_id in get_entry_data(config_entry, CONF_LOCKS, [])
+            for entity_id in get_entry_config(config_entry).locks
             if not ent_reg.async_get(entity_id)
         )
     except StopIteration:
@@ -468,7 +468,7 @@ async def async_setup_entry(
     has_number_of_uses = any(
         CONF_NUMBER_OF_USES in slot_config
         for entry in hass.config_entries.async_entries(DOMAIN)
-        for slot_config in get_entry_data(entry, CONF_SLOTS, {}).values()
+        for slot_config in get_entry_config(entry).slots.values()
     )
     if has_number_of_uses:
         async_create_issue(
@@ -581,10 +581,12 @@ async def async_unload_entry(
     if unload_ok:
         await async_unload_lock(hass, config_entry)
 
-        # Clean up repair issues for this config entry. Use get_entry_data to
-        # check both data and options since data migrates to options during setup.
+        # Clean up repair issues for this config entry. EntryConfig handles
+        # the data-vs-options precedence (matters during the data→options
+        # migration that happens early in setup).
         entry_id = config_entry.entry_id
-        for slot_num in get_entry_data(config_entry, CONF_SLOTS, {}):
+        config = get_entry_config(config_entry)
+        for slot_num in config.slots:
             async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
             async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
         # Only delete lock_offline if no other LCM entry manages this lock
@@ -595,10 +597,9 @@ async def async_unload_entry(
             )
             if e.entry_id != entry_id
         ]
-        for lock_entity_id in get_entry_data(config_entry, CONF_LOCKS, []):
+        for lock_entity_id in config.locks:
             still_managed = any(
-                lock_entity_id in get_entry_data(e, CONF_LOCKS, [])
-                for e in other_entries
+                get_entry_config(e).has_lock(lock_entity_id) for e in other_entries
             )
             if not still_managed:
                 async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")

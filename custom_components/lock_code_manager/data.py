@@ -55,9 +55,9 @@ class EntryConfig:
     def from_entry(cls, entry: ConfigEntry) -> EntryConfig:
         """Build EntryConfig from a config entry, options-preferred.
 
-        Matches the precedence used by :func:`get_entry_data`: during
-        options-flow updates the new config is in ``options`` while
-        ``data`` still holds the old config.
+        Uses options-preferred precedence: during options-flow updates
+        the new config is in ``options`` while ``data`` still holds the
+        old config.
         """
         return cls.from_mapping(
             {
@@ -109,6 +109,64 @@ class EntryConfig:
         """
         return self.slots.get(int(slot_num), {})
 
+    def with_slot_field_set(
+        self, slot_num: int | str, key: str, value: Any
+    ) -> EntryConfig:
+        """Return a new EntryConfig with one slot's field set to ``value``.
+
+        Creates the slot if it doesn't already exist. Used by writer
+        paths (entity field updates, condition entity set service) to
+        produce the new config to hand to ``async_update_entry``, paired
+        with :meth:`to_dict`.
+        """
+        sn = int(slot_num)
+        new_slots: dict[int, dict[str, Any]] = {
+            k: dict(v) for k, v in self.slots.items()
+        }
+        new_slots.setdefault(sn, {})[key] = value
+        return EntryConfig(
+            locks=self.locks,
+            slots=MappingProxyType(
+                {k: MappingProxyType(v) for k, v in new_slots.items()}
+            ),
+        )
+
+    def with_slot_field_removed(self, slot_num: int | str, key: str) -> EntryConfig:
+        """Return a new EntryConfig with one slot's field removed.
+
+        No-op (returns ``self``) if the slot or key is already absent.
+        """
+        sn = int(slot_num)
+        if sn not in self.slots or key not in self.slots[sn]:
+            return self
+        new_slots: dict[int, dict[str, Any]] = {
+            k: dict(v) for k, v in self.slots.items()
+        }
+        new_slots[sn].pop(key, None)
+        return EntryConfig(
+            locks=self.locks,
+            slots=MappingProxyType(
+                {k: MappingProxyType(v) for k, v in new_slots.items()}
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain mutable dict suitable for ``async_update_entry``.
+
+        Only includes the keys EntryConfig knows about (CONF_LOCKS and
+        CONF_SLOTS). Inner slot dicts are plain ``dict`` (not
+        ``MappingProxyType``) so HA's storage layer can serialize them.
+
+        Callers preserving other top-level keys in ``entry.data`` /
+        ``entry.options`` should merge: ``{**dict(entry.data),
+        **new_config.to_dict()}``. In practice LCM entries only carry
+        these two keys.
+        """
+        return {
+            CONF_LOCKS: list(self.locks),
+            CONF_SLOTS: {k: dict(v) for k, v in self.slots.items()},
+        }
+
 
 def get_entry_config(entry: ConfigEntry) -> EntryConfig:
     """Return the EntryConfig view of ``entry``.
@@ -124,16 +182,6 @@ def get_entry_config(entry: ConfigEntry) -> EntryConfig:
     if isinstance(cached, EntryConfig):
         return cached
     return EntryConfig.from_entry(entry)
-
-
-def get_entry_data(config_entry: ConfigEntry, key: str, default: Any) -> Any:
-    """
-    Get data from config entry.
-
-    Prefers options over data because during options flow updates, the new
-    configuration is in options while data still contains the old configuration.
-    """
-    return config_entry.options.get(key, config_entry.data.get(key, default))
 
 
 def get_slot_data(config_entry, slot_num: int | str) -> Mapping[str, Any]:
