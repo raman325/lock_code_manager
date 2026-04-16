@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "08dab9fb6fc1",
+  "strategy": "manual-commit",
+  "branch": "refactor/tier-1-housekeeping",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/test_exceptions.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/08/dab9fb6fc1/0/metadata.json",
+      "transcript": "/08/dab9fb6fc1/0/full.jsonl",
+      "content_hash": "/08/dab9fb6fc1/0/content_hash.txt",
+      "prompt": "/08/dab9fb6fc1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12132,
+    "cache_creation_tokens": 8126008,
+    "cache_read_tokens": 942177457,
+    "output_tokens": 801632,
+    "api_call_count": 2041
+  }
+}

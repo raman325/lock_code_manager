@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "08dab9fb6fc1",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-16T18:20:24.290141Z",
+  "branch": "refactor/tier-1-housekeeping",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/test_exceptions.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "32653a1459c7",
+  "token_usage": {
+    "input_tokens": 12132,
+    "cache_creation_tokens": 8126008,
+    "cache_read_tokens": 942177457,
+    "output_tokens": 801632,
+    "api_call_count": 2041
+  },
+  "session_metrics": {
+    "turn_count": 176
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-16T18:20:18.512181Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 75,
+    "human_removed": 58,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
