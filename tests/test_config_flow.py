@@ -11,7 +11,10 @@ from homeassistant.const import CONF_ENABLED, CONF_ENTITY_ID, CONF_NAME, CONF_PI
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.config_flow import _async_get_all_codes
+from custom_components.lock_code_manager.config_flow import (
+    LockCodeManagerFlowHandler,
+    _async_get_all_codes,
+)
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_SLOTS,
@@ -627,3 +630,117 @@ async def test_async_get_all_codes_returns_all_non_empty(hass: HomeAssistant):
     assert LOCK_1_ENTITY_ID in result
     assert result[LOCK_1_ENTITY_ID] == {1: "1234", 3: "9999"}
     assert LOCK_1_ENTITY_ID in instances
+
+
+async def test_async_get_all_codes_entity_not_in_registry(hass: HomeAssistant):
+    """Test _async_get_all_codes skips locks not in the entity registry."""
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    result, instances = await _async_get_all_codes(
+        hass, dev_reg, ent_reg, ["lock.does_not_exist"]
+    )
+
+    assert result == {}
+    assert instances == {}
+
+
+async def test_async_get_all_codes_unsupported_platform(hass: HomeAssistant):
+    """Test _async_get_all_codes skips locks on unsupported platforms."""
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "lock", "unsupported_platform", "test_lock_1", suggested_object_id="test_1"
+    )
+    dev_reg = dr.async_get(hass)
+
+    result, instances = await _async_get_all_codes(
+        hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
+    )
+
+    assert result == {}
+    assert instances == {}
+
+
+async def test_async_get_all_codes_missing_lock_config_entry(hass: HomeAssistant):
+    """Test _async_get_all_codes skips locks whose config entry is missing."""
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        "lock", "zwave_js", "test_lock_1", suggested_object_id="test_1"
+    )
+    dev_reg = dr.async_get(hass)
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.config_flow.INTEGRATIONS_CLASS_MAP",
+            {"zwave_js": MagicMock()},
+        ),
+        patch.object(hass.config_entries, "async_get_entry", return_value=None),
+    ):
+        result, instances = await _async_get_all_codes(
+            hass, dev_reg, ent_reg, [LOCK_1_ENTITY_ID]
+        )
+
+    assert result == {}
+    assert instances == {}
+
+
+async def test_clear_existing_slot_handles_failures(hass: HomeAssistant):
+    """Test that clearing failures and missing instances are handled gracefully."""
+    mock_clear_ok = AsyncMock(return_value=True)
+    mock_clear_fail = AsyncMock(side_effect=RuntimeError("clear failed"))
+    mock_lock_ok = MagicMock()
+    mock_lock_ok.async_internal_clear_usercode = mock_clear_ok
+    mock_lock_fail = MagicMock()
+    mock_lock_fail.async_internal_clear_usercode = mock_clear_fail
+
+    # Three locks: one without an instance (skipped), one OK, one that fails
+    existing = {
+        "lock.no_instance": {1: "1111"},
+        "lock.ok": {1: "2222"},
+        "lock.fails": {1: "3333"},
+        "lock.skipped": {2: "4444"},  # slot 2, not 1 — should be skipped
+    }
+    instances = {
+        "lock.ok": mock_lock_ok,
+        "lock.fails": mock_lock_fail,
+        "lock.skipped": MagicMock(),
+    }
+
+    with patch(GET_ALL_CODES_PATCH, return_value=(existing, instances)):
+        flow_id = await _init_flow_to_user_step(hass)
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "yaml"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id,
+        {CONF_SLOTS: {1: {CONF_ENABLED: True, CONF_PIN: "5678"}}},
+    )
+
+    # Confirm step shown because slot 1 has existing codes
+    assert result["step_id"] == "existing_codes_confirm"
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"next_step_id": "existing_codes_clear"}
+    )
+
+    assert result["type"] == "create_entry"
+    # OK lock cleared, failing lock attempted (exception swallowed),
+    # no_instance skipped, lock.skipped not touched (different slot)
+    mock_clear_ok.assert_called_once_with(1, source="direct")
+    mock_clear_fail.assert_called_once_with(1, source="direct")
+    instances["lock.skipped"].async_internal_clear_usercode.assert_not_called()
+
+
+async def test_continue_after_confirm_unknown_state(hass: HomeAssistant):
+    """Test that the unknown state fallback aborts the flow."""
+    handler = LockCodeManagerFlowHandler()
+    handler.hass = hass
+    handler._next_after_confirm = ""
+
+    result = await handler._continue_after_confirm()
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "unknown"
