@@ -3,7 +3,8 @@
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
       "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
-      "locks_updated": "The locks for your config entry have been updated."
+      "locks_updated": "The locks for your config entry have been updated.",
+      "unknown": "An unexpected error occurred during setup."
     },
     "error": {
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",

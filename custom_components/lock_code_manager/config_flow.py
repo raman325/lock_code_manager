@@ -180,6 +180,8 @@ async def _async_get_all_codes(
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
     lock_instances: dict[str, Any] = {}
+    # Query sequentially to avoid flooding networks (e.g. Z-Wave, Matter)
+    # with simultaneous requests across multiple locks
     for lock_entity_id in lock_entity_ids:
         try:
             lock_instance, usercodes = await _async_check_existing_usercodes(
@@ -270,14 +272,19 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _create_entry_and_clear_slots(self) -> dict[str, Any]:
-        """Build entry creation result, clear existing codes, then return."""
-        result = self.async_create_entry(title=self.title, data=self.data)
+        """Clear existing codes (already user-authorized), then create entry.
+
+        The user explicitly confirmed clearing in the existing_codes_confirm
+        step, so we do it before creating the entry. async_create_entry()
+        only builds a FlowResult dict — the entry isn't persisted until
+        after this step returns.
+        """
         for slot_num in self._slots_to_clear:
             await self._clear_existing_slot(slot_num)
         self._slots_to_clear = []
         self._existing_codes = {}
         self._lock_instances = {}
-        return result
+        return self.async_create_entry(title=self.title, data=self.data)
 
     async def _clear_existing_slot(self, slot_num: int) -> None:
         """Clear a specific slot on all locks that have an existing code in it."""
