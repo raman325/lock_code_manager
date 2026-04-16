@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -51,6 +53,101 @@ def find_entry_for_lock_slot(
             and code_slot in (int(s) for s in get_entry_data(entry, CONF_SLOTS, {}))
         ),
         None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EntryConfigDiff:
+    """Diff between two LCM entry configurations.
+
+    Produced by :func:`compute_entry_config_diff`. Provides three views of
+    the same diff so callers can ask the question that fits their need:
+
+    - **By axis** (slot dict + lock list): used by the update listener,
+      which adds/removes slot entities and lock providers along independent
+      axes.
+    - **By unchanged set**: ``slots_unchanged`` enumerates slot keys
+      present in both configs, used by the listener to reconcile per-slot
+      configuration changes.
+    - **By cartesian pair**: ``pairs_added`` / ``pairs_removed`` give
+      ``(lock, slot)`` tuples that are new or gone, which the options flow
+      uses to detect existing-codes hazards on newly-added pairs (catches
+      both "new slot on existing lock" and "new lock with existing slot").
+
+    **Slot key types**: the slot-dict outputs (``slots_added``,
+    ``slots_removed``, ``slots_unchanged``) preserve the *new* mapping's
+    key type (``str`` if loaded from JSON storage, ``int`` if from
+    voluptuous validation). The cartesian pair sets always use ``int``
+    slot keys so they compare correctly even when ``old`` and ``new``
+    have different key types (a common situation: stored ``data`` is
+    ``str``-keyed, fresh user input from voluptuous is ``int``-keyed).
+    """
+
+    slots_added: dict[Any, Any]
+    slots_removed: dict[Any, Any]
+    slots_unchanged: set[Any]
+    locks_added: list[str]
+    locks_removed: list[str]
+    pairs_added: frozenset[tuple[str, int]]
+    pairs_removed: frozenset[tuple[str, int]]
+
+    @property
+    def has_changes(self) -> bool:
+        """True if any slot or lock was added or removed."""
+        return bool(
+            self.slots_added
+            or self.slots_removed
+            or self.locks_added
+            or self.locks_removed
+        )
+
+
+def compute_entry_config_diff(
+    old: Mapping[str, Any], new: Mapping[str, Any]
+) -> EntryConfigDiff:
+    """Compute the diff between two LCM entry config mappings.
+
+    Each input is a mapping with ``CONF_LOCKS`` (list[str]) and
+    ``CONF_SLOTS`` (dict[int|str, dict]) keys. Slot keys are normalized
+    to ``int`` *internally* for set comparisons (so ``str``-keyed stored
+    data and ``int``-keyed voluptuous output compare correctly), but the
+    slot-dict outputs preserve the source key type of ``new``. This
+    matches the existing convention in the listener and entity layer
+    where ``slot_num`` may be ``str`` or ``int`` depending on origin.
+    """
+    raw_old_slots = old.get(CONF_SLOTS, {})
+    raw_new_slots = new.get(CONF_SLOTS, {})
+    # int-normalized key sets for comparisons only
+    old_int_keys = {int(k) for k in raw_old_slots}
+    new_int_keys = {int(k) for k in raw_new_slots}
+    unchanged_int_keys = old_int_keys & new_int_keys
+
+    old_locks: list[str] = list(old.get(CONF_LOCKS, []))
+    new_locks: list[str] = list(new.get(CONF_LOCKS, []))
+    old_lock_set = set(old_locks)
+    new_lock_set = set(new_locks)
+    old_pairs: set[tuple[str, int]] = {
+        (lock, slot) for lock in old_locks for slot in old_int_keys
+    }
+    new_pairs: set[tuple[str, int]] = {
+        (lock, slot) for lock in new_locks for slot in new_int_keys
+    }
+
+    return EntryConfigDiff(
+        slots_added={
+            k: v for k, v in raw_new_slots.items() if int(k) not in old_int_keys
+        },
+        slots_removed={
+            k: v for k, v in raw_old_slots.items() if int(k) not in new_int_keys
+        },
+        # Preserve the new mapping's key type — the listener's reconcile
+        # loop indexes back into raw_new_slots / raw_old_slots and needs
+        # the original key type to find the slot config dict.
+        slots_unchanged={k for k in raw_new_slots if int(k) in unchanged_int_keys},
+        locks_added=[lock for lock in new_locks if lock not in old_lock_set],
+        locks_removed=[lock for lock in old_locks if lock not in new_lock_set],
+        pairs_added=frozenset(new_pairs - old_pairs),
+        pairs_removed=frozenset(old_pairs - new_pairs),
     )
 
 
