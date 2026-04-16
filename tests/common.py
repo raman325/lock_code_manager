@@ -70,39 +70,25 @@ class MockLCMLock(BaseLock):
         """Return integration domain."""
         return "test"
 
-    @callback
-    def setup(self) -> None:
-        """Set up lock."""
-
-    @callback
-    def unload(self, remove_permanently: bool) -> None:
-        """Unload lock."""
-
     def set_connected(self, connected: bool) -> None:
         """Set connection state for testing."""
         self._connected = connected
 
-    def is_integration_connected(self) -> bool:
+    async def async_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
-    def hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync
-        with the lock.
-        """
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+        """Perform hard refresh of all codes."""
         self.service_calls["hard_refresh_codes"].append(())
-        return self.get_usercodes()
+        return await self.async_get_usercodes()
 
-    def set_usercode(
+    async def async_set_usercode(
         self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
-        """
-        Set a usercode on a code slot.
+        """Set a usercode on a code slot.
 
-        Returns True if the value was changed, False if already set to this value.
+        Returns True if the value was changed, False if already set.
         """
         if self.codes.get(code_slot) == usercode:
             return False
@@ -110,9 +96,8 @@ class MockLCMLock(BaseLock):
         self.service_calls["set_usercode"].append((code_slot, usercode, name))
         return True
 
-    def clear_usercode(self, code_slot: int) -> bool:
-        """
-        Clear a usercode on a code slot.
+    async def async_clear_usercode(self, code_slot: int) -> bool:
+        """Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
         """
@@ -122,18 +107,8 @@ class MockLCMLock(BaseLock):
         self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    def get_usercodes(self) -> dict[int, str | SlotCode]:
-        """
-        Get dictionary of code slots and usercodes.
-
-        Called by data coordinator to get data for code slot sensors.
-
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
-        """
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+        """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
         return snapshot

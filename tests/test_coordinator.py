@@ -45,25 +45,25 @@ class MockLockWithHardRefresh(BaseLock):
         """Return configurable hard refresh interval."""
         return self._hard_refresh_interval
 
-    def is_integration_connected(self) -> bool:
+    async def async_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
         return self._is_connected
 
-    def hard_refresh_codes(self) -> dict[int, str | None]:
+    async def async_hard_refresh_codes(self) -> dict[int, str | None]:
         """Perform hard refresh and return all codes."""
-        return self.get_usercodes()
+        return await self.async_get_usercodes()
 
-    def get_usercodes(self) -> dict[int, str | None]:
-        """Get dictionary of code slots and usercodes."""
+    async def async_get_usercodes(self) -> dict[int, str | None]:
+        """Return dictionary of code slots and usercodes."""
         return {}
 
-    def set_usercode(
+    async def async_set_usercode(
         self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
         return True
 
-    def clear_usercode(self, code_slot: int) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """Clear a usercode on a code slot."""
         return True
 

@@ -723,7 +723,6 @@ async def test_is_device_available_default_returns_true(hass: HomeAssistant):
     )
 
     # Default implementation returns True
-    assert lock.is_device_available() is True
     assert await lock.async_is_device_available() is True
 
 
