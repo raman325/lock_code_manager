@@ -112,13 +112,20 @@ class MatterLock(BaseLock):
     ) -> dict[str, Any]:
         """Call a Matter service and return the per-entity response data.
 
-        Intentionally does NOT route through ``BaseLock.async_call_service``:
-        Matter services return ``{entity_id: {...}}``-shaped responses that
-        need per-entity unwrapping plus structural validation, and the
-        bespoke ``LockCodeManagerProviderError`` raised on malformed data
-        is meaningfully different from the generic ``LockDisconnected``
-        the shared wrapper raises. Future refactors should preserve this
-        bypass rather than "unifying" it back into the base helper.
+        Intentionally does NOT route through ``BaseLock.async_call_service``.
+        That helper does exactly one thing: wrap raw service-call failures
+        (``HomeAssistantError`` family) as ``LockDisconnected``. Matter
+        needs two additional jobs the base helper deliberately doesn't do:
+
+        1. Unwrap the ``{entity_id: {...}}``-shaped response the Matter
+           service returns and hand back the inner per-entity dict.
+        2. Validate that response shape and raise
+           ``LockCodeManagerProviderError`` (a different error class) when
+           the lock returns no/non-dict data — a "malformed response" path
+           the base helper has no opinion on at all.
+
+        Future refactors should preserve this bypass rather than "unifying"
+        it back into the base helper.
         """
         entity_id = self.lock.entity_id
         try:
