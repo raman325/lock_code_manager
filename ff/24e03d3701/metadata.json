@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ff24e03d3701",
+  "strategy": "manual-commit",
+  "branch": "refactor/reduce-flow-duplication",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/data.py",
+    "tests/test_data.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ff/24e03d3701/0/metadata.json",
+      "transcript": "/ff/24e03d3701/0/full.jsonl",
+      "content_hash": "/ff/24e03d3701/0/content_hash.txt",
+      "prompt": "/ff/24e03d3701/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11578,
+    "cache_creation_tokens": 6511606,
+    "cache_read_tokens": 637628587,
+    "output_tokens": 508876,
+    "api_call_count": 1591
+  }
+}
