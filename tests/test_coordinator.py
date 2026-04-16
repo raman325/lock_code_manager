@@ -539,8 +539,9 @@ async def test_drift_check_calls_hard_refresh(
 
     coordinator = LockUsercodeUpdateCoordinator(hass, lock, config_entry)
 
-    # Mock the hard refresh method
-    mock_hard_refresh = AsyncMock()
+    # Mock the hard refresh method. Return a real dict so the coordinator's
+    # int-key normalization (applied to drift-check results) can iterate it.
+    mock_hard_refresh = AsyncMock(return_value={1: "1234"})
 
     with patch.object(lock, "async_internal_hard_refresh_codes", mock_hard_refresh):
         await coordinator._async_drift_check(dt_util.utcnow())

@@ -9,6 +9,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -359,23 +360,44 @@ async def test_async_call_service_raises_lock_disconnected_on_error(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_call_service raises LockDisconnected when service call fails."""
+    """Test that async_call_service wraps HA service errors as LockDisconnected."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
-    # Register a service that raises an error
     async def failing_service(call):
-        raise ValueError("Service failed")
+        raise HomeAssistantError("Service failed")
 
     hass.services.async_register("test_domain", "failing_service", failing_service)
 
-    # Calling a failing service should raise LockDisconnected
     with pytest.raises(
         LockDisconnected, match="Service call test_domain.failing_service failed"
     ):
         await lock_provider.async_call_service("test_domain", "failing_service", {})
 
-    # Clean up
     hass.services.async_remove("test_domain", "failing_service")
+
+
+async def test_async_call_service_propagates_non_ha_exceptions(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Non-HomeAssistantError exceptions must propagate, not become LockDisconnected.
+
+    Wrapping programming errors (TypeError) or shutdown signals
+    (asyncio.CancelledError) as LockDisconnected would trigger false
+    "lock offline" issues, drift backoff, and push-resub loops.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    async def buggy_service(call):
+        raise TypeError("programmer made a mistake")
+
+    hass.services.async_register("test_domain", "buggy_service", buggy_service)
+
+    with pytest.raises(TypeError, match="programmer made a mistake"):
+        await lock_provider.async_call_service("test_domain", "buggy_service", {})
+
+    hass.services.async_remove("test_domain", "buggy_service")
 
 
 async def test_set_usercode_refreshes_coordinator_on_change(

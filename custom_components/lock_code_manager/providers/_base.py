@@ -19,7 +19,7 @@ from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_STATE, CONF_NAME
 from homeassistant.core import Event, HomeAssistant, State, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -856,7 +856,12 @@ class BaseLock:
                 blocking=blocking,
                 return_response=return_response,
             )
-        except Exception as err:
+        except HomeAssistantError as err:
+            # Narrow catch: only HA-raised service errors map to LockDisconnected.
+            # ServiceValidationError is a subclass of HomeAssistantError so it's
+            # covered. Letting CancelledError, TypeError, and other programming
+            # bugs propagate avoids false "lock offline" issue creation, drift
+            # backoff, and push-resub loops on shutdown or call-site mistakes.
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )

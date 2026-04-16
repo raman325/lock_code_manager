@@ -96,7 +96,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
-from .data import get_entry_config
+from .data import get_entry_config, get_managed_slots
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -386,16 +386,6 @@ def _serialize_slot(
     return result
 
 
-def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
-    """Return slot numbers managed by LCM for a given lock."""
-    return {
-        slot_num
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if (config := get_entry_config(entry)).has_lock(lock_entity_id)
-        for slot_num in config.slots
-    }
-
-
 @dataclass
 class SlotEntities:
     """Entity IDs for a single slot's LCM entities.
@@ -549,7 +539,7 @@ def _serialize_lock_coordinator(
     """Serialize coordinator data for a lock."""
     coordinator = lock.coordinator
     data = coordinator.data if coordinator is not None else {}
-    managed_slots = _get_managed_slots(hass, lock.lock.entity_id)
+    managed_slots = get_managed_slots(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
 
