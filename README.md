@@ -100,7 +100,7 @@ for configuration options and setup guidance.
 
 ## Inspiration
 
-I spent some time contributing to [keymaster](https://github.com/FutureTense/keymaster),
+I am a [keymaster](https://github.com/FutureTense/keymaster) maintainer,
 and what I learned working on it, and the regular complaints users had about it generating
 too many automations, entities, etc. led me to take a different approach. This isn't a
 knock on `keymaster`, unfortunately a lot of what is built in this integration wasn't
