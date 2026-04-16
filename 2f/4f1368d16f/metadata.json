@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2f4f1368d16f",
+  "strategy": "manual-commit",
+  "branch": "refactor/reduce-flow-duplication",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2f/4f1368d16f/0/metadata.json",
+      "transcript": "/2f/4f1368d16f/0/full.jsonl",
+      "content_hash": "/2f/4f1368d16f/0/content_hash.txt",
+      "prompt": "/2f/4f1368d16f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11519,
+    "cache_creation_tokens": 6467684,
+    "cache_read_tokens": 620279397,
+    "output_tokens": 485298,
+    "api_call_count": 1552
+  }
+}
