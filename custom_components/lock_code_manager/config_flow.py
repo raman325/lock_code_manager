@@ -88,31 +88,6 @@ SLOTS_YAML_SELECTOR = sel.ObjectSelector(sel.ObjectSelectorConfig())
 
 POSITIVE_INT = vol.All(vol.Coerce(int), vol.Range(min=1))
 
-# Existing code status messages for description_placeholders.
-# These are set dynamically because HA config flows don't support conditional
-# description templates — the step description is a single string in strings.json
-# with {existing_code_msg} as a placeholder.
-EXISTING_CODE_MSG_READABLE = (
-    " An existing PIN ({existing_pin}) was detected and prefilled."
-    " You can keep it or enter a new one."
-)
-EXISTING_CODE_MSG_UNREADABLE = (
-    " An existing PIN was detected but could not be read."
-    " It will be replaced when this slot is configured."
-)
-EXISTING_CODE_MSG_CONFLICT = (
-    " Different PINs were detected across your locks for this slot."
-    " The existing codes will be replaced."
-)
-EXISTING_CODE_MSG_READABLE_YAML = " An existing PIN ({existing_pin}) was detected."
-EXISTING_CODE_MSG_UNREADABLE_YAML = (
-    " An existing PIN was detected but could not be read. It will be cleared."
-)
-EXISTING_CODE_MSG_CONFLICT_YAML = (
-    " Different PINs were detected across your locks."
-    " The existing codes will be cleared."
-)
-
 
 def _check_common_slots(
     hass: HomeAssistant,
@@ -247,11 +222,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self.slots_to_configure: list[int] = []
-        self._auto_clear = False
         self._existing_codes: dict[str, dict[int, str | SlotCode]] = {}
         self._lock_instances: dict[str, Any] = {}
         self._slots_to_clear: list[int] = []
-        self._yaml_slots_to_review: list[int] = []
+        self._next_after_confirm: str = ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -287,37 +261,13 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             last_step=False,
         )
 
-    def _get_existing_code_for_slot(
-        self, slot_num: int
-    ) -> tuple[str | None, str | None]:
-        """Check cached existing codes for a slot across all locks.
-
-        Returns (status, pin) where status is one of:
-        - ("readable", pin_value) — all locks have the same readable code
-        - ("unreadable", None) — code exists but is masked on all locks
-        - ("conflict", None) — locks disagree (different readable codes, or
-          mixed readable and unreadable)
-        - (None, None) — no existing code for this slot
-        """
-        codes_for_slot: list[str | SlotCode] = [
-            codes[slot_num]
-            for codes in self._existing_codes.values()
-            if slot_num in codes
-        ]
-        if not codes_for_slot:
-            return None, None
-
-        readable = [c for c in codes_for_slot if not isinstance(c, SlotCode)]
-        if not readable:
-            return "unreadable", None
-
-        # All locks must have readable codes and agree on the same PIN
-        if len(readable) != len(codes_for_slot):
-            return "conflict", None
-        unique_pins = {str(c) for c in readable}
-        if len(unique_pins) == 1:
-            return "readable", str(readable[0])
-        return "conflict", None
+    def _slots_with_existing_codes(self, slot_nums: Iterable[int]) -> list[int]:
+        """Return sorted list of slot numbers that have existing codes on any lock."""
+        return sorted(
+            slot_num
+            for slot_num in slot_nums
+            if any(slot_num in codes for codes in self._existing_codes.values())
+        )
 
     async def _create_entry_and_clear_slots(self) -> dict[str, Any]:
         """Build entry creation result, clear existing codes, then return."""
@@ -369,7 +319,6 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             start = user_input[CONF_START_SLOT]
             num_slots = user_input[CONF_NUM_SLOTS]
-            self._auto_clear = user_input.get("auto_clear_existing", False)
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass, self.data[CONF_LOCKS], list(range(start, start + num_slots))
             )
@@ -377,6 +326,12 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders.update(additional_placeholders)
             if not errors:
                 self.slots_to_configure = list(range(start, start + num_slots))
+                self._slots_to_clear = self._slots_with_existing_codes(
+                    self.slots_to_configure
+                )
+                if self._slots_to_clear:
+                    self._next_after_confirm = "code_slot"
+                    return await self.async_step_existing_codes_confirm()
                 return await self.async_step_code_slot()
 
         return self.async_show_form(
@@ -387,7 +342,6 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(
                         CONF_NUM_SLOTS, default=DEFAULT_NUM_SLOTS
                     ): POSITIVE_INT,
-                    vol.Optional("auto_clear_existing", default=False): cv.boolean,
                 }
             ),
             errors=errors,
@@ -426,43 +380,14 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             if not errors:
                 slot_num = int(self.slots_to_configure.pop(0))
                 self.data[CONF_SLOTS][slot_num] = CODE_SLOT_SCHEMA(user_input)
-                # Track slot for clearing after entry creation
-                if self._get_existing_code_for_slot(slot_num)[0] is not None:
-                    self._slots_to_clear.append(slot_num)
                 if not self.slots_to_configure:
                     return await self._create_entry_and_clear_slots()
                 current_slot = self.slots_to_configure[0]
                 description_placeholders["slot_num"] = current_slot
 
-        # Check for existing code on locks for the current slot
-        suggested_values: dict[str, Any] = {}
-        if self._auto_clear:
-            description_placeholders["existing_code_msg"] = ""
-        else:
-            status, existing_pin = self._get_existing_code_for_slot(current_slot)
-            if status == "readable":
-                description_placeholders["existing_code_msg"] = (
-                    EXISTING_CODE_MSG_READABLE.format(existing_pin=existing_pin)
-                )
-                suggested_values[CONF_PIN] = existing_pin
-            elif status == "unreadable":
-                description_placeholders["existing_code_msg"] = (
-                    EXISTING_CODE_MSG_UNREADABLE
-                )
-            elif status == "conflict":
-                description_placeholders["existing_code_msg"] = (
-                    EXISTING_CODE_MSG_CONFLICT
-                )
-            else:
-                description_placeholders["existing_code_msg"] = ""
-
-        schema = self.add_suggested_values_to_schema(
-            UI_CODE_SLOT_SCHEMA, suggested_values
-        )
-
         return self.async_show_form(
             step_id="code_slot",
-            data_schema=schema,
+            data_schema=UI_CODE_SLOT_SCHEMA,
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=len(self.slots_to_configure) == 1,
@@ -475,7 +400,6 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if not user_input:
             user_input = {}
         if user_input:
-            self._auto_clear = user_input.get("auto_clear_existing", False)
             try:
                 slots = CODE_SLOTS_SCHEMA(user_input[CONF_SLOTS])
             except vol.Invalid as err:
@@ -490,22 +414,10 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
                 if not errors:
                     self.data[CONF_SLOTS] = slots
-                    if self._auto_clear:
-                        # Auto-clear all slots with existing codes
-                        self._slots_to_clear = [
-                            slot_num
-                            for slot_num in slots
-                            if self._get_existing_code_for_slot(slot_num)[0] is not None
-                        ]
-                        return await self._create_entry_and_clear_slots()
-                    # Check for existing codes in configured slots
-                    self._yaml_slots_to_review = [
-                        slot_num
-                        for slot_num in slots
-                        if self._get_existing_code_for_slot(slot_num)[0] is not None
-                    ]
-                    if self._yaml_slots_to_review:
-                        return await self.async_step_yaml_slot_review()
+                    self._slots_to_clear = self._slots_with_existing_codes(slots.keys())
+                    if self._slots_to_clear:
+                        self._next_after_confirm = "create_entry"
+                        return await self.async_step_existing_codes_confirm()
                     return self.async_create_entry(title=self.title, data=self.data)
 
         return self.async_show_form(
@@ -513,7 +425,6 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_SLOTS, default=user_input): SLOTS_YAML_SELECTOR,
-                    vol.Optional("auto_clear_existing", default=False): cv.boolean,
                 }
             ),
             errors=errors,
@@ -521,51 +432,37 @@ class LockCodeManagerFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             last_step=True,
         )
 
-    async def async_step_yaml_slot_review(
+    async def async_step_existing_codes_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Review existing codes for YAML-configured slots one at a time."""
-        if user_input is not None:
-            slot_num = self._yaml_slots_to_review.pop(0)
-            if user_input.get("adopt"):
-                status, pin = self._get_existing_code_for_slot(slot_num)
-                if status == "readable" and pin:
-                    self.data[CONF_SLOTS][slot_num][CONF_PIN] = pin
-                    self.data[CONF_SLOTS][slot_num][CONF_ENABLED] = True
-            # Track slot for clearing after entry creation
-            self._slots_to_clear.append(slot_num)
-            if not self._yaml_slots_to_review:
-                return await self._create_entry_and_clear_slots()
-
-        if not self._yaml_slots_to_review:
-            return await self._create_entry_and_clear_slots()
-
-        current_slot = self._yaml_slots_to_review[0]
-        status, pin = self._get_existing_code_for_slot(current_slot)
-
-        description_placeholders: dict[str, Any] = {"slot_num": current_slot}
-        if status == "readable":
-            description_placeholders["existing_code_msg"] = (
-                EXISTING_CODE_MSG_READABLE_YAML.format(existing_pin=pin)
-            )
-            schema = vol.Schema({vol.Required("adopt", default=True): cv.boolean})
-        elif status == "conflict":
-            description_placeholders["existing_code_msg"] = (
-                EXISTING_CODE_MSG_CONFLICT_YAML
-            )
-            schema = vol.Schema({})
-        else:
-            description_placeholders["existing_code_msg"] = (
-                EXISTING_CODE_MSG_UNREADABLE_YAML
-            )
-            schema = vol.Schema({})
-
-        return self.async_show_form(
-            step_id="yaml_slot_review",
-            data_schema=schema,
-            description_placeholders=description_placeholders,
-            last_step=len(self._yaml_slots_to_review) == 1,
+        """Confirm clearing of existing codes before proceeding."""
+        return self.async_show_menu(
+            step_id="existing_codes_confirm",
+            menu_options=["existing_codes_clear", "existing_codes_cancel"],
+            description_placeholders={
+                "slots": ", ".join(str(s) for s in self._slots_to_clear),
+            },
         )
+
+    async def async_step_existing_codes_clear(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """User confirmed clearing. Proceed to next step."""
+        return await self._continue_after_confirm()
+
+    async def async_step_existing_codes_cancel(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """User cancelled. Abort the flow."""
+        return self.async_abort(reason="existing_codes_cancelled")
+
+    async def _continue_after_confirm(self) -> dict[str, Any]:
+        """Dispatch to the next step after the user confirms clearing."""
+        if self._next_after_confirm == "code_slot":
+            return await self.async_step_code_slot()
+        if self._next_after_confirm == "create_entry":
+            return await self._create_entry_and_clear_slots()
+        return self.async_abort(reason="unknown")
 
     async def async_step_reauth(self, user_input: dict[str, Any]):
         """Handle import flow step."""

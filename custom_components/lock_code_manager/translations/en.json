@@ -2,6 +2,7 @@
   "config": {
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
+      "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
       "locks_updated": "The locks for your config entry have been updated."
     },
     "error": {
@@ -27,8 +28,16 @@
           "number_of_uses": "Number of Uses",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:**{existing_code_msg}\n\nA slot is active when all conditions are met: the condition entity (if configured) is 'on', and Number of Uses (if configured) is greater than 0. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
+        "description": "**Configure slot {slot_num}:** A slot is active when all conditions are met: the condition entity (if configured) is 'on', and Number of Uses (if configured) is greater than 0. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
         "title": "Configure Slot {slot_num}"
+      },
+      "existing_codes_confirm": {
+        "title": "Existing Codes Detected",
+        "description": "Existing codes were detected on the following slots: {slots}\n\nProceeding will clear these codes from the lock(s). Cancel if you want to back out.",
+        "menu_options": {
+          "existing_codes_clear": "Clear existing codes and continue",
+          "existing_codes_cancel": "Cancel setup"
+        }
       },
       "reauth": {
         "data": {
@@ -39,12 +48,8 @@
       },
       "ui": {
         "data": {
-          "auto_clear_existing": "Auto-clear existing codes",
           "num_slots": "Number of slots",
           "start_slot": "Start from slot #"
-        },
-        "data_description": {
-          "auto_clear_existing": "When enabled, any existing codes on the lock for the selected slots will be automatically cleared without prompting. When disabled, you will be shown detected codes and given the option to keep or replace them."
         },
         "description": "Configure slots for all codes you want on the lock. You can add and remove slots later using the integration services.",
         "title": "How Many Slots?"
@@ -57,20 +62,9 @@
         "description": "Give this configuration a unique name (e.g. `House Locks`) and select the locks you would like to manage with it.",
         "title": "Lock Code Manager"
       },
-      "yaml_slot_review": {
-        "data": {
-          "adopt": "Adopt existing PIN"
-        },
-        "description": "**Slot {slot_num}:**{existing_code_msg}",
-        "title": "Review Existing Code — Slot {slot_num}"
-      },
       "yaml": {
         "data": {
-          "auto_clear_existing": "Auto-clear existing codes",
           "slots": "Slots YAML"
-        },
-        "data_description": {
-          "auto_clear_existing": "When enabled, any existing codes on the lock for the configured slots will be automatically cleared without prompting. When disabled, you will be asked to adopt or clear each detected code individually."
         },
         "description": "The config is expected to be a dictionary where the key is the slot number. For more information, check the docs.",
         "title": "Configure slots"
