@@ -2,7 +2,9 @@
   "config": {
     "abort": {
       "already_configured": "Lock Code Manager config entry with same slugified name already exists.",
-      "locks_updated": "The locks for your config entry have been updated."
+      "existing_codes_cancelled": "Setup cancelled. Existing codes were not modified.",
+      "locks_updated": "The locks for your config entry have been updated.",
+      "unknown": "An unexpected error occurred during setup."
     },
     "error": {
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
@@ -30,6 +32,14 @@
         "description": "**Configure slot {slot_num}:** A slot is active when all conditions are met: the condition entity (if configured) is 'on', and Number of Uses (if configured) is greater than 0. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
         "title": "Configure Slot {slot_num}"
       },
+      "existing_codes_confirm": {
+        "title": "Existing Codes Detected",
+        "description": "Existing codes were detected on the following slots: {slots}\n\nProceeding will clear these codes from the lock(s). Cancel if you want to back out.",
+        "menu_options": {
+          "existing_codes_clear": "Clear existing codes and continue",
+          "existing_codes_cancel": "Cancel setup"
+        }
+      },
       "reauth": {
         "data": {
           "locks": "Locks"
@@ -42,7 +52,7 @@
           "num_slots": "Number of slots",
           "start_slot": "Start from slot #"
         },
-        "description": "Configure slots for all codes you want on the lock (existing user codes for the slot range specified will be cleared). You can add and remove slots later using the integration services.",
+        "description": "Configure slots for all codes you want on the lock. You can add and remove slots later using the integration services.",
         "title": "How Many Slots?"
       },
       "user": {
@@ -108,6 +118,10 @@
     }
   },
   "options": {
+    "abort": {
+      "existing_codes_cancelled": "Update cancelled. Existing codes were not modified.",
+      "unknown": "An unexpected error occurred while updating options."
+    },
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
       "locks_already_configured": "The following lock(s) are already managed by another config entry: {locks}."
@@ -120,6 +134,14 @@
         },
         "description": "Update the locks that are associated with this config entry and/or the slot configurations.",
         "title": "Lock Code Manager"
+      },
+      "existing_codes_confirm": {
+        "title": "Existing Codes Detected",
+        "description": "Existing codes were detected on newly-added slot(s): {slots}\n\nProceeding will clear these codes from the lock(s). Cancel to back out without saving any changes.",
+        "menu_options": {
+          "existing_codes_clear": "Clear existing codes and continue",
+          "existing_codes_cancel": "Cancel update"
+        }
       }
     }
   },

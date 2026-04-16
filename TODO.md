@@ -2,9 +2,6 @@
 
 ## User-Facing Features
 
-- **Config flow: lock reset step** — Check for existing unmanaged codes on the
-  lock during setup. User can cancel or proceed (all slots cleared, LCM re-sets
-  managed codes immediately).
 - **Config flow: conflicting integration detection** — Warn if Keymaster or other
   code management integrations are detected at setup.
 - **Clear all unmanaged codes** — Button or service to clear unmanaged code slots
@@ -55,6 +52,30 @@
 
 ## Code Quality
 
+- **Provider exception hierarchy** — Introduce `LockCodeManagerProviderError`
+  as a parent for exceptions raised by lock providers (`LockDisconnected`,
+  `CodeRejectedError`/`DuplicateCodeError`, `ProviderNotImplementedError`).
+  `EntityNotFoundError` stays at the `LockCodeManagerError` base since it's
+  about LCM's internal entity-registry view, not the lock itself. The
+  internal `_LockQuerySkipped` sentinel in `config_flow.py` also stays at
+  the base. Once the parent exists, `_async_get_all_codes` can collapse its
+  two-try workaround into a single try with three `except` arms
+  (skip / provider-failure / unexpected). Touches every provider and every
+  catch site in coordinator/sync/repair — file as its own PR for focused
+  review of the classification.
+- **Config flow + update listener: shared diff helper** — The options flow's
+  added-`(lock, slot)`-pair calculation in
+  `LockCodeManagerOptionsFlow._maybe_confirm_then_persist` and the
+  `slots_to_add/remove` + `locks_to_add/remove` calculation in
+  `__init__.py:async_update_listener` compute related views of the same
+  old-vs-new diff. Extract a single `compute_entry_config_diff(old, new)`
+  helper in `data.py` returning a frozen dataclass with all three views
+  (slot dict diff, lock list diff, cartesian pair diff). Single source of
+  truth for slot-key int/str normalization. While there: collapse the two
+  near-identical `_create_entry_and_clear_slots` /
+  `_persist_options_and_clear_slots` methods into one mixin helper, and
+  extract the `scoped_codes` builder in `_maybe_confirm_then_persist` into
+  a named helper for readability.
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.
   Document when to use each.
 - **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
