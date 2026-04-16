@@ -52,17 +52,6 @@
 
 ## Code Quality
 
-- **Provider exception hierarchy** — Introduce `LockCodeManagerProviderError`
-  as a parent for exceptions raised by lock providers (`LockDisconnected`,
-  `CodeRejectedError`/`DuplicateCodeError`, `ProviderNotImplementedError`).
-  `EntityNotFoundError` stays at the `LockCodeManagerError` base since it's
-  about LCM's internal entity-registry view, not the lock itself. The
-  internal `_LockQuerySkipped` sentinel in `config_flow.py` also stays at
-  the base. Once the parent exists, `_async_get_all_codes` can collapse its
-  two-try workaround into a single try with three `except` arms
-  (skip / provider-failure / unexpected). Touches every provider and every
-  catch site in coordinator/sync/repair — file as its own PR for focused
-  review of the classification.
 - **Config flow + update listener: shared diff helper** — The options flow's
   added-`(lock, slot)`-pair calculation in
   `LockCodeManagerOptionsFlow._maybe_confirm_then_persist` and the

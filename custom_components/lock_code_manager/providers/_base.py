@@ -141,13 +141,16 @@ class BaseLock:
 
     Exception Handling
     ------------------
-    Provider implementations should raise LockCodeManagerError (or subclasses like
-    LockDisconnected) for lock communication failures. The coordinator catches
-    LockCodeManagerError and handles it appropriately (e.g., retrying, logging).
+    Provider implementations should raise LockCodeManagerProviderError (or one of
+    its subclasses: LockDisconnected, CodeRejectedError/DuplicateCodeError,
+    ProviderNotImplementedError) for any failure originating from the lock or
+    its integration. The coordinator catches LockCodeManagerError (the broader
+    parent) and handles it appropriately (e.g., retrying, logging).
 
-    Do NOT raise generic exceptions or HomeAssistantError directly - always use
-    LCM-derived exceptions so the coordinator can distinguish lock failures from
-    other errors.
+    Do NOT raise generic exceptions, HomeAssistantError, or the bare
+    LockCodeManagerError directly — always use LockCodeManagerProviderError
+    or a subclass so callers can distinguish provider failures from
+    LCM-internal exceptions.
     """
 
     hass: HomeAssistant = field(repr=False)

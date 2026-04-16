@@ -25,7 +25,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..data import get_managed_slots
-from ..exceptions import LockCodeManagerError, LockDisconnected
+from ..exceptions import LockCodeManagerProviderError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
@@ -107,7 +107,7 @@ class SchlageLock(BaseLock):
             ) from err
 
         if not isinstance(response, dict):
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Schlage get_codes returned malformed response for {entity_id}: "
                 f"expected dict, got {type(response).__name__}"
             )
@@ -115,7 +115,7 @@ class SchlageLock(BaseLock):
         # Platform entity services wrap the response per entity_id.
         entity_response = response.get(entity_id, response)
         if not isinstance(entity_response, dict):
-            raise LockCodeManagerError(
+            raise LockCodeManagerProviderError(
                 f"Schlage get_codes returned malformed entity response for "
                 f"{entity_id}: expected dict, got {type(entity_response).__name__}"
             )
@@ -161,7 +161,7 @@ class SchlageLock(BaseLock):
         """Return whether the Schlage lock device is available for commands."""
         try:
             await self._async_get_codes()
-        except (LockDisconnected, LockCodeManagerError) as err:
+        except LockCodeManagerProviderError as err:
             LOGGER.debug(
                 "Lock %s: availability check failed: %s",
                 self.lock.entity_id,

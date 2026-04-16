@@ -36,7 +36,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
-from .exceptions import LockCodeManagerError
+from .exceptions import LockCodeManagerError, LockCodeManagerProviderError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -124,11 +124,9 @@ class _LockQuerySkipped(LockCodeManagerError):
 
     Used internally by ``_async_build_lock_instance`` to signal one of the
     three expected setup-time skip conditions (missing entity, unsupported
-    platform, missing config entry). Subclasses ``LockCodeManagerError`` so
-    it belongs to the project's exception family, but is caught separately
-    from provider-raised ``LockCodeManagerError`` (e.g. ``LockDisconnected``)
-    so setup-time skips log at DEBUG and real provider failures log at
-    WARNING.
+    platform, missing config entry). Subclasses ``LockCodeManagerError`` (not
+    ``LockCodeManagerProviderError``) because it doesn't originate from a
+    provider — the lock provider is never even constructed.
     """
 
 
@@ -189,9 +187,11 @@ async def _async_get_all_codes(
     - Dict keyed by lock entity ID to temporary lock provider instances, for
       reuse in clearing slots.
 
-    Locks are skipped (with logging) for three failure modes:
+    Locks are skipped (with logging) for these failure modes:
     - Setup-time skip (entity missing, unsupported platform, etc.) → DEBUG
     - Provider failure (e.g. ``LockDisconnected``) → WARNING with details
+    - Bare ``LockCodeManagerError`` from a provider that hasn't migrated
+      to ``LockCodeManagerProviderError`` → WARNING with details
     - Unexpected exception → WARNING with traceback
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
@@ -203,16 +203,27 @@ async def _async_get_all_codes(
             lock_instance = _async_build_lock_instance(
                 hass, dev_reg, ent_reg, lock_entity_id
             )
+            usercodes = await lock_instance.async_internal_get_usercodes()
         except _LockQuerySkipped:
             # Already logged by _async_build_lock_instance with the
             # appropriate level for the specific skip reason
             continue
-
-        try:
-            usercodes = await lock_instance.async_internal_get_usercodes()
-        except LockCodeManagerError as err:
+        except LockCodeManagerProviderError as err:
             # Real provider failure (e.g. LockDisconnected) — surface it
             # so users can see why a lock's codes weren't checked
+            _LOGGER.warning(
+                "Failed to get usercodes from %s: %s",
+                lock_entity_id,
+                err,
+            )
+            continue
+        except LockCodeManagerError as err:
+            # Defensive: a provider raised the bare base class. Treat as
+            # a real failure (not a setup-time skip — those use
+            # _LockQuerySkipped) but warn without traceback so it stays
+            # actionable. All in-tree providers raise
+            # LockCodeManagerProviderError; this catches third-party or
+            # not-yet-migrated providers.
             _LOGGER.warning(
                 "Failed to get usercodes from %s: %s",
                 lock_entity_id,

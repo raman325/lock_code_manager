@@ -14,6 +14,22 @@ class LockCodeManagerError(HomeAssistantError):
     """Base class for lock_code_manager exceptions."""
 
 
+class LockCodeManagerProviderError(LockCodeManagerError):
+    """Base class for exceptions raised by lock providers.
+
+    Subclasses cover real provider-side failures: communication problems
+    (``LockDisconnected``), the lock rejecting a code (``CodeRejectedError``,
+    ``DuplicateCodeError``), or the provider declining to implement an
+    operation (``ProviderNotImplementedError``).
+
+    LCM-internal exceptions (e.g. ``EntityNotFoundError``, the
+    ``_LockQuerySkipped`` sentinel in the config flow) stay at the
+    ``LockCodeManagerError`` level. Catching this class lets callers say
+    "did this error come from the lock provider?" without enumerating
+    every provider error type.
+    """
+
+
 class EntityNotFoundError(LockCodeManagerError):
     """Raise when en entity is not found."""
 
@@ -25,7 +41,7 @@ class EntityNotFoundError(LockCodeManagerError):
         super().__init__(f"Entity not found for lock {lock} slot {slot_num} key {key}")
 
 
-class CodeRejectedError(LockCodeManagerError):
+class CodeRejectedError(LockCodeManagerProviderError):
     """Raised when the lock will not accept a PIN on a slot."""
 
     def __init__(self, code_slot: int, lock_entity_id: str, reason: str | None = None):
@@ -66,17 +82,18 @@ class DuplicateCodeError(CodeRejectedError):
         )
 
 
-class LockDisconnected(LockCodeManagerError):
+class LockDisconnected(LockCodeManagerProviderError):
     """Raised when lock can't be communicated with."""
 
 
-class ProviderNotImplementedError(LockCodeManagerError, NotImplementedError):
+class ProviderNotImplementedError(LockCodeManagerProviderError, NotImplementedError):
     """
     Raised when a provider method is not implemented.
 
     This exception should be raised by BaseLock methods that must be overridden
-    by provider subclasses. It combines LockCodeManagerError (so the coordinator
-    can catch it uniformly) with NotImplementedError (for standard Python semantics).
+    by provider subclasses. It combines LockCodeManagerProviderError (so the
+    coordinator can catch it uniformly with other provider failures) with
+    NotImplementedError (for standard Python semantics).
     """
 
     def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
