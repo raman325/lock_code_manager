@@ -598,12 +598,17 @@ class BaseLock:
         )
 
     async def async_is_integration_connected(self) -> bool:
-        """Return whether the integration's client/driver/broker is connected."""
-        self._raise_not_implemented(
-            "async_is_integration_connected",
-            "Override this method to report whether the underlying "
-            "integration is connected.",
-        )
+        """Return whether the integration's client/driver/broker is connected.
+
+        Default: ``True`` iff the lock's parent config entry is loaded.
+        Providers override when "the integration is connected" means
+        something more specific than "config entry loaded" — e.g. Z-Wave
+        JS checks the websocket client state separately from the entry
+        state.
+        """
+        if not self.lock_config_entry:
+            return False
+        return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     @final
     async def async_internal_is_integration_connected(self) -> bool:
@@ -826,35 +831,30 @@ class BaseLock:
         return await self._execute_rate_limited("get", self.async_get_usercodes)
 
     @final
-    def call_service(
-        self,
-        domain: str,
-        service: str,
-        service_data: dict[str, Any] | None = None,
-        blocking: bool = True,
-    ):
-        """Call a hass service and log a failure on an error."""
-        try:
-            self.hass.services.call(
-                domain, service, service_data=service_data, blocking=blocking
-            )
-        except Exception as err:
-            LOGGER.error(
-                "Error calling %s.%s service call: %s", domain, service, str(err)
-            )
-
-    @final
     async def async_call_service(
         self,
         domain: str,
         service: str,
         service_data: dict[str, Any] | None = None,
+        target: dict[str, Any] | None = None,
         blocking: bool = True,
-    ):
-        """Call a hass service and re-raise failures as LockDisconnected."""
+        return_response: bool = False,
+    ) -> dict[str, Any] | None:
+        """Call a hass service and re-raise failures as LockDisconnected.
+
+        When ``return_response=True``, returns the service response (as a
+        dict) so callers don't have to write their own service-call wrapper
+        just to access response data. ``target`` mirrors HA's standard
+        target dict for platform-aware services.
+        """
         try:
-            await self.hass.services.async_call(
-                domain, service, service_data=service_data, blocking=blocking
+            return await self.hass.services.async_call(
+                domain,
+                service,
+                service_data=service_data,
+                target=target,
+                blocking=blocking,
+                return_response=return_response,
             )
         except Exception as err:
             LOGGER.error(

@@ -15,7 +15,7 @@ from typing import Any
 
 from matter_server.common.models import EventType
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
@@ -161,12 +161,6 @@ class MatterLock(BaseLock):
             self.lock.entity_id,
             lock_info,
         )
-
-    async def async_is_integration_connected(self) -> bool:
-        """Return whether the Matter integration is loaded."""
-        if not self.lock_config_entry:
-            return False
-        return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     async def async_is_device_available(self) -> bool:
         """Return whether the Matter lock device is available for commands."""

@@ -620,7 +620,11 @@ class TestListUsersErrors:
             hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value="not a dict")
         )
 
-        with pytest.raises(LockDisconnected, match="Failed to list users"):
+        # The base async_call_service wrapper re-raises any failure as
+        # LockDisconnected with the standard "Service call X.Y failed" prefix.
+        with pytest.raises(
+            LockDisconnected, match="Service call local_akuvox.list_users failed"
+        ):
             await akuvox_lock.async_get_usercodes()
 
     async def test_list_users_malformed_entity_response(

@@ -90,19 +90,23 @@ async def test_base(hass: HomeAssistant):
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     with pytest.raises(NotImplementedError):
         assert lock.domain
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_is_integration_connected()
-    # Note: hard_refresh, set, and clear operations now check connection first,
-    # so they raise NotImplementedError from is_integration_connected() instead of
-    # the expected error from the unimplemented method
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_hard_refresh_codes()
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_clear_usercode(1)
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_set_usercode(1, "1234")
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_get_usercodes()
+    # async_is_integration_connected has a sensible default — it returns
+    # False here because the test config entry isn't in the LOADED state.
+    assert await lock.async_internal_is_integration_connected() is False
+    # hard_refresh / set / clear / get all check connection first via
+    # _execute_rate_limited; since the default connection check returned
+    # False above, they raise LockDisconnected before reaching the abstract
+    # method that would raise NotImplementedError. Patch the connection
+    # check to True so we actually exercise the abstract methods.
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_hard_refresh_codes()
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_clear_usercode(1)
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_set_usercode(1, "1234")
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_get_usercodes()
 
 
 async def test_config_entry_state_change_resubscribes(
