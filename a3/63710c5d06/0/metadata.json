@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a363710c5d06",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-16T14:58:29.173178Z",
+  "branch": "refactor/reduce-flow-duplication",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "34bd1015b971",
+  "token_usage": {
+    "input_tokens": 11593,
+    "cache_creation_tokens": 6969559,
+    "cache_read_tokens": 639533899,
+    "output_tokens": 518163,
+    "api_call_count": 1596
+  },
+  "session_metrics": {
+    "turn_count": 163
+  }
+}
