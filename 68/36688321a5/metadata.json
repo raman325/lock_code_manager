@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6836688321a5",
+  "strategy": "manual-commit",
+  "branch": "refactor/entry-config-readers",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/68/36688321a5/0/metadata.json",
+      "transcript": "/68/36688321a5/0/full.jsonl",
+      "content_hash": "/68/36688321a5/0/content_hash.txt",
+      "prompt": "/68/36688321a5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11678,
+    "cache_creation_tokens": 7067881,
+    "cache_read_tokens": 679079168,
+    "output_tokens": 576295,
+    "api_call_count": 1671
+  }
+}
