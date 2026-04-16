@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d534a19d59ee",
+  "strategy": "manual-commit",
+  "branch": "docs/keymaster-maintainer-credit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d5/34a19d59ee/0/metadata.json",
+      "transcript": "/d5/34a19d59ee/0/full.jsonl",
+      "content_hash": "/d5/34a19d59ee/0/content_hash.txt",
+      "prompt": "/d5/34a19d59ee/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11451,
+    "cache_creation_tokens": 6396500,
+    "cache_read_tokens": 603979279,
+    "output_tokens": 444526,
+    "api_call_count": 1509
+  }
+}
