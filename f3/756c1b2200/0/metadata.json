@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f3756c1b2200",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-16T17:08:35.570947Z",
+  "branch": "refactor/consolidate-slot-models",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "032b8773bbca",
+  "token_usage": {
+    "input_tokens": 12032,
+    "cache_creation_tokens": 8024009,
+    "cache_read_tokens": 885422285,
+    "output_tokens": 757787,
+    "api_call_count": 1976
+  },
+  "session_metrics": {
+    "turn_count": 173
+  }
+}
