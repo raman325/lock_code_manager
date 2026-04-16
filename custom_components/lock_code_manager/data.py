@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -74,20 +75,25 @@ class EntryConfigDiff:
       uses to detect existing-codes hazards on newly-added pairs (catches
       both "new slot on existing lock" and "new lock with existing slot").
 
-    **Slot key types**: the slot-dict outputs (``slots_added``,
-    ``slots_removed``, ``slots_unchanged``) preserve the *new* mapping's
-    key type (``str`` if loaded from JSON storage, ``int`` if from
-    voluptuous validation). The cartesian pair sets always use ``int``
-    slot keys so they compare correctly even when ``old`` and ``new``
-    have different key types (a common situation: stored ``data`` is
-    ``str``-keyed, fresh user input from voluptuous is ``int``-keyed).
+    **Slot key types**: ``slots_added`` and ``slots_unchanged`` preserve
+    the *new* mapping's key type. ``slots_removed`` preserves the *old*
+    mapping's key type (its keys come from the old mapping). The
+    cartesian pair sets always use ``int`` slot keys so they compare
+    correctly even when ``old`` and ``new`` have different key types (a
+    common situation: stored ``data`` is ``str``-keyed, fresh user input
+    from voluptuous is ``int``-keyed).
+
+    **Immutability**: the dataclass is frozen, and all containers are
+    deeply immutable (``MappingProxyType`` for dicts, ``frozenset`` for
+    sets, ``tuple`` for lists) so callers can use this safely as cached
+    state without defensive copies.
     """
 
-    slots_added: dict[Any, Any]
-    slots_removed: dict[Any, Any]
-    slots_unchanged: set[Any]
-    locks_added: list[str]
-    locks_removed: list[str]
+    slots_added: Mapping[Any, Any]
+    slots_removed: Mapping[Any, Any]
+    slots_unchanged: frozenset[Any]
+    locks_added: tuple[str, ...]
+    locks_removed: tuple[str, ...]
     pairs_added: frozenset[tuple[str, int]]
     pairs_removed: frozenset[tuple[str, int]]
 
@@ -134,18 +140,20 @@ def compute_entry_config_diff(
     }
 
     return EntryConfigDiff(
-        slots_added={
-            k: v for k, v in raw_new_slots.items() if int(k) not in old_int_keys
-        },
-        slots_removed={
-            k: v for k, v in raw_old_slots.items() if int(k) not in new_int_keys
-        },
+        slots_added=MappingProxyType(
+            {k: v for k, v in raw_new_slots.items() if int(k) not in old_int_keys}
+        ),
+        slots_removed=MappingProxyType(
+            {k: v for k, v in raw_old_slots.items() if int(k) not in new_int_keys}
+        ),
         # Preserve the new mapping's key type — the listener's reconcile
         # loop indexes back into raw_new_slots / raw_old_slots and needs
         # the original key type to find the slot config dict.
-        slots_unchanged={k for k in raw_new_slots if int(k) in unchanged_int_keys},
-        locks_added=[lock for lock in new_locks if lock not in old_lock_set],
-        locks_removed=[lock for lock in old_locks if lock not in new_lock_set],
+        slots_unchanged=frozenset(
+            k for k in raw_new_slots if int(k) in unchanged_int_keys
+        ),
+        locks_added=tuple(lock for lock in new_locks if lock not in old_lock_set),
+        locks_removed=tuple(lock for lock in old_locks if lock not in new_lock_set),
         pairs_added=frozenset(new_pairs - old_pairs),
         pairs_removed=frozenset(old_pairs - new_pairs),
     )

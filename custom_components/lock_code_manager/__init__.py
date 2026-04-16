@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import logging
 from pathlib import Path
 from typing import Any
@@ -609,7 +610,7 @@ async def async_unload_entry(
 async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    locks_to_add: list[str],
+    locks_to_add: Sequence[str],
     new_slots: dict[int, Any],
     callbacks: Any,
     ent_reg: er.EntityRegistry,
