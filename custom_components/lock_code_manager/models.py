@@ -33,7 +33,7 @@ class SlotCode(StrEnum):
 
 
 @dataclass
-class LockCodeManagerConfigEntryData:
+class LockCodeManagerConfigEntryRuntimeData:
     """Runtime data for a Lock Code Manager config entry."""
 
     locks: dict[str, BaseLock] = field(default_factory=dict)
@@ -45,4 +45,4 @@ class LockCodeManagerConfigEntryData:
     config: EntryConfig = field(default_factory=EntryConfig.empty)
 
 
-type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryData]
+type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryRuntimeData]
