@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ef472a00add0",
+  "strategy": "manual-commit",
+  "branch": "docs/post-tier-1-cleanups",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ef/472a00add0/0/metadata.json",
+      "transcript": "/ef/472a00add0/0/full.jsonl",
+      "content_hash": "/ef/472a00add0/0/content_hash.txt",
+      "prompt": "/ef/472a00add0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13036,
+    "cache_creation_tokens": 8322452,
+    "cache_read_tokens": 1010203139,
+    "output_tokens": 862391,
+    "api_call_count": 2155
+  }
+}

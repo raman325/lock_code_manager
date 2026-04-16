@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ef472a00add0",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-16T18:54:28.209484Z",
+  "branch": "docs/post-tier-1-cleanups",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "d4bed63f3b30",
+  "token_usage": {
+    "input_tokens": 13036,
+    "cache_creation_tokens": 8322452,
+    "cache_read_tokens": 1010203139,
+    "output_tokens": 862391,
+    "api_call_count": 2155
+  },
+  "session_metrics": {
+    "turn_count": 180
+  }
+}
