@@ -116,7 +116,14 @@ class EntryConfig:
         ``old_config - new_config`` — note this is a *delta* (both adds
         and removes), not strict set subtraction. The result includes
         what changed in either direction.
+
+        Returns ``NotImplemented`` for non-``EntryConfig`` operands so
+        Python's operator protocol falls back to ``__rsub__`` and
+        ultimately raises a clear ``TypeError`` rather than letting the
+        misuse fail deep inside ``EntryConfigDiff.__post_init__``.
         """
+        if not isinstance(other, EntryConfig):
+            return NotImplemented
         return EntryConfigDiff(old=self, new=other)
 
     def with_slot_field_set(
@@ -235,8 +242,9 @@ class EntryConfigDiff:
         # or via the operator sugar on EntryConfig:
         diff = current_config - proposed_config
 
-    Either side may be ``None`` (treated as :meth:`EntryConfig.empty`)
-    for the "all added" / "all removed" cases.
+    Either side may be omitted (defaults to :meth:`EntryConfig.empty`)
+    for the "all added" / "all removed" cases — for example,
+    ``EntryConfigDiff(new=cfg)`` reads as "diff from nothing to cfg".
 
     Provides three views of the same diff so callers can ask the
     question that fits their need:

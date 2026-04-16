@@ -164,6 +164,25 @@ def test_subtraction_operator_is_diff_sugar() -> None:
     assert via_operator.has_changes is via_constructor.has_changes
 
 
+def test_subtraction_with_non_entry_config_raises_type_error() -> None:
+    """``cfg - non_config`` returns NotImplemented -> Python raises TypeError.
+
+    Without the isinstance guard, the operator would succeed and the
+    error would surface deep inside EntryConfigDiff.__post_init__ as
+    a confusing AttributeError ("'str' has no attribute 'slots'").
+    Returning NotImplemented lets Python's operator protocol surface
+    the standard "unsupported operand type(s)" message instead.
+    """
+    cfg = _cfg({CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}})
+
+    with pytest.raises(TypeError, match="unsupported operand"):
+        cfg - "not a config"  # type: ignore[operator]
+    with pytest.raises(TypeError, match="unsupported operand"):
+        cfg - {"locks": []}  # type: ignore[operator]
+    with pytest.raises(TypeError, match="unsupported operand"):
+        cfg - None  # type: ignore[operator]
+
+
 def test_diff_is_deeply_immutable() -> None:
     """EntryConfigDiff fields are immutable containers — safe as cached state.
 
