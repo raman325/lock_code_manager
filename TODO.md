@@ -52,26 +52,98 @@
 
 ## Code Quality
 
-- **Config flow + update listener: shared diff helper** — The options flow's
-  added-`(lock, slot)`-pair calculation in
-  `LockCodeManagerOptionsFlow._maybe_confirm_then_persist` and the
-  `slots_to_add/remove` + `locks_to_add/remove` calculation in
-  `__init__.py:async_update_listener` compute related views of the same
-  old-vs-new diff. Extract a single `compute_entry_config_diff(old, new)`
-  helper in `data.py` returning a frozen dataclass with all three views
-  (slot dict diff, lock list diff, cartesian pair diff). Single source of
-  truth for slot-key int/str normalization. While there: collapse the two
-  near-identical `_create_entry_and_clear_slots` /
-  `_persist_options_and_clear_slots` methods into one mixin helper, and
-  extract the `scoped_codes` builder in `_maybe_confirm_then_persist` into
-  a named helper for readability.
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.
   Document when to use each.
 - **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
   sensor entities to coordinator (survives entity recreation during config
   updates).
-- **Dataclass conversion** — Convert config entry data and internal dicts to typed
-  dataclasses with `from_dict`/`from_entry` class methods.
+- **EntryConfig: typed boundary container** — Introduce a frozen `EntryConfig`
+  dataclass in `data.py` as the single chokepoint for reading entry config.
+  Solves the long-standing str/int slot key inconsistency that HA's JSON
+  storage round-trip creates (visible today as defensive `slot_key = slot
+  if slot in d else str(slot)` patterns scattered across the codebase).
+
+  **Core shape:**
+
+  ```python
+  @dataclass(frozen=True, slots=True)
+  class EntryConfig:
+      locks: tuple[str, ...]
+      slots: Mapping[int, Mapping[str, Any]]  # always int keys
+
+      @classmethod
+      def from_entry(cls, entry: ConfigEntry) -> EntryConfig: ...
+      @classmethod
+      def from_mapping(cls, m: Mapping) -> EntryConfig: ...
+      def diff(self, other: EntryConfig) -> EntryConfigDiff: ...
+      def has_lock(self, lock_entity_id: str) -> bool: ...
+      def has_slot(self, slot_num: int) -> bool: ...
+      def with_slot_updated(self, slot_num: int, key: str, value: Any) -> EntryConfig: ...
+  ```
+
+  **Type boundary cleanup that lands with this:**
+
+  - Migrate readers off raw `entry.data[CONF_SLOTS]` / `entry.options[CONF_SLOTS]`
+    indexing onto `EntryConfig.from_entry(entry).slots`. Sites today:
+    `coordinator.py:89` (`get_expected_pin`), `entity.py:82/105`,
+    `helpers.py:146/191/209`, `websocket.py:194/1018`, providers `virtual.py`
+    `:80/93/121`, `__init__.py` listener locals, `config_flow.py:508/544`
+    write paths.
+  - `get_slot_data(entry, slot_num)` becomes `EntryConfig.from_entry(entry)
+    .slots.get(slot_num, {})` — one helper to delete.
+  - `get_entry_data(entry, key, default)` becomes `EntryConfig.from_entry(entry)
+    .locks` / `.slots` attribute access. Helper can be removed once all
+    callers are migrated.
+  - `get_managed_slots(hass, lock_entity_id)` keeps its signature but its body
+    iterates entries and calls `EntryConfig.from_entry(entry)` instead of
+    raw indexing.
+  - `find_entry_for_lock_slot(hass, lock_entity_id, code_slot)` similarly.
+  - `compute_entry_config_diff(old, new)` becomes a method
+    `EntryConfig.diff(self, other) -> EntryConfigDiff`. Module-level helper
+    can be removed (or kept as a thin shim during transition).
+  - `_async_setup_new_locks(hass, entry, locks_to_add, new_slots, ...)`
+    can take `EntryConfig` instead of separate `locks_to_add` + `new_slots`
+    args.
+
+  **Defensive patterns to delete after migration:**
+
+  - `helpers.py:146` `slot_key = slot_num if slot_num in slots else str(slot_num)`
+  - `helpers.py:191` and `:209` (same pattern)
+  - `websocket.py:194` `slots_data.get(slot_num) or slots_data.get(str(slot_num))`
+  - `websocket.py:1018` `if slot_num not in slots and str(slot_num) not in slots`
+  - `coordinator.py:89` `.get(str(slot_num), {})` becomes `.get(slot_num, {})`
+  - The `for code_slot in get_entry_data(entry, CONF_SLOTS, {})` patterns where
+    the int(code_slot) cast is needed (find_entry_for_lock_slot, get_managed_slots)
+
+  **Ancillary improvements worth bundling:**
+
+  - **TypedDict for slot config** — define `class SlotConfig(TypedDict)` with
+    fields `pin: NotRequired[str]`, `enabled: bool`, `name: NotRequired[str]`,
+    `entity_id: NotRequired[str]`, `number_of_uses: NotRequired[int]`. Replaces
+    `dict[str, Any]` typing for slot inner dicts; gives pyright real signal on
+    slot reads/writes.
+  - **Listener int normalization (was PR #1028 review item #3)** — once the
+    str-hardcoded readers are migrated, the listener can normalize its locals
+    (`curr_slots`, `new_slots`) to int keys without breaking downstream
+    consumers. Closes the latent `slots_unchanged` `KeyError` risk.
+  - **EntryConfigDiff source-key-type complexity goes away** — currently
+    preserves the source's str-or-int key type to avoid breaking the listener.
+    With normalized inputs guaranteed, all dict outputs can be `Mapping[int, ...]`
+    and the int-normalization-for-comparison-only special case in
+    `compute_entry_config_diff` simplifies to plain set ops.
+  - **Drop `get_entry_data`'s options-over-data fallback in callers that don't
+    need it** — once `EntryConfig.from_entry()` encapsulates the priority logic,
+    callers stop carrying that detail.
+  - **HA storage round-trip stays as-is** — JSON layer continues to serialize
+    int keys to str on disk; we don't fight it. Normalization is purely on
+    READ via `from_entry()`. This keeps the migration additive (no changes to
+    on-disk format, no migration version bump needed).
+
+  **Migration approach:** introduce `EntryConfig` and migrate one module at
+  a time (coordinator → entities → helpers → websocket → providers →
+  listener). Each step deletes its local defensive str-handling. Single PR
+  for the introduction + first migration target; follow-up PRs for the rest
+  to keep reviews focused.
 - **Websocket optimization** — Add optional `include_entities`/`include_locks`
   flags to `get_config_entry_data` command.
 - **Entity registry change detection** — Warn if LCM entity IDs change (reload

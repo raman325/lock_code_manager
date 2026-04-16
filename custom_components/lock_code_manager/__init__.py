@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import logging
 from pathlib import Path
 from typing import Any
@@ -78,7 +79,7 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import get_entry_data
+from .data import compute_entry_config_diff, get_entry_data
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -609,7 +610,7 @@ async def async_unload_entry(
 async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
-    locks_to_add: list[str],
+    locks_to_add: Sequence[str],
     new_slots: dict[int, Any],
     callbacks: Any,
     ent_reg: er.EntityRegistry,
@@ -757,7 +758,6 @@ async def async_update_listener(
 
     curr_slots: dict[int, Any] = {**config_entry.data.get(CONF_SLOTS, {})}
     new_slots: dict[int, Any] = {**config_entry.options.get(CONF_SLOTS, {})}
-    curr_locks: list[str] = [*config_entry.data.get(CONF_LOCKS, [])]
     new_locks: list[str] = [*config_entry.options.get(CONF_LOCKS, [])]
 
     # Strip number_of_uses from slots that didn't previously have it
@@ -780,15 +780,13 @@ async def async_update_listener(
         )
     await asyncio.gather(*setup_tasks.values())
 
-    # Identify changes that need to be made
-    slots_to_add: dict[int, Any] = {
-        k: v for k, v in new_slots.items() if k not in curr_slots
-    }
-    slots_to_remove: dict[int, Any] = {
-        k: v for k, v in curr_slots.items() if k not in new_slots
-    }
-    locks_to_add: list[str] = [lock for lock in new_locks if lock not in curr_locks]
-    locks_to_remove: list[str] = [lock for lock in curr_locks if lock not in new_locks]
+    # Identify changes that need to be made (single source of truth for the
+    # data-vs-options diff; same helper is used by the options-flow scan)
+    diff = compute_entry_config_diff(config_entry.data, config_entry.options)
+    slots_to_add = diff.slots_added
+    slots_to_remove = diff.slots_removed
+    locks_to_add = diff.locks_added
+    locks_to_remove = diff.locks_removed
 
     callbacks = runtime_data.callbacks
 
@@ -878,7 +876,7 @@ async def async_update_listener(
 
     # For all slots that are in both the old and new config, check if any of the
     # configuration options have changed
-    for slot_num in set(curr_slots).intersection(new_slots):
+    for slot_num in diff.slots_unchanged:
         await _async_reconcile_slot_entities(
             config_entry,
             slot_num,
@@ -897,5 +895,5 @@ async def async_update_listener(
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update
-    if slots_to_add or slots_to_remove or locks_to_add or locks_to_remove:
+    if diff.has_changes:
         _async_notify_lovelace_dashboards(hass)

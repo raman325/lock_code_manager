@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
+from functools import partial
 import logging
 import pkgutil
 from typing import Any
@@ -35,7 +36,7 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import get_entry_data
+from .data import compute_entry_config_diff, get_entry_data
 from .exceptions import LockCodeManagerError, LockCodeManagerProviderError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
@@ -244,6 +245,27 @@ async def _async_get_all_codes(
     return result, lock_instances
 
 
+def _scope_codes_to_pairs(
+    all_codes: dict[str, dict[int, str | SlotCode]],
+    lock_instances: dict[str, Any],
+    pairs: Iterable[tuple[str, int]],
+) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
+    """Filter raw query results to only the ``(lock, slot)`` pairs given.
+
+    Used by the options flow so the mixin's clearing logic cannot touch
+    already-managed ``(lock, slot)`` pairs even though they appear in the
+    raw query result. The mixin's ``_clear_existing_slot`` only iterates
+    pairs present in ``_all_codes``, so scoping there constrains the blast
+    radius without the mixin needing to know about pairs.
+    """
+    scoped_codes: dict[str, dict[int, str | SlotCode]] = {}
+    for lock, slot in pairs:
+        if (code := all_codes.get(lock, {}).get(slot)) is not None:
+            scoped_codes.setdefault(lock, {})[slot] = code
+    scoped_instances = {lock: lock_instances[lock] for lock in scoped_codes}
+    return scoped_codes, scoped_instances
+
+
 class _ExistingCodesFlowMixin:
     """Mixin providing existing-codes detection, confirm UI, and clearing.
 
@@ -310,6 +332,25 @@ class _ExistingCodesFlowMixin:
         self._slots_to_clear = []
         self._all_codes = {}
         self._lock_instances = {}
+
+    async def _clear_then_create_entry(
+        self, *, title: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Clear pending slots, then create the entry.
+
+        Used by both the config flow and the options flow as the persist
+        target after the user confirms clearing. Bind ``title``/``data``
+        via ``functools.partial`` when assigning ``_next_step``, or call
+        directly when no confirmation step is required.
+
+        Clearing happens BEFORE ``async_create_entry()`` because
+        ``async_create_entry()`` only builds a FlowResult dict — the entry
+        isn't persisted until after this step returns.
+        """
+        await self._clear_all_pending_slots()
+        return self.async_create_entry(  # type: ignore[attr-defined]
+            title=title, data=data
+        )
 
     async def async_step_existing_codes_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -389,17 +430,6 @@ class LockCodeManagerFlowHandler(
             last_step=False,
         )
 
-    async def _create_entry_and_clear_slots(self) -> dict[str, Any]:
-        """Clear existing codes (already user-authorized), then create entry.
-
-        The user explicitly confirmed clearing in the existing_codes_confirm
-        step, so we do it before creating the entry. async_create_entry()
-        only builds a FlowResult dict — the entry isn't persisted until
-        after this step returns.
-        """
-        await self._clear_all_pending_slots()
-        return self.async_create_entry(title=self.title, data=self.data)
-
     async def async_step_choose_path(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -477,7 +507,9 @@ class LockCodeManagerFlowHandler(
                 slot_num = int(self.slots_to_configure.pop(0))
                 self.data[CONF_SLOTS][slot_num] = CODE_SLOT_SCHEMA(user_input)
                 if not self.slots_to_configure:
-                    return await self._create_entry_and_clear_slots()
+                    return await self._clear_then_create_entry(
+                        title=self.title, data=self.data
+                    )
                 current_slot = self.slots_to_configure[0]
                 description_placeholders["slot_num"] = current_slot
 
@@ -512,7 +544,11 @@ class LockCodeManagerFlowHandler(
                     self.data[CONF_SLOTS] = slots
                     self._slots_to_clear = self._slots_with_existing_codes(slots.keys())
                     if self._slots_to_clear:
-                        self._next_step = self._create_entry_and_clear_slots
+                        self._next_step = partial(
+                            self._clear_then_create_entry,
+                            title=self.title,
+                            data=self.data,
+                        )
                         return await self.async_step_existing_codes_confirm()
                     return self.async_create_entry(title=self.title, data=self.data)
 
@@ -588,7 +624,6 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
     def __init__(self) -> None:
         """Initialize options flow."""
         self._init_existing_codes_state()
-        self._pending_options: dict[str, Any] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -648,45 +683,36 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
         current configuration. If any newly-added pair has a non-empty
         code on its lock, show the confirmation step before persisting.
         """
-        old_locks: Iterable[str] = get_entry_data(self.config_entry, CONF_LOCKS, [])
-        old_slots: Iterable[int] = get_entry_data(self.config_entry, CONF_SLOTS, {})
-        old_pairs = {(lock, int(slot)) for lock in old_locks for slot in old_slots}
-
-        new_locks = user_input[CONF_LOCKS]
-        new_slots = user_input[CONF_SLOTS]
-        new_pairs = {(lock, int(slot)) for lock in new_locks for slot in new_slots}
-
-        added_pairs = new_pairs - old_pairs
-        if not added_pairs:
+        # Use the same diff helper as the update listener so the "is this
+        # pair new?" definition stays in one place
+        old_data = {
+            CONF_LOCKS: get_entry_data(self.config_entry, CONF_LOCKS, []),
+            CONF_SLOTS: get_entry_data(self.config_entry, CONF_SLOTS, {}),
+        }
+        diff = compute_entry_config_diff(old_data, user_input)
+        if not diff.pairs_added:
             return self.async_create_entry(title="", data=user_input)
 
         # Query only the locks involved in newly-added pairs
-        locks_to_query = sorted({lock for lock, _ in added_pairs})
+        locks_to_query = sorted({lock for lock, _ in diff.pairs_added})
         ent_reg = er.async_get(self.hass)
         dev_reg = dr.async_get(self.hass)
         all_codes, lock_instances = await _async_get_all_codes(
             self.hass, dev_reg, ent_reg, locks_to_query
         )
 
-        # Scope _all_codes to ONLY the added pairs so the mixin's
-        # clearing logic doesn't touch already-managed (lock, slot) pairs
-        scoped_codes: dict[str, dict[int, str | SlotCode]] = {}
-        for lock, slot in added_pairs:
-            if (code := all_codes.get(lock, {}).get(slot)) is not None:
-                scoped_codes.setdefault(lock, {})[slot] = code
-        self._all_codes = scoped_codes
-        self._lock_instances = {lock: lock_instances[lock] for lock in scoped_codes}
+        # Scope to ONLY the added pairs so the mixin's clearing logic
+        # cannot touch already-managed (lock, slot) pairs
+        self._all_codes, self._lock_instances = _scope_codes_to_pairs(
+            all_codes, lock_instances, diff.pairs_added
+        )
 
-        added_slot_nums = {slot for _, slot in added_pairs}
+        added_slot_nums = {slot for _, slot in diff.pairs_added}
         self._slots_to_clear = self._slots_with_existing_codes(added_slot_nums)
         if not self._slots_to_clear:
             return self.async_create_entry(title="", data=user_input)
 
-        self._pending_options = user_input
-        self._next_step = self._persist_options_and_clear_slots
+        self._next_step = partial(
+            self._clear_then_create_entry, title="", data=user_input
+        )
         return await self.async_step_existing_codes_confirm()
-
-    async def _persist_options_and_clear_slots(self) -> dict[str, Any]:
-        """Clear confirmed slots, then persist the pending options."""
-        await self._clear_all_pending_slots()
-        return self.async_create_entry(title="", data=self._pending_options)
