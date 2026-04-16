@@ -58,52 +58,47 @@
   sensor entities to coordinator (survives entity recreation during config
   updates).
 - **EntryConfig migration** — Multi-stage refactor centralizing entry-config
-  reads through a typed `EntryConfig` dataclass to eliminate the str/int slot
-  key inconsistency that HA's JSON storage round-trip creates. **Stage 1
-  delivered in PR #1029**: introduced `EntryConfig` with `from_entry` /
-  `from_mapping` / `slot` / `has_slot` / `has_lock` / `empty`, cached it on
-  `runtime_data.config` (refreshed at the top of `async_update_listener` so
-  even entity-driven writes update the cache), and migrated readers in
-  `data.get_slot_data` / `get_managed_slots` / `find_entry_for_lock_slot`,
-  `coordinator.get_expected_pin`, and `websocket._get_condition_entity_id` /
-  `subscribe_code_slot` validator. The accessors absorb `int|str` slot_num
-  internally so call sites have no visible casts.
+  reads and writes through a typed `EntryConfig` dataclass to eliminate the
+  str/int slot key inconsistency that HA's JSON storage round-trip creates.
 
-  **Stage 2: writers** — Migrate sites that mutate `config_entry.data[CONF_SLOTS]`
-  directly off raw dict access. Affected sites:
+  **Stage 1 delivered in PR #1029**: introduced `EntryConfig` with
+  `from_entry` / `from_mapping` / `slot` / `has_slot` / `has_lock` / `empty`,
+  cached it on `runtime_data.config` (refreshed at the top of
+  `async_update_listener` so even entity-driven writes update the cache),
+  and migrated readers in `data.get_slot_data` / `get_managed_slots` /
+  `find_entry_for_lock_slot`, `coordinator.get_expected_pin`, and
+  `websocket._get_condition_entity_id` / `subscribe_code_slot` validator.
+  The accessors absorb `int|str` slot_num internally so call sites have no
+  visible casts.
 
-  - `entity._update_config_entry` (`entity.py:105`) — `data[CONF_SLOTS][self
-    .slot_num][self.key] = value`. Needs an `EntryConfig.with_slot_field_set
-    (slot_num, key, value)` immutable helper that returns a new `EntryConfig`,
-    plus a `to_dict()` for handing back to `async_update_entry`.
-  - `helpers.py:146` `slot_key = slot_num if slot_num in slots else str(slot_num)`
-  - `helpers.py:191` and `:209` (same defensive pattern around
-    `data[CONF_SLOTS][slot_key][CONF_ENTITY_ID]` set/delete)
-  - `config_flow.py:508/544` write paths — these construct fresh slot dicts
-    so they're already controlled, mostly want type-tightening.
+  **Stage 2 delivered (this PR)**: added immutable update API
+  (`with_slot_field_set`, `with_slot_field_removed`, `to_dict`) and migrated
+  every writer off raw `data[CONF_SLOTS][...]` mutation —
+  `entity._update_config_entry`, `helpers.async_set_slot_condition`,
+  `helpers.async_clear_slot_condition`, `helpers.get_slot_config` (drops
+  the defensive `slot if slot in slots else str(slot)` pattern). Also
+  deleted `get_entry_data` entirely after a survey showed 100% of its
+  callers were doing `CONF_LOCKS` or `CONF_SLOTS` lookups — all migrated
+  to `EntryConfig` (`__init__.py`, `helpers.py`, `config_flow.py`,
+  `websocket.py`).
 
-  After Stage 2, `runtime_data.config.slots` is the only authoritative view
-  and writers go through it.
-
-  **Stage 3: listener int-normalization** (was [PR #1028][pr-1028] review
-  item #3) — Once writers are migrated, the listener's `curr_slots` /
-  `new_slots` locals can normalize to int keys without breaking downstream
-  consumers. Closes the latent
+  **Stage 3 still pending: listener int-normalization** (was
+  [PR #1028][pr-1028] review item #3). With readers and writers all
+  consuming `EntryConfig` (which is always int-keyed internally), the
+  listener can finally normalize its `curr_slots` / `new_slots` locals
+  to int keys without breaking downstream. Closes the latent
   `slots_unchanged` `KeyError` risk and lets `EntryConfigDiff` drop its
   source-key-type preservation gymnastics (all dict outputs can be
   `Mapping[int, ...]`, the int-normalization-for-comparison-only special
   case in `compute_entry_config_diff` simplifies to plain set ops).
 
-  **Stage 4: API cleanup** — After the migration is end-to-end:
+  **Stage 4 still pending: API cleanup**:
 
   - `compute_entry_config_diff(old, new)` becomes a method
     `EntryConfig.diff(self, other) -> EntryConfigDiff`. Module-level helper
     can be removed.
   - `_async_setup_new_locks(hass, entry, locks_to_add, new_slots, ...)` takes
     `EntryConfig` instead of separate `locks_to_add` + `new_slots` args.
-  - `get_entry_data(entry, key, default)` callers that don't need the
-    options-over-data fallback can switch to `runtime_data.config.locks` /
-    `.slots`. Helper can eventually be removed.
   - `get_slot_data(entry, slot_num)` thin-wrapper can be removed; callers
     use `get_entry_config(entry).slot(slot_num)` directly.
 

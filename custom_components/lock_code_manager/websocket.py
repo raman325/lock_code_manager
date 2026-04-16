@@ -95,7 +95,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
-from .data import get_entry_config, get_entry_data
+from .data import get_entry_config
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -303,7 +303,7 @@ async def get_config_entry_data(
 
     """
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    entry_config = get_entry_config(config_entry)
 
     connection.send_result(
         msg["id"],
@@ -321,11 +321,10 @@ async def get_config_entry_data(
                     CONF_NAME: _get_lock_friendly_name(hass, lock),
                 }
                 for lock_id, lock in all_locks.items()
-                if lock_id in entry_lock_ids
+                if entry_config.has_lock(lock_id)
             ],
             CONF_SLOTS: {
-                k: v.get(CONF_ENTITY_ID)
-                for k, v in get_entry_data(config_entry, CONF_SLOTS, {}).items()
+                k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()
             },
         },
     )
@@ -411,9 +410,10 @@ def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
     """Return slot identifiers managed by LCM for a given lock."""
     managed_slots: set[Any] = set()
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
+        config = get_entry_config(entry)
+        if not config.has_lock(lock_entity_id):
             continue
-        for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
+        for slot_num in config.slots:
             managed_slots.update(_slot_variants(slot_num))
     return managed_slots
 
@@ -435,11 +435,12 @@ def _get_slot_entity_ids(
     ent_reg = er.async_get(hass)
 
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
+        config = get_entry_config(entry)
+        if not config.has_lock(lock_entity_id):
             continue
 
-        for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
-            slot_int = int(slot_num)
+        for slot_int in config.slots:
+            slot_num = slot_int
 
             # Build unique IDs for each entity type
             name_uid = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
@@ -688,7 +689,7 @@ def _get_slot_in_sync_entity_ids(
     """
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
-    lock_entity_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    lock_entity_ids = get_entry_config(config_entry).locks
 
     in_sync_map: dict[str, str] = {}
     for lock_entity_id in lock_entity_ids:
@@ -910,7 +911,7 @@ def _serialize_slot_card_data(
 
     # Build per-lock status
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    entry_lock_ids = get_entry_config(config_entry).locks
 
     locks_data: list[dict[str, Any]] = [
         _build_lock_status(
@@ -1128,7 +1129,7 @@ async def subscribe_code_slot(
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    entry_lock_ids = get_entry_config(config_entry).locks
 
     for lock_entity_id in entry_lock_ids:
         lock = all_locks.get(lock_entity_id)

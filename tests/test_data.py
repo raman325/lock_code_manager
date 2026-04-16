@@ -228,7 +228,7 @@ def test_entry_config_from_mapping_preserves_int_slot_keys() -> None:
 
 
 def test_entry_config_from_entry_options_preferred() -> None:
-    """from_entry prefers options over data, matching get_entry_data."""
+    """from_entry prefers options over data (the options-flow precedence)."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: ["lock.old"], CONF_SLOTS: {"1": _slot("old")}},
@@ -326,3 +326,123 @@ def test_get_entry_config_falls_back_when_runtime_data_lacks_config() -> None:
     result = get_entry_config(entry)
 
     assert result.locks == ("lock.fresh",)
+
+
+# --- Immutable update helper tests ---
+
+
+def test_with_slot_field_set_creates_slot_when_missing() -> None:
+    """with_slot_field_set creates the slot if it wasn't already present."""
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    )
+
+    updated = config.with_slot_field_set(2, "pin", "5678")
+
+    assert set(updated.slots.keys()) == {1, 2}
+    assert dict(updated.slots[2]) == {"pin": "5678"}
+
+
+def test_with_slot_field_set_updates_existing_field() -> None:
+    """with_slot_field_set replaces an existing field on an existing slot."""
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: _slot(pin="abc")}})
+
+    updated = config.with_slot_field_set(1, "pin", "xyz")
+
+    assert updated.slots[1]["pin"] == "xyz"
+    assert updated.slots[1]["enabled"] is True  # other fields preserved
+
+
+def test_with_slot_field_set_does_not_mutate_original() -> None:
+    """with_slot_field_set returns a new EntryConfig — original is untouched."""
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: _slot(pin="abc")}})
+
+    updated = config.with_slot_field_set(1, "pin", "xyz")
+
+    assert config.slots[1]["pin"] == "abc"  # unchanged
+    assert updated is not config
+    assert updated.slots[1]["pin"] == "xyz"
+
+
+def test_with_slot_field_set_accepts_str_slot_num() -> None:
+    """Normalizes the slot_num argument the same way has_slot does."""
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: _slot()}})
+
+    updated = config.with_slot_field_set("1", "pin", "new")
+
+    assert updated.slots[1]["pin"] == "new"
+
+
+def test_with_slot_field_set_output_is_deeply_immutable() -> None:
+    """The returned EntryConfig is frozen with read-only mappings, same as the input."""
+    config = EntryConfig.empty()
+    updated = config.with_slot_field_set(1, "pin", "1234")
+
+    with pytest.raises(TypeError):
+        updated.slots[1]["pin"] = "9999"  # type: ignore[index]
+
+
+def test_with_slot_field_removed_removes_key() -> None:
+    """with_slot_field_removed drops the named key from the slot config."""
+    config = EntryConfig.from_mapping(
+        {CONF_SLOTS: {1: {"pin": "1234", "enabled": True, "entity_id": "binary.a"}}}
+    )
+
+    updated = config.with_slot_field_removed(1, "entity_id")
+
+    assert "entity_id" not in updated.slots[1]
+    assert updated.slots[1]["pin"] == "1234"  # other fields preserved
+
+
+def test_with_slot_field_removed_is_noop_when_absent() -> None:
+    """Returns self (same instance) when there's nothing to remove."""
+    config = EntryConfig.from_mapping({CONF_SLOTS: {1: _slot()}})
+
+    # Slot exists but key doesn't
+    assert config.with_slot_field_removed(1, "entity_id") is config
+    # Slot doesn't exist at all
+    assert config.with_slot_field_removed(99, "pin") is config
+
+
+def test_to_dict_round_trips_through_from_mapping() -> None:
+    """to_dict → from_mapping reconstructs an equivalent EntryConfig.
+
+    Guards the write path used by entity._update_config_entry and the
+    helpers write functions: they build a new EntryConfig, call
+    to_dict(), hand it to async_update_entry, and expect the eventual
+    listener re-read to produce the same logical config.
+    """
+    original = EntryConfig.from_mapping(
+        {
+            CONF_LOCKS: ["lock.a", "lock.b"],
+            CONF_SLOTS: {1: _slot("1234"), 2: _slot("5678")},
+        }
+    )
+
+    round_tripped = EntryConfig.from_mapping(original.to_dict())
+
+    assert round_tripped.locks == original.locks
+    assert dict(round_tripped.slots) == dict(original.slots)
+
+
+def test_to_dict_produces_plain_mutable_dicts() -> None:
+    """to_dict output is plain dict (not MappingProxyType).
+
+    HA's async_update_entry expects a plain dict it can serialize; the
+    read-only wrappers EntryConfig uses internally would break that.
+    """
+    config = EntryConfig.from_mapping(
+        {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {1: _slot()}}
+    )
+
+    result = config.to_dict()
+
+    assert isinstance(result, dict)
+    assert isinstance(result[CONF_SLOTS], dict)
+    assert isinstance(result[CONF_SLOTS][1], dict)
+    # Mutability — the returned dicts are the caller's to modify
+    result[CONF_SLOTS][1]["pin"] = "9999"
+    result[CONF_LOCKS].append("lock.b")
+    # Original EntryConfig is untouched by that mutation
+    assert config.slots[1]["pin"] == "1234"
+    assert config.locks == ("lock.a",)

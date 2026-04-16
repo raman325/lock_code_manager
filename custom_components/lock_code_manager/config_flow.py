@@ -36,7 +36,7 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import compute_entry_config_diff, get_entry_data
+from .data import compute_entry_config_diff, get_entry_config
 from .exceptions import LockCodeManagerError, LockCodeManagerProviderError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
@@ -102,11 +102,9 @@ def _check_common_slots(
             (lock, common_slots, entry.title)
             for lock in locks
             for entry in hass.config_entries.async_entries(DOMAIN)
-            if lock in get_entry_data(entry, CONF_LOCKS, {})
+            if (config := get_entry_config(entry)).has_lock(lock)
             and (
-                common_slots := sorted(
-                    set(get_entry_data(entry, CONF_SLOTS, {})) & set(slots_list)
-                )
+                common_slots := sorted(set(config.slots) & {int(s) for s in slots_list})
             )
             and not (config_entry and config_entry == entry)
         )
@@ -582,7 +580,7 @@ class LockCodeManagerFlowHandler(
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
                 user_input[CONF_LOCKS],
-                get_entry_data(config_entry, CONF_SLOTS, {}).keys(),
+                get_entry_config(config_entry).slots.keys(),
                 config_entry,
             )
             errors.update(additional_errors)
@@ -653,19 +651,23 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
                 if not errors:
                     return await self._maybe_confirm_then_persist(user_input)
 
-        def _get_default(key: str) -> Any:
-            """Get default value."""
-            return user_input.get(key, get_entry_data(self.config_entry, key, {}))
+        # Use to_dict() rather than .locks / .slots directly — to_dict
+        # returns plain mutable dict/list, while EntryConfig.slots is a
+        # deeply read-only MappingProxyType which the form selectors
+        # can't JSON-serialize.
+        defaults = get_entry_config(self.config_entry).to_dict()
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_LOCKS, default=_get_default(CONF_LOCKS)
+                        CONF_LOCKS,
+                        default=user_input.get(CONF_LOCKS, defaults[CONF_LOCKS]),
                     ): LOCK_ENTITY_SELECTOR,
                     vol.Required(
-                        CONF_SLOTS, default=_get_default(CONF_SLOTS)
+                        CONF_SLOTS,
+                        default=user_input.get(CONF_SLOTS, defaults[CONF_SLOTS]),
                     ): SLOTS_YAML_SELECTOR,
                 }
             ),
@@ -685,11 +687,9 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
         """
         # Use the same diff helper as the update listener so the "is this
         # pair new?" definition stays in one place
-        old_data = {
-            CONF_LOCKS: get_entry_data(self.config_entry, CONF_LOCKS, []),
-            CONF_SLOTS: get_entry_data(self.config_entry, CONF_SLOTS, {}),
-        }
-        diff = compute_entry_config_diff(old_data, user_input)
+        diff = compute_entry_config_diff(
+            get_entry_config(self.config_entry).to_dict(), user_input
+        )
         if not diff.pairs_added:
             return self.async_create_entry(title="", data=user_input)
 
