@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import logging
 from pathlib import Path
 from typing import Any
@@ -614,7 +614,7 @@ async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
     locks_to_add: Sequence[str],
-    new_slots: dict[int, Any],
+    new_slots: Mapping[int, Any],
     callbacks: Any,
     ent_reg: er.EntityRegistry,
 ) -> None:
@@ -692,8 +692,8 @@ async def _async_setup_new_locks(
 async def _async_reconcile_slot_entities(
     config_entry: LockCodeManagerConfigEntry,
     slot_num: int,
-    old_config: dict[str, Any],
-    new_config: dict[str, Any],
+    old_config: Mapping[str, Any],
+    new_config: Mapping[str, Any],
     callbacks: Any,
     ent_reg: er.EntityRegistry,
 ) -> None:
@@ -767,9 +767,15 @@ async def async_update_listener(
 
     setup_tasks = runtime_data.setup_tasks
 
-    curr_slots: dict[int, Any] = {**config_entry.data.get(CONF_SLOTS, {})}
-    new_slots: dict[int, Any] = {**config_entry.options.get(CONF_SLOTS, {})}
-    new_locks: list[str] = [*config_entry.options.get(CONF_LOCKS, [])]
+    # Build EntryConfig views of data (old) and options (new) so all
+    # downstream slot lookups use int keys regardless of how the storage
+    # round-tripped them. Callers that need a plain dict (e.g. to hand
+    # back to async_update_entry at the end of this function) call
+    # to_dict() at the write site.
+    old_config = EntryConfig.from_mapping(config_entry.data)
+    new_config = EntryConfig.from_mapping(config_entry.options)
+    curr_slots = old_config.slots
+    new_slots = new_config.slots
 
     # Strip number_of_uses from slots that didn't previously have it
     # (deprecated — only existing values are preserved). Skip on initial
@@ -792,8 +798,9 @@ async def async_update_listener(
     await asyncio.gather(*setup_tasks.values())
 
     # Identify changes that need to be made (single source of truth for the
-    # data-vs-options diff; same helper is used by the options-flow scan)
-    diff = compute_entry_config_diff(config_entry.data, config_entry.options)
+    # data-vs-options diff; same helper is used by the options-flow scan).
+    # Both inputs go through EntryConfig.to_dict() so they're int-keyed.
+    diff = compute_entry_config_diff(old_config.to_dict(), new_config.to_dict())
     slots_to_add = diff.slots_added
     slots_to_remove = diff.slots_removed
     locks_to_add = diff.locks_added
@@ -897,12 +904,16 @@ async def async_update_listener(
             ent_reg,
         )
 
-    # Existing entities will listen to updates and act on it
-    new_data = {CONF_LOCKS: new_locks, CONF_SLOTS: new_slots}
+    # Existing entities will listen to updates and act on it.
+    # Use to_dict() so the stored data has plain dicts (not the read-only
+    # MappingProxyType wrappers EntryConfig uses internally) — HA's
+    # storage layer can't serialize MappingProxyType.
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )
-    hass.config_entries.async_update_entry(config_entry, data=new_data, options={})
+    hass.config_entries.async_update_entry(
+        config_entry, data=new_config.to_dict(), options={}
+    )
     # The async_update_entry above re-triggers this listener, which
     # refreshes runtime_data.config at the top before the early-return.
 

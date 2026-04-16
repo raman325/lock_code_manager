@@ -792,10 +792,12 @@ async def test_number_of_uses_repair_flow_strips_data(
 
     assert result["type"] == "create_entry"
 
-    # Verify number_of_uses was stripped from the config entry
-    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS]["2"]
+    # Verify number_of_uses was stripped from the config entry. The
+    # listener normalizes slot keys to int when it writes back to data,
+    # so look up by int rather than the str key the test originally wrote.
+    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][2]
     # Slot 1 should be unchanged
-    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS]["1"]
+    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][1]
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 

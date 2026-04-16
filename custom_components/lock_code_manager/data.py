@@ -232,7 +232,7 @@ class EntryConfigDiff:
     - **By axis** (slot dict + lock list): used by the update listener,
       which adds/removes slot entities and lock providers along independent
       axes.
-    - **By unchanged set**: ``slots_unchanged`` enumerates slot keys
+    - **By unchanged set**: ``slots_unchanged`` enumerates slot numbers
       present in both configs, used by the listener to reconcile per-slot
       configuration changes.
     - **By cartesian pair**: ``pairs_added`` / ``pairs_removed`` give
@@ -240,13 +240,11 @@ class EntryConfigDiff:
       uses to detect existing-codes hazards on newly-added pairs (catches
       both "new slot on existing lock" and "new lock with existing slot").
 
-    **Slot key types**: ``slots_added`` and ``slots_unchanged`` preserve
-    the *new* mapping's key type. ``slots_removed`` preserves the *old*
-    mapping's key type (its keys come from the old mapping). The
-    cartesian pair sets always use ``int`` slot keys so they compare
-    correctly even when ``old`` and ``new`` have different key types (a
-    common situation: stored ``data`` is ``str``-keyed, fresh user input
-    from voluptuous is ``int``-keyed).
+    All slot keys (in ``slots_added`` / ``slots_removed`` / ``slots_unchanged``
+    / ``pairs_added`` / ``pairs_removed``) are guaranteed ``int``. Inputs
+    with ``str`` keys (e.g. raw entry data after a JSON round-trip) are
+    normalized internally — typical callers go through
+    :meth:`EntryConfig.to_dict` which already produces ``int`` keys.
 
     **Immutability**: the dataclass is frozen, and all containers are
     deeply immutable (``MappingProxyType`` for dicts, ``frozenset`` for
@@ -254,9 +252,9 @@ class EntryConfigDiff:
     state without defensive copies.
     """
 
-    slots_added: Mapping[Any, Any]
-    slots_removed: Mapping[Any, Any]
-    slots_unchanged: frozenset[Any]
+    slots_added: Mapping[int, Mapping[str, Any]]
+    slots_removed: Mapping[int, Mapping[str, Any]]
+    slots_unchanged: frozenset[int]
     locks_added: tuple[str, ...]
     locks_removed: tuple[str, ...]
     pairs_added: frozenset[tuple[str, int]]
@@ -280,43 +278,43 @@ def compute_entry_config_diff(
 
     Each input is a mapping with ``CONF_LOCKS`` (list[str]) and
     ``CONF_SLOTS`` (dict[int|str, dict]) keys. Slot keys are normalized
-    to ``int`` *internally* for set comparisons (so ``str``-keyed stored
-    data and ``int``-keyed voluptuous output compare correctly), but the
-    slot-dict outputs preserve the source key type of ``new``. This
-    matches the existing convention in the listener and entity layer
-    where ``slot_num`` may be ``str`` or ``int`` depending on origin.
+    to ``int`` so ``str``-keyed stored data and ``int``-keyed voluptuous
+    output compare correctly. All output dicts are int-keyed regardless
+    of source.
     """
-    raw_old_slots = old.get(CONF_SLOTS, {})
-    raw_new_slots = new.get(CONF_SLOTS, {})
-    # int-normalized key sets for comparisons only
-    old_int_keys = {int(k) for k in raw_old_slots}
-    new_int_keys = {int(k) for k in raw_new_slots}
-    unchanged_int_keys = old_int_keys & new_int_keys
+    raw_old_slots: Mapping[Any, Any] = old.get(CONF_SLOTS, {})
+    raw_new_slots: Mapping[Any, Any] = new.get(CONF_SLOTS, {})
+    # Normalize source dicts up front. After this everything is int-keyed
+    # — the listener's `curr_slots[slot_num]` lookups against
+    # `diff.slots_unchanged` are safe regardless of the source key type.
+    old_slots: dict[int, Mapping[str, Any]] = {
+        int(k): v for k, v in raw_old_slots.items()
+    }
+    new_slots: dict[int, Mapping[str, Any]] = {
+        int(k): v for k, v in raw_new_slots.items()
+    }
+    old_keys = old_slots.keys()
+    new_keys = new_slots.keys()
 
     old_locks: list[str] = list(old.get(CONF_LOCKS, []))
     new_locks: list[str] = list(new.get(CONF_LOCKS, []))
     old_lock_set = set(old_locks)
     new_lock_set = set(new_locks)
     old_pairs: set[tuple[str, int]] = {
-        (lock, slot) for lock in old_locks for slot in old_int_keys
+        (lock, slot) for lock in old_locks for slot in old_keys
     }
     new_pairs: set[tuple[str, int]] = {
-        (lock, slot) for lock in new_locks for slot in new_int_keys
+        (lock, slot) for lock in new_locks for slot in new_keys
     }
 
     return EntryConfigDiff(
         slots_added=MappingProxyType(
-            {k: v for k, v in raw_new_slots.items() if int(k) not in old_int_keys}
+            {k: v for k, v in new_slots.items() if k not in old_slots}
         ),
         slots_removed=MappingProxyType(
-            {k: v for k, v in raw_old_slots.items() if int(k) not in new_int_keys}
+            {k: v for k, v in old_slots.items() if k not in new_slots}
         ),
-        # Preserve the new mapping's key type — the listener's reconcile
-        # loop indexes back into raw_new_slots / raw_old_slots and needs
-        # the original key type to find the slot config dict.
-        slots_unchanged=frozenset(
-            k for k in raw_new_slots if int(k) in unchanged_int_keys
-        ),
+        slots_unchanged=frozenset(old_keys & new_keys),
         locks_added=tuple(lock for lock in new_locks if lock not in old_lock_set),
         locks_removed=tuple(lock for lock in old_locks if lock not in new_lock_set),
         pairs_added=frozenset(new_pairs - old_pairs),

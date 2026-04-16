@@ -94,26 +94,26 @@ def test_diff_str_keys_match_int_keys() -> None:
     assert not diff.has_changes
 
 
-def test_diff_slot_dicts_preserve_source_key_types() -> None:
-    """slots_{added,unchanged} take new's key type; slots_removed takes old's.
+def test_diff_slot_dicts_always_int_keyed() -> None:
+    """All slot-dict outputs are int-keyed regardless of input key type.
 
-    The listener indexes back into raw_new_slots/raw_old_slots with these
-    keys to look up the slot config dict, so changing the key type would
-    break those lookups.
+    Stage 3 of the EntryConfig migration: callers normalize via
+    EntryConfig.to_dict() before passing to compute_entry_config_diff,
+    so the helper guarantees int-keyed outputs and downstream code
+    (notably the listener's reconcile loop) doesn't have to translate.
     """
-    # Both sides use str keys (typical of the listener case where both
-    # `data` and `options` come from JSON storage round-trips)
+    # Mixed: old has str keys (raw JSON-loaded data), new has int (voluptuous)
     old = {CONF_SLOTS: {"1": _slot(), "3": _slot()}}
-    new = {CONF_SLOTS: {"1": _slot("9999"), "2": _slot()}}
+    new = {CONF_SLOTS: {1: _slot("9999"), 2: _slot()}}
 
     diff = compute_entry_config_diff(old, new)
 
-    # slots_added/unchanged take new's key type (str here)
-    assert "2" in diff.slots_added
-    assert "1" in diff.slots_unchanged
-    # slots_removed takes old's key type (also str here, but importantly
-    # it is the OLD mapping's keys regardless)
-    assert "3" in diff.slots_removed
+    assert 2 in diff.slots_added
+    assert "2" not in diff.slots_added
+    assert 1 in diff.slots_unchanged
+    assert "1" not in diff.slots_unchanged
+    assert 3 in diff.slots_removed
+    assert "3" not in diff.slots_removed
 
 
 def test_diff_pair_added_for_new_lock_with_existing_slot() -> None:
