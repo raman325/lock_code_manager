@@ -685,4 +685,185 @@ describe('LockCodesCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('_formatSlotRange', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('returns empty string for empty array', () => {
+            expect((card as any)._formatSlotRange([])).toBe('');
+        });
+
+        it('returns single slot number', () => {
+            expect((card as any)._formatSlotRange([{ slot: 5 }])).toBe('5');
+        });
+
+        it('formats consecutive range', () => {
+            const slots = [{ slot: 1 }, { slot: 2 }, { slot: 3 }];
+            expect((card as any)._formatSlotRange(slots)).toBe('1 – 3');
+        });
+
+        it('formats non-consecutive slots', () => {
+            const slots = [{ slot: 1 }, { slot: 3 }, { slot: 5 }];
+            expect((card as any)._formatSlotRange(slots)).toBe('1, 3, 5');
+        });
+
+        it('formats mixed ranges and singles', () => {
+            const slots = [
+                { slot: 1 },
+                { slot: 2 },
+                { slot: 3 },
+                { slot: 5 },
+                { slot: 7 },
+                { slot: 8 }
+            ];
+            expect((card as any)._formatSlotRange(slots)).toBe('1 – 3, 5, 7 – 8');
+        });
+
+        it('handles non-numeric slots by joining', () => {
+            const slots = [{ slot: 'A' }, { slot: 'B' }];
+            expect((card as any)._formatSlotRange(slots)).toBe('A, B');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_getCodeClass', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('returns no-code for empty slot', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
+        });
+
+        it('returns masked for unknown code', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: 'unknown' })).toBe('masked');
+        });
+
+        it('returns masked for code_length without code', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: null, code_length: 4 })).toBe(
+                'masked'
+            );
+        });
+
+        it('returns empty string for actual code', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: '1234' })).toBe('');
+        });
+
+        // configured_code branches were removed — dead code pruned.
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_formatCode', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('returns bullets for unknown code', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'unknown' })).toBe('• • •');
+        });
+
+        it('returns dash for empty slot with no configured code', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'empty' })).toBe('—');
+        });
+
+        it('returns masked code when shouldMask', () => {
+            (card as any)._revealed = false;
+            expect((card as any)._formatCode({ slot: 1, code: '1234' })).toBe('••••');
+        });
+
+        it('returns actual code when revealed', () => {
+            (card as any)._revealed = true;
+            expect((card as any)._formatCode({ slot: 1, code: '1234' })).toBe('1234');
+        });
+
+        it('returns masked configured_code for disabled slot', () => {
+            (card as any)._revealed = false;
+            expect(
+                (card as any)._formatCode({ slot: 1, code: null, configured_code: '5678' })
+            ).toBe('••••');
+        });
+
+        it('returns revealed configured_code when unmasked', () => {
+            (card as any)._config = {
+                lock_entity_id: 'lock.test_1',
+                code_display: 'unmasked',
+                type: 'custom:lcm-lock-codes'
+            };
+            expect(
+                (card as any)._formatCode({ slot: 1, code: null, configured_code: '5678' })
+            ).toBe('5678');
+        });
+
+        it('returns bullets for configured_code_length', () => {
+            expect(
+                (card as any)._formatCode({ slot: 1, code: null, configured_code_length: 6 })
+            ).toBe('••••••');
+        });
+
+        it('returns bullets for code_length', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'empty', code_length: 4 })).toBe(
+                '••••'
+            );
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_navigateToSlot', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('navigates with valid config entry id', () => {
+            const pushStateSpy = vi.spyOn(history, 'pushState');
+            (card as any)._navigateToSlot('test-entry-id');
+            expect(pushStateSpy).toHaveBeenCalledWith(
+                null,
+                '',
+                '/config/integrations/integration/lock_code_manager#config_entry=test-entry-id'
+            );
+            pushStateSpy.mockRestore();
+        });
+
+        it('returns early for undefined config entry id', () => {
+            const pushStateSpy = vi.spyOn(history, 'pushState');
+            (card as any)._navigateToSlot(undefined);
+            expect(pushStateSpy).not.toHaveBeenCalled();
+            pushStateSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });

@@ -1007,13 +1007,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         if (isSlotEmpty(lock.code)) return null;
         if (lock.code === SLOT_CODE_UNKNOWN) return '• • •';
-        if (lock.code !== null && lock.code !== '') {
-            return shouldMask ? '•'.repeat(String(lock.code).length) : String(lock.code);
-        }
-        if (lock.codeLength) {
-            return '•'.repeat(lock.codeLength);
-        }
-        return null;
+        return shouldMask ? '•'.repeat(String(lock.code).length) : String(lock.code);
     }
 
     // _toggleReveal inherited from mixin
