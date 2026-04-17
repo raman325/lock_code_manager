@@ -35,7 +35,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.models import (
-    LockCodeManagerConfigEntryData,
+    LockCodeManagerConfigEntryRuntimeData,
     SlotCode,
 )
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -1883,7 +1883,7 @@ async def test_duplicate_code_notification_marks_rejected(
     )
 
     # Find the ZWaveJSLock instance created by LCM setup
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    runtime_data: LockCodeManagerConfigEntryRuntimeData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
     lock_instance._set_in_progress_code_slot = 2
 
@@ -1916,7 +1916,7 @@ async def test_duplicate_code_notification_no_user_id_marks_rejected(
         mock_zwave_usercodes,
     )
 
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    runtime_data: LockCodeManagerConfigEntryRuntimeData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
     lock_instance._set_in_progress_code_slot = 3
 
@@ -1989,7 +1989,7 @@ async def test_duplicate_code_notification_ignored_when_user_id_mismatches(
     switch_2 = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
     switch_3 = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 3)
 
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    runtime_data: LockCodeManagerConfigEntryRuntimeData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
 
     # LCM is setting slot 2, but notification says slot 3
@@ -2078,7 +2078,7 @@ async def test_internal_set_usercode_raises_duplicate_for_rejected_slot(
         mock_zwave_usercodes,
     )
 
-    runtime_data: LockCodeManagerConfigEntryData = lcm_entry.runtime_data
+    runtime_data: LockCodeManagerConfigEntryRuntimeData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
 
     # Mark slot 2 as rejected (simulating event 15)

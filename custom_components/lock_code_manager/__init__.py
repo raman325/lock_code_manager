@@ -88,7 +88,7 @@ from .helpers import (
     async_set_usercode,
     get_locks_from_targets,
 )
-from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryData
+from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryRuntimeData
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -448,7 +448,7 @@ async def async_setup_entry(
 
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
     await _async_register_strategy_resource(hass)
-    config_entry.runtime_data = LockCodeManagerConfigEntryData(
+    config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
         config=EntryConfig.from_entry(config_entry),
     )
 

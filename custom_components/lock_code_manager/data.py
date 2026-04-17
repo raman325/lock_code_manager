@@ -25,7 +25,7 @@ class EntryConfig:
     (``MappingProxyType`` at both levels) so instances can be cached
     without defensive copies.
 
-    An instance is cached on ``LockCodeManagerConfigEntryData.config``
+    An instance is cached on ``LockCodeManagerConfigEntryRuntimeData.config``
     and refreshed by the update listener. Most callers should access it
     via ``entry.runtime_data.config``. Iteration helpers that walk
     ``hass.config_entries.async_entries(DOMAIN)`` use
