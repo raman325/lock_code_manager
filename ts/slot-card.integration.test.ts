@@ -1622,22 +1622,27 @@ describe('LockCodeManagerSlotCard integration', () => {
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
+            // Pin time AFTER element setup so flush()'s setTimeout isn't blocked
+            vi.useFakeTimers();
+            vi.setSystemTime(new Date('2026-03-18T12:00:00'));
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
         });
 
         it('returns empty string for today', () => {
-            expect((card as any)._formatScheduleDate(new Date())).toBe('');
+            expect((card as any)._formatScheduleDate(new Date('2026-03-18T17:00:00'))).toBe('');
         });
 
         it('returns "tomorrow " for tomorrow', () => {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            expect((card as any)._formatScheduleDate(tomorrow)).toBe('tomorrow ');
+            expect((card as any)._formatScheduleDate(new Date('2026-03-19T10:00:00'))).toBe(
+                'tomorrow '
+            );
         });
 
         it('returns weekday for other dates', () => {
-            const nextWeek = new Date();
-            nextWeek.setDate(nextWeek.getDate() + 5);
-            const result = (card as any)._formatScheduleDate(nextWeek);
+            const result = (card as any)._formatScheduleDate(new Date('2026-03-23T10:00:00'));
             expect(result.length).toBeGreaterThan(0);
             expect(result).not.toBe('tomorrow ');
         });

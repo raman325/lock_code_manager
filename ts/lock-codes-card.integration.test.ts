@@ -767,7 +767,37 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: '1234' })).toBe('');
         });
 
-        // configured_code branches were removed — dead code pruned.
+        it('returns disabled masked for configured_code when masked', () => {
+            (card as any)._config = {
+                code_display: 'masked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
+            expect(
+                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
+            ).toBe('disabled masked');
+        });
+
+        it('returns disabled for configured_code when unmasked', () => {
+            (card as any)._config = {
+                code_display: 'unmasked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
+            expect(
+                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
+            ).toBe('disabled');
+        });
+
+        it('returns disabled masked for configured_code_length', () => {
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code_length: 4
+                })
+            ).toBe('disabled masked');
+        });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 

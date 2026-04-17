@@ -597,9 +597,21 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
-        if (isSlotEmpty(slot.code) && !slot.code_length) return 'no-code';
+        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
+        const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
+
         if (slot.code === SLOT_CODE_UNKNOWN || slot.code_length) return 'masked';
-        return '';
+        if (!isSlotEmpty(slot.code)) return '';
+
+        // Empty/null code on the lock — check for a configured PIN
+        // (disabled LCM slot where the code hasn't been pushed yet).
+        if (slot.configured_code) {
+            return shouldMask ? 'disabled masked' : 'disabled';
+        }
+        if (slot.configured_code_length) {
+            return 'disabled masked';
+        }
+        return 'no-code';
     }
 
     private _formatCode(slot: LockCoordinatorSlotData): string {
