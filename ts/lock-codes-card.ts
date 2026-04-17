@@ -262,33 +262,39 @@ class LockCodesCard extends LockCodesCardBase {
         }
 
         const groups = this._groupSlots(slots);
-        const result: TemplateResult[] = [];
+        const borrowedSlots = this._identifyBorrowedSlots(groups);
+        const result = this._renderGroupsWithBorrowing(groups, borrowedSlots);
+        return html`<div class="slots-grid">${result}</div>`;
+    }
 
-        // Track slots borrowed from empty groups so we can adjust their ranges
-        const borrowedSlots = new Set<number | string>();
-
-        // First pass: identify slots to borrow from empty groups
+    /** Find empty-group slots to "borrow" so lone active slots get a grid partner. */
+    private _identifyBorrowedSlots(groups: SlotGroup[]): Set<number | string> {
+        const borrowed = new Set<number | string>();
         for (let i = 0; i < groups.length; i++) {
             const group = groups[i];
-            const prevGroup = i > 0 ? groups[i - 1] : null;
-            const nextGroup = i < groups.length - 1 ? groups[i + 1] : null;
-
             if (group.type === 'active' && group.slots.length === 1) {
                 const [slot] = group.slots;
                 const slotNum = typeof slot.slot === 'string' ? parseInt(slot.slot, 10) : slot.slot;
                 const isOdd = slotNum % 2 === 1;
+                const prevGroup = i > 0 ? groups[i - 1] : null;
+                const nextGroup = i < groups.length - 1 ? groups[i + 1] : null;
 
                 if (isOdd && nextGroup?.type === 'empty' && nextGroup.slots.length > 0) {
-                    // Odd slot before empty range - borrow first slot from empty range
-                    borrowedSlots.add(nextGroup.slots[0].slot);
+                    borrowed.add(nextGroup.slots[0].slot);
                 } else if (!isOdd && prevGroup?.type === 'empty' && prevGroup.slots.length > 0) {
-                    // Even slot after empty range - borrow last slot from empty range
-                    borrowedSlots.add(prevGroup.slots[prevGroup.slots.length - 1].slot);
+                    borrowed.add(prevGroup.slots[prevGroup.slots.length - 1].slot);
                 }
             }
         }
+        return borrowed;
+    }
 
-        // Second pass: render with borrowed slots
+    /** Render slot groups, pairing lone active slots with borrowed empty neighbors. */
+    private _renderGroupsWithBorrowing(
+        groups: SlotGroup[],
+        borrowedSlots: Set<number | string>
+    ): TemplateResult[] {
+        const result: TemplateResult[] = [];
         for (let i = 0; i < groups.length; i++) {
             const group = groups[i];
             const prevGroup = i > 0 ? groups[i - 1] : null;
@@ -302,7 +308,6 @@ class LockCodesCard extends LockCodesCardBase {
                     const isOdd = slotNum % 2 === 1;
 
                     if (isOdd && nextGroup?.type === 'empty' && nextGroup.slots.length > 0) {
-                        // Odd slot on left, borrowed empty slot on right
                         result.push(this._renderSlotChip(slot, false));
                         result.push(this._renderEmptySlotChip(nextGroup.slots[0]));
                     } else if (
@@ -310,23 +315,19 @@ class LockCodesCard extends LockCodesCardBase {
                         prevGroup?.type === 'empty' &&
                         prevGroup.slots.length > 0
                     ) {
-                        // Borrowed empty slot on left, even slot on right
                         result.push(
                             this._renderEmptySlotChip(prevGroup.slots[prevGroup.slots.length - 1])
                         );
                         result.push(this._renderSlotChip(slot, false));
                     } else {
-                        // No adjacent empty group to borrow from - use full width
                         result.push(this._renderSlotChip(slot, true));
                     }
                 } else {
-                    // Multiple slots - render normally
                     for (const slot of group.slots) {
                         result.push(this._renderSlotChip(slot, false));
                     }
                 }
             } else {
-                // Empty group - filter out borrowed slots and render if any remain
                 const remainingSlots = group.slots.filter((s) => !borrowedSlots.has(s.slot));
                 if (remainingSlots.length > 0) {
                     result.push(
@@ -339,8 +340,7 @@ class LockCodesCard extends LockCodesCardBase {
                 }
             }
         }
-
-        return html`<div class="slots-grid">${result}</div>`;
+        return result;
     }
 
     private _renderEmptySlotChip(slot: LockCoordinatorSlotData): TemplateResult {
@@ -523,48 +523,56 @@ class LockCodesCard extends LockCodesCardBase {
         const isEditing = this._editingSlot === slot.slot;
         const isUnmanaged = slot.managed !== true;
 
-        // Editing mode for unmanaged slots
         if (isEditing && isUnmanaged) {
-            return html`
-                <div class="slot-code-edit" @click=${(e: Event) => e.stopPropagation()}>
-                    <div class="slot-code-edit-row">
-                        <input
-                            class="slot-code-input"
-                            type="text"
-                            inputmode="numeric"
-                            pattern="[0-9]*"
-                            placeholder="PIN"
-                            .value=${this._editValue}
-                            @input=${this._handleEditInput}
-                            @keydown=${this._handleEditKeydown}
-                            ?disabled=${this._saving}
-                        />
-                        <div class="slot-code-edit-buttons">
-                            <ha-icon-button
-                                .path=${mdiCheck}
-                                @click=${() => this._saveCode(slot.slot)}
-                                .label=${'Save'}
-                                ?disabled=${this._saving}
-                            ></ha-icon-button>
-                            <ha-icon-button
-                                .path=${mdiClose}
-                                @click=${this._cancelEdit}
-                                .label=${'Cancel'}
-                                ?disabled=${this._saving}
-                            ></ha-icon-button>
-                        </div>
-                    </div>
-                    <span class="slot-edit-help">
-                        ${this._saving ? 'Saving...' : 'Enter to save, Esc to cancel'}
-                    </span>
-                </div>
-            `;
+            return this._renderCodeEditMode(slot);
         }
+        return this._renderCodeDisplayMode(slot, hasCode, mode, isUnmanaged && !isEditing);
+    }
 
-        // Normal display mode
-        const isEditable = isUnmanaged && !isEditing;
+    private _renderCodeEditMode(slot: LockCoordinatorSlotData): TemplateResult {
+        return html`
+            <div class="slot-code-edit" @click=${(e: Event) => e.stopPropagation()}>
+                <div class="slot-code-edit-row">
+                    <input
+                        class="slot-code-input"
+                        type="text"
+                        inputmode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="PIN"
+                        .value=${this._editValue}
+                        @input=${this._handleEditInput}
+                        @keydown=${this._handleEditKeydown}
+                        ?disabled=${this._saving}
+                    />
+                    <div class="slot-code-edit-buttons">
+                        <ha-icon-button
+                            .path=${mdiCheck}
+                            @click=${() => this._saveCode(slot.slot)}
+                            .label=${'Save'}
+                            ?disabled=${this._saving}
+                        ></ha-icon-button>
+                        <ha-icon-button
+                            .path=${mdiClose}
+                            @click=${this._cancelEdit}
+                            .label=${'Cancel'}
+                            ?disabled=${this._saving}
+                        ></ha-icon-button>
+                    </div>
+                </div>
+                <span class="slot-edit-help">
+                    ${this._saving ? 'Saving...' : 'Enter to save, Esc to cancel'}
+                </span>
+            </div>
+        `;
+    }
+
+    private _renderCodeDisplayMode(
+        slot: LockCoordinatorSlotData,
+        hasCode: boolean,
+        mode: CodeDisplayMode,
+        isEditable: boolean
+    ): TemplateResult {
         const editableClass = isEditable ? 'editable' : '';
-
         return html`
             <div class="slot-code-row">
                 <span

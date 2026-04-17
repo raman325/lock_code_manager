@@ -51,6 +51,39 @@ interface LockSyncStatus {
     name: string;
 }
 
+/** Maps editable field names to their entity key, HA service, and value transform. */
+const EDIT_FIELD_CONFIG: Record<
+    'name' | 'pin' | 'numberOfUses',
+    {
+        entityKey: keyof NonNullable<SlotCardData['entities']>;
+        service: string;
+        serviceData: (v: string) => Record<string, unknown>;
+    }
+> = {
+    name: {
+        entityKey: 'name',
+        service: 'text.set_value',
+        serviceData: (v) => {
+            return { value: v.trim() };
+        }
+    },
+    numberOfUses: {
+        entityKey: 'number_of_uses',
+        service: 'number.set_value',
+        serviceData: (v) => {
+            const num = parseInt(v, 10);
+            return !isNaN(num) && num >= 0 ? { value: num } : {};
+        }
+    },
+    pin: {
+        entityKey: 'pin',
+        service: 'text.set_value',
+        serviceData: (v) => {
+            return { value: v.trim() };
+        }
+    }
+};
+
 // Base class with subscription mixin
 const LcmSlotCardBase = LcmSubscriptionMixin(LitElement);
 
@@ -502,53 +535,78 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const { number_of_uses, condition_entity } = conditions;
         const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
         const hasConditionEntity = condition_entity !== undefined;
-
         const usesBlocking = hasNumberOfUses && number_of_uses === 0;
         const entityBlocking = hasConditionEntity && condition_entity.state !== 'on';
 
+        return this._renderCollapsible(
+            'Conditions',
+            this._conditionsExpanded,
+            this._toggleConditions,
+            this._renderConditionContent(conditions, hasNumberOfUses, hasConditionEntity),
+            this._renderConditionHeaderExtra(
+                conditions,
+                hasNumberOfUses,
+                hasConditionEntity,
+                usesBlocking,
+                entityBlocking
+            )
+        );
+    }
+
+    private _renderConditionHeaderExtra(
+        conditions: SlotCardConditions,
+        hasNumberOfUses: boolean,
+        hasConditionEntity: boolean,
+        usesBlocking: boolean,
+        entityBlocking: boolean
+    ): TemplateResult | undefined {
         const hasConditions = hasNumberOfUses || hasConditionEntity;
+        if (!hasConditions) return undefined;
+
         const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasConditionEntity ? 1 : 0);
         const blockingConditions = (usesBlocking ? 1 : 0) + (entityBlocking ? 1 : 0);
-
-        // Show ✓ when all conditions pass (muted), ✗ when blocking (prominent)
         const passingConditions = totalConditions - blockingConditions;
         const allPassing = blockingConditions === 0;
-        const headerExtra = hasConditions
-            ? html`<span class="collapsible-badge ${allPassing ? 'muted' : 'warning'}"
-                      >${allPassing ? '✓' : '✗'} ${passingConditions}/${totalConditions}</span
-                  >
-                  <span class="condition-blocking-icons">
-                      ${hasNumberOfUses
-                          ? html`<ha-svg-icon
-                                class="condition-icon ${usesBlocking ? 'blocking' : ''}"
-                                .path=${mdiPound}
-                                title="${usesBlocking
-                                    ? 'No uses remaining'
-                                    : `${number_of_uses} uses remaining`}"
-                            ></ha-svg-icon>`
-                          : nothing}
-                      ${hasConditionEntity
-                          ? html`<ha-svg-icon
-                                class="condition-icon ${entityBlocking ? 'blocking' : ''}"
-                                .path=${this._getConditionEntityIcon(
-                                    condition_entity.domain,
-                                    !entityBlocking
-                                )}
-                                title="${entityBlocking
-                                    ? 'Condition blocking access'
-                                    : 'Condition allowing access'}"
-                            ></ha-svg-icon>`
-                          : nothing}
-                  </span>`
-            : undefined;
 
-        // Determine what conditions can still be added
-        const canAddEntity = !hasConditionEntity;
+        return html`<span class="collapsible-badge ${allPassing ? 'muted' : 'warning'}"
+                >${allPassing ? '✓' : '✗'} ${passingConditions}/${totalConditions}</span
+            >
+            <span class="condition-blocking-icons">
+                ${hasNumberOfUses
+                    ? html`<ha-svg-icon
+                          class="condition-icon ${usesBlocking ? 'blocking' : ''}"
+                          .path=${mdiPound}
+                          title="${usesBlocking
+                              ? 'No uses remaining'
+                              : `${conditions.number_of_uses} uses remaining`}"
+                      ></ha-svg-icon>`
+                    : nothing}
+                ${hasConditionEntity
+                    ? html`<ha-svg-icon
+                          class="condition-icon ${entityBlocking ? 'blocking' : ''}"
+                          .path=${this._getConditionEntityIcon(
+                              conditions.condition_entity!.domain,
+                              !entityBlocking
+                          )}
+                          title="${entityBlocking
+                              ? 'Condition blocking access'
+                              : 'Condition allowing access'}"
+                      ></ha-svg-icon>`
+                    : nothing}
+            </span>`;
+    }
 
+    private _renderConditionContent(
+        conditions: SlotCardConditions,
+        hasNumberOfUses: boolean,
+        hasConditionEntity: boolean
+    ): TemplateResult {
+        const { number_of_uses, condition_entity } = conditions;
+        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
         const usesStatusText = usesBlocking ? 'No uses left' : 'Uses available';
         const usesStatusClass = usesBlocking ? 'inactive' : 'active';
 
-        const content = html`
+        return html`
             ${hasNumberOfUses
                 ? html`<div class="condition-item">
                       <div class="condition-item-header">
@@ -582,7 +640,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                       </div>
                   </div>`
                 : nothing}
-            ${hasConditionEntity ? this._renderConditionEntity(condition_entity, true) : nothing}
+            ${hasConditionEntity ? this._renderConditionEntity(condition_entity!, true) : nothing}
             ${!this._isStub && this._config?.condition_helpers?.length
                 ? html`<div class="condition-helpers">
                       ${[...new Set(this._config.condition_helpers)]
@@ -596,7 +654,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           )}
                   </div>`
                 : nothing}
-            ${canAddEntity
+            ${!hasConditionEntity
                 ? html`<div class="add-condition-links">
                       <span
                           class="add-condition-link"
@@ -606,14 +664,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                   </div>`
                 : nothing}
         `;
-
-        return this._renderCollapsible(
-            'Conditions',
-            this._conditionsExpanded,
-            this._toggleConditions,
-            content,
-            headerExtra
-        );
     }
 
     /**
@@ -726,94 +776,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const displayName = entity.friendly_name ?? entity.condition_entity_id;
         const domainLabel = this._getDomainLabel(entity.domain);
 
-        // Build context lines based on domain
-        let contextLines: TemplateResult | typeof nothing = nothing;
-
-        if (entity.domain === 'calendar') {
-            if (isActive && entity.calendar) {
-                // Active calendar: show current event + next event preview
-                contextLines = html`
-                    ${entity.calendar.summary
-                        ? html`<div class="condition-context">
-                              <span class="condition-context-label">Event:</span>${entity.calendar
-                                  .summary}
-                          </div>`
-                        : nothing}
-                    ${entity.calendar.start_time
-                        ? html`<div class="condition-context">
-                              <span class="condition-context-label">Started:</span>
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${entity.calendar.start_time}
-                              ></ha-relative-time>
-                          </div>`
-                        : nothing}
-                    ${entity.calendar.end_time
-                        ? html`<div class="condition-context">
-                              <span class="condition-context-label">Ends:</span>
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${entity.calendar.end_time}
-                              ></ha-relative-time>
-                          </div>`
-                        : nothing}
-                    ${entity.calendar_next
-                        ? html`<div class="condition-context condition-context-next">
-                              <span class="condition-context-label">Next:</span>${entity
-                                  .calendar_next.summary ?? 'Event'}
-                              starts
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${entity.calendar_next.start_time}
-                              ></ha-relative-time>
-                          </div>`
-                        : nothing}
-                `;
-            } else if (!isActive && entity.calendar_next) {
-                // Inactive calendar: show next event details
-                contextLines = html`
-                    <div class="condition-context">
-                        <span class="condition-context-label">Next:</span>${entity.calendar_next
-                            .summary ?? 'Event'}
-                    </div>
-                    <div class="condition-context">
-                        <span class="condition-context-label">Starts:</span>
-                        <ha-relative-time
-                            .hass=${this._hass}
-                            .datetime=${entity.calendar_next.start_time}
-                        ></ha-relative-time>
-                    </div>
-                `;
-            }
-        } else if (entity.domain === 'schedule' && entity.schedule?.next_event) {
-            // Schedule: show timing info consistently
-            const nextEvent = new Date(entity.schedule.next_event);
-            const timeStr = nextEvent.toLocaleTimeString([], {
-                hour: 'numeric',
-                minute: '2-digit'
-            });
-            const dateStr = this._formatScheduleDate(nextEvent);
-
-            if (isActive) {
-                // Active schedule: show when it ends
-                contextLines = html`
-                    <div class="condition-context">
-                        <span class="condition-context-label">Ends:</span>
-                        ${dateStr}${timeStr}
-                    </div>
-                `;
-            } else {
-                // Inactive schedule: show when it starts
-                contextLines = html`
-                    <div class="condition-context">
-                        <span class="condition-context-label">Starts:</span>
-                        ${dateStr}${timeStr}
-                    </div>
-                `;
-            }
-        }
-        // input_boolean, switch, binary_sensor: no extra context needed
-
         return html`
             <div
                 class="condition-entity clickable"
@@ -851,9 +813,89 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         : nothing}
                 </div>
                 <div class="condition-entity-name">${displayName}</div>
-                ${contextLines}
+                ${this._renderConditionContext(entity, isActive)}
             </div>
         `;
+    }
+
+    private _renderConditionContext(
+        entity: ConditionEntityInfo,
+        isActive: boolean
+    ): TemplateResult | typeof nothing {
+        if (entity.domain === 'calendar') {
+            if (isActive && entity.calendar) {
+                return html`
+                    ${entity.calendar.summary
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Event:</span>${entity.calendar
+                                  .summary}
+                          </div>`
+                        : nothing}
+                    ${entity.calendar.start_time
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Started:</span>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar.start_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                    ${entity.calendar.end_time
+                        ? html`<div class="condition-context">
+                              <span class="condition-context-label">Ends:</span>
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar.end_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                    ${entity.calendar_next
+                        ? html`<div class="condition-context condition-context-next">
+                              <span class="condition-context-label">Next:</span>${entity
+                                  .calendar_next.summary ?? 'Event'}
+                              starts
+                              <ha-relative-time
+                                  .hass=${this._hass}
+                                  .datetime=${entity.calendar_next.start_time}
+                              ></ha-relative-time>
+                          </div>`
+                        : nothing}
+                `;
+            }
+            if (!isActive && entity.calendar_next) {
+                return html`
+                    <div class="condition-context">
+                        <span class="condition-context-label">Next:</span>${entity.calendar_next
+                            .summary ?? 'Event'}
+                    </div>
+                    <div class="condition-context">
+                        <span class="condition-context-label">Starts:</span>
+                        <ha-relative-time
+                            .hass=${this._hass}
+                            .datetime=${entity.calendar_next.start_time}
+                        ></ha-relative-time>
+                    </div>
+                `;
+            }
+        }
+
+        if (entity.domain === 'schedule' && entity.schedule?.next_event) {
+            const nextEvent = new Date(entity.schedule.next_event);
+            const timeStr = nextEvent.toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit'
+            });
+            const dateStr = this._formatScheduleDate(nextEvent);
+            const label = isActive ? 'Ends:' : 'Starts:';
+            return html`
+                <div class="condition-context">
+                    <span class="condition-context-label">${label}</span>
+                    ${dateStr}${timeStr}
+                </div>
+            `;
+        }
+
+        return nothing;
     }
 
     /**
@@ -1290,39 +1332,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private async _saveEditValue(rawValue: string): Promise<void> {
         if (!this._hass || !this._editingField) return;
 
-        const fieldConfig: Record<
-            'name' | 'pin' | 'numberOfUses',
-            {
-                entityKey: keyof NonNullable<SlotCardData['entities']>;
-                service: string;
-                serviceData: (v: string) => Record<string, unknown>;
-            }
-        > = {
-            name: {
-                entityKey: 'name',
-                service: 'text.set_value',
-                serviceData: (v) => {
-                    return { value: v.trim() };
-                }
-            },
-            numberOfUses: {
-                entityKey: 'number_of_uses',
-                service: 'number.set_value',
-                serviceData: (v) => {
-                    const num = parseInt(v, 10);
-                    return !isNaN(num) && num >= 0 ? { value: num } : {};
-                }
-            },
-            pin: {
-                entityKey: 'pin',
-                service: 'text.set_value',
-                serviceData: (v) => {
-                    return { value: v.trim() };
-                }
-            }
-        };
-
-        const config = fieldConfig[this._editingField];
+        const config = EDIT_FIELD_CONFIG[this._editingField];
         const entityId = this._data?.entities?.[config.entityKey];
         const fieldLabel =
             this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
@@ -1332,7 +1342,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             return;
         }
 
-        // Check if entity exists and is available
         const entityState = this._hass.states[entityId];
         if (!entityState || entityState.state === 'unavailable') {
             this._setActionError(`Cannot update ${fieldLabel}: entity is unavailable or disabled`);
@@ -1340,7 +1349,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
 
         const serviceData = config.serviceData(rawValue);
-        // Skip if invalid value (e.g., non-numeric for numberOfUses)
         if (Object.keys(serviceData).length === 0) return;
 
         const [domain, service] = config.service.split('.');
