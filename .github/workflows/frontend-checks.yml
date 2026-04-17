@@ -56,10 +56,20 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Run tests
-        run: yarn test --coverage --coverage.reporter=json
+        run: >-
+          yarn test --coverage --coverage.reporter=json
+          --reporter=default --reporter=junit
+          --outputFile.junit=junit.xml
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: typescript
           files: ./coverage/coverage-final.json
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: typescript
+          files: junit.xml

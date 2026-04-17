@@ -96,7 +96,7 @@ jobs:
         # CI-only deps installed separately to keep requirements_dev.txt lightweight
         run: |
           uv pip install --system pytest-cov pytest-github-actions-annotate-failures
-          pytest ./tests/ --cov=custom_components/lock_code_manager/ --cov-report=xml
+          pytest ./tests/ --cov=custom_components/lock_code_manager/ --cov-report=xml --junitxml=junit.xml
       - name: Upload coverage to Codecov
         if: matrix.python-version == needs.setup.outputs.target-python
         uses: codecov/codecov-action@v6
@@ -104,3 +104,10 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: python
           files: coverage.xml
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && matrix.python-version == needs.setup.outputs.target-python }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: python
+          files: junit.xml
