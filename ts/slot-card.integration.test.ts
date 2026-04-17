@@ -1501,14 +1501,31 @@ describe('LockCodeManagerSlotCard integration', () => {
 
     describe('_renderConditionEntity', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('renders with edit actions when showEdit is true', async () => {
-            const card = document.createElement('lcm-slot') as SlotCardElement &
-                Record<string, unknown>;
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
             card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
+        });
 
+        /** Recursively collect all function values from a TemplateResult */
+        function collectHandlers(result: any): Array<(...args: any[]) => void> {
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectHandlers(v));
+                }
+            }
+            return handlers;
+        }
+
+        it('renders with edit actions when showEdit is true', () => {
             const entity = {
                 condition_entity_id: 'switch.test',
                 domain: 'switch',
@@ -1517,9 +1534,24 @@ describe('LockCodeManagerSlotCard integration', () => {
             };
             const result = (card as any)._renderConditionEntity(entity, true);
             expect(result).toBeDefined();
-            // The showEdit=true branch produces a nested TemplateResult in
-            // the values array containing the edit/delete icons.
             expect(result.values.length).toBeGreaterThan(0);
+        });
+
+        it('inline click handlers execute without error', () => {
+            const entity = {
+                condition_entity_id: 'switch.test',
+                domain: 'switch',
+                friendly_name: 'Test Switch',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionEntity(entity, true);
+            const handlers = collectHandlers(result);
+            // Exercise each handler — these are the click/stopPropagation
+            // lambdas inside the template that codecov flags as uncovered.
+            for (const handler of handlers) {
+                expect(() => handler({ stopPropagation: () => {} })).not.toThrow();
+            }
+            expect(handlers.length).toBeGreaterThan(0);
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

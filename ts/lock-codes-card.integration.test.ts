@@ -601,16 +601,20 @@ describe('LockCodesCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_renderCodeEditMode', () => {
+    describe('_renderCodeEditMode and _renderCodeSection dispatch', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('renders edit input template', async () => {
-            const card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
                 Record<string, unknown>;
             card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
+        });
 
+        it('renders edit input template via _renderCodeEditMode', () => {
             (card as any)._editValue = '9999';
             (card as any)._saving = false;
             const slot = { slot: 1, code: '1234', managed: false };
@@ -619,6 +623,30 @@ describe('LockCodesCard integration', () => {
             const strings = result.strings?.join('') ?? '';
             expect(strings).toContain('slot-code-edit');
             expect(strings).toContain('slot-code-input');
+        });
+
+        it('_renderCodeSection dispatches to edit mode when editing unmanaged slot', () => {
+            (card as any)._editingSlot = 1;
+            (card as any)._editValue = '9999';
+            (card as any)._saving = false;
+            const slot = { slot: 1, code: '1234', managed: false };
+            const result = (card as any)._renderCodeSection(slot, true, 'masked_with_reveal');
+            expect(result).toBeDefined();
+            const strings = result.strings?.join('') ?? '';
+            expect(strings).toContain('slot-code-edit');
+        });
+
+        it('edit mode stopPropagation wrapper is called', () => {
+            (card as any)._editValue = '9999';
+            (card as any)._saving = false;
+            const slot = { slot: 1, code: '1234', managed: false };
+            const result = (card as any)._renderCodeEditMode(slot);
+            // The first value in the template is the stopPropagation handler
+            const stopPropHandler = result.values?.find((v: unknown) => typeof v === 'function');
+            expect(stopPropHandler).toBeDefined();
+            const mockEvent = { stopPropagation: vi.fn() };
+            stopPropHandler(mockEvent);
+            expect(mockEvent.stopPropagation).toHaveBeenCalled();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
