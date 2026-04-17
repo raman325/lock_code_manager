@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "fc2638885a55",
+  "strategy": "manual-commit",
+  "branch": "test/ts-coverage-gaps",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fc/2638885a55/0/metadata.json",
+      "transcript": "/fc/2638885a55/0/full.jsonl",
+      "content_hash": "/fc/2638885a55/0/content_hash.txt",
+      "prompt": "/fc/2638885a55/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13468,
+    "cache_creation_tokens": 9459519,
+    "cache_read_tokens": 1145553881,
+    "output_tokens": 1062427,
+    "api_call_count": 2504
+  }
+}
