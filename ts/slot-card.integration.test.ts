@@ -1219,4 +1219,340 @@ describe('LockCodeManagerSlotCard integration', () => {
             /* eslint-enable @typescript-eslint/no-explicit-any */
         });
     });
+
+    describe('edit field handlers', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let callServiceMock: ReturnType<typeof vi.fn>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            const hass = createMockHassWithConnection({
+                states: {
+                    'text.slot_1_name': { state: 'Test' },
+                    'text.slot_1_pin': { state: '1234' },
+                    'number.slot_1_uses': { state: '5' }
+                }
+            });
+            callServiceMock = vi.fn().mockResolvedValue(undefined);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (hass as any).callService = callServiceMock;
+            card.hass = hass;
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('_startEditing sets editingField for name', () => {
+            (card as any)._startEditing('name');
+            expect((card as any)._editingField).toBe('name');
+        });
+
+        it('_startEditing reveals PIN before entering edit mode', () => {
+            (card as any)._revealed = false;
+            (card as any)._startEditing('pin');
+            expect((card as any)._revealed).toBe(true);
+        });
+
+        it('_handleEditBlur saves value and clears editingField', () => {
+            (card as any)._editingField = 'name';
+            (card as any)._data = makeSlotCardData({
+                entities: { name: 'text.slot_1_name' }
+            });
+            const mockEvent = { target: { value: 'New Name' } };
+            (card as any)._handleEditBlur(mockEvent);
+            expect((card as any)._editingField).toBeNull();
+        });
+
+        it('_handleEditKeydown saves on Enter', () => {
+            (card as any)._editingField = 'name';
+            (card as any)._data = makeSlotCardData({
+                entities: { name: 'text.slot_1_name' }
+            });
+            const mockEvent = { key: 'Enter', target: { value: 'New Name' } };
+            (card as any)._handleEditKeydown(mockEvent);
+            expect((card as any)._editingField).toBeNull();
+        });
+
+        it('_handleEditKeydown cancels on Escape', () => {
+            (card as any)._editingField = 'name';
+            const mockEvent = { key: 'Escape', target: { value: 'ignored' } };
+            (card as any)._handleEditKeydown(mockEvent);
+            expect((card as any)._editingField).toBeNull();
+        });
+
+        it('_saveEditValue calls service for name field', async () => {
+            (card as any)._editingField = 'name';
+            (card as any)._data = makeSlotCardData({
+                entities: { name: 'text.slot_1_name' }
+            });
+            await (card as any)._saveEditValue('New Name');
+            expect(callServiceMock).toHaveBeenCalledWith(
+                'text',
+                'set_value',
+                expect.objectContaining({
+                    entity_id: 'text.slot_1_name',
+                    value: 'New Name'
+                })
+            );
+        });
+
+        it('_saveEditValue sets error when entity is missing', async () => {
+            (card as any)._editingField = 'name';
+            (card as any)._data = makeSlotCardData({ entities: {} });
+            await (card as any)._saveEditValue('New Name');
+            expect((card as any)._actionError).toContain('unavailable');
+        });
+
+        it('_saveEditValue sets error when entity state is unavailable', async () => {
+            (card as any)._editingField = 'pin';
+            (card as any)._data = makeSlotCardData({
+                entities: { pin: 'text.slot_1_pin' }
+            });
+            (card as any)._hass.states['text.slot_1_pin'] = { state: 'unavailable' };
+            await (card as any)._saveEditValue('5678');
+            expect((card as any)._actionError).toContain('unavailable');
+        });
+
+        it('_saveEditValue skips invalid numberOfUses value', async () => {
+            (card as any)._editingField = 'numberOfUses';
+            (card as any)._data = makeSlotCardData({
+                entities: { number_of_uses: 'number.slot_1_uses' }
+            });
+            await (card as any)._saveEditValue('abc');
+            expect(callServiceMock).not.toHaveBeenCalled();
+        });
+
+        it('_saveEditValue sets error when service call fails', async () => {
+            (card as any)._editingField = 'name';
+            (card as any)._data = makeSlotCardData({
+                entities: { name: 'text.slot_1_name' }
+            });
+            callServiceMock.mockRejectedValueOnce(new Error('Service failed'));
+            await (card as any)._saveEditValue('New Name');
+            expect((card as any)._actionError).toContain('Failed to update name');
+        });
+
+        it('_saveEditValue returns early without hass', async () => {
+            (card as any)._hass = null;
+            (card as any)._editingField = 'name';
+            await (card as any)._saveEditValue('test');
+            expect(callServiceMock).not.toHaveBeenCalled();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_handleEnabledToggle', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let callServiceMock: ReturnType<typeof vi.fn>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            const hass = createMockHassWithConnection();
+            callServiceMock = vi.fn().mockResolvedValue(undefined);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (hass as any).callService = callServiceMock;
+            card.hass = hass;
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('calls turn_on when toggling to enabled', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { enabled: 'switch.slot_1_enabled' }
+            });
+            const mockEvent = { target: { checked: true } };
+            await (card as any)._handleEnabledToggle(mockEvent);
+            expect(callServiceMock).toHaveBeenCalledWith('switch', 'turn_on', {
+                entity_id: 'switch.slot_1_enabled'
+            });
+        });
+
+        it('calls turn_off when toggling to disabled', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { enabled: 'switch.slot_1_enabled' }
+            });
+            const mockEvent = { target: { checked: false } };
+            await (card as any)._handleEnabledToggle(mockEvent);
+            expect(callServiceMock).toHaveBeenCalledWith('switch', 'turn_off', {
+                entity_id: 'switch.slot_1_enabled'
+            });
+        });
+
+        it('returns early without hass', async () => {
+            (card as any)._hass = null;
+            const mockEvent = { target: { checked: true } };
+            await (card as any)._handleEnabledToggle(mockEvent);
+            expect(callServiceMock).not.toHaveBeenCalled();
+        });
+
+        it('returns early when enabled entity is missing', async () => {
+            (card as any)._data = makeSlotCardData({ entities: {} });
+            const mockEvent = { target: { checked: true } };
+            await (card as any)._handleEnabledToggle(mockEvent);
+            expect(callServiceMock).not.toHaveBeenCalled();
+        });
+
+        it('sets action error when service call fails', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { enabled: 'switch.slot_1_enabled' }
+            });
+            callServiceMock.mockRejectedValueOnce(new Error('Switch failed'));
+            const mockEvent = { target: { checked: true } };
+            await (card as any)._handleEnabledToggle(mockEvent);
+            expect((card as any)._actionError).toContain('Failed to enable slot');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_saveEditValue for pin field', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('calls text.set_value for pin field with trimmed value', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            const hass = createMockHassWithConnection({
+                states: { 'text.slot_1_pin': { state: '1234' } }
+            });
+            const callServiceMock = vi.fn().mockResolvedValue(undefined);
+            (hass as any).callService = callServiceMock;
+            card.hass = hass;
+            container.appendChild(card);
+            await flush();
+
+            (card as any)._editingField = 'pin';
+            (card as any)._data = makeSlotCardData({ entities: { pin: 'text.slot_1_pin' } });
+            await (card as any)._saveEditValue(' 5678 ');
+            expect(callServiceMock).toHaveBeenCalledWith(
+                'text',
+                'set_value',
+                expect.objectContaining({ entity_id: 'text.slot_1_pin', value: '5678' })
+            );
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderConditionContext', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('returns context for active calendar with event', () => {
+            const entity = {
+                calendar: {
+                    end_time: '2026-01-01T12:00:00',
+                    start_time: '2026-01-01T10:00:00',
+                    summary: 'Test Event'
+                },
+                condition_entity_id: 'calendar.test',
+                domain: 'calendar',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionContext(entity, true);
+            expect(result).not.toBe(undefined);
+            expect(result.values).toBeDefined();
+        });
+
+        it('returns context for inactive calendar with next event', () => {
+            const entity = {
+                calendar_next: { start_time: '2026-01-02T10:00:00', summary: 'Next Event' },
+                condition_entity_id: 'calendar.test',
+                domain: 'calendar',
+                state: 'off'
+            };
+            const result = (card as any)._renderConditionContext(entity, false);
+            expect(result).not.toBe(undefined);
+            expect(result.values).toBeDefined();
+        });
+
+        it('returns context for active schedule', () => {
+            const entity = {
+                condition_entity_id: 'schedule.test',
+                domain: 'schedule',
+                schedule: { next_event: '2026-01-01T17:00:00' },
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionContext(entity, true);
+            expect(result).not.toBe(undefined);
+            expect(result.values).toBeDefined();
+        });
+
+        it('returns nothing for binary_sensor', () => {
+            const entity = {
+                condition_entity_id: 'binary_sensor.test',
+                domain: 'binary_sensor',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionContext(entity, true);
+            // Lit's `nothing` is a symbol
+            expect(typeof result).toBe('symbol');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderConditionEntity', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Recursively collect all function values from a TemplateResult */
+        function collectHandlers(result: any): Array<(...args: any[]) => void> {
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectHandlers(v));
+                }
+            }
+            return handlers;
+        }
+
+        it('renders with edit actions when showEdit is true', () => {
+            const entity = {
+                condition_entity_id: 'switch.test',
+                domain: 'switch',
+                friendly_name: 'Test Switch',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionEntity(entity, true);
+            expect(result).toBeDefined();
+            expect(result.values.length).toBeGreaterThan(0);
+        });
+
+        it('inline click handlers execute without error', () => {
+            const entity = {
+                condition_entity_id: 'switch.test',
+                domain: 'switch',
+                friendly_name: 'Test Switch',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionEntity(entity, true);
+            const handlers = collectHandlers(result);
+            // Exercise each handler — these are the click/stopPropagation
+            // lambdas inside the template that codecov flags as uncovered.
+            for (const handler of handlers) {
+                expect(() => handler({ stopPropagation: () => {} })).not.toThrow();
+            }
+            expect(handlers.length).toBeGreaterThan(0);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });
