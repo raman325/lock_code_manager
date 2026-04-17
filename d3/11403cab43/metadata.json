@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d311403cab43",
+  "strategy": "manual-commit",
+  "branch": "refactor/ts-method-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card.ts",
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d3/11403cab43/0/metadata.json",
+      "transcript": "/d3/11403cab43/0/full.jsonl",
+      "content_hash": "/d3/11403cab43/0/content_hash.txt",
+      "prompt": "/d3/11403cab43/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13302,
+    "cache_creation_tokens": 9323538,
+    "cache_read_tokens": 1072968652,
+    "output_tokens": 1001133,
+    "api_call_count": 2355
+  }
+}

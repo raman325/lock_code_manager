@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d311403cab43",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-17T04:17:00.19537Z",
+  "branch": "refactor/ts-method-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card.ts",
+    "ts/slot-card.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "abaf01285aca",
+  "token_usage": {
+    "input_tokens": 13302,
+    "cache_creation_tokens": 9323538,
+    "cache_read_tokens": 1072968652,
+    "output_tokens": 1001133,
+    "api_call_count": 2355
+  },
+  "session_metrics": {
+    "turn_count": 199
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-17T04:16:53.707156Z",
+    "agent_lines": 0,
+    "human_added": 17,
+    "human_modified": 203,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 0
+  }
+}
