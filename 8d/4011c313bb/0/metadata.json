@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8d4011c313bb",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-17T05:27:34.85957Z",
+  "branch": "refactor/ts-method-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "b8919d688ae6",
+  "token_usage": {
+    "input_tokens": 13405,
+    "cache_creation_tokens": 9402335,
+    "cache_read_tokens": 1116339657,
+    "output_tokens": 1037258,
+    "api_call_count": 2449
+  },
+  "session_metrics": {
+    "turn_count": 204
+  }
+}
