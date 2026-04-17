@@ -200,6 +200,11 @@ describe('LcmSubscriptionMixin integration', () => {
     });
 
     describe('_formatSubscriptionError', () => {
+        beforeEach(() => {
+            el = document.createElement('test-subscription-element') as TestSubscriptionElement;
+            container.appendChild(el);
+        });
+
         it('returns message from Error instance', () => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             expect((el as any)._formatSubscriptionError(new Error('test error'))).toBe(

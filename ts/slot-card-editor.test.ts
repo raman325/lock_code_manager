@@ -880,6 +880,13 @@ describe('LcmSlotCardEditor integration', () => {
     });
     describe('_configEntryChanged', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
+        beforeEach(async () => {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+        });
+
         it('updates config_entry_id and dispatches', async () => {
             const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
             (el as any)._config = { config_entry_id: 'old', slot: 1, type: 'custom:lcm-slot' };
@@ -906,6 +913,13 @@ describe('LcmSlotCardEditor integration', () => {
 
     describe('_slotChanged', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
+        beforeEach(async () => {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+        });
+
         it('updates slot number and dispatches', () => {
             const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
             (el as any)._config = { config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' };
@@ -935,6 +949,13 @@ describe('LcmSlotCardEditor integration', () => {
 
     describe('_displayModeChanged', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
+        beforeEach(async () => {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+        });
+
         it('updates code_display and dispatches', () => {
             const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
             (el as any)._config = {
