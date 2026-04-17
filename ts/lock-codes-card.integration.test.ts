@@ -555,4 +555,71 @@ describe('LockCodesCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('_identifyBorrowedSlots', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('borrows from next empty group for odd lone active slot', () => {
+            const groups = [
+                { slots: [{ slot: 1, code: '1234', managed: true }], type: 'active' as const },
+                {
+                    slots: [
+                        { slot: 2, code: null, managed: false },
+                        { slot: 3, code: null, managed: false }
+                    ],
+                    type: 'empty' as const
+                }
+            ];
+            const borrowed = (card as any)._identifyBorrowedSlots(groups);
+            expect(borrowed.has(2)).toBe(true);
+        });
+
+        it('borrows from prev empty group for even lone active slot', () => {
+            const groups = [
+                {
+                    slots: [
+                        { slot: 1, code: null, managed: false },
+                        { slot: 2, code: null, managed: false }
+                    ],
+                    type: 'empty' as const
+                },
+                { slots: [{ slot: 4, code: '5678', managed: true }], type: 'active' as const }
+            ];
+            const borrowed = (card as any)._identifyBorrowedSlots(groups);
+            expect(borrowed.has(2)).toBe(true);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderCodeEditMode', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders edit input template', async () => {
+            const card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            (card as any)._editValue = '9999';
+            (card as any)._saving = false;
+            const slot = { slot: 1, code: '1234', managed: false };
+            const result = (card as any)._renderCodeEditMode(slot);
+            expect(result).toBeDefined();
+            const strings = result.strings?.join('') ?? '';
+            expect(strings).toContain('slot-code-edit');
+            expect(strings).toContain('slot-code-input');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });

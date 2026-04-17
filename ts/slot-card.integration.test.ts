@@ -1406,4 +1406,121 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('_saveEditValue for pin field', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('calls text.set_value for pin field with trimmed value', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            const hass = createMockHassWithConnection({
+                states: { 'text.slot_1_pin': { state: '1234' } }
+            });
+            const callServiceMock = vi.fn().mockResolvedValue(undefined);
+            (hass as any).callService = callServiceMock;
+            card.hass = hass;
+            container.appendChild(card);
+            await flush();
+
+            (card as any)._editingField = 'pin';
+            (card as any)._data = makeSlotCardData({ entities: { pin: 'text.slot_1_pin' } });
+            await (card as any)._saveEditValue(' 5678 ');
+            expect(callServiceMock).toHaveBeenCalledWith(
+                'text',
+                'set_value',
+                expect.objectContaining({ entity_id: 'text.slot_1_pin', value: '5678' })
+            );
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderConditionContext', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('returns context for active calendar with event', () => {
+            const entity = {
+                calendar: {
+                    end_time: '2026-01-01T12:00:00',
+                    start_time: '2026-01-01T10:00:00',
+                    summary: 'Test Event'
+                },
+                condition_entity_id: 'calendar.test',
+                domain: 'calendar',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionContext(entity, true);
+            expect(result).not.toBe(undefined);
+            expect(result.values).toBeDefined();
+        });
+
+        it('returns context for inactive calendar with next event', () => {
+            const entity = {
+                calendar_next: { start_time: '2026-01-02T10:00:00', summary: 'Next Event' },
+                condition_entity_id: 'calendar.test',
+                domain: 'calendar',
+                state: 'off'
+            };
+            const result = (card as any)._renderConditionContext(entity, false);
+            expect(result).not.toBe(undefined);
+            expect(result.values).toBeDefined();
+        });
+
+        it('returns context for active schedule', () => {
+            const entity = {
+                condition_entity_id: 'schedule.test',
+                domain: 'schedule',
+                schedule: { next_event: '2026-01-01T17:00:00' },
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionContext(entity, true);
+            expect(result).not.toBe(undefined);
+            expect(result.values).toBeDefined();
+        });
+
+        it('returns nothing for binary_sensor', () => {
+            const entity = {
+                condition_entity_id: 'binary_sensor.test',
+                domain: 'binary_sensor',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionContext(entity, true);
+            // Lit's `nothing` is a symbol
+            expect(typeof result).toBe('symbol');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderConditionEntity', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders with edit actions when showEdit is true', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            const entity = {
+                condition_entity_id: 'switch.test',
+                domain: 'switch',
+                friendly_name: 'Test Switch',
+                state: 'on'
+            };
+            const result = (card as any)._renderConditionEntity(entity, true);
+            expect(result).toBeDefined();
+            // The showEdit=true branch produces a nested TemplateResult in
+            // the values array containing the edit/delete icons.
+            expect(result.values.length).toBeGreaterThan(0);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });
