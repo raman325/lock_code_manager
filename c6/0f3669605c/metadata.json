@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c60f3669605c",
+  "strategy": "manual-commit",
+  "branch": "refactor/externalize-component-styles",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card.ts",
+    "ts/slot-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c6/0f3669605c/0/metadata.json",
+      "transcript": "/c6/0f3669605c/0/full.jsonl",
+      "content_hash": "/c6/0f3669605c/0/content_hash.txt",
+      "prompt": "/c6/0f3669605c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13226,
+    "cache_creation_tokens": 9251791,
+    "cache_read_tokens": 1051194059,
+    "output_tokens": 974987,
+    "api_call_count": 2299
+  }
+}
