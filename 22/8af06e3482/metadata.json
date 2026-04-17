@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "228af06e3482",
+  "strategy": "manual-commit",
+  "branch": "refactor/ts-method-extraction",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/22/8af06e3482/0/metadata.json",
+      "transcript": "/22/8af06e3482/0/full.jsonl",
+      "content_hash": "/22/8af06e3482/0/content_hash.txt",
+      "prompt": "/22/8af06e3482/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13393,
+    "cache_creation_tokens": 9392085,
+    "cache_read_tokens": 1110889616,
+    "output_tokens": 1032326,
+    "api_call_count": 2438
+  }
+}
