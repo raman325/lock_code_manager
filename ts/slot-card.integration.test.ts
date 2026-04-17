@@ -1555,4 +1555,194 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('_getConditionEntityIcon', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it.each([
+            ['calendar', true],
+            ['calendar', false],
+            ['binary_sensor', true],
+            ['switch', true],
+            ['switch', false],
+            ['schedule', true],
+            ['input_boolean', true],
+            ['input_boolean', false],
+            ['unknown_domain', true]
+        ])('returns an icon for domain=%s isActive=%s', (domain, isActive) => {
+            const icon = (card as any)._getConditionEntityIcon(domain, isActive);
+            expect(typeof icon).toBe('string');
+            expect(icon.length).toBeGreaterThan(0);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_getConditionStatusText', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it.each([
+            ['calendar', true, 'Event active'],
+            ['calendar', false, 'No event'],
+            ['schedule', true, 'In schedule'],
+            ['schedule', false, 'Outside schedule'],
+            ['switch', true, 'On'],
+            ['switch', false, 'Off']
+        ])('returns correct text for domain=%s isActive=%s', (domain, isActive, expected) => {
+            const text = (card as any)._getConditionStatusText(domain, isActive);
+            expect(text).toContain(expected);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_formatScheduleDate', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+            // Pin time AFTER element setup so flush()'s setTimeout isn't blocked
+            vi.useFakeTimers();
+            vi.setSystemTime(new Date('2026-03-18T12:00:00'));
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('returns empty string for today', () => {
+            expect((card as any)._formatScheduleDate(new Date('2026-03-18T17:00:00'))).toBe('');
+        });
+
+        it('returns "tomorrow " for tomorrow', () => {
+            expect((card as any)._formatScheduleDate(new Date('2026-03-19T10:00:00'))).toBe(
+                'tomorrow '
+            );
+        });
+
+        it('returns weekday for other dates', () => {
+            const result = (card as any)._formatScheduleDate(new Date('2026-03-23T10:00:00'));
+            expect(result.length).toBeGreaterThan(0);
+            expect(result).not.toBe('tomorrow ');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_formatLockCode', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('returns null for empty code', () => {
+            expect((card as any)._formatLockCode({ code: 'empty' })).toBeNull();
+        });
+
+        it('returns bullets for unknown code', () => {
+            expect((card as any)._formatLockCode({ code: 'unknown' })).toBe('• • •');
+        });
+
+        it('returns masked code when not revealed', () => {
+            (card as any)._revealed = false;
+            expect((card as any)._formatLockCode({ code: '1234' })).toBe('••••');
+        });
+
+        it('returns actual code when revealed', () => {
+            (card as any)._revealed = true;
+            (card as any)._config = {
+                config_entry_id: 'abc',
+                slot: 1,
+                type: 'custom:lcm-slot',
+                code_display: 'masked_with_reveal'
+            };
+            expect((card as any)._formatLockCode({ code: '1234' })).toBe('1234');
+        });
+
+        it('returns null for null code', () => {
+            expect((card as any)._formatLockCode({ code: null })).toBeNull();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_navigateToEventHistory', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('dispatches hass-more-info event', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            (card as any)._data = makeSlotCardData({ event_entity_id: 'event.test_slot_1' });
+            const dispatchSpy = vi.spyOn(card, 'dispatchEvent');
+            (card as any)._navigateToEventHistory();
+            expect(dispatchSpy).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'hass-more-info' })
+            );
+            dispatchSpy.mockRestore();
+        });
+
+        it('returns early without event_entity_id', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            (card as any)._data = makeSlotCardData({});
+            const dispatchSpy = vi.spyOn(card, 'dispatchEvent');
+            (card as any)._navigateToEventHistory();
+            expect(dispatchSpy).not.toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_toggleLockStatus', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('toggles lock status expanded state', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            expect((card as any)._lockStatusExpanded).toBe(false);
+            (card as any)._toggleLockStatus();
+            expect((card as any)._lockStatusExpanded).toBe(true);
+            (card as any)._toggleLockStatus();
+            expect((card as any)._lockStatusExpanded).toBe(false);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });

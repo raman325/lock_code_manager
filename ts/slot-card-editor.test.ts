@@ -1,5 +1,5 @@
 /* eslint-disable no-underscore-dangle */
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { createMockHass } from './test/mock-hass';
@@ -877,6 +877,112 @@ describe('LcmSlotCardEditor integration', () => {
             }
             expect(handlers.length).toBeGreaterThan(0);
         });
+    });
+    describe('_configEntryChanged', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        beforeEach(async () => {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+        });
+
+        it('updates config_entry_id and dispatches', async () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = { config_entry_id: 'old', slot: 1, type: 'custom:lcm-slot' };
+            (el as any)._configEntryChanged({ target: { value: 'new-id' } });
+            expect((el as any)._config.config_entry_id).toBe('new-id');
+            expect(dispatchSpy).toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+
+        it('returns early when value unchanged', () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = { config_entry_id: 'same', slot: 1, type: 'custom:lcm-slot' };
+            (el as any)._configEntryChanged({ target: { value: 'same' } });
+            expect(dispatchSpy).not.toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+
+        it('returns early without config', () => {
+            (el as any)._config = undefined;
+            expect(() => (el as any)._configEntryChanged({ target: { value: 'x' } })).not.toThrow();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_slotChanged', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        beforeEach(async () => {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+        });
+
+        it('updates slot number and dispatches', () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = { config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' };
+            (el as any)._slotChanged({ target: { value: '5' } });
+            expect((el as any)._config.slot).toBe(5);
+            expect(dispatchSpy).toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+
+        it('returns early for NaN value', () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = { config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' };
+            (el as any)._slotChanged({ target: { value: 'abc' } });
+            expect(dispatchSpy).not.toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+
+        it('returns early when slot unchanged', () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = { config_entry_id: 'abc', slot: 3, type: 'custom:lcm-slot' };
+            (el as any)._slotChanged({ target: { value: '3' } });
+            expect(dispatchSpy).not.toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_displayModeChanged', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        beforeEach(async () => {
+            el = createEditor();
+            el.hass = createMockHass({ callWS: () => [] });
+            container.appendChild(el);
+            await flush();
+        });
+
+        it('updates code_display and dispatches', () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = {
+                config_entry_id: 'abc',
+                slot: 1,
+                type: 'custom:lcm-slot',
+                code_display: 'masked'
+            };
+            (el as any)._displayModeChanged({ target: { value: 'unmasked' } });
+            expect((el as any)._config.code_display).toBe('unmasked');
+            expect(dispatchSpy).toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+
+        it('returns early when mode unchanged', () => {
+            const dispatchSpy = vi.spyOn(el, 'dispatchEvent');
+            (el as any)._config = {
+                config_entry_id: 'abc',
+                slot: 1,
+                type: 'custom:lcm-slot',
+                code_display: 'masked'
+            };
+            (el as any)._displayModeChanged({ target: { value: 'masked' } });
+            expect(dispatchSpy).not.toHaveBeenCalled();
+            dispatchSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
     });
     /* eslint-enable @typescript-eslint/no-explicit-any */
 });

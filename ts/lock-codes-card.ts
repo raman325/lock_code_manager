@@ -600,21 +600,17 @@ class LockCodesCard extends LockCodesCardBase {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
-        // Active code on the lock
-        if (isSlotEmpty(slot.code) && !slot.code_length) return 'no-code';
         if (slot.code === SLOT_CODE_UNKNOWN || slot.code_length) return 'masked';
-        if (slot.code !== null && slot.code !== '') return '';
+        if (!isSlotEmpty(slot.code)) return '';
 
-        // No active code - check for configured code (disabled LCM slot)
+        // Empty/null code on the lock — check for a configured PIN
+        // (disabled LCM slot where the code hasn't been pushed yet).
         if (slot.configured_code) {
-            // We have the actual code - choose class based on display mode
             return shouldMask ? 'disabled masked' : 'disabled';
         }
         if (slot.configured_code_length) {
-            // Only have length (always masked)
             return 'disabled masked';
         }
-
         return 'no-code';
     }
 
