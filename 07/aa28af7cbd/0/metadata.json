@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "07aa28af7cbd",
+  "session_id": "6629a885-3d0f-45f3-b34c-af9881428368",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-17T05:58:17.77847Z",
+  "branch": "test/ts-coverage-gaps",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card.ts",
+    "ts/slot-card-editor.test.ts",
+    "ts/slot-card.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "db780f536619",
+  "token_usage": {
+    "input_tokens": 13462,
+    "cache_creation_tokens": 9456924,
+    "cache_read_tokens": 1143323031,
+    "output_tokens": 1060444,
+    "api_call_count": 2500
+  },
+  "session_metrics": {
+    "turn_count": 207
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-17T05:58:11.169901Z",
+    "agent_lines": 0,
+    "human_added": 479,
+    "human_modified": 25,
+    "human_removed": 0,
+    "total_committed": 479,
+    "agent_percentage": 0
+  }
+}
