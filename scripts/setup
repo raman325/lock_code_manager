@@ -53,14 +53,13 @@ fi
 pip install --upgrade uv
 uv pip install -r requirements_dev.txt
 
-# Install prek (fast Rust-based pre-commit replacement).
-# Falls back to pre-commit if prek is not available.
+# Install git hooks. Prefer prek (fast Rust-based replacement).
+# If prek is unavailable, use a uv-managed pre-commit pinned to Python 3.13
+# instead of whatever pre-commit binary may already be on PATH (a Homebrew
+# install linked against Python 3.14 fails on macOS).
 if command -v prek &> /dev/null; then
   prek install
-elif command -v pre-commit &> /dev/null; then
-  pre-commit install
 else
-  # Install pre-commit as a uv-managed tool pinned to Python 3.13.
   uv tool install --force --python 3.13 pre-commit
   pre-commit install
 fi

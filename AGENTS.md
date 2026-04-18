@@ -186,16 +186,9 @@ See `TODO.md` for implementation details.
 scripts/setup
 ```
 
-Creates Python 3.13 venv, installs dependencies with uv, sets up pre-commit hooks, and installs Node dependencies.
-
-**pre-commit on Python 3.14 (macOS)**: `scripts/setup` installs pre-commit
-as a uv tool pinned to Python 3.13 (`uv tool install --python 3.13
-pre-commit`). If your `pre-commit` was previously installed via Homebrew
-and Homebrew's Python is 3.14, it will fail on macOS with
-`Symbol not found: _XML_SetAllocTrackerActivationThreshold` — Python 3.14's
-bundled `pyexpat` is built against a newer `libexpat` than the one
-`/usr/lib/libexpat.1.dylib` provides. Run `brew uninstall pre-commit` so
-the uv-managed binary at `~/.local/bin/pre-commit` is the one in `PATH`.
+Creates Python 3.13 venv, installs dependencies with uv, sets up git hooks
+(preferring `prek` with fallback to uv-managed `pre-commit`), and installs
+Node dependencies.
 
 ### Testing
 
@@ -238,7 +231,7 @@ yarn watch                     # Watch mode for development
 - Python: Ruff for linting/formatting (line length: 88)
 - Import order: future → stdlib → third-party → homeassistant → first-party → local
 - **No inline/local imports** — always import at the top of the file. Restructure modules to avoid circular dependencies.
-- **No `nonlocal`/`local`/`global`** — use mutable containers or restructure instead.
+- **No `nonlocal`/`global`** — use mutable containers or restructure instead.
 - Type annotations: Keep older style (`dict[str, Any]` not `dict[str, Any] | None` where possible)
 - Docstrings: Required for all public functions. Prefer prose explaining intent over mechanical
   re-statements of parameters. Do NOT add Google-style `Args:`/`Returns:` sections — type
