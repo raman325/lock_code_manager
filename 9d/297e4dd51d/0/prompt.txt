@@ -726,3 +726,173 @@ service_provider_tests.py is a weird name for a module that doesn't conform to a
 <usage><total_tokens>66901</total_tokens><tool_uses>55</tool_uses><duration_ms>203317</duration_ms></usage>
 <worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a2f1b0ab</worktreePath><worktreeBranch>worktree-agent-a2f1b0ab</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+ok merged. now let's kick off two parallel subagents - 1 to do the other providers (move them into modules, try to bring in real fixtures but generally go to the source, either core or the custom integration repo, and find the best tests we can and make ours at least as good), and the other to figure out how to do oit for the integration itself and how to split that work up into non conflicting PRs so we can do it in parallel
+
+---
+
+<task-notification>
+<task-id>a48a1f1cbf30b26a4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/a48a1f1cbf30b26a4.output</output-file>
+<status>completed</status>
+<summary>Agent "Research: other provider test modules" completed</summary>
+<result>Here is the report.
+
+---
+
+## Test Refactoring Report: Schlage, Akuvox, Virtual Providers
+
+### Current State
+
+| Provider | Lines | Fixtures | Mocks/Patches | Shared Mixins |
+|----------|-------|----------|---------------|---------------|
+| Schlage | 634 | `schlage_config_entry`, `schlage_lock`, `lcm_config_entry`, 4 alias fixtures | `register_mock_service` for `get_codes`, `add_code`, `delete_code`; one `patch.object` for `_async_tag_unmanaged_codes` | `ServiceProviderConnectionTests`, `ServiceProviderDeviceAvailabilityTests` |
+| Akuvox | 774 | `akuvox_config_entry`, `akuvox_lock`, `lcm_config_entry`, 4 alias fixtures | `register_mock_service` for `list_users`, `add_user`, `modify_user`, `delete_user` | `ServiceProviderConnectionTests` only |
+| Virtual | 223 | `virtual_lock`, `virtual_lock_with_slots` | None -- purely in-memory, no service mocking | None |
+
+### External Integration References
+
+- **Schlage**: No Schlage custom component repo found at `/Users/raman/projects/`. These tests mock services directly (no real integration fixtures needed -- the service-mock pattern is already the correct approach for a cloud-API integration).
+- **Akuvox**: No Akuvox custom component repo found either. Same service-mock pattern applies.
+- **Virtual**: LCM's own provider. No external reference needed. Tests are self-contained.
+
+### What Changes in the Module Move
+
+For each provider, the refactoring is mechanical:
+1. Create `tests/providers/&lt;provider&gt;/` directory with `__init__.py`, `conftest.py`, `test_&lt;provider&gt;.py`
+2. Move fixtures from the test file into `conftest.py`
+3. Move alias fixtures (`provider_lock`, etc.) into `conftest.py`
+4. No mocking changes needed -- all three already use `register_mock_service` from `helpers.py` or direct in-memory state
+5. No new shared fixture infrastructure required beyond what `helpers.py` already provides
+
+### Estimated Effort
+
+- **Schlage**: Small -- straightforward file reorganization, well-structured with alias fixtures already in place
+- **Akuvox**: Small -- same pattern as Schlage, slightly more tests but identical structure
+- **Virtual**: Small -- simplest of the three, no service mocking, no shared mixins
+
+### Recommended Approach
+
+**Single PR for all three.** Rationale:
+- All three are purely mechanical moves (no logic changes)
+- Combined they total ~1,630 lines, manageable for review
+- No shared fixture infrastructure needs to be created first -- `helpers.py` already exists at the parent level
+- No external integration fixtures to build
+
+**Priority order** (if split is preferred): Schlage &gt; Akuvox &gt; Virtual. Schlage and Akuvox are structurally identical and could pair naturally. Virtual is trivial and could go with either.
+
+**No blockers**: The existing `helpers.py` at `tests/providers/helpers.py` with `register_mock_service` and the two mixin classes already serves all three providers correctly from the parent directory. The Matter and Z-Wave JS subdirectories have their own `helpers.py` files for provider-specific helpers, but Schlage/Akuvox/Virtual don't need provider-specific helper modules.</result>
+<usage><total_tokens>43220</total_tokens><tool_uses>11</tool_uses><duration_ms>51243</duration_ms></usage>
+</task-notification>
+
+---
+
+ok while that's going, let's create a PR where we stop clearing slots when we stop managing a lock/slot
+
+---
+
+<task-notification>
+<task-id>a1aa4fb9a6cf496fa</task-id>
+<tool-use-id>toolu_01LyyxWLiCCuxepYM9Eyvfe7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/a1aa4fb9a6cf496fa.output</output-file>
+<status>completed</status>
+<summary>Agent "Research: integration test refactor plan" completed</summary>
+<result>Now I have enough information to produce the report.
+
+---
+
+## Test Refactoring Plan
+
+### 1. Current Test Infrastructure
+
+**`tests/conftest.py`** provides four key autouse fixtures plus two entry-level fixtures:
+- `auto_enable_custom_integrations` -- enables custom integration loading
+- `auto_setup_mock_lock` -- patches `INTEGRATIONS_CLASS_MAP` to include `MockLCMLock` for the `"test"` domain
+- `disable_rate_limiting` -- zeroes out `_min_operation_delay` on all `BaseLock` instances
+- `mock_lock_config_entry` -- creates a **fake "test" integration** with mock lock + calendar entities, sets up its config entry, yields it, and unloads on teardown. This provides the prerequisite lock/calendar entities that Lock Code Manager needs.
+- `lock_code_manager_config_entry` -- creates a real LCM config entry using `BASE_CONFIG` (2 locks, 2 slots), calls `async_setup_entry` through the real code path, yields the entry, unloads on teardown.
+
+**`tests/common.py`** defines `MockLCMLock` (a `BaseLock` subclass with in-memory codes), `MockLockEntity`, `MockCalendarEntity`, entity ID constants, and `BASE_CONFIG`.
+
+**Key finding:** Most tests already go through real `async_setup_entry`. The `mock_lock_config_entry` fixture is not mocking LCM -- it creates the prerequisite lock entities that LCM manages. Only `test_config_flow.py` mocks out `async_setup_entry`/`async_unload_entry` (intentionally, since config flow tests only need the flow logic).
+
+### 2. Test Categories and Current State
+
+| Category | Files | Lines | Setup Pattern |
+|----------|-------|-------|---------------|
+| **Lifecycle** | `test_init.py` | 919 | Real setup via both fixtures; some tests create entries manually |
+| **Entity** | `test_binary_sensor.py`, `test_sensor.py` | 1231 | Real setup via both fixtures |
+| **Sync** | `test_sync.py` | 391 | Mixed: `TestCalculateInSync` is pure-logic (mock `SlotSyncManager`), but integration tests use real fixtures |
+| **Coordinator** | `test_coordinator.py` | 1067 | Creates its own `MockLockWithHardRefresh`, constructs coordinators directly with `mock_lock_config_entry` only |
+| **Config flow** | `test_config_flow.py` | 1090 | Patches out `async_setup_entry`/`async_unload_entry` (autouse fixture); tests flow logic only |
+| **API** | `test_websocket.py` | 2850 | Uses real fixtures; some tests also test pure helper functions |
+| **Unit** | `test_helpers.py`, `test_exceptions.py` | 405 | `test_helpers` uses real fixtures; `test_exceptions` constructs locks directly |
+
+### 3. Assessment
+
+The tests are already in good shape -- they go through real `async_setup_entry` for integration-level tests. The main areas for improvement:
+- **`test_coordinator.py`** defines its own `MockLockWithHardRefresh` and `MockLockWithPush` locally. These could use `MockLCMLock` from `common.py` or be shared if other tests need them.
+- **`test_sync.py`** has a clean split between pure-logic tests (using mocks) and integration tests (using real fixtures). No changes needed.
+- **`test_config_flow.py`** correctly bypasses entry setup since it only tests the flow. No changes needed.
+- **`conftest.py`** helper functions (`get_in_sync_entity_obj`, `async_trigger_sync_tick`, etc.) are imported by `test_binary_sensor.py` and `test_sync.py` -- these should stay in conftest.
+- **Hack in `mock_lock_config_entry`**: `hass.data["lock_code_manager_calendars"]` is a manual data injection for calendar entities. This could be cleaned up.
+
+### 4. Proposed PR Split
+
+**PR 1: Coordinator test cleanup** (low effort, no conflicts)
+- Files: `tests/test_coordinator.py`
+- Move `MockLockWithHardRefresh` / `MockLockWithPush` to `tests/common.py` if they have reuse potential, or keep local but derive from `MockLCMLock`
+- Verify all coordinator tests use `mock_lock_config_entry` consistently
+- No dependencies on other PRs
+
+**PR 2: Websocket + helpers test cleanup** (medium effort, no conflicts)
+- Files: `tests/test_websocket.py`, `tests/test_helpers.py`
+- Extract pure-function tests in `test_websocket.py` (the `_get_bool_state`, `_get_text_state`, etc. helpers) into their own test class or section
+- Ensure `test_helpers.py` tests use the shared `lock_code_manager_config_entry` fixture consistently
+- No dependencies on other PRs
+
+**PR 3: Entity tests + sync tests** (medium effort, no conflicts)
+- Files: `tests/test_binary_sensor.py`, `tests/test_sensor.py`, `tests/test_sync.py`
+- Clean up the `hass.data["lock_code_manager_calendars"]` hack in `conftest.py` if possible
+- Ensure sync integration tests use the shared fixture rather than constructing managers manually
+- No dependencies on other PRs
+
+**PR 4: Init + config flow + exceptions** (low effort, no conflicts)
+- Files: `tests/test_init.py`, `tests/test_config_flow.py`, `tests/test_exceptions.py`
+- These are already well-structured. Main work: ensure `test_exceptions.py` uses shared helpers for lock creation
+- No dependencies on other PRs
+
+### 5. Key Questions -- Answers
+
+- **Is `tests/conftest.py` the right place for shared fixtures?** Yes. The helper functions (`async_trigger_sync_tick`, etc.) are used across multiple test files and belong in conftest.
+- **Should we create a shared "LCM integration fixture"?** `lock_code_manager_config_entry` already serves this role and does real setup. No new fixture is needed.
+- **How do `auto_setup_mock_lock` and `mock_lock_config_entry` work?** `auto_setup_mock_lock` patches the provider registry so the "test" domain maps to `MockLCMLock`. `mock_lock_config_entry` creates a fake HA integration with mock lock/calendar entities that LCM can then manage. Together they provide the complete prerequisite environment for LCM's real `async_setup_entry` to succeed.</result>
+<usage><total_tokens>48126</total_tokens><tool_uses>15</tool_uses><duration_ms>63111</duration_ms></usage>
+</task-notification>
+
+---
+
+continue the research agent if we need, i was trying to stop the current change. We only want to stop clearing the slot when we e.g. remove the lock from the config
+
+---
+
+yes and also don't clear it if the slot is removed from the config
+
+---
+
+no, disabling a slot means clear it, disable the code. REmoving ti from the code means stop managing it, not delete the code from the lock
+
+---
+
+no you said earlier that when a lock is removed in some scenarios, the slots are cleared. Sounds like that was incorect
+
+---
+
+now back to the research
+
+---
+
+yes kick off all 5. So we are moving mocks further away from the code we are testing in the integration PRs?
