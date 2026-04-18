@@ -97,6 +97,14 @@ class SlotSyncManager:
 
     The in-sync binary sensor entity reads manager.in_sync for display.
 
+    State mutation rules:
+        - ``_update_in_sync_display`` is read-only: updates ``_in_sync``
+          for instant UI feedback but does not modify sync state.
+        - ``_async_tick_impl`` is the single authoritative place for all
+          sync state mutations: circuit breaker, sync operations,
+          ``_last_set_pin``, transition detection via ``_tick_in_sync``.
+        - ``_mark_dirty`` only sets ``_dirty = True``.
+
     Lifecycle methods (async_start, async_stop) are idempotent and re-entrant.
     """
 
@@ -159,7 +167,7 @@ class SlotSyncManager:
         self._sync_attempt_first: datetime | None = None
 
         # Invalid state tracking (for initial load)
-        self._invalid_state_count: int = 0
+        self._warned_invalid_state: bool = False
 
         # State tracking
         self._state_tracking_unsub: Callable[[], None] | None = None
@@ -369,7 +377,6 @@ class SlotSyncManager:
         """Reset the sync attempt tracker."""
         self._sync_attempt_count = 0
         self._sync_attempt_first = None
-        self._invalid_state_count = 0
 
     def _record_sync_attempt(self) -> None:
         """Record a sync attempt toward circuit breaker counter.
@@ -496,27 +503,14 @@ class SlotSyncManager:
         # we schedule a sync for the next tick after entities are ready.
         if self._in_sync is None:
             if slot_state.active_state not in (STATE_ON, STATE_OFF):
-                self._invalid_state_count += 1
-
-                # Exact `== MAX+1` (not `>=`) is intentional: we log the
-                # warning exactly once. Subsequent invalid-state ticks fall
-                # through to neither branch and stay silent to avoid spam.
-                if self._invalid_state_count == MAX_SYNC_ATTEMPTS + 1:
-                    _LOGGER.warning(
-                        "%s: Active entity has invalid state '%s' for %s consecutive checks. "
-                        "Entity may be unavailable or misconfigured. Check that the active "
-                        "binary_sensor entity exists and is in a valid state (ON/OFF).",
-                        self._log_prefix,
-                        slot_state.active_state,
-                        self._invalid_state_count,
-                    )
-                elif self._invalid_state_count <= MAX_SYNC_ATTEMPTS:
+                if not self._warned_invalid_state:
                     _LOGGER.debug(
-                        "%s: Active entity has invalid state '%s' (attempt %s), waiting...",
+                        "%s: Active entity has invalid state '%s', waiting "
+                        "for valid state (ON/OFF)",
                         self._log_prefix,
                         slot_state.active_state,
-                        self._invalid_state_count,
                     )
+                    self._warned_invalid_state = True
                 self._dirty = True  # retry next tick
                 return
 
