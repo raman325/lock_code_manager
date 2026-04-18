@@ -390,9 +390,15 @@ class BaseLock:
             self.setup_push_subscription()
         except ProviderNotImplementedError:
             raise
-        except Exception as err:  # noqa: BLE001
+        except LockDisconnected as err:
             LOGGER.debug(
-                "Lock %s: push subscription failed: %s",
+                "Lock %s: push subscription deferred (disconnected): %s",
+                self.lock.entity_id,
+                err,
+            )
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning(
+                "Lock %s: push subscription failed unexpectedly: %s",
                 self.lock.entity_id,
                 err,
             )
