@@ -1,0 +1,628 @@
+Live Matter Lock Testing — Lock Code Manager
+
+  We're testing the Lock Code Manager (LCM) custom integration against a real Matter lock: lock.raman_office (10 slots, currently all empty).
+
+  Architecture context (from codebase analysis):
+  - Matter provider reports codes as SlotCode.UNKNOWN (write-only — PINs can't be read back) or SlotCode.EMPTY
+  - LCM uses SlotSyncManager (one per lock×slot) with 5-second tick intervals to reconcile desired vs actual state
+  - In-sync for UNKNOWN codes compares against _last_set_pin (the PIN we last sent)
+  - Push events from Matter DoorLock cluster (event 4 = LockUserChange) drive real-time updates
+  - Circuit breaker disables a slot after 3 failed sync attempts in 5 minutes
+  - Duplicate PINs raise DuplicateCodeError → slot disabled + repair issue created
+  - Config flow clears existing codes on selected slots before managing them
+
+  What you (the agent) can do:
+  - Call HA services via MCP tools (ha_call_service, ha_get_state, ha_search_entities, ha_get_device, etc.)
+  - Read Matter lock state: matter.get_lock_users (service call with return_response: true)
+  - Set codes directly: matter.set_lock_usercode with {slot, pin_code}
+  - Clear codes directly: matter.clear_lock_usercode with {slot}
+  - Read LCM entity states (sensors, binary_sensors, switches, text entities)
+  - Call LCM websocket commands via ha_call_service if needed
+
+  What the user must do manually:
+  - Create/modify LCM config entries (via HA UI config flow)
+  - Enable/disable slots (via HA UI or entity service calls — confirm with user first)
+  - Restart integrations if needed
+  - Physical keypad operations (Phase 8)
+
+  Test Phases (execute in this order):
+
+  Phase 1 — Baseline (DONE)
+
+  Lock found. 10 slots, all empty. matter.get_lock_users returns {max_users: 10, users: []}.
+
+  Phase 2 — Direct set/get round-trip
+
+  1. Call matter.set_lock_usercode on slot 2 with pin 1234
+  2. Call matter.get_lock_users to confirm slot 2 is populated
+  3. Expected: Slot 2 shows as occupied (PIN won't be readable, just presence)
+
+  Phase 3 — Duplicate code detection
+
+  1. Call matter.set_lock_usercode on slot 3 with the SAME pin 1234
+  2. Expected: Either the lock rejects it (error) or accepts it (Matter spec allows duplicates on some locks). Record the behavior — LCM's provider catches duplicates at the application layer, but the lock itself may or may not enforce uniqueness.
+
+  Phase 4 — LCM config entry setup
+
+  1. Ask user to create an LCM config entry via HA UI:
+    - Select lock.raman_office
+    - Configure slots 1-3 (slot 2 already has a code from Phase 2)
+    - Slot 1: name="Test User 1", PIN="5678", enabled=true
+    - Slot 2: name="Test User 2", PIN="1234", enabled=true
+    - Slot 3: name="Test User 3", PIN="9012", enabled=true
+  2. Expected during config flow: LCM should detect existing code on slot 2 (and slot 3 if Phase 3 succeeded) and ask to clear them before proceeding
+  3. After setup, wait ~10 seconds for sync, then:
+    - Read all LCM entities: sensor.code_*, binary_sensor.active_*, binary_sensor.in_sync_*, text.pin_*
+    - Call matter.get_lock_users to verify codes were set on the lock
+  4. Expected: All 3 slots in-sync, codes set on lock (showing as UNKNOWN)
+
+  Phase 5 — External drift detection
+
+  1. Directly change slot 1's code: matter.set_lock_usercode slot 1 pin 9999 (bypassing LCM)
+  2. Wait for LCM's hard refresh interval (check lock.hard_refresh_interval — likely 5 minutes, or trigger manually)
+  3. Read binary_sensor.in_sync_* entities for slot 1
+  4. Expected: Slot 1 goes out-of-sync, then LCM re-syncs it back to "5678" on next tick
+  5. Verify with matter.get_lock_users that the lock has the correct code again
+
+  Phase 6 — Slot disable/enable cycle
+
+  1. Ask user (or call service) to disable slot 1 (set the enabled switch to OFF)
+  2. Wait ~10 seconds
+  3. Read matter.get_lock_users — slot 1 should be cleared
+  4. Re-enable slot 1
+  5. Wait ~10 seconds
+  6. Read matter.get_lock_users — slot 1 should be set again
+  7. Expected: Clean disable → clear → re-enable → set cycle with in-sync throughout
+
+  Phase 7 — Duplicate PIN via LCM
+
+  1. Ask user to change slot 3's PIN to "5678" (same as slot 1) via the text entity or UI
+  2. Expected: LCM detects duplicate, disables slot 3, creates repair issue
+  3. Verify: slot 3 disabled, repair issue visible, slot 3's code cleared on lock
+
+  Phase 8 — Clear and cleanup
+
+  1. Ask user to delete the LCM config entry
+  2. Expected: All managed slots cleared on the lock
+  3. Verify with matter.get_lock_users — all slots empty again
+
+  Phase 9 — Physical keypad (optional, requires user action)
+
+  1. Set up a fresh config entry with slot 1, PIN "1111"
+  2. Ask user to use the physical keypad to unlock with PIN "1111"
+  3. Check HA logs/events for LockOperation event (event 2) from Matter
+  4. Expected: Event fires with correct credential slot attribution
+
+  For each phase, report:
+  - Exact service calls made and responses
+  - Entity states before/after
+  - Whether behavior matched expectations
+  - Any surprises, errors, or timing issues
+  - Screenshots of HA UI if relevant
+
+  Key entity patterns to watch:
+  - binary_sensor.{entry_name}_slot_{N}_{lock_name}_in_sync — sync state
+  - binary_sensor.{entry_name}_slot_{N}_active — whether slot is active
+  - sensor.{entry_name}_slot_{N}_{lock_name}_code — code on lock
+  - text.{entry_name}_slot_{N}_pin — configured PIN
+  - switch.{entry_name}_slot_{N}_enabled — enabled state
+
+  Codebase reference: /Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/matter.py
+
+---
+
+continue
+
+---
+
+ahh crap I didn't do it with the current code
+
+---
+
+scp it to ha:/config/custom_components/ but note that the folder already exists
+
+---
+
+are you sure you didn't trigger a restart?
+
+---
+
+ssh in ha core start
+
+---
+
+try now
+
+---
+
+I added it, didn't get blocked
+
+---
+
+I enabled all of them. This may be what the user in the original issue was pointing to
+
+---
+
+1. It's safe because we own the slot now
+
+---
+
+alternatively, should we persist the last set pin alongside the config?
+
+---
+
+alternatively, should we persist the last set pin alongside the config? the concern then is if the PIN gets changed while HA is down right? so maybe it's just safer to clear then set
+
+---
+
+I am thinking put both in the try block. They both get the same except, except only the duplicate gets extracted
+
+---
+
+lets test the fix before we continue on the tests for this. We should make tests for each fix we identify as we go though
+
+---
+
+LCM and matter are back up, ha is still starting up
+
+---
+
+<task-notification>
+<task-id>bi4p6r45r</task-id>
+<tool-use-id>toolu_01HDrpfmAB7k1ZtGo9TLy2Zo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/bi4p6r45r.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart HA Core" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+we should have _async_call_service accept return_response and we can default it to True
+
+---
+
+we should have _async_call_service accept return_response and we can default it to True. Even better would be if it figured out what the service supported and always returned a response if it supports it, otherwise don't
+
+---
+
+../home-assistant
+
+---
+
+as soon as it comes up I need to step away, so you can continue with the tests until you need my input
+
+---
+
+if you can do as much of the testing as you can without me and leave the ones that need me to the end. I am not worried about battery life too much, just don't be stupid
+
+---
+
+LCM and matter are back up
+
+---
+
+First let’s address these issues before we continue the test. Split across multiple PRs to keep scope sensible for ea h unit of work, including existing bug fixes
+
+---
+
+pre-commit failed on PR 1045
+
+---
+
+1045 merged
+
+---
+
+see comment on 1044
+
+---
+
+<task-notification>
+<task-id>ae356273ce51eff32</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/ae356273ce51eff32.output</output-file>
+<status>completed</status>
+<summary>Agent "PR3: fix set_lock_user user_index" completed</summary>
+<result>Done. Here is the summary:
+
+**Branch:** `fix/matter-set-lock-user-index` (based on `fix/matter-duplicate-on-restart`)
+**PR:** https://github.com/raman325/lock_code_manager/pull/1046
+
+**Changes made:**
+
+1. **`custom_components/lock_code_manager/providers/matter.py`**:
+   - `_set_lock_credential` now returns `int | None` (the `user_index` from the service response) instead of `None`
+   - `async_set_usercode` captures the returned `user_index` from both the initial call and the retry path
+   - The `set_lock_user` call now requires both `name is not None` and `user_index is not None`
+   - The service data passes `user_index` instead of `credential_index`
+
+2. **`tests/providers/test_matter.py`**:
+   - `test_set_usercode` updated to mock `set_lock_credential` returning `{"credential_index": 1, "user_index": 1, "next_credential_index": 2}`, and asserts `set_lock_user` is called with `user_index=1` (not `credential_index`)
+   - `test_set_usercode_no_name` updated with realistic response data
+   - Added `test_set_usercode_skips_name_when_no_user_index` — verifies that when `set_lock_credential` returns `{}` (no `user_index`), `set_lock_user` is not called even when a name is provided
+
+All 67 tests pass. All pre-commit checks pass.</result>
+<usage><total_tokens>58185</total_tokens><tool_uses>34</tool_uses><duration_ms>209409</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ae356273</worktreePath><worktreeBranch>worktree-agent-ae356273</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+yeah that's a better implementation
+
+---
+
+what shoudl the state translate to?
+
+---
+
+maybe SET to make it clear that its system generated?
+
+---
+
+once we are done merging all of these PRs, let's continue with the tests
+
+---
+
+once the PR has been created, let's scp this to HA prod and restart it so we can continue our tests assuming there are no more bugs we've discovered left to address
+
+---
+
+status?
+
+---
+
+<task-notification>
+<task-id>a7b9b21f17df54b68</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/a7b9b21f17df54b68.output</output-file>
+<status>completed</status>
+<summary>Agent "PR: SlotCode.UNKNOWN to UNREADABLE_CODE" completed</summary>
+<result>The PR has been created: https://github.com/raman325/lock_code_manager/pull/1047
+
+Here is a summary of what was done:
+
+**Changes across 22 files:**
+
+**Python (models + providers + sync + sensor + websocket):**
+- `custom_components/lock_code_manager/models.py` -- Renamed `SlotCode.UNKNOWN = "unknown"` to `SlotCode.UNREADABLE_CODE = "unreadable_code"` with updated docstring explaining the distinction from HA's `STATE_UNKNOWN`
+- `custom_components/lock_code_manager/providers/matter.py`, `zwave_js.py`, `schlage.py`, `_base.py` -- All `SlotCode.UNKNOWN` references updated to `SlotCode.UNREADABLE_CODE`, including comments and docstrings
+- `custom_components/lock_code_manager/sync.py`, `sensor.py`, `websocket.py` -- Same rename applied
+
+**TypeScript (frontend):**
+- `ts/types.ts` -- `SLOT_CODE_UNKNOWN = 'unknown'` renamed to `SLOT_CODE_UNREADABLE = 'unreadable_code'`
+- `ts/lock-codes-card.ts`, `ts/slot-card.ts` -- All imports and usages updated
+- Generated JS bundle rebuilt
+
+**Tests (Python + TypeScript):**
+- 6 Python test files and 3 TypeScript test files updated with the new names, including test descriptions and assertion values (e.g., `"unknown"` -&gt; `"unreadable_code"` in serialization assertions)
+
+**Verification:**
+- All 609 Python tests pass
+- All 558 TypeScript tests pass
+- All pre-commit hooks pass (ruff, flake8, mypy, eslint, rollup build, etc.)</result>
+<usage><total_tokens>71405</total_tokens><tool_uses>97</tool_uses><duration_ms>444113</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a7b9b21f</worktreePath><worktreeBranch>worktree-agent-a7b9b21f</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+merged now
+
+---
+
+ok should we retest any of the previous tests to see if the bug fixes work?
+
+---
+
+<task-notification>
+<task-id>bcg6c9soe</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/bcg6c9soe.output</output-file>
+<status>completed</status>
+<summary>Background command "Deploy to HA and restart" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bx3u2kmzs</task-id>
+<tool-use-id>toolu_01WugmcT459SRB6bLgcYcuz8</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/bx3u2kmzs.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart HA after clearing pycache" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+matter shows up as working for me
+
+---
+
+let's walk through the limitations
+- for usernames, do we gracefully handle the 500? We don't explicitly need to set the name for the functionality, we should just attempt to and set it if we can
+- what's reasonable here? I don't know how much a poll costs, and polling too often for no-ops seems like a waste of batteries
+- is there a way to prevent this? Wouldn't this be the case for all providers? we should gracefully handle this
+
+---
+
+1. 500s shouldn't be lock disconnected by convention right? maybe we need a new exception type here in addition to the handling for matter
+2. agreed
+3. I think we should setup regardless because there may be other locks that **are** available
+
+---
+
+A
+
+---
+
+yes
+
+---
+
+what does self._setup_complete block? should we instead move that from the finally and check for that in the state handler?
+
+---
+
+what does self._setup_complete block? should we instead move that from the finally and check for that in the state handler? maybe we change finally to else. And in state handler if self._setup_complete is not set, then we retry setup
+
+---
+
+what does self._setup_complete block? should we instead move that from the finally and check for that in the state handler? maybe we change finally to else. And in state handler if self._setup_complete is not set, then we retry setup. Matter of fact, I think I meant else here when I suggestedi t
+
+---
+
+Let's rethink this. Walk me through how setup goes for a config entry. What gets called, what happens in the base provider, and what's specific to matter where. Let's talk about the happy path. Then let's go from there
+
+---
+
+got it so the issue here is that while the integration is down, we can't ask the provider to do its integration specific things. So yeah, the question is, if we skip the provider specific setup and continue as normal, what's the first clue we get that the integration is working agian
+
+---
+
+when do we run async_is_connection_up or whatever its called now?
+
+---
+
+maybe we need to do both async_setup and teardown on loaded/unloaded changes?
+
+---
+
+I think both setup and unluoad have to be idempotent across all providers
+
+---
+
+lets pull the idempotency refactor into this PR since it is related to this issue. This is the complete fix across all providers
+
+---
+
+yes, but in your table you sed base unload is not idempotent and in your changes needed you said it is
+
+---
+
+the if not self._setup_succeeded and setting to true should be in an else: block
+
+---
+
+add a line break between the two try except clauses that are back to back
+
+---
+
+<task-notification>
+<task-id>bbuz1s957</task-id>
+<tool-use-id>toolu_01MF6eFamjFq7xbmC36aLD9j</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/bbuz1s957.output</output-file>
+<status>completed</status>
+<summary>Background command "Deploy, clear pycache, restart" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+we should set logs to debug, restart HA, then perform the test again. I have a feeling we are knocking the device off the network somehow
+
+---
+
+<task-notification>
+<task-id>bcg07jm10</task-id>
+<tool-use-id>toolu_01BpE5ZUYkNCE9xz5YFc2711</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/bcg07jm10.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart HA with debug logging" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+the matter device is not connected anymore
+
+---
+
+I took out a battery for five seconds then put it back in. You think I neefd to take it out for longer?
+
+---
+
+<task-notification>
+<task-id>byjbfhynj</task-id>
+<tool-use-id>toolu_01YRQ4fqQQF3hiA1hwChPQF2</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/byjbfhynj.output</output-file>
+<status>completed</status>
+<summary>Background command "Restart Matter server addon" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I pulled the battery and reconnected it. I can see it in aqara. Check if you can see it in pfsense maybe?
+
+---
+
+so the user can't be set on user 1. I wonder if that's because it's the admin user. Is that part of the matter spec or is that specific to this lock?
+
+---
+
+it's been happening repeatedly. We may have a bug in the name setting logic
+
+---
+
+sure
+
+---
+
+reset and retry. We need to make sure the behavior works as intended otherwise why implement it
+
+---
+
+the circuit breaker shouldn't have triggered the first time though. It should have been reset. That indicates there's a bug in the circuit breaker
+
+---
+
+run pre-commit
+
+---
+
+see review comment
+
+---
+
+update PR title and description if needed, then run code review
+
+---
+
+when we're done doing all the testing, one thing we should look at is what else needs to mvoe into the tick based logic to remove more race conditions and simplify some of these areas of parallellism
+
+---
+
+are the mcphub memories stored with the rgith context? like which project you are referring to?
+
+---
+
+update your hooks to include standard context info that would be helpful considering this is a multitenant memory bank across projects, agents, and systems
+
+---
+
+I wasn't suggesting you create a memory about the standard context info, I was suggesting we edit the hooks in your config to include them in the prompt
+
+---
+
+circuit breaker fix merged
+
+---
+
+yes
+
+---
+
+lets link all the relevant merged PRs to https://github.com/raman325/lock_code_manager/issues/984
+
+---
+
+<task-notification>
+<task-id>b740wzr8j</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/b740wzr8j.output</output-file>
+<status>completed</status>
+<summary>Background command "Deploy, clear pycache, restart" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+cleared
+
+---
+
+what is remove_permanently?
+
+---
+
+I am not clear on which approach is better. What is async_remove_entry? Where would we define it?
+
+---
+
+lets just leave them as is. I wonder if we should actually just stop clearing slots when we remove them in general
+
+---
+
+what is the phase 9 test?
+
+---
+
+set up test for 1111 slot 1
+
+---
+
+entered it twice
+
+---
+
+yes, find out if there's a better way to get the node id. how does the matter integration or the lib do it? ../home-assistant for HA
+
+---
+
+we should try to setup tests to mirror how they are in the integration. So let's get a full lock mock and load it in as a node so we can do full end to end testing. That's how it should be done for zwave_js and for matter. Let's comment out the test for now, merge this, then we can do a test PR
+
+---
+
+let's refactor and fix the matter tests in this PR. After done, update PR title and description. We can make any updates to zwave_js in parallel with a subagent or we can do it after. I'd prefer in parallel
+
+---
+
+no, this is the wrong way to do it. We talked about having a proper fixture to represent the node and setting the network up like it is done in the integration. These hacks don't test anything, that's why this bug made it through
+
+---
+
+<task-notification>
+<task-id>a65dcfa6996d699d9</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9b4082f1-6f1a-4674-80fc-628e3964b57a/tasks/a65dcfa6996d699d9.output</output-file>
+<status>completed</status>
+<summary>Agent "Refactor zwave_js test fixtures" completed</summary>
+<result>I now have enough information to write the report.
+
+---
+
+## Report: LCM Z-Wave JS Test Fixtures vs HA Z-Wave JS Test Fixtures
+
+### 1. How LCM fixtures work today
+
+The LCM provider tests in `tests/providers/conftest.py` closely mirror HA's pattern:
+
+- **`zwave_client`** fixture patches `homeassistant.components.zwave_js.ZwaveClient`, creates a mock client with connect/listen/disconnect side effects, builds a real `Driver` and controller `Node` from JSON fixture files in `tests/providers/fixtures/zwave_js/`.
+- **`lock_schlage_be469`** creates a real `Node` object from fixture JSON and registers it on the client's driver controller.
+- **`zwave_integration`** creates a `MockConfigEntry` for `zwave_js`, calls `async_setup`, yielding a fully loaded Z-Wave JS config entry.
+- **`lock_entity`** finds the lock entity registry entry created by the integration setup.
+- **`zwave_js_lock`** (in `test_zwave_js.py`) constructs a `ZWaveJSLock` provider instance directly, passing the registries and lock entity -- it does NOT go through LCM's own config entry setup for most tests.
+
+Most tests then call `async_setup_internal` with a throwaway `MockConfigEntry` and patch methods like `async_call_service`, `_get_usercodes_from_cache`, and `code_slot_in_use` to avoid hitting real Z-Wave commands.
+
+### 2. How HA Z-Wave JS tests work
+
+HA's conftest (`tests/components/zwave_js/conftest.py`) is structurally identical in the client/driver/node layer. The key differences:
+
+- **`client` fixture** (named `client`, LCM uses `zwave_client`) -- same pattern, same `connect/listen/disconnect` mocks, same `async_send_command` side effect.
+- **`integration` fixture** takes a `platforms` fixture parameter, allowing tests to restrict which platforms load. This keeps tests fast and focused.
+- **Node fixtures** follow the exact same `Node(client, copy.deepcopy(state))` + register on controller pattern.
+- HA's node fixture JSON files live in `tests/components/zwave_js/fixtures/` and are loaded via `load_json_object_fixture` (HA test helper). LCM loads them via a local `load_json_fixture` function from `tests/providers/fixtures/zwave_js/`.
+
+### 3. Gaps for proper end-to-end test coverage
+
+1. **Provider constructed manually, not via LCM entry setup.** Most tests build `ZWaveJSLock` directly rather than going through `hass.config_entries.async_setup` with a real LCM config entry. The later `test_duplicate_code_*` tests do use `_setup_lcm_entry` for full setup -- this pattern should be the default.
+2. **Heavy patching of provider internals.** `async_call_service`, `_get_usercodes_from_cache`, `code_slot_in_use` are frequently patched. True end-to-end tests should let calls flow through to the mock client's `async_send_command`.
+3. **`mock_zwave_usercodes` is only used for duplicate-code tests.** This fixture (wrapping `get_usercodes`/`get_usercode` with mutable state backed by `async_send_command`) is the right pattern for end-to-end but is not used by the majority of tests.
+4. **No coordinator lifecycle testing.** Most tests assign `zwave_js_lock.coordinator = MagicMock()` instead of letting the real coordinator run.
+5. **Fixture JSON files are copies.** LCM maintains its own copies of `lock_schlage_be469_state.json` rather than referencing HA's.
+
+### 4. Rough refactor plan
+
+1. **Make `_setup_lcm_entry` (or equivalent) the default test helper** -- all tests should create a real LCM config entry and let the integration set up the provider, coordinator, and entities.
+2. **Expand `mock_zwave_usercodes` to all tests** -- wire `get_usercodes`/`get_usercode` through mutable state so `async_get_usercodes`, `async_set_usercode`, and `async_clear_usercode` exercise real code paths end-to-end.
+3. **Remove manual `ZWaveJSLock` construction** -- retrieve the provider instance from `lcm_entry.runtime_data.locks[entity_id]` instead.
+4. **Stop patching `async_call_service`** -- let it call through to HA's service layer backed by the mock Z-Wave client.
+5. **Let the real coordinator run** -- remove `zwave_js_lock.coordinator = MagicMock()` assignments; use `async_trigger_sync_tick` helpers for controlled refresh.</result>
+<usage><total_tokens>66246</total_tokens><tool_uses>13</tool_uses><duration_ms>62728</duration_ms></usage>
+</task-notification>
+
+---
+
+the matter refactor needs to be done in this PR, because I can't merge this PR without reaosnable tests. Then we can do zwave_js in a separate effort
+
+---
+
+alright let's do it this way - let's create a module in tests/providers for each provider and then put the python files there. THat allows us to have shared fixtures and provider specific fixtures
