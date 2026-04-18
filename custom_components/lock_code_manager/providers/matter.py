@@ -16,7 +16,7 @@ from typing import Any
 from matter_server.common.models import EventType
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import callback
+from homeassistant.core import SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..data import get_managed_slots
@@ -112,26 +112,32 @@ class MatterLock(BaseLock):
     ) -> dict[str, Any]:
         """Call a Matter service and return the per-entity dict.
 
+        Auto-detects whether the service supports responses. Void services
+        (SupportsResponse.NONE) are called without return_response and return
+        an empty dict. Services that support responses are validated for the
+        expected per-entity structure.
+
         Raises LockDisconnected on service failure or
         LockCodeManagerProviderError on malformed response.
         """
-        # Bypasses BaseLock.async_call_service because Matter responses are
-        # wrapped per entity_id and need structural validation that raises
-        # LockCodeManagerProviderError (not LockDisconnected) on bad shape.
         entity_id = self.lock.entity_id
+        resp_support = self.hass.services.supports_response(MATTER_DOMAIN, service)
+        return_response = resp_support != SupportsResponse.NONE
         try:
             result = await self.hass.services.async_call(
                 MATTER_DOMAIN,
                 service,
                 service_data,
                 blocking=True,
-                return_response=True,
+                return_response=return_response,
             )
         except (ServiceValidationError, HomeAssistantError) as err:
             raise LockDisconnected(
                 f"Matter service {MATTER_DOMAIN}.{service} failed for "
                 f"{entity_id}: {err}"
             ) from err
+        if not return_response:
+            return {}
         if not isinstance(result, dict) or entity_id not in result:
             raise LockCodeManagerProviderError(
                 f"Matter service {MATTER_DOMAIN}.{service} returned no data for "
