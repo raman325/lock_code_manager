@@ -358,9 +358,9 @@ class MatterLock(BaseLock):
 
     # -- Credential helpers --------------------------------------------------
 
-    async def _set_lock_credential(self, code_slot: int, usercode: str) -> None:
-        """Send set_lock_credential to the lock."""
-        await self._async_call_service(
+    async def _set_lock_credential(self, code_slot: int, usercode: str) -> int | None:
+        """Send set_lock_credential to the lock and return the user_index."""
+        result = await self._async_call_service(
             "set_lock_credential",
             {
                 "entity_id": self.lock.entity_id,
@@ -369,6 +369,7 @@ class MatterLock(BaseLock):
                 "credential_index": code_slot,
             },
         )
+        return result.get("user_index")
 
     async def _clear_lock_credential(self, code_slot: int) -> None:
         """Send clear_lock_credential to the lock."""
@@ -460,8 +461,9 @@ class MatterLock(BaseLock):
         DuplicateCodeError without clearing, since the slot may hold a
         different user's credential that should not be silently removed.
         """
+        user_index: int | None = None
         try:
-            await self._set_lock_credential(code_slot, usercode)
+            user_index = await self._set_lock_credential(code_slot, usercode)
         except LockDisconnected as err:
             if "duplicate" not in str(err).lower():
                 raise
@@ -477,7 +479,7 @@ class MatterLock(BaseLock):
             )
             try:
                 await self._clear_lock_credential(code_slot)
-                await self._set_lock_credential(code_slot, usercode)
+                user_index = await self._set_lock_credential(code_slot, usercode)
             except LockDisconnected as retry_err:
                 if "duplicate" in str(retry_err).lower():
                     raise DuplicateCodeError(
@@ -485,13 +487,13 @@ class MatterLock(BaseLock):
                         lock_entity_id=self.lock.entity_id,
                     ) from retry_err
                 raise
-        if name is not None:
+        if name is not None and user_index is not None:
             try:
                 await self._async_call_service(
                     "set_lock_user",
                     {
                         "entity_id": self.lock.entity_id,
-                        "credential_index": code_slot,
+                        "user_index": user_index,
                         "user_name": name,
                     },
                 )
