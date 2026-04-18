@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "3b1892bc4454",
+  "session_id": "9b4082f1-6f1a-4674-80fc-628e3964b57a",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-18T06:17:45.98984Z",
+  "branch": "refactor/simplify-push-retry",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "2c6d8ce5d1fb",
+  "token_usage": {
+    "input_tokens": 1771,
+    "cache_creation_tokens": 1713010,
+    "cache_read_tokens": 638043057,
+    "output_tokens": 319126,
+    "api_call_count": 1432
+  },
+  "session_metrics": {
+    "turn_count": 133
+  }
+}
