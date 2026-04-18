@@ -234,8 +234,8 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             )
             return
 
-        # Push subscription retry is handled by BaseLock's OneShotRetry
-        # and the config entry state listener — no need to retry here.
+        # Push subscription retry is handled by the config entry state
+        # listener and connection transition handler — no need to retry here.
 
         if new_data != self.data:
             _LOGGER.debug(
