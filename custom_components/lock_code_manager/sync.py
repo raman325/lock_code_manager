@@ -135,8 +135,12 @@ class SlotSyncManager:
             ATTR_CODE: (SENSOR_DOMAIN, f"{base_uid}|{ATTR_CODE}|{lock_entity_id}"),
         }
 
-        # State
+        # State — _in_sync is the display state (updated by both the tick
+        # and the display callback for instant UI). _tick_in_sync is the
+        # tick's own view, updated only by the tick, used for transition
+        # detection (circuit breaker reset).
         self._in_sync: bool | None = None
+        self._tick_in_sync: bool | None = None
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
         self._dirty: bool = False
@@ -428,9 +432,10 @@ class SlotSyncManager:
     def _update_in_sync_display(self) -> None:
         """Update the in_sync display state immediately if it changed.
 
-        This is a read-only check — no sync operations are performed.
-        Allows the UI to reflect state changes instantly while the tick
-        handles actual sync operations.
+        Read-only with respect to sync state — updates ``_in_sync`` and
+        writes the entity state for instant UI feedback, but does not
+        modify the circuit breaker tracker or any other sync state.
+        All sync state mutations happen exclusively in ``_async_tick_impl``.
         """
         if self._in_sync is None:
             return
@@ -440,13 +445,6 @@ class SlotSyncManager:
         expected = self.calculate_in_sync(slot_state)
         if expected != self._in_sync:
             self._in_sync = expected
-            # Reset circuit breaker on any transition between in-sync and
-            # out-of-sync. A True→False transition means the reconciliation
-            # state changed (for example, due to a desired-state edit or
-            # lock-side drift), so prior attempts should not carry over.
-            # False→True means sync succeeded and the tracker should be clean
-            # for next time.
-            self._reset_sync_tracker()
             self._write_state()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
@@ -465,7 +463,14 @@ class SlotSyncManager:
         await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:
-        """Core tick logic — called from _async_tick after dirty check."""
+        """Core tick logic — called from _async_tick after dirty check.
+
+        This is the single authoritative place for all sync state mutations:
+        circuit breaker tracking, sync operations, and ``_last_set_pin``
+        changes. The display callback (``_update_in_sync_display``) may
+        update ``_in_sync`` for immediate UI feedback, but the tick is the
+        only place that acts on sync state transitions.
+        """
         slot_state = self._resolve_slot_state()
         if slot_state is None:
             # State resolution failed — retry on next tick. We always retry
@@ -475,6 +480,15 @@ class SlotSyncManager:
             return
 
         expected_in_sync = self.calculate_in_sync(slot_state)
+
+        # Reset circuit breaker when the tick detects any in_sync
+        # transition. Uses _tick_in_sync (tick-only state) instead of
+        # _in_sync (which the display callback may have already updated).
+        # True→False: sync target changed (PIN edit), prior attempts
+        # should not count. False→True: sync succeeded, clean slate.
+        if self._tick_in_sync is not None and self._tick_in_sync != expected_in_sync:
+            self._reset_sync_tracker()
+        self._tick_in_sync = expected_in_sync
 
         # Initial load: detect sync state without performing sync operations.
         # This prevents premature sync attempts during entity setup when dependent
@@ -611,7 +625,6 @@ class SlotSyncManager:
         if not self._in_sync:
             self._in_sync = True
             self._write_state()
-            self._reset_sync_tracker()
             # Only clear slot_disabled when the slot is enabled — a disabled
             # slot can be "in sync" without the issue being resolved
             if slot_state.active_state == STATE_ON:
