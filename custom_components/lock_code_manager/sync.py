@@ -167,7 +167,7 @@ class SlotSyncManager:
         self._sync_attempt_first: datetime | None = None
 
         # Invalid state tracking (for initial load)
-        self._warned_invalid_state: bool = False
+        self._logged_invalid_state: bool = False
 
         # State tracking
         self._state_tracking_unsub: Callable[[], None] | None = None
@@ -503,14 +503,14 @@ class SlotSyncManager:
         # we schedule a sync for the next tick after entities are ready.
         if self._in_sync is None:
             if slot_state.active_state not in (STATE_ON, STATE_OFF):
-                if not self._warned_invalid_state:
+                if not self._logged_invalid_state:
                     _LOGGER.debug(
                         "%s: Active entity has invalid state '%s', waiting "
                         "for valid state (ON/OFF)",
                         self._log_prefix,
                         slot_state.active_state,
                     )
-                    self._warned_invalid_state = True
+                    self._logged_invalid_state = True
                 self._dirty = True  # retry next tick
                 return
 

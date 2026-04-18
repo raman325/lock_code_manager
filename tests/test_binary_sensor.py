@@ -1115,7 +1115,7 @@ async def test_invalid_active_state_during_initial_load(
 
     # Reset to simulate pre-initial-load state
     in_sync_entity_obj._sync_manager._in_sync = None
-    in_sync_entity_obj._sync_manager._warned_invalid_state = False
+    in_sync_entity_obj._sync_manager._logged_invalid_state = False
 
     # Set active entity to an invalid state (not ON or OFF)
     hass.states.async_set(SLOT_1_ACTIVE_ENTITY, "unknown_invalid_state")
@@ -1128,7 +1128,7 @@ async def test_invalid_active_state_during_initial_load(
         await hass.async_block_till_done()
 
     # Warning logged once
-    assert in_sync_entity_obj._sync_manager._warned_invalid_state is True
+    assert in_sync_entity_obj._sync_manager._logged_invalid_state is True
 
     # Initial state is still not loaded due to invalid state
     assert in_sync_entity_obj._sync_manager._in_sync is None
