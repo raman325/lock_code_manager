@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "1364d4794295",
+  "strategy": "manual-commit",
+  "branch": "refactor/simplify-push-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/13/64d4794295/0/metadata.json",
+      "transcript": "/13/64d4794295/0/full.jsonl",
+      "content_hash": "/13/64d4794295/0/content_hash.txt",
+      "prompt": "/13/64d4794295/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1751,
+    "cache_creation_tokens": 1703135,
+    "cache_read_tokens": 622616134,
+    "output_tokens": 315132,
+    "api_call_count": 1414
+  }
+}
