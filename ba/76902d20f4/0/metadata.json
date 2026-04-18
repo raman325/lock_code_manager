@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ba76902d20f4",
+  "session_id": "9b4082f1-6f1a-4674-80fc-628e3964b57a",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-18T04:29:58.415559Z",
+  "branch": "fix/matter-node-id-resolution",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/test_matter.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "e22b432a23e1",
+  "token_usage": {
+    "input_tokens": 1246,
+    "cache_creation_tokens": 784738,
+    "cache_read_tokens": 327625831,
+    "output_tokens": 213289,
+    "api_call_count": 1007
+  },
+  "session_metrics": {
+    "turn_count": 94
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-18T04:29:57.614742Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 43,
+    "human_removed": 56,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
