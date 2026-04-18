@@ -357,18 +357,34 @@ async def test_get_usercodes_invalid_credential_index_skipped(
 
 
 async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> None:
-    """Test set_usercode calls the correct Matter services."""
+    """Test set_usercode calls the correct Matter services with user_index."""
     calls: list[dict[str, Any]] = []
 
-    async def _capture_call(call):
+    async def _capture_credential_call(call):
+        calls.append({"service": call.service, "data": dict(call.data)})
+        return {
+            LOCK_ENTITY_ID: {
+                "credential_index": 1,
+                "user_index": 1,
+                "next_credential_index": 2,
+            }
+        }
+
+    async def _capture_user_call(call):
         calls.append({"service": call.service, "data": dict(call.data)})
         return {LOCK_ENTITY_ID: {}}
 
     register_mock_service(
-        hass, MATTER_DOMAIN, "set_lock_credential", AsyncMock(side_effect=_capture_call)
+        hass,
+        MATTER_DOMAIN,
+        "set_lock_credential",
+        AsyncMock(side_effect=_capture_credential_call),
     )
     register_mock_service(
-        hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
+        hass,
+        MATTER_DOMAIN,
+        "set_lock_user",
+        AsyncMock(side_effect=_capture_user_call),
     )
 
     result = await matter_lock.async_set_usercode(1, "1234", "User One")
@@ -380,15 +396,40 @@ async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> Non
     assert calls[0]["data"]["credential_type"] == "pin"
     assert calls[0]["data"]["credential_data"] == "1234"
     assert calls[0]["data"]["credential_index"] == 1
-    # Second call: set_lock_user
+    # Second call: set_lock_user with user_index (not credential_index)
     assert calls[1]["service"] == "set_lock_user"
+    assert calls[1]["data"]["user_index"] == 1
     assert calls[1]["data"]["user_name"] == "User One"
+    assert "credential_index" not in calls[1]["data"]
 
 
 async def test_set_usercode_no_name(
     hass: HomeAssistant, matter_lock: MatterLock
 ) -> None:
     """Test set_usercode without a name only calls set_lock_credential."""
+    calls: list[str] = []
+
+    async def _capture_call(call):
+        calls.append(call.service)
+        return {LOCK_ENTITY_ID: {"credential_index": 3, "user_index": 3}}
+
+    register_mock_service(
+        hass, MATTER_DOMAIN, "set_lock_credential", AsyncMock(side_effect=_capture_call)
+    )
+    register_mock_service(
+        hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
+    )
+
+    result = await matter_lock.async_set_usercode(3, "9999")
+
+    assert result is True
+    assert calls == ["set_lock_credential"]
+
+
+async def test_set_usercode_skips_name_when_no_user_index(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test set_usercode skips set_lock_user when response has no user_index."""
     calls: list[str] = []
 
     async def _capture_call(call):
@@ -402,7 +443,7 @@ async def test_set_usercode_no_name(
         hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
     )
 
-    result = await matter_lock.async_set_usercode(3, "9999")
+    result = await matter_lock.async_set_usercode(1, "1234", "User One")
 
     assert result is True
     assert calls == ["set_lock_credential"]
