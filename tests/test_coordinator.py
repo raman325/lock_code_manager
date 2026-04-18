@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Literal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -58,7 +59,11 @@ class MockLockWithHardRefresh(BaseLock):
         return {}
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """Set a usercode on a code slot."""
         return True

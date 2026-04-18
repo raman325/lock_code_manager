@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
@@ -84,7 +85,11 @@ class MockLCMLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """Set a usercode on a code slot.
 
