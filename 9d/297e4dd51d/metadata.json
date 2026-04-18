@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9d297e4dd51d",
+  "strategy": "manual-commit",
+  "branch": "docs/agents-md-conventions",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/9d/297e4dd51d/0/metadata.json",
+      "transcript": "/9d/297e4dd51d/0/full.jsonl",
+      "content_hash": "/9d/297e4dd51d/0/content_hash.txt",
+      "prompt": "/9d/297e4dd51d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1595,
+    "cache_creation_tokens": 1624202,
+    "cache_read_tokens": 518444012,
+    "output_tokens": 278708,
+    "api_call_count": 1286
+  }
+}

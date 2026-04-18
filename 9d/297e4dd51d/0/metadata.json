@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9d297e4dd51d",
+  "session_id": "9b4082f1-6f1a-4674-80fc-628e3964b57a",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-18T05:36:56.105873Z",
+  "branch": "docs/agents-md-conventions",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "de755d59d3f5",
+  "token_usage": {
+    "input_tokens": 1595,
+    "cache_creation_tokens": 1624202,
+    "cache_read_tokens": 518444012,
+    "output_tokens": 278708,
+    "api_call_count": 1286
+  },
+  "session_metrics": {
+    "turn_count": 120
+  }
+}
