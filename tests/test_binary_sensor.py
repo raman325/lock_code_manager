@@ -83,12 +83,12 @@ async def _async_force_sync_cycle(
 
 async def test_binary_sensor_entity(
     hass: HomeAssistant,
-    mock_lock_config_entry,
+    mock_calendars,
     lock_code_manager_config_entry,
 ):
     """Walk through calendar, usage, enable/disable, and PIN updates for slot 2."""
     # Initial calendar/active state should be off
-    calendar_1, _ = hass.data["lock_code_manager_calendars"]
+    calendar_1, _ = mock_calendars
     state = hass.states.get("calendar.test_1")
     assert state
     assert state.state == STATE_OFF
@@ -209,13 +209,13 @@ async def test_binary_sensor_entity(
 
 async def test_startup_no_code_flapping_when_synced(
     hass: HomeAssistant,
-    mock_lock_config_entry,
+    mock_calendars,
     lock_code_manager_config_entry,
 ):
     """Test that codes aren't unnecessarily cleared/set on startup when already synced."""
     # Create a calendar event to make slot 2 active
     # (slot 2 has calendar.test_1 configured in BASE_CONFIG)
-    calendar_1, _ = hass.data["lock_code_manager_calendars"]
+    calendar_1, _ = mock_calendars
     now = dt_util.utcnow()
     start = now - timedelta(hours=1)
     end = now + timedelta(hours=1)

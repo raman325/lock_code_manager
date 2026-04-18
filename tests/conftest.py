@@ -189,6 +189,14 @@ async def lock_code_manager_config_entry_fixture(hass: HomeAssistant):
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
+@pytest.fixture(name="mock_calendars")
+def mock_calendars_fixture(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> list[MockCalendarEntity]:
+    """Return the mock calendar entities created by mock_lock_config_entry."""
+    return hass.data["lock_code_manager_calendars"]
+
+
 def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):
     """Get the in-sync entity object for a given entity ID.
 
