@@ -9,7 +9,7 @@ export function isSlotEmpty(code: number | string | null): boolean {
     return code === null || code === '' || code === SLOT_CODE_EMPTY;
 }
 
-/** True if code represents an occupied slot (readable, masked, or unknown) */
+/** True if code represents an occupied slot (readable, masked, or unreadable) */
 export function isSlotOccupied(code: number | string | null, codeLength?: number): boolean {
     if (code === SLOT_CODE_UNREADABLE) return true;
     if (isSlotEmpty(code)) return !!codeLength;
