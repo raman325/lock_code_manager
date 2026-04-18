@@ -83,6 +83,16 @@ class LockDisconnected(LockCodeManagerProviderError):
     """Raised when lock can't be communicated with."""
 
 
+class LockOperationFailed(LockCodeManagerProviderError):
+    """Raised when the lock is reachable but the operation failed.
+
+    This covers cases like the lock not supporting a requested operation
+    or the provider rejecting the command for a lock-side reason. Unlike
+    ``LockDisconnected``, the lock is online — the specific operation
+    just could not be completed.
+    """
+
+
 class ProviderNotImplementedError(LockCodeManagerProviderError, NotImplementedError):
     """Raised when a provider method that subclasses must override is called."""
 

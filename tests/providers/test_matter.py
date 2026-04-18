@@ -11,7 +11,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
+    LockCodeManagerProviderError,
     LockDisconnected,
 )
 from custom_components.lock_code_manager.models import SlotCode
@@ -137,6 +138,11 @@ async def test_supports_push(matter_lock: MatterLock) -> None:
 async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
     """Test that scan interval is 5 minutes."""
     assert matter_lock.usercode_scan_interval == timedelta(minutes=5)
+
+
+async def test_hard_refresh_interval(matter_lock: MatterLock) -> None:
+    """Test that hard refresh interval is 1 hour for drift detection."""
+    assert matter_lock.hard_refresh_interval == timedelta(hours=1)
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +550,43 @@ async def test_service_call_failure_raises_lock_disconnected(
 
     with pytest.raises(LockDisconnected, match="connection lost"):
         await matter_lock.async_set_usercode(1, "1234")
+
+
+async def test_service_validation_error_raises_provider_error(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test that ServiceValidationError raises LockCodeManagerProviderError, not LockDisconnected."""
+    handler = AsyncMock(side_effect=ServiceValidationError("invalid data"))
+    register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", handler)
+
+    with pytest.raises(LockCodeManagerProviderError, match="rejected input"):
+        await matter_lock.async_set_usercode(1, "1234")
+
+
+async def test_set_usercode_user_name_failure_does_not_propagate(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test that a user name set failure does not propagate when credential set succeeds."""
+    register_mock_service(
+        hass,
+        MATTER_DOMAIN,
+        "set_lock_credential",
+        AsyncMock(
+            return_value={
+                LOCK_ENTITY_ID: {"credential_index": 1, "user_index": 1},
+            }
+        ),
+    )
+    register_mock_service(
+        hass,
+        MATTER_DOMAIN,
+        "set_lock_user",
+        AsyncMock(side_effect=HomeAssistantError("500 Internal Server Error")),
+    )
+
+    result = await matter_lock.async_set_usercode(1, "1234", name="Test")
+
+    assert result is True
 
 
 async def test_set_usercode_duplicate_direct_raises_immediately(
