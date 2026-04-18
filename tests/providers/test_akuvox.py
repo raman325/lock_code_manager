@@ -34,7 +34,7 @@ from custom_components.lock_code_manager.providers.akuvox import (
     _parse_tag,
 )
 
-from .service_provider_tests import (
+from .helpers import (
     ServiceProviderConnectionTests,
     register_mock_service,
 )

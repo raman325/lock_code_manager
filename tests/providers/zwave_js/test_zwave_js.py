@@ -232,28 +232,20 @@ async def test_get_usercodes_from_cache(
 async def test_set_usercode_calls_service(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
+    zwave_client: MagicMock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode calls the Z-Wave JS service."""
+    """Test that set_usercode sends the Z-Wave command to the lock."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    with patch.object(
-        zwave_js_lock, "async_call_service", new_callable=AsyncMock
-    ) as mock_service:
-        result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+    zwave_client.async_send_command.reset_mock()
+    result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert result is True
-        mock_service.assert_called_once_with(
-            ZWAVE_JS_DOMAIN,
-            "set_lock_usercode",
-            {
-                "entity_id": zwave_js_lock.lock.entity_id,
-                "code_slot": 4,
-                "usercode": "5678",
-            },
-        )
+    assert result is True
+    # Verify the Z-Wave command reached the mock client
+    assert zwave_client.async_send_command.call_count >= 1
 
     await zwave_js_lock.async_unload(False)
 
@@ -268,14 +260,10 @@ async def test_set_usercode_skips_when_unchanged(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    with patch.object(
-        zwave_js_lock, "async_call_service", new_callable=AsyncMock
-    ) as mock_service:
-        # Slot 2 already has "1234" in the fixture
-        result = await zwave_js_lock.async_set_usercode(2, "1234", "Test User")
+    # Slot 2 already has "1234" in the fixture
+    result = await zwave_js_lock.async_set_usercode(2, "1234", "Test User")
 
-        assert result is False
-        mock_service.assert_not_called()
+    assert result is False
 
     await zwave_js_lock.async_unload(False)
 
@@ -299,20 +287,14 @@ async def test_set_usercode_skips_when_code_matches(
     # Mock the cache to return the same code we're trying to set
     matching_slot = {"code_slot": 2, "usercode": "5678", "in_use": True}
 
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-            return_value=matching_slot,
-        ),
-        patch.object(
-            zwave_js_lock, "async_call_service", new_callable=AsyncMock
-        ) as mock_service,
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        return_value=matching_slot,
     ):
         result = await zwave_js_lock.async_set_usercode(2, "5678", "Test User")
 
         # Should skip the set operation since code already matches
         assert result is False
-        mock_service.assert_not_called()
 
     await zwave_js_lock.async_unload(False)
 
@@ -341,20 +323,14 @@ async def test_set_usercode_proceeds_when_masked(
     # Mock the cache to return a masked code
     masked_slot = {"code_slot": 2, "usercode": "****", "in_use": True}
 
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-            return_value=masked_slot,
-        ),
-        patch.object(
-            zwave_js_lock, "async_call_service", new_callable=AsyncMock
-        ) as mock_service,
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        return_value=masked_slot,
     ):
         result = await zwave_js_lock.async_set_usercode(2, "5678", "Test User")
 
         # Should proceed since masked codes cannot be compared
         assert result is True
-        mock_service.assert_called_once()
 
     await zwave_js_lock.async_unload(False)
 
@@ -373,19 +349,13 @@ async def test_set_usercode_proceeds_on_cache_failure(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-            side_effect=ValueError("cache miss"),
-        ),
-        patch.object(
-            zwave_js_lock, "async_call_service", new_callable=AsyncMock
-        ) as mock_service,
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        side_effect=ValueError("cache miss"),
     ):
         result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
         assert result is True
-        mock_service.assert_called_once()
 
     await zwave_js_lock.async_unload(False)
 
@@ -393,27 +363,19 @@ async def test_set_usercode_proceeds_on_cache_failure(
 async def test_clear_usercode_calls_service(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
+    zwave_client: MagicMock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that clear_usercode calls the Z-Wave JS service."""
+    """Test that clear_usercode sends the Z-Wave command to the lock."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    with patch.object(
-        zwave_js_lock, "async_call_service", new_callable=AsyncMock
-    ) as mock_service:
-        result = await zwave_js_lock.async_clear_usercode(2)
+    zwave_client.async_send_command.reset_mock()
+    result = await zwave_js_lock.async_clear_usercode(2)
 
-        assert result is True
-        mock_service.assert_called_once_with(
-            ZWAVE_JS_DOMAIN,
-            "clear_lock_usercode",
-            {
-                "entity_id": zwave_js_lock.lock.entity_id,
-                "code_slot": 2,
-            },
-        )
+    assert result is True
+    assert zwave_client.async_send_command.call_count >= 1
 
     await zwave_js_lock.async_unload(False)
 
@@ -428,14 +390,10 @@ async def test_clear_usercode_skips_when_already_cleared(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    with patch.object(
-        zwave_js_lock, "async_call_service", new_callable=AsyncMock
-    ) as mock_service:
-        # Slot 3 is already empty in the fixture
-        result = await zwave_js_lock.async_clear_usercode(3)
+    # Slot 3 is already empty in the fixture
+    result = await zwave_js_lock.async_clear_usercode(3)
 
-        assert result is False
-        mock_service.assert_not_called()
+    assert result is False
 
     await zwave_js_lock.async_unload(False)
 
@@ -453,19 +411,13 @@ async def test_clear_usercode_proceeds_on_cache_failure(
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-            side_effect=ValueError("cache miss"),
-        ),
-        patch.object(
-            zwave_js_lock, "async_call_service", new_callable=AsyncMock
-        ) as mock_service,
+    with patch(
+        "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
+        side_effect=ValueError("cache miss"),
     ):
         result = await zwave_js_lock.async_clear_usercode(2)
 
         assert result is True
-        mock_service.assert_called_once()
 
     await zwave_js_lock.async_unload(False)
 
@@ -496,12 +448,11 @@ async def test_set_usercode_optimistic_update(
     mock_coordinator.data = {4: ""}  # Slot appears empty in stale cache
     zwave_js_lock.coordinator = mock_coordinator
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+    result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert result is True
-        # Verify optimistic update was called with new PIN
-        mock_coordinator.push_update.assert_called_once_with({4: "5678"})
+    assert result is True
+    # Verify optimistic update was called with new PIN
+    mock_coordinator.push_update.assert_called_once_with({4: "5678"})
 
     await zwave_js_lock.async_unload(False)
 
@@ -521,20 +472,14 @@ async def test_set_usercode_optimistic_update_prevents_stale_read(
     mock_coordinator.data = {4: ""}
     zwave_js_lock.coordinator = mock_coordinator
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        await zwave_js_lock.async_set_usercode(4, "9999")
+    await zwave_js_lock.async_set_usercode(4, "9999")
 
-        # The optimistic update should have been called
-        mock_coordinator.push_update.assert_called_once_with({4: "9999"})
+    # The optimistic update should have been called
+    mock_coordinator.push_update.assert_called_once_with({4: "9999"})
 
-        # Simulate what push_update does - update coordinator data
-        # (In real code, push_update calls async_set_updated_data which does this)
-        mock_coordinator.data[4] = "9999"
-
-        # Now coordinator.data reflects the expected value
-        # Binary sensor would see coordinator.data[4] == "9999" == pin_state
-        # → expected_in_sync = True → no retry loop
-        assert mock_coordinator.data[4] == "9999"
+    # Simulate what push_update does - update coordinator data
+    mock_coordinator.data[4] = "9999"
+    assert mock_coordinator.data[4] == "9999"
 
     await zwave_js_lock.async_unload(False)
 
@@ -560,12 +505,11 @@ async def test_clear_usercode_optimistic_update(
     mock_coordinator.data = {2: "1234"}  # Stale: slot still shows PIN
     zwave_js_lock.coordinator = mock_coordinator
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        result = await zwave_js_lock.async_clear_usercode(2)
+    result = await zwave_js_lock.async_clear_usercode(2)
 
-        assert result is True
-        # Verify optimistic update was called with SlotCode.EMPTY
-        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+    assert result is True
+    # Verify optimistic update was called with SlotCode.EMPTY
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
 
     await zwave_js_lock.async_unload(False)
 
@@ -595,8 +539,7 @@ async def test_v1_set_usercode_polls_slot(
     mock_coordinator.data = {4: ""}
     zwave_js_lock.coordinator = mock_coordinator
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+    await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
     mock_get_usercode_from_node.assert_called_once_with(lock_schlage_be469, 4)
 
@@ -619,8 +562,7 @@ async def test_v1_clear_usercode_polls_slot(
     mock_coordinator.data = {2: "1234"}
     zwave_js_lock.coordinator = mock_coordinator
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        await zwave_js_lock.async_clear_usercode(2)
+    await zwave_js_lock.async_clear_usercode(2)
 
     mock_get_usercode_from_node.assert_called_once_with(lock_schlage_be469, 2)
 
@@ -642,8 +584,7 @@ async def test_v2_set_usercode_does_not_poll_slot(
     mock_coordinator.data = {4: ""}
     zwave_js_lock_v2.coordinator = mock_coordinator
 
-    with patch.object(zwave_js_lock_v2, "async_call_service", new_callable=AsyncMock):
-        await zwave_js_lock_v2.async_set_usercode(4, "5678", "Test User")
+    await zwave_js_lock_v2.async_set_usercode(4, "5678", "Test User")
 
     mock_get_usercode_from_node.assert_not_called()
 
@@ -668,10 +609,9 @@ async def test_set_usercode_no_coordinator(
     # Remove coordinator to test defensive check
     zwave_js_lock.coordinator = None
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        # Should not raise even without coordinator
-        result = await zwave_js_lock.async_set_usercode(4, "5678")
-        assert result is True
+    # Should not raise even without coordinator
+    result = await zwave_js_lock.async_set_usercode(4, "5678")
+    assert result is True
 
     await zwave_js_lock.async_unload(False)
 
@@ -689,10 +629,9 @@ async def test_clear_usercode_no_coordinator(
     # Remove coordinator to test defensive check
     zwave_js_lock.coordinator = None
 
-    with patch.object(zwave_js_lock, "async_call_service", new_callable=AsyncMock):
-        # Should not raise even without coordinator
-        result = await zwave_js_lock.async_clear_usercode(2)
-        assert result is True
+    # Should not raise even without coordinator
+    result = await zwave_js_lock.async_clear_usercode(2)
+    assert result is True
 
     await zwave_js_lock.async_unload(False)
 

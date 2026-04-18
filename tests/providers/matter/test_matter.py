@@ -24,7 +24,7 @@ from custom_components.lock_code_manager.providers.matter import (
     MATTER_DOMAIN,
     MatterLock,
 )
-from tests.providers.service_provider_tests import (
+from tests.providers.helpers import (
     ServiceProviderConnectionTests,
     ServiceProviderDeviceAvailabilityTests,
     register_mock_service,
