@@ -98,6 +98,37 @@ class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
 
 
 # ---------------------------------------------------------------------------
+# _async_call_service response validation tests
+# ---------------------------------------------------------------------------
+
+
+async def test_async_call_service_missing_entity_data(
+    hass: HomeAssistant, matter_lock_simple: MatterLock
+) -> None:
+    """Test _async_call_service raises when response has no data for entity."""
+    handler = AsyncMock(return_value={"wrong_entity_id": {}})
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
+
+    with pytest.raises(LockCodeManagerProviderError, match="returned no data"):
+        await matter_lock_simple._async_call_service(
+            "get_lock_info", {"entity_id": matter_lock_simple.lock.entity_id}
+        )
+
+
+async def test_async_call_service_non_dict_entity_data(
+    hass: HomeAssistant, matter_lock_simple: MatterLock
+) -> None:
+    """Test _async_call_service raises when entity data is not a dict."""
+    handler = AsyncMock(return_value={LOCK_ENTITY_ID: "not_a_dict"})
+    register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
+
+    with pytest.raises(LockCodeManagerProviderError, match="returned non-dict"):
+        await matter_lock_simple._async_call_service(
+            "get_lock_info", {"entity_id": matter_lock_simple.lock.entity_id}
+        )
+
+
+# ---------------------------------------------------------------------------
 # Setup tests
 # ---------------------------------------------------------------------------
 
