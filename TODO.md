@@ -18,8 +18,6 @@
 - **Custom Jinja templates** — Ship `.jinja` macros for LCM entity resolution
   (e.g. `lcm_slot_entities(config_entry_id, slot_num)`). Auto-install to
   `custom_templates/` during setup.
-- **Drift detection alerting** — Alert users when drift detection consistently
-  fails (e.g. lock offline). Currently only logged.
 
 ## Providers
 
@@ -32,31 +30,39 @@
 **Cannot support:** esphome (no API), august/yale/yalexs_ble/yale_smart_alarm
 (library limitations)
 
-## Architecture Considerations
+### Matter provider
 
-- **Event-driven vs optimistic push updates** — For providers that support push
-  events (Matter LockUserChange, Z-Wave value updates), consider removing
-  optimistic pushes from set/clear methods and relying solely on events. The
-  event is the lock's actual confirmation the credential was stored, while
-  optimistic pushes only confirm the service call was accepted. Event-only
-  updates give a single source of truth and simpler code, at the cost of a
-  brief latency window before the coordinator updates. Z-Wave may still need
-  optimistic pushes to avoid sync loops with stale cache reads.
-
-- **Matter provider: direct Matter client commands** — Replace HA service calls
+- **Direct Matter client commands** — Replace HA service calls
   (`matter.set_lock_credential`, etc.) with direct `MatterClient.send_device_command()`
   calls to get structured response objects (e.g., `SetCredentialResponse.status`
   with `DlStatus.kDuplicate`). Currently duplicate detection relies on string
   matching the error message. Direct commands would give typed status codes for
   duplicate, occupied, resource exhausted, etc.
 
+- **Known Aqara U300 limitations** (discovered during live testing 2026-04-18):
+  - User names with spaces rejected (500 error from `set_lock_user`)
+  - Status `unknown(133)` when setting credential on occupied slot without clearing
+  - Lock disconnects from Thread network after repeated HA restarts (needs battery
+    pull + Matter server restart to recover)
+
+## Architecture Considerations
+
+- **Event-driven vs optimistic push updates** — Both Matter and Z-Wave JS need
+  optimistic pushes from set/clear methods. Z-Wave JS needs them to avoid sync
+  loops with stale cache reads. Matter needs them because PINs are write-only
+  (the lock never reports the actual value back). Removing optimistic pushes
+  is not viable for either provider. Event-only updates would leave a latency
+  window where the coordinator has stale data, triggering unnecessary re-sync
+  attempts.
+
+- **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
+  sensor entities to coordinator (survives entity recreation during config
+  updates).
+
 ## Code Quality
 
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.
   Document when to use each.
-- **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
-  sensor entities to coordinator (survives entity recreation during config
-  updates).
 - **TypedDict for slot config** — Define `class SlotConfig(TypedDict)` with
   `pin: NotRequired[str]`, `enabled: bool`, `name: NotRequired[str]`,
   `entity_id: NotRequired[str]`, `number_of_uses: NotRequired[int]` to
@@ -78,6 +84,15 @@
   required).
 - **Provider diagnostics** — Add `get_diagnostic_data()` to `BaseLock` for
   provider-specific diagnostic information.
+
+## Testing
+
+- **Live Matter lock testing** — Remaining scenarios not yet validated
+  (2026-04-18):
+  - PIN change while in sync (re-sync via clear-then-set)
+  - Multiple config entries sharing the same lock (conflict detection)
+  - Hard refresh drift detection (verify 1-hour poll catches changes)
+  - Config flow re-add (picks up existing codes on lock)
 
 ## Frontend
 
