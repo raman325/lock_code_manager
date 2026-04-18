@@ -921,13 +921,7 @@ async def test_sync_attempts_exceeded_disables_slot(
 
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
-    # Pre-load the tracker with MAX_SYNC_ATTEMPTS successful attempts within the window
-    now = dt_util.utcnow()
-    in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_manager._sync_attempt_first = now
-
-    # Change PIN to trigger sync — the circuit breaker should fire BEFORE
-    # attempting another sync, disabling the slot
+    # Change PIN to trigger sync
     await hass.services.async_call(
         TEXT_DOMAIN,
         TEXT_SERVICE_SET_VALUE,
@@ -937,7 +931,13 @@ async def test_sync_attempts_exceeded_disables_slot(
     )
     await hass.async_block_till_done()
 
-    # Trigger tick to attempt sync (circuit breaker will fire)
+    # Pre-load the tracker AFTER the PIN change to simulate repeated failures
+    # on the same PIN (a PIN change resets the tracker, so we must load after)
+    now = dt_util.utcnow()
+    in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
+    in_sync_entity_obj._sync_manager._sync_attempt_first = now
+
+    # Trigger tick — circuit breaker should fire before attempting sync
     await in_sync_entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 

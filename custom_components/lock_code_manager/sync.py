@@ -440,8 +440,11 @@ class SlotSyncManager:
         expected = self.calculate_in_sync(slot_state)
         if expected != self._in_sync:
             self._in_sync = expected
-            if expected:
-                self._reset_sync_tracker()
+            # Reset circuit breaker on any transition: True→False means the
+            # sync target changed (e.g. PIN edited), so prior attempts should
+            # not count against the new target. False→True means sync
+            # succeeded and the tracker should be clean for next time.
+            self._reset_sync_tracker()
             self._write_state()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
@@ -584,12 +587,9 @@ class SlotSyncManager:
                 )
                 return
             else:
-                # Sync succeeded — reset circuit breaker immediately so a
-                # subsequent PIN change doesn't inherit stale attempt counts.
-                self._reset_sync_tracker()
-                # Refresh coordinator to verify. Skip for push providers —
-                # they update coordinator optimistically via push_update()
-                # and refreshing from cache could read stale data.
+                # Sync succeeded - refresh coordinator to verify
+                # Skip for push providers — they update coordinator optimistically
+                # via push_update() and refreshing from cache could read stale data.
                 if not self._lock.supports_push:
                     try:
                         await self._coordinator.async_refresh()
