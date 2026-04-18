@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
@@ -63,6 +63,7 @@ class MockLCMLock(BaseLock):
         """Initialize mock lock."""
         super().__init__(*args, **kwargs)
         self._connected = True
+        self._hard_refresh_interval: timedelta | None = None
         self.codes: dict[int, str] = {1: "1234", 2: "5678"}
         self.service_calls: defaultdict[str, list] = defaultdict(list)
 
@@ -70,6 +71,11 @@ class MockLCMLock(BaseLock):
     def domain(self) -> str:
         """Return integration domain."""
         return "test"
+
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """Return configurable hard refresh interval."""
+        return self._hard_refresh_interval
 
     def set_connected(self, connected: bool) -> None:
         """Set connection state for testing."""
@@ -117,6 +123,31 @@ class MockLCMLock(BaseLock):
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
         return snapshot
+
+
+@dataclass(repr=False, eq=False)
+class MockLCMPushLock(MockLCMLock):
+    """Mock lock that supports push-based updates."""
+
+    def __init__(self, *args, **kwargs):
+        """Initialize mock push lock."""
+        super().__init__(*args, **kwargs)
+        self._supports_push = True
+        self._subscribe_called = False
+        self._unsubscribe_called = False
+
+    @property
+    def supports_push(self) -> bool:
+        """Return whether this lock supports push-based updates."""
+        return self._supports_push
+
+    def setup_push_subscription(self) -> None:
+        """Subscribe to push-based value updates."""
+        self._subscribe_called = True
+
+    def teardown_push_subscription(self) -> None:
+        """Unsubscribe from push-based value updates."""
+        self._unsubscribe_called = True
 
 
 class MockLockEntity(LockEntity):
