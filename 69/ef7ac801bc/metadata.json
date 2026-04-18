@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "69ef7ac801bc",
+  "strategy": "manual-commit",
+  "branch": "refactor/simplify-push-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/zwave_js/test_zwave_js.py",
+    "tests/test_util.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/69/ef7ac801bc/0/metadata.json",
+      "transcript": "/69/ef7ac801bc/0/full.jsonl",
+      "content_hash": "/69/ef7ac801bc/0/content_hash.txt",
+      "prompt": "/69/ef7ac801bc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1791,
+    "cache_creation_tokens": 1724502,
+    "cache_read_tokens": 653653114,
+    "output_tokens": 323157,
+    "api_call_count": 1450
+  }
+}
