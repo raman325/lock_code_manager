@@ -3,11 +3,12 @@
 import asyncio
 from datetime import datetime, timedelta
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -598,6 +599,115 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
         assert lock.subscribe_calls == 0
 
     await lock.async_unload(False)
+
+
+async def test_async_setup_internal_creates_coordinator_when_setup_fails(
+    hass: HomeAssistant,
+):
+    """Test that coordinator is created even when async_setup raises."""
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_setup_fail",
+        config_entry=config_entry,
+    )
+
+    lock = BaseLock(
+        hass,
+        dev_reg,
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+
+    # Make async_setup raise an exception
+    with (
+        patch.object(
+            lock,
+            "async_setup",
+            side_effect=LockDisconnected("provider unavailable"),
+        ),
+        patch(
+            "custom_components.lock_code_manager.coordinator."
+            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
+        ),
+        patch(
+            "custom_components.lock_code_manager.coordinator."
+            "LockUsercodeUpdateCoordinator.async_refresh"
+        ),
+    ):
+        # Should not raise even though async_setup failed
+        await lock.async_setup_internal(config_entry)
+
+    # Coordinator should still have been created
+    assert lock.coordinator is not None
+    # Setup complete should be signaled
+    assert lock._setup_complete.is_set()
+    # Setup should be marked as failed
+    assert lock._setup_succeeded is False
+
+    # Simulate reconnect: mock lock_config_entry as LOADED, async_setup succeeds
+    mock_entry = MagicMock()
+    mock_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = mock_entry
+    with patch.object(lock, "async_setup", return_value=None):
+        await lock._async_on_integration_loaded()
+
+    assert lock._setup_succeeded is True
+
+
+async def test_on_integration_loaded_skips_when_no_config_entry(
+    hass: HomeAssistant,
+):
+    """Test that _async_on_integration_loaded is a no-op when _lcm_config_entry is None."""
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock_no_entry", config_entry=config_entry
+    )
+
+    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+    # _lcm_config_entry is None (async_setup_internal never called)
+    assert lock._lcm_config_entry is None
+    # Should be a no-op, not raise
+    await lock._async_on_integration_loaded()
+    assert lock._setup_succeeded is False
+
+
+async def test_on_integration_loaded_retries_on_disconnect(
+    hass: HomeAssistant,
+):
+    """Test that _async_on_integration_loaded retries setup on LockDisconnected."""
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock_retry", config_entry=config_entry
+    )
+
+    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+    lock._lcm_config_entry = config_entry
+
+    # async_setup raises LockDisconnected — should not propagate
+    with patch.object(
+        lock, "async_setup", side_effect=LockDisconnected("still offline")
+    ):
+        await lock._async_on_integration_loaded()
+
+    assert lock._setup_succeeded is False
 
 
 async def test_set_usercode_skips_refresh_for_push_provider(

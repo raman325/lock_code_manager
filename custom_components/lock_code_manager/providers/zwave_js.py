@@ -354,7 +354,14 @@ class ZWaveJSLock(BaseLock):
         return ZWAVE_JS_DOMAIN
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Set up lock by provider."""
+        """Set up lock by provider.
+
+        Idempotent: clears existing listeners before re-registering.
+        """
+        listeners = list(self._listeners)
+        self._listeners.clear()
+        for listener in listeners:
+            listener()
         self._listeners.append(
             self.hass.bus.async_listen(
                 ZWAVE_JS_NOTIFICATION_EVENT,
@@ -365,9 +372,10 @@ class ZWaveJSLock(BaseLock):
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
-        for listener in self._listeners:
-            listener()
+        listeners = list(self._listeners)
         self._listeners.clear()
+        for listener in listeners:
+            listener()
         await super().async_unload(remove_permanently)
 
     async def async_is_integration_connected(self) -> bool:
