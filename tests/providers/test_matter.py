@@ -10,7 +10,7 @@ from matter_server.common.models import MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -520,6 +520,35 @@ async def test_set_usercode_duplicate_raises_duplicate_code_error(
         await matter_lock.async_set_usercode(1, "1234")
     assert exc_info.value.code_slot == 1
     assert exc_info.value.lock_entity_id == LOCK_ENTITY_ID
+
+
+async def test_async_call_service_void_service(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test _async_call_service works with void services that do not return responses.
+
+    Void services (SupportsResponse.NONE) should be called without
+    return_response=True and return an empty dict without raising
+    LockCodeManagerProviderError.
+    """
+    handler = AsyncMock(return_value=None)
+
+    async def _service_handler(call):
+        return await handler(call)
+
+    hass.services.async_register(
+        MATTER_DOMAIN,
+        "void_service",
+        _service_handler,
+        supports_response=SupportsResponse.NONE,
+    )
+
+    result = await matter_lock._async_call_service(
+        "void_service", {"entity_id": matter_lock.lock.entity_id}
+    )
+
+    assert result == {}
+    assert handler.call_count == 1
 
 
 async def test_get_usercodes_multiple_credential_types(
