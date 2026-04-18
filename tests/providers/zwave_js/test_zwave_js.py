@@ -681,12 +681,12 @@ async def test_subscribe_is_idempotent(
     await zwave_js_lock.async_unload(False)
 
 
-async def test_subscribe_push_logs_on_client_not_ready(
+async def test_subscribe_push_no_crash_on_client_not_ready(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that push subscription logs and returns when client isn't ready."""
+    """Test that push subscription handles client not ready without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
@@ -706,13 +706,13 @@ async def test_subscribe_push_logs_on_client_not_ready(
     await zwave_js_lock.async_unload(False)
 
 
-async def test_subscribe_push_logs_on_node_error(
+async def test_subscribe_push_no_crash_on_node_error(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that push subscription logs and returns when node.on raises."""
+    """Test that push subscription handles node.on error without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
