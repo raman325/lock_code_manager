@@ -584,9 +584,12 @@ class SlotSyncManager:
                 )
                 return
             else:
-                # Sync succeeded - refresh coordinator to verify
-                # Skip for push providers — they update coordinator optimistically
-                # via push_update() and refreshing from cache could read stale data.
+                # Sync succeeded — reset circuit breaker immediately so a
+                # subsequent PIN change doesn't inherit stale attempt counts.
+                self._reset_sync_tracker()
+                # Refresh coordinator to verify. Skip for push providers —
+                # they update coordinator optimistically via push_update()
+                # and refreshing from cache could read stale data.
                 if not self._lock.supports_push:
                     try:
                         await self._coordinator.async_refresh()
