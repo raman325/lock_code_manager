@@ -62,7 +62,11 @@ then
     python3 -m pip install aiousbwatcher==1.1.1
 fi
 
-pre-commit install
+if command -v prek &> /dev/null; then
+  prek install
+else
+  pre-commit install
+fi
 yarn install
 
 # Setup directories for HA and linking
