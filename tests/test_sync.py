@@ -16,6 +16,7 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.exceptions import LockOperationFailed
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
@@ -354,3 +355,37 @@ class TestSlotDisabledIssueCleanup:
 
         # The issue should be deleted since slot is back in sync
         assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+class TestLockOperationFailedRetry:
+    """Tests that LockOperationFailed triggers retry, not slot disable."""
+
+    async def test_lock_operation_failed_triggers_retry(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """LockOperationFailed during sync sets dirty for retry instead of disabling slot."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        # Force out-of-sync state so _perform_sync is called:
+        # set coordinator data to EMPTY so the slot appears to need a set
+        manager._in_sync = False
+        manager._dirty = True
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockOperationFailed("service validation failed"),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        # Should retry (dirty=True) rather than disable the slot
+        assert manager._dirty is True
+        # Slot should not have been disabled (in_sync stays False, not None)
+        assert manager._in_sync is False

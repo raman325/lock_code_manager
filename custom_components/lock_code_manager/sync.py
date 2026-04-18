@@ -52,7 +52,7 @@ from .const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
-from .exceptions import CodeRejectedError, LockDisconnected
+from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
 from .models import SlotCode
 from .util import async_disable_slot
 
@@ -556,7 +556,7 @@ class SlotSyncManager:
                     f"Fix the issue and re-enable the slot.",
                 )
                 return
-            except LockDisconnected as err:
+            except (LockDisconnected, LockOperationFailed) as err:
                 _LOGGER.info(
                     "%s: Lock disconnected during %s usercode: %s. Will retry on next tick.",
                     self._log_prefix,

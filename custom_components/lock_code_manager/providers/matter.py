@@ -81,6 +81,16 @@ class MatterLock(BaseLock):
         return timedelta(minutes=5)
 
     @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """Return interval between hard refreshes for drift detection.
+
+        Matter locks support push events for local changes, but API-initiated
+        changes bypass push notifications. Periodic hard refresh catches drift
+        from external tools or missed events.
+        """
+        return timedelta(hours=1)
+
+    @property
     def _matter_node_id(self) -> int | None:
         """Resolve the Matter node ID from the device registry."""
         if not self.device_entry:
@@ -131,7 +141,12 @@ class MatterLock(BaseLock):
                 blocking=True,
                 return_response=return_response,
             )
-        except (ServiceValidationError, HomeAssistantError) as err:
+        except ServiceValidationError as err:
+            raise LockCodeManagerProviderError(
+                f"Matter service {MATTER_DOMAIN}.{service} rejected input for "
+                f"{entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter service {MATTER_DOMAIN}.{service} failed for "
                 f"{entity_id}: {err}"
