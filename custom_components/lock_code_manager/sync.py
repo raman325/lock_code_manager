@@ -440,8 +440,13 @@ class SlotSyncManager:
         expected = self.calculate_in_sync(slot_state)
         if expected != self._in_sync:
             self._in_sync = expected
-            if expected:
-                self._reset_sync_tracker()
+            # Reset circuit breaker on any transition between in-sync and
+            # out-of-sync. A True→False transition means the reconciliation
+            # state changed (for example, due to a desired-state edit or
+            # lock-side drift), so prior attempts should not carry over.
+            # False→True means sync succeeded and the tracker should be clean
+            # for next time.
+            self._reset_sync_tracker()
             self._write_state()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
