@@ -1110,27 +1110,27 @@ async def test_invalid_active_state_during_initial_load(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that invalid active state during initial load is tracked and prevents initial sync."""
+    """Test that invalid active state during initial load prevents sync and logs once."""
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Reset to simulate pre-initial-load state
     in_sync_entity_obj._sync_manager._in_sync = None
-    in_sync_entity_obj._sync_manager._invalid_state_count = 0
+    in_sync_entity_obj._sync_manager._logged_invalid_state = False
 
-    # Set active entity to an invalid state (not ON, OFF, or UNAVAILABLE)
+    # Set active entity to an invalid state (not ON or OFF)
     hass.states.async_set(SLOT_1_ACTIVE_ENTITY, "unknown_invalid_state")
     await hass.async_block_till_done()
 
-    # Trigger multiple ticks to exceed MAX_SYNC_ATTEMPTS threshold
-    for _ in range(MAX_SYNC_ATTEMPTS + 1):
+    # Trigger multiple ticks — should keep retrying without crashing
+    for _ in range(5):
         in_sync_entity_obj._sync_manager._dirty = True
         await in_sync_entity_obj._sync_manager._async_tick()
         await hass.async_block_till_done()
 
-    # Verify that invalid_state_count was incremented
-    assert in_sync_entity_obj._sync_manager._invalid_state_count > MAX_SYNC_ATTEMPTS
+    # Warning logged once
+    assert in_sync_entity_obj._sync_manager._logged_invalid_state is True
 
-    # Verify that initial state is still not loaded due to invalid state
+    # Initial state is still not loaded due to invalid state
     assert in_sync_entity_obj._sync_manager._in_sync is None
 
 

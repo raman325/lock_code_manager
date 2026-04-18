@@ -229,7 +229,8 @@ class MatterLock(BaseLock):
         - LockUserChange (event 4): pushes occupancy updates to coordinator
           when credentials are added, modified, or cleared
 
-        Called by BaseLock.subscribe_push_updates() with automatic retry.
+        Called by BaseLock.subscribe_push_updates(). On failure, the
+        reconnect handlers will retry when the integration reloads.
         """
         if self._event_unsub is not None:
             return

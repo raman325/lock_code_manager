@@ -119,7 +119,6 @@ POLL_FAILURE_ALERT_THRESHOLD: int = 12
 TICK_INTERVAL = timedelta(seconds=5)
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
-PUSH_SUBSCRIBE_RETRY_DELAY = timedelta(seconds=10)
 
 
 # Defaults

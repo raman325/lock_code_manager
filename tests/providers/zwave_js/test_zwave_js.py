@@ -681,12 +681,12 @@ async def test_subscribe_is_idempotent(
     await zwave_js_lock.async_unload(False)
 
 
-async def test_subscribe_push_retry_on_client_not_ready(
+async def test_subscribe_push_no_crash_on_client_not_ready(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that push subscription schedules retry when client isn't ready."""
+    """Test that push subscription handles client not ready without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
@@ -694,29 +694,25 @@ async def test_subscribe_push_retry_on_client_not_ready(
     zwave_js_lock.unsubscribe_push_updates()
     assert zwave_js_lock._value_update_unsub is None
 
-    # Make client appear not ready
+    # Make client appear not ready — should not crash
     with patch.object(
         zwave_js_lock, "_get_client_state", return_value=(False, "not connected")
     ):
         zwave_js_lock.subscribe_push_updates()
 
-    # Should not have subscribed but should have scheduled retry
+    # Should not have subscribed (no crash, no retry timer)
     assert zwave_js_lock._value_update_unsub is None
-    assert zwave_js_lock._push_retry is not None
-    assert zwave_js_lock._push_retry.pending
 
-    # Clean up
-    zwave_js_lock._push_retry.cancel()
     await zwave_js_lock.async_unload(False)
 
 
-async def test_subscribe_push_retry_on_node_error(
+async def test_subscribe_push_no_crash_on_node_error(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that push subscription schedules retry when node.on raises ValueError."""
+    """Test that push subscription handles node.on error without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
     await zwave_js_lock.async_setup_internal(lcm_entry)
@@ -724,16 +720,12 @@ async def test_subscribe_push_retry_on_node_error(
     zwave_js_lock.unsubscribe_push_updates()
     assert zwave_js_lock._value_update_unsub is None
 
-    # Make node.on raise ValueError
+    # Make node.on raise — should not crash
     with patch.object(lock_schlage_be469, "on", side_effect=ValueError("not ready")):
         zwave_js_lock.subscribe_push_updates()
 
     assert zwave_js_lock._value_update_unsub is None
-    assert zwave_js_lock._push_retry is not None
-    assert zwave_js_lock._push_retry.pending
 
-    # Clean up
-    zwave_js_lock._push_retry.cancel()
     await zwave_js_lock.async_unload(False)
 
 
