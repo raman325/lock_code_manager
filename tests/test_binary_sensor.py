@@ -931,14 +931,19 @@ async def test_sync_attempts_exceeded_disables_slot(
     )
     await hass.async_block_till_done()
 
-    # Pre-load the tracker AFTER the PIN change to simulate repeated failures
-    # on the same PIN (a PIN change resets the tracker, so we must load after)
+    # Simulate that the tick has already processed the out-of-sync state
+    # (so _tick_in_sync matches the current state and no transition reset)
+    sync_mgr = in_sync_entity_obj._sync_manager
+    sync_mgr._tick_in_sync = False
+
+    # Pre-load the tracker to simulate repeated failures on the same PIN
     now = dt_util.utcnow()
-    in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_manager._sync_attempt_first = now
+    sync_mgr._sync_attempt_count = MAX_SYNC_ATTEMPTS
+    sync_mgr._sync_attempt_first = now
 
     # Trigger tick — circuit breaker should fire before attempting sync
-    await in_sync_entity_obj._sync_manager._async_tick()
+    sync_mgr._dirty = True
+    await sync_mgr._async_tick()
     await hass.async_block_till_done()
 
     # Slot should be disabled
@@ -992,6 +997,61 @@ async def test_sync_tracker_resets_when_back_in_sync(
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
     assert not in_sync_entity_obj._sync_manager._sync_attempts_exceeded()
+
+
+async def test_sync_tracker_resets_on_pin_change_in_tick(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that the tick resets the circuit breaker when sync target changes.
+
+    When a PIN changes while the slot is in sync, the tick detects the
+    True→False transition and resets the tracker before checking the
+    circuit breaker. This prevents stale attempt counts from a prior
+    sync cycle from incorrectly triggering the breaker.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    sync_mgr = in_sync_entity_obj._sync_manager
+
+    # Verify in sync
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+
+    # Simulate prior sync attempts (as if a previous sync cycle ran)
+    now = dt_util.utcnow()
+    sync_mgr._sync_attempt_count = MAX_SYNC_ATTEMPTS - 1
+    sync_mgr._sync_attempt_first = now
+
+    # Change PIN — the display callback updates _in_sync to False for UI,
+    # but does NOT reset the tracker (that's the tick's job now)
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "9999"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # The display callback set _in_sync = False but tracker is untouched
+    assert sync_mgr._in_sync is False
+    assert sync_mgr._sync_attempt_count == MAX_SYNC_ATTEMPTS - 1
+
+    # Tick fires — detects True→False transition, resets tracker BEFORE
+    # checking circuit breaker, then performs sync
+    sync_mgr._dirty = True
+    await sync_mgr._async_tick()
+    await hass.async_block_till_done()
+
+    # Tracker should have been reset (the old attempts cleared) and then
+    # one new attempt recorded for the sync operation
+    assert sync_mgr._sync_attempt_count == 1
+
+    # Slot should NOT be disabled (circuit breaker didn't fire)
+    enabled_state = hass.states.get(SLOT_1_ENABLED_ENTITY)
+    assert enabled_state.state == STATE_ON
 
 
 async def test_sync_tracker_expired_window_resets(

@@ -135,8 +135,12 @@ class SlotSyncManager:
             ATTR_CODE: (SENSOR_DOMAIN, f"{base_uid}|{ATTR_CODE}|{lock_entity_id}"),
         }
 
-        # State
+        # State — _in_sync is the display state (updated by both the tick
+        # and the display callback for instant UI). _tick_in_sync is the
+        # tick's own view, updated only by the tick, used for transition
+        # detection (circuit breaker reset).
         self._in_sync: bool | None = None
+        self._tick_in_sync: bool | None = None
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
         self._dirty: bool = False
@@ -475,16 +479,16 @@ class SlotSyncManager:
             self._dirty = True
             return
 
-        prev_in_sync = self._in_sync
         expected_in_sync = self.calculate_in_sync(slot_state)
 
-        # Reset circuit breaker on any transition. True→False means the
-        # sync target changed (PIN edited, slot re-enabled) so prior
-        # attempts should not count. False→True is handled below in the
-        # "Back in sync" block. This is the ONLY place the tracker is
-        # reset — the display callback does not touch it.
-        if prev_in_sync is not None and prev_in_sync and not expected_in_sync:
+        # Reset circuit breaker when the tick detects any in_sync
+        # transition. Uses _tick_in_sync (tick-only state) instead of
+        # _in_sync (which the display callback may have already updated).
+        # True→False: sync target changed (PIN edit), prior attempts
+        # should not count. False→True: sync succeeded, clean slate.
+        if self._tick_in_sync is not None and self._tick_in_sync != expected_in_sync:
             self._reset_sync_tracker()
+        self._tick_in_sync = expected_in_sync
 
         # Initial load: detect sync state without performing sync operations.
         # This prevents premature sync attempts during entity setup when dependent
@@ -621,7 +625,6 @@ class SlotSyncManager:
         if not self._in_sync:
             self._in_sync = True
             self._write_state()
-            self._reset_sync_tracker()
             # Only clear slot_disabled when the slot is enabled — a disabled
             # slot can be "in sync" without the issue being resolved
             if slot_state.active_state == STATE_ON:
