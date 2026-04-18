@@ -337,7 +337,7 @@ def _serialize_slot(
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
 
-    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unknown"),
+    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
     # regular codes are masked or revealed, None stays None.
     if isinstance(code, SlotCode):
         result[ATTR_CODE] = str(code)

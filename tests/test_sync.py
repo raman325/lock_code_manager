@@ -72,7 +72,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.UNKNOWN,
+                    "coordinator_code": SlotCode.UNREADABLE_CODE,
                 },
                 True,
                 id="active-unknown-code-matching-last-set",
@@ -82,7 +82,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "5678",
-                    "coordinator_code": SlotCode.UNKNOWN,
+                    "coordinator_code": SlotCode.UNREADABLE_CODE,
                 },
                 False,
                 id="active-unknown-code-pin-changed",
@@ -92,7 +92,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.UNKNOWN,
+                    "coordinator_code": SlotCode.UNREADABLE_CODE,
                 },
                 False,
                 id="active-unknown-code-never-set",
@@ -138,7 +138,7 @@ class TestCalculateInSync:
             ),
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": SlotCode.UNKNOWN},
+                {"active": STATE_OFF, "coordinator_code": SlotCode.UNREADABLE_CODE},
                 False,
                 id="inactive-unknown-code",
             ),

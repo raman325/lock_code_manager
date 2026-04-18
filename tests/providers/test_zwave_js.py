@@ -1048,8 +1048,8 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
 
         # Slot 1 should have its code
         assert codes[1] == "9999"
-        # Slot 5 returns UNKNOWN (masked code, so sync logic knows a PIN exists)
-        assert codes[5] is SlotCode.UNKNOWN
+        # Slot 5 returns UNREADABLE_CODE (masked code, so sync logic knows a PIN exists)
+        assert codes[5] is SlotCode.UNREADABLE_CODE
 
     await zwave_js_lock.async_unload(False)
 
@@ -1060,10 +1060,10 @@ async def test_get_usercodes_masked_pin_returns_unknown(
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test that masked PINs return SlotCode.UNKNOWN.
+    Test that masked PINs return SlotCode.UNREADABLE_CODE.
 
     When the lock returns masked codes (all asterisks), the provider returns
-    SlotCode.UNKNOWN so consumers know a code exists but the value is hidden.
+    SlotCode.UNREADABLE_CODE so consumers know a code exists but the value is hidden.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -1085,8 +1085,8 @@ async def test_get_usercodes_masked_pin_returns_unknown(
     ):
         codes = await zwave_js_lock.async_get_usercodes()
 
-        # Masked PIN should be returned as SlotCode.UNKNOWN
-        assert codes[2] is SlotCode.UNKNOWN
+        # Masked PIN should be returned as SlotCode.UNREADABLE_CODE
+        assert codes[2] is SlotCode.UNREADABLE_CODE
 
     await zwave_js_lock.async_unload(False)
 
@@ -1132,10 +1132,10 @@ async def test_push_update_masked_code_sends_unknown(
     lock_schlage_be469: Node,
 ) -> None:
     """
-    Test that push updates with masked codes send SlotCode.UNKNOWN.
+    Test that push updates with masked codes send SlotCode.UNREADABLE_CODE.
 
     When a push update arrives with a masked code (all asterisks) and the slot
-    is in use, the coordinator should receive SlotCode.UNKNOWN.
+    is in use, the coordinator should receive SlotCode.UNREADABLE_CODE.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -1175,8 +1175,10 @@ async def test_push_update_masked_code_sends_unknown(
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        # Coordinator should receive SlotCode.UNKNOWN for masked codes
-        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.UNKNOWN})
+        # Coordinator should receive SlotCode.UNREADABLE_CODE for masked codes
+        mock_coordinator.push_update.assert_called_once_with(
+            {2: SlotCode.UNREADABLE_CODE}
+        )
 
 
 async def test_push_update_falsy_value_sends_empty(
@@ -1315,7 +1317,7 @@ async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that masked codes with slot_in_use=None still send UNKNOWN."""
+    """Test that masked codes with slot_in_use=None still send UNREADABLE_CODE."""
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1331,7 +1333,7 @@ async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
     zwave_js_lock.coordinator = mock_coordinator
     zwave_js_lock.subscribe_push_updates()
 
-    # slot_in_use returns None (indeterminate) — should still treat masked as UNKNOWN
+    # slot_in_use returns None (indeterminate) — should still treat masked as UNREADABLE_CODE
     with patch.object(zwave_js_lock, "code_slot_in_use", return_value=None):
         event = ZwaveEvent(
             type="value updated",
@@ -1350,7 +1352,9 @@ async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.UNKNOWN})
+        mock_coordinator.push_update.assert_called_once_with(
+            {2: SlotCode.UNREADABLE_CODE}
+        )
 
 
 async def test_push_update_user_id_status_available_clears_slot(

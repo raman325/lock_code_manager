@@ -13,7 +13,7 @@ import {
     LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData,
-    SLOT_CODE_UNKNOWN,
+    SLOT_CODE_UNREADABLE,
     isSlotEmpty,
     isSlotOccupied
 } from './types';
@@ -177,7 +177,9 @@ class LockCodesCard extends LockCodesCardBase {
         }
         // Get the current code value (if any); sentinels are not editable values
         const currentCode =
-            isSlotOccupied(slot.code) && slot.code !== SLOT_CODE_UNKNOWN ? String(slot.code) : '';
+            isSlotOccupied(slot.code) && slot.code !== SLOT_CODE_UNREADABLE
+                ? String(slot.code)
+                : '';
         this._editValue = currentCode;
         this._editingSlot = slot.slot;
         // Focus input after render
@@ -600,7 +602,7 @@ class LockCodesCard extends LockCodesCardBase {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
-        if (slot.code === SLOT_CODE_UNKNOWN || slot.code_length) return 'masked';
+        if (slot.code === SLOT_CODE_UNREADABLE || slot.code_length) return 'masked';
         if (!isSlotEmpty(slot.code)) return '';
 
         // Empty/null code on the lock — check for a configured PIN
@@ -619,7 +621,7 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
-        if (slot.code === SLOT_CODE_UNKNOWN) return '• • •';
+        if (slot.code === SLOT_CODE_UNREADABLE) return '• • •';
         if (isSlotEmpty(slot.code)) {
             if (slot.code_length) return '•'.repeat(slot.code_length);
             // Fall through to configured code or dash below

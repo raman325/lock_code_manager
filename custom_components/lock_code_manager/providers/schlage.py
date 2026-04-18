@@ -12,7 +12,7 @@ services (``schlage.get_codes``, ``schlage.add_code``,
 
 PINs are write-only from the Schlage API perspective: the ``get_codes``
 service returns masked PINs (``****``), so occupied slots report
-SlotCode.UNKNOWN and cleared slots report SlotCode.EMPTY.
+SlotCode.UNREADABLE_CODE and cleared slots report SlotCode.EMPTY.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ class SchlageLock(BaseLock):
     ``[LCM:<slot>]`` tag in each code's name.
 
     PINs are write-only: ``get_codes`` returns masked values, so the
-    coordinator sees SlotCode.UNKNOWN for occupied slots and SlotCode.EMPTY
+    coordinator sees SlotCode.UNREADABLE_CODE for occupied slots and SlotCode.EMPTY
     for cleared slots.
     """
 
@@ -252,7 +252,7 @@ class SchlageLock(BaseLock):
         """Get dictionary of code slots and usercodes.
 
         Schlage PINs are write-only (returned as masked values), so occupied
-        slots return SlotCode.UNKNOWN and cleared slots return SlotCode.EMPTY.
+        slots return SlotCode.UNREADABLE_CODE and cleared slots return SlotCode.EMPTY.
 
         This method only reads and classifies codes; auto-tagging of unmanaged
         codes is handled by ``_async_tag_unmanaged_codes()``.
@@ -297,9 +297,9 @@ class SchlageLock(BaseLock):
             seen_slots.add(slot_num)
             occupied_slots.add(slot_num)
 
-        # Build final result: UNKNOWN for occupied, EMPTY for unoccupied managed slots
+        # Build final result: UNREADABLE_CODE for occupied, EMPTY for unoccupied managed slots
         return {
-            slot: SlotCode.UNKNOWN if slot in occupied_slots else SlotCode.EMPTY
+            slot: SlotCode.UNREADABLE_CODE if slot in occupied_slots else SlotCode.EMPTY
             for slot in managed_slots
         }
 

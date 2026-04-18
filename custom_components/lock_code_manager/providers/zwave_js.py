@@ -204,13 +204,13 @@ class ZWaveJSLock(BaseLock):
         else:
             value = str(new_value)
             slot_in_use = self.code_slot_in_use(code_slot)
-            # Asymmetric in_use checks: masked codes count as UNKNOWN even
+            # Asymmetric in_use checks: masked codes count as UNREADABLE_CODE even
             # when in_use is None (some firmwares mask before reporting
             # status), but all-zeros only counts as EMPTY when in_use is
             # explicitly False (zeros from a partially-loaded cache must
             # not be misread as cleared).
             if value == "*" * len(value) and slot_in_use is not False:
-                resolved = SlotCode.UNKNOWN
+                resolved = SlotCode.UNREADABLE_CODE
             elif value.strip("0") == "" and slot_in_use is False:
                 resolved = SlotCode.EMPTY
             else:
@@ -540,7 +540,7 @@ class ZWaveJSLock(BaseLock):
                 continue
             elif usercode == "*" * len(usercode):
                 # Masked code (all asterisks with slot in use)
-                data[code_slot] = SlotCode.UNKNOWN
+                data[code_slot] = SlotCode.UNREADABLE_CODE
             else:
                 # Unmasked code
                 data[code_slot] = usercode

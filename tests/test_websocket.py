@@ -2811,26 +2811,26 @@ class TestSerializeSlotWithSlotCode:
         result = _serialize_slot(1, SlotCode.EMPTY, reveal=True)
         assert result[ATTR_CODE] == "empty"
 
-    def test_unknown_code_passes_through(self) -> None:
-        """SlotCode.UNKNOWN should serialize as the string "unknown"."""
-        result = _serialize_slot(1, SlotCode.UNKNOWN, reveal=False)
-        assert result[ATTR_CODE] == "unknown"
+    def test_unreadable_code_passes_through(self) -> None:
+        """SlotCode.UNREADABLE_CODE should serialize as the string "unreadable_code"."""
+        result = _serialize_slot(1, SlotCode.UNREADABLE_CODE, reveal=False)
+        assert result[ATTR_CODE] == "unreadable_code"
         assert ATTR_CODE_LENGTH not in result
 
-    def test_unknown_code_includes_configured_code_when_revealed(self) -> None:
-        """SlotCode.UNKNOWN with configured_code and reveal should include it."""
+    def test_unreadable_code_includes_configured_code_when_revealed(self) -> None:
+        """SlotCode.UNREADABLE_CODE with configured_code and reveal should include it."""
         result = _serialize_slot(
-            1, SlotCode.UNKNOWN, reveal=True, configured_code="1234"
+            1, SlotCode.UNREADABLE_CODE, reveal=True, configured_code="1234"
         )
-        assert result[ATTR_CODE] == "unknown"
+        assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code"] == "1234"
 
-    def test_unknown_code_includes_configured_code_length_when_masked(self) -> None:
-        """SlotCode.UNKNOWN without reveal should include configured_code_length."""
+    def test_unreadable_code_includes_configured_code_length_when_masked(self) -> None:
+        """SlotCode.UNREADABLE_CODE without reveal should include configured_code_length."""
         result = _serialize_slot(
-            1, SlotCode.UNKNOWN, reveal=False, configured_code="1234"
+            1, SlotCode.UNREADABLE_CODE, reveal=False, configured_code="1234"
         )
-        assert result[ATTR_CODE] == "unknown"
+        assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code_length"] == 4
 
     def test_regular_code_revealed(self) -> None:

@@ -89,7 +89,7 @@ class LockCodeManagerCodeSlotSensorEntity(
         code = self.coordinator.data.get(int(self.slot_num))
         if code is SlotCode.EMPTY:
             return ""
-        if code is SlotCode.UNKNOWN:
+        if code is SlotCode.UNREADABLE_CODE:
             return self.coordinator.get_expected_pin(int(self.slot_num))
         return code
 
