@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import functools
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
@@ -393,7 +393,11 @@ class ZWaveJSLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """
         Set a usercode on a code slot.

@@ -505,10 +505,10 @@ async def test_service_call_failure_raises_lock_disconnected(
         await matter_lock.async_set_usercode(1, "1234")
 
 
-async def test_set_usercode_duplicate_raises_duplicate_code_error(
+async def test_set_usercode_duplicate_direct_raises_immediately(
     hass: HomeAssistant, matter_lock: MatterLock
 ) -> None:
-    """Test that a duplicate status from the lock raises DuplicateCodeError."""
+    """Test that a duplicate on a direct (user-initiated) call raises immediately."""
     handler = AsyncMock(
         side_effect=HomeAssistantError(
             "Failed to set credential: lock returned status `duplicate`"
@@ -520,6 +520,52 @@ async def test_set_usercode_duplicate_raises_duplicate_code_error(
         await matter_lock.async_set_usercode(1, "1234")
     assert exc_info.value.code_slot == 1
     assert exc_info.value.lock_entity_id == LOCK_ENTITY_ID
+    # Only one set attempt, no clear-and-retry for direct calls
+    assert handler.call_count == 1
+
+
+async def test_set_usercode_duplicate_sync_retries_after_clear(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test that a duplicate during sync clears and retries successfully."""
+    set_handler = AsyncMock(
+        side_effect=[
+            HomeAssistantError(
+                "Failed to set credential: lock returned status `duplicate`"
+            ),
+            {LOCK_ENTITY_ID: {"credential_index": 1, "user_index": 1}},
+        ]
+    )
+    clear_handler = AsyncMock(return_value={LOCK_ENTITY_ID: {}})
+    register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", set_handler)
+    register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", clear_handler)
+
+    result = await matter_lock.async_set_usercode(1, "1234", source="sync")
+
+    assert result is True
+    assert set_handler.call_count == 2
+    assert clear_handler.call_count == 1
+
+
+async def test_set_usercode_duplicate_sync_persistent_raises(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """Test that a persistent duplicate during sync raises after retry."""
+    set_handler = AsyncMock(
+        side_effect=HomeAssistantError(
+            "Failed to set credential: lock returned status `duplicate`"
+        )
+    )
+    clear_handler = AsyncMock(return_value={LOCK_ENTITY_ID: {}})
+    register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", set_handler)
+    register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", clear_handler)
+
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        await matter_lock.async_set_usercode(1, "1234", source="sync")
+    assert exc_info.value.code_slot == 1
+    assert exc_info.value.lock_entity_id == LOCK_ENTITY_ID
+    assert set_handler.call_count == 2
+    assert clear_handler.call_count == 1
 
 
 async def test_async_call_service_void_service(

@@ -635,13 +635,20 @@ class BaseLock:
         )
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """Set a usercode on a code slot.
 
         Returns True if the value was changed, False if already set to this
         value. If the provider cannot determine whether a change occurred,
         return True so the coordinator refreshes and verifies the state.
+
+        ``source`` indicates whether the call originates from the sync
+        manager ("sync") or a user action ("direct").
         """
         self._raise_not_implemented(
             "async_set_usercode",
@@ -689,6 +696,7 @@ class BaseLock:
             usercode,
             pre_execute=_pre_execute_checks,
             name=name,
+            source=source,
         )
         # Refresh coordinator to update entity states from cache (only if changed).
         # Skip for push-based providers — they update the coordinator optimistically

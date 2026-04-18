@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
@@ -65,7 +65,11 @@ class VirtualLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """
         Set a usercode on a code slot.

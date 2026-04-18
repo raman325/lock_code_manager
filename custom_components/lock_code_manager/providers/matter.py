@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 from matter_server.common.models import EventType
 
@@ -356,6 +356,31 @@ class MatterLock(BaseLock):
         if self.coordinator and self.coordinator.data is not None:
             self.coordinator.push_update({code_slot: resolved})
 
+    # -- Credential helpers --------------------------------------------------
+
+    async def _set_lock_credential(self, code_slot: int, usercode: str) -> None:
+        """Send set_lock_credential to the lock."""
+        await self._async_call_service(
+            "set_lock_credential",
+            {
+                "entity_id": self.lock.entity_id,
+                "credential_type": "pin",
+                "credential_data": usercode,
+                "credential_index": code_slot,
+            },
+        )
+
+    async def _clear_lock_credential(self, code_slot: int) -> None:
+        """Send clear_lock_credential to the lock."""
+        await self._async_call_service(
+            "clear_lock_credential",
+            {
+                "entity_id": self.lock.entity_id,
+                "credential_type": "pin",
+                "credential_index": code_slot,
+            },
+        )
+
     # -- Usercode CRUD -------------------------------------------------------
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
@@ -412,7 +437,11 @@ class MatterLock(BaseLock):
         }
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """Set a usercode on a code slot.
 
@@ -420,27 +449,42 @@ class MatterLock(BaseLock):
         the credential value actually changed. Pushes SlotCode.UNKNOWN to the
         coordinator immediately — the LockUserChange event will confirm.
 
-        If the lock returns a "duplicate" status, the PIN already exists on
-        another slot. This raises DuplicateCodeError so the sync manager can
-        disable the slot and notify the user.
+        If the lock returns a "duplicate" status during sync (source="sync"),
+        the credential is cleared on that slot and the set is retried. This
+        handles the common case where _last_set_pin is lost after a Home
+        Assistant restart and the lock rejects a re-set of the same PIN. If
+        the retry also returns "duplicate", the PIN truly exists on a different
+        slot and DuplicateCodeError is raised.
+
+        For direct (user-initiated) calls, a duplicate immediately raises
+        DuplicateCodeError without clearing, since the slot may hold a
+        different user's credential that should not be silently removed.
         """
         try:
-            await self._async_call_service(
-                "set_lock_credential",
-                {
-                    "entity_id": self.lock.entity_id,
-                    "credential_type": "pin",
-                    "credential_data": usercode,
-                    "credential_index": code_slot,
-                },
-            )
+            await self._set_lock_credential(code_slot, usercode)
         except LockDisconnected as err:
-            if "duplicate" in str(err).lower():
+            if "duplicate" not in str(err).lower():
+                raise
+            if source != "sync":
                 raise DuplicateCodeError(
                     code_slot=code_slot,
                     lock_entity_id=self.lock.entity_id,
                 ) from err
-            raise
+            LOGGER.debug(
+                "Lock %s: duplicate on slot %s, clearing and retrying",
+                self.lock.entity_id,
+                code_slot,
+            )
+            try:
+                await self._clear_lock_credential(code_slot)
+                await self._set_lock_credential(code_slot, usercode)
+            except LockDisconnected as retry_err:
+                if "duplicate" in str(retry_err).lower():
+                    raise DuplicateCodeError(
+                        code_slot=code_slot,
+                        lock_entity_id=self.lock.entity_id,
+                    ) from retry_err
+                raise
         if name is not None:
             try:
                 await self._async_call_service(
@@ -482,14 +526,7 @@ class MatterLock(BaseLock):
         if not lock_data.get("credential_exists"):
             return False
 
-        await self._async_call_service(
-            "clear_lock_credential",
-            {
-                "entity_id": self.lock.entity_id,
-                "credential_type": "pin",
-                "credential_index": code_slot,
-            },
-        )
+        await self._clear_lock_credential(code_slot)
         # Optimistic update: clear succeeded, push empty state immediately.
         # The LockUserChange event will confirm later.
         if self.coordinator and self.coordinator.data is not None:
