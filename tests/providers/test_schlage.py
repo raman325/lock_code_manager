@@ -32,7 +32,7 @@ from custom_components.lock_code_manager.providers.schlage import (
     _parse_tag,
 )
 
-from .service_provider_tests import (
+from .helpers import (
     ServiceProviderConnectionTests,
     ServiceProviderDeviceAvailabilityTests,
     register_mock_service,
