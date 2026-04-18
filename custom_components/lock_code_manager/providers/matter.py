@@ -15,6 +15,10 @@ from typing import Any, Literal
 
 from matter_server.common.models import EventType
 
+from homeassistant.components.matter.helpers import (
+    get_matter,
+    get_node_from_device_entry,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -90,29 +94,41 @@ class MatterLock(BaseLock):
         """
         return timedelta(hours=1)
 
-    @property
-    def _matter_node_id(self) -> int | None:
-        """Resolve the Matter node ID from the device registry."""
+    def _get_matter_node(self) -> Any | None:
+        """Get the MatterNode for this lock from the Matter integration.
+
+        Uses the Matter integration's helper to resolve the node from the
+        device entry, which correctly handles the device identifier format.
+        Returns the node object with .node_id and access to the client.
+        """
         if not self.device_entry:
             return None
-        for domain, identifier in self.device_entry.identifiers:
-            if domain == MATTER_DOMAIN:
-                # Matter device identifiers are "{node_id}"
-                try:
-                    return int(identifier)
-                except (ValueError, TypeError):
-                    continue
-        return None
+        try:
+            return get_node_from_device_entry(self.hass, self.device_entry)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(
+                "Failed to resolve Matter node for %s: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return None
+
+    @property
+    def _matter_node_id(self) -> int | None:
+        """Resolve the Matter node ID."""
+        node = self._get_matter_node()
+        return node.node_id if node else None
 
     def _get_matter_client(self) -> Any | None:
-        """Get the MatterClient from hass.data."""
-        matter_data = self.hass.data.get(MATTER_DOMAIN)
-        if not matter_data:
-            return None
+        """Get the MatterClient via the Matter integration helper."""
         try:
-            entry_data = next(iter(matter_data.values()))
-            return entry_data.adapter.matter_client
-        except (StopIteration, AttributeError):
+            return get_matter(self.hass).matter_client
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(
+                "Failed to get Matter client for %s: %s",
+                self.lock.entity_id,
+                err,
+            )
             return None
 
     async def _async_call_service(
