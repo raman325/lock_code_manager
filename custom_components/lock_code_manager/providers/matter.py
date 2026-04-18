@@ -105,7 +105,12 @@ class MatterLock(BaseLock):
             return None
         try:
             return get_node_from_device_entry(self.hass, self.device_entry)
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(
+                "Failed to resolve Matter node for %s: %s",
+                self.lock.entity_id,
+                err,
+            )
             return None
 
     @property
@@ -115,10 +120,15 @@ class MatterLock(BaseLock):
         return node.node_id if node else None
 
     def _get_matter_client(self) -> Any | None:
-        """Get the MatterClient from hass.data."""
+        """Get the MatterClient via the Matter integration helper."""
         try:
             return get_matter(self.hass).matter_client
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
+            LOGGER.debug(
+                "Failed to get Matter client for %s: %s",
+                self.lock.entity_id,
+                err,
+            )
             return None
 
     async def _async_call_service(
