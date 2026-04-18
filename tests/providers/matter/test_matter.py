@@ -6,22 +6,13 @@ from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from matter_server.common.models import MatterNodeEvent
+from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from custom_components.lock_code_manager.const import (
-    CONF_ENABLED,
-    CONF_LOCKS,
-    CONF_NAME,
-    CONF_PIN,
-    CONF_SLOTS,
-    DOMAIN,
-)
 from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
@@ -33,68 +24,14 @@ from custom_components.lock_code_manager.providers.matter import (
     MATTER_DOMAIN,
     MatterLock,
 )
-
-from .service_provider_tests import (
+from tests.providers.service_provider_tests import (
     ServiceProviderConnectionTests,
     ServiceProviderDeviceAvailabilityTests,
     register_mock_service,
 )
 
+# Simple fixture entity ID (for service-level tests without full integration)
 LOCK_ENTITY_ID = "lock.matter_test_matter_lock"
-
-
-@pytest.fixture
-async def matter_config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create a Matter config entry."""
-    entry = MockConfigEntry(domain=MATTER_DOMAIN)
-    entry.add_to_hass(hass)
-    entry._async_set_state(hass, entry.state, None)
-    return entry
-
-
-@pytest.fixture
-async def matter_lock(
-    hass: HomeAssistant, matter_config_entry: MockConfigEntry
-) -> MatterLock:
-    """Create a MatterLock instance with a registered lock entity."""
-    entity_reg = er.async_get(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "matter",
-        "test_matter_lock",
-        config_entry=matter_config_entry,
-    )
-    return MatterLock(
-        hass,
-        dr.async_get(hass),
-        entity_reg,
-        matter_config_entry,
-        lock_entity,
-    )
-
-
-@pytest.fixture
-async def lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create a Lock Code Manager config entry that manages slots 1 and 2."""
-    config = {
-        CONF_LOCKS: [LOCK_ENTITY_ID],
-        CONF_SLOTS: {
-            1: {CONF_NAME: "slot1", CONF_PIN: "1234", CONF_ENABLED: True},
-            2: {CONF_NAME: "slot2", CONF_PIN: "5678", CONF_ENABLED: True},
-        },
-    }
-    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_matter_lcm")
-    entry.add_to_hass(hass)
-    return entry
-
-
-# --- Alias fixtures for shared test mixins ---
-
-
-@pytest.fixture
-def provider_lock(matter_lock: MatterLock) -> MatterLock:
-    """Alias matter_lock for shared test mixins."""
-    return matter_lock
 
 
 @pytest.fixture
@@ -120,29 +57,29 @@ def provider_lock_class() -> type[MatterLock]:
 # ---------------------------------------------------------------------------
 
 
-async def test_domain_property(matter_lock: MatterLock) -> None:
+async def test_domain_property(matter_lock_simple: MatterLock) -> None:
     """Test that domain returns 'matter'."""
-    assert matter_lock.domain == MATTER_DOMAIN
+    assert matter_lock_simple.domain == MATTER_DOMAIN
 
 
-async def test_supports_code_slot_events(matter_lock: MatterLock) -> None:
+async def test_supports_code_slot_events(matter_lock_simple: MatterLock) -> None:
     """Test that Matter locks support code slot events via LockOperation."""
-    assert matter_lock.supports_code_slot_events is True
+    assert matter_lock_simple.supports_code_slot_events is True
 
 
-async def test_supports_push(matter_lock: MatterLock) -> None:
+async def test_supports_push(matter_lock_simple: MatterLock) -> None:
     """Test that Matter locks support push-based updates."""
-    assert matter_lock.supports_push is True
+    assert matter_lock_simple.supports_push is True
 
 
-async def test_usercode_scan_interval(matter_lock: MatterLock) -> None:
+async def test_usercode_scan_interval(matter_lock_simple: MatterLock) -> None:
     """Test that scan interval is 5 minutes."""
-    assert matter_lock.usercode_scan_interval == timedelta(minutes=5)
+    assert matter_lock_simple.usercode_scan_interval == timedelta(minutes=5)
 
 
-async def test_hard_refresh_interval(matter_lock: MatterLock) -> None:
+async def test_hard_refresh_interval(matter_lock_simple: MatterLock) -> None:
     """Test that hard refresh interval is 1 hour for drift detection."""
-    assert matter_lock.hard_refresh_interval == timedelta(hours=1)
+    assert matter_lock_simple.hard_refresh_interval == timedelta(hours=1)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +104,7 @@ class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
 
 async def test_setup(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup validates lock supports user management and PIN credentials."""
@@ -180,13 +117,13 @@ async def test_setup(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
-    await matter_lock.async_setup(lcm_config_entry)
+    await matter_lock_simple.async_setup(lcm_config_entry)
     assert handler.call_count == 1
 
 
 async def test_setup_unsupported_lock(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock does not support user management."""
@@ -199,12 +136,12 @@ async def test_setup_unsupported_lock(
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support user management"):
-        await matter_lock.async_setup(lcm_config_entry)
+        await matter_lock_simple.async_setup(lcm_config_entry)
 
 
 async def test_setup_no_pin_support(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock supports users but not PIN credentials."""
@@ -218,7 +155,7 @@ async def test_setup_no_pin_support(
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support PIN credentials"):
-        await matter_lock.async_setup(lcm_config_entry)
+        await matter_lock_simple.async_setup(lcm_config_entry)
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +165,7 @@ async def test_setup_no_pin_support(
 
 async def test_get_usercodes(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test get_usercodes returns UNREADABLE_CODE for occupied, EMPTY for cleared slots."""
@@ -252,7 +189,7 @@ async def test_get_usercodes(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
-    codes = await matter_lock.async_get_usercodes()
+    codes = await matter_lock_simple.async_get_usercodes()
 
     assert codes[1] is SlotCode.UNREADABLE_CODE
     assert codes[2] is SlotCode.EMPTY
@@ -260,7 +197,7 @@ async def test_get_usercodes(
 
 async def test_get_usercodes_no_users(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test get_usercodes when no users exist on the lock."""
@@ -273,7 +210,7 @@ async def test_get_usercodes_no_users(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
-    codes = await matter_lock.async_get_usercodes()
+    codes = await matter_lock_simple.async_get_usercodes()
 
     assert codes[1] is SlotCode.EMPTY
     assert codes[2] is SlotCode.EMPTY
@@ -281,7 +218,7 @@ async def test_get_usercodes_no_users(
 
 async def test_get_usercodes_no_configured_slots(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
 ) -> None:
     """Test get_usercodes returns empty dict when no slots configured and no occupied slots."""
     register_mock_service(
@@ -290,13 +227,13 @@ async def test_get_usercodes_no_configured_slots(
         "get_lock_users",
         AsyncMock(return_value={LOCK_ENTITY_ID: {"users": []}}),
     )
-    codes = await matter_lock.async_get_usercodes()
+    codes = await matter_lock_simple.async_get_usercodes()
     assert codes == {}
 
 
 async def test_get_usercodes_unmanaged_occupied_slots(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
 ) -> None:
     """Test get_usercodes returns unmanaged occupied slots as UNREADABLE_CODE."""
     register_mock_service(
@@ -324,13 +261,13 @@ async def test_get_usercodes_unmanaged_occupied_slots(
             }
         ),
     )
-    codes = await matter_lock.async_get_usercodes()
+    codes = await matter_lock_simple.async_get_usercodes()
     assert codes == {5: SlotCode.UNREADABLE_CODE, 8: SlotCode.UNREADABLE_CODE}
 
 
 async def test_get_usercodes_invalid_credential_index_skipped(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
 ) -> None:
     """Test that invalid credential_index values are skipped with a warning."""
     register_mock_service(
@@ -352,7 +289,7 @@ async def test_get_usercodes_invalid_credential_index_skipped(
             }
         ),
     )
-    codes = await matter_lock.async_get_usercodes()
+    codes = await matter_lock_simple.async_get_usercodes()
     # Only slot 3 should appear; "bad" index is skipped
     assert codes == {3: SlotCode.UNREADABLE_CODE}
 
@@ -362,7 +299,9 @@ async def test_get_usercodes_invalid_credential_index_skipped(
 # ---------------------------------------------------------------------------
 
 
-async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> None:
+async def test_set_usercode(
+    hass: HomeAssistant, matter_lock_simple: MatterLock
+) -> None:
     """Test set_usercode calls the correct Matter services with user_index."""
     calls: list[dict[str, Any]] = []
 
@@ -393,7 +332,7 @@ async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> Non
         AsyncMock(side_effect=_capture_user_call),
     )
 
-    result = await matter_lock.async_set_usercode(1, "1234", "User One")
+    result = await matter_lock_simple.async_set_usercode(1, "1234", "User One")
 
     assert result is True
     assert len(calls) == 2
@@ -410,7 +349,7 @@ async def test_set_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> Non
 
 
 async def test_set_usercode_no_name(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test set_usercode without a name only calls set_lock_credential."""
     calls: list[str] = []
@@ -426,14 +365,14 @@ async def test_set_usercode_no_name(
         hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
     )
 
-    result = await matter_lock.async_set_usercode(3, "9999")
+    result = await matter_lock_simple.async_set_usercode(3, "9999")
 
     assert result is True
     assert calls == ["set_lock_credential"]
 
 
 async def test_set_usercode_skips_name_when_no_user_index(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test set_usercode skips set_lock_user when response has no user_index."""
     calls: list[str] = []
@@ -449,7 +388,7 @@ async def test_set_usercode_skips_name_when_no_user_index(
         hass, MATTER_DOMAIN, "set_lock_user", AsyncMock(side_effect=_capture_call)
     )
 
-    result = await matter_lock.async_set_usercode(1, "1234", "User One")
+    result = await matter_lock_simple.async_set_usercode(1, "1234", "User One")
 
     assert result is True
     assert calls == ["set_lock_credential"]
@@ -460,7 +399,9 @@ async def test_set_usercode_skips_name_when_no_user_index(
 # ---------------------------------------------------------------------------
 
 
-async def test_clear_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> None:
+async def test_clear_usercode(
+    hass: HomeAssistant, matter_lock_simple: MatterLock
+) -> None:
     """Test clear_usercode calls clear_lock_credential when credential exists."""
     credential_status_response = {
         LOCK_ENTITY_ID: {"credential_exists": True},
@@ -474,7 +415,7 @@ async def test_clear_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> N
     )
     register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", handler_clear)
 
-    result = await matter_lock.async_clear_usercode(1)
+    result = await matter_lock_simple.async_clear_usercode(1)
 
     assert result is True
     assert handler_status.call_count == 1
@@ -482,7 +423,7 @@ async def test_clear_usercode(hass: HomeAssistant, matter_lock: MatterLock) -> N
 
 
 async def test_clear_usercode_already_empty(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test clear_usercode returns False when the credential does not exist."""
     credential_status_response = {
@@ -495,7 +436,7 @@ async def test_clear_usercode_already_empty(
     )
     register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", handler_clear)
 
-    result = await matter_lock.async_clear_usercode(2)
+    result = await matter_lock_simple.async_clear_usercode(2)
 
     assert result is False
     # Only the credential status check should have been called
@@ -510,7 +451,7 @@ async def test_clear_usercode_already_empty(
 
 async def test_hard_refresh_codes(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test hard_refresh_codes returns same result as get_usercodes."""
@@ -530,7 +471,7 @@ async def test_hard_refresh_codes(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
-    codes = await matter_lock.async_hard_refresh_codes()
+    codes = await matter_lock_simple.async_hard_refresh_codes()
 
     assert codes[1] is SlotCode.EMPTY
     assert codes[2] is SlotCode.UNREADABLE_CODE
@@ -542,29 +483,29 @@ async def test_hard_refresh_codes(
 
 
 async def test_service_call_failure_raises_lock_disconnected(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test that Matter service failures raise LockDisconnected."""
     handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
     register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", handler)
 
     with pytest.raises(LockDisconnected, match="connection lost"):
-        await matter_lock.async_set_usercode(1, "1234")
+        await matter_lock_simple.async_set_usercode(1, "1234")
 
 
 async def test_service_validation_error_raises_provider_error(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test that ServiceValidationError raises LockCodeManagerProviderError, not LockDisconnected."""
     handler = AsyncMock(side_effect=ServiceValidationError("invalid data"))
     register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", handler)
 
     with pytest.raises(LockCodeManagerProviderError, match="rejected input"):
-        await matter_lock.async_set_usercode(1, "1234")
+        await matter_lock_simple.async_set_usercode(1, "1234")
 
 
 async def test_set_usercode_user_name_failure_does_not_propagate(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test that a user name set failure does not propagate when credential set succeeds."""
     register_mock_service(
@@ -584,13 +525,13 @@ async def test_set_usercode_user_name_failure_does_not_propagate(
         AsyncMock(side_effect=HomeAssistantError("500 Internal Server Error")),
     )
 
-    result = await matter_lock.async_set_usercode(1, "1234", name="Test")
+    result = await matter_lock_simple.async_set_usercode(1, "1234", name="Test")
 
     assert result is True
 
 
 async def test_set_usercode_duplicate_direct_raises_immediately(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test that a duplicate on a direct (user-initiated) call raises immediately."""
     handler = AsyncMock(
@@ -601,7 +542,7 @@ async def test_set_usercode_duplicate_direct_raises_immediately(
     register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", handler)
 
     with pytest.raises(DuplicateCodeError) as exc_info:
-        await matter_lock.async_set_usercode(1, "1234")
+        await matter_lock_simple.async_set_usercode(1, "1234")
     assert exc_info.value.code_slot == 1
     assert exc_info.value.lock_entity_id == LOCK_ENTITY_ID
     # Only one set attempt, no clear-and-retry for direct calls
@@ -609,7 +550,7 @@ async def test_set_usercode_duplicate_direct_raises_immediately(
 
 
 async def test_set_usercode_duplicate_sync_retries_after_clear(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test that a duplicate during sync clears and retries successfully."""
     set_handler = AsyncMock(
@@ -624,7 +565,7 @@ async def test_set_usercode_duplicate_sync_retries_after_clear(
     register_mock_service(hass, MATTER_DOMAIN, "set_lock_credential", set_handler)
     register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", clear_handler)
 
-    result = await matter_lock.async_set_usercode(1, "1234", source="sync")
+    result = await matter_lock_simple.async_set_usercode(1, "1234", source="sync")
 
     assert result is True
     assert set_handler.call_count == 2
@@ -632,7 +573,7 @@ async def test_set_usercode_duplicate_sync_retries_after_clear(
 
 
 async def test_set_usercode_duplicate_sync_persistent_raises(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test that a persistent duplicate during sync raises after retry."""
     set_handler = AsyncMock(
@@ -645,7 +586,7 @@ async def test_set_usercode_duplicate_sync_persistent_raises(
     register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", clear_handler)
 
     with pytest.raises(DuplicateCodeError) as exc_info:
-        await matter_lock.async_set_usercode(1, "1234", source="sync")
+        await matter_lock_simple.async_set_usercode(1, "1234", source="sync")
     assert exc_info.value.code_slot == 1
     assert exc_info.value.lock_entity_id == LOCK_ENTITY_ID
     assert set_handler.call_count == 2
@@ -653,7 +594,7 @@ async def test_set_usercode_duplicate_sync_persistent_raises(
 
 
 async def test_async_call_service_void_service(
-    hass: HomeAssistant, matter_lock: MatterLock
+    hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
     """Test _async_call_service works with void services that do not return responses.
 
@@ -673,8 +614,8 @@ async def test_async_call_service_void_service(
         supports_response=SupportsResponse.NONE,
     )
 
-    result = await matter_lock._async_call_service(
-        "void_service", {"entity_id": matter_lock.lock.entity_id}
+    result = await matter_lock_simple._async_call_service(
+        "void_service", {"entity_id": matter_lock_simple.lock.entity_id}
     )
 
     assert result == {}
@@ -683,7 +624,7 @@ async def test_async_call_service_void_service(
 
 async def test_get_usercodes_multiple_credential_types(
     hass: HomeAssistant,
-    matter_lock: MatterLock,
+    matter_lock_simple: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that only PIN credentials are considered, not other types like RFID."""
@@ -704,7 +645,7 @@ async def test_get_usercodes_multiple_credential_types(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
 
-    codes = await matter_lock.async_get_usercodes()
+    codes = await matter_lock_simple.async_get_usercodes()
 
     # Slot 1 has only RFID credential, not PIN
     assert codes[1] is SlotCode.EMPTY
@@ -739,12 +680,12 @@ def _make_node_event(
 class TestLockOperationEvent:
     """Test _on_node_event callback filtering and event firing."""
 
-    def test_unlock_with_pin_credential(self, matter_lock: MatterLock) -> None:
+    def test_unlock_with_pin_credential(self, matter_lock_simple: MatterLock) -> None:
         """Unlock with PIN credential fires code slot event."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -761,12 +702,12 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is False
         assert fired[0]["action_text"] == "unlocked"
 
-    def test_lock_with_pin_credential(self, matter_lock: MatterLock) -> None:
+    def test_lock_with_pin_credential(self, matter_lock_simple: MatterLock) -> None:
         """Lock with PIN credential fires code slot event."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -783,12 +724,12 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is True
         assert fired[0]["action_text"] == "locked"
 
-    def test_rfid_credential_ignored(self, matter_lock: MatterLock) -> None:
+    def test_rfid_credential_ignored(self, matter_lock_simple: MatterLock) -> None:
         """RFID credential does not fire pin_used event."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -802,12 +743,14 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    def test_fingerprint_credential_ignored(self, matter_lock: MatterLock) -> None:
+    def test_fingerprint_credential_ignored(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
         """Fingerprint credential does not fire pin_used event."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -821,12 +764,12 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
+    def test_wrong_cluster_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Events from non-DoorLock clusters are ignored."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 cluster_id=6,  # OnOff cluster
@@ -836,12 +779,12 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    def test_wrong_event_id_ignored(self, matter_lock: MatterLock) -> None:
+    def test_wrong_event_id_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Non-LockOperation DoorLock events are ignored."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=3,  # LockOperationError
@@ -851,36 +794,36 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    def test_no_credentials_ignored(self, matter_lock: MatterLock) -> None:
+    def test_no_credentials_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Event without credentials is ignored."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(data={"lockOperationType": 1}),
         )
 
         assert len(fired) == 0
 
-    def test_empty_credentials_ignored(self, matter_lock: MatterLock) -> None:
+    def test_empty_credentials_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Event with empty credentials list is ignored."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(data={"lockOperationType": 1, "credentials": []}),
         )
 
         assert len(fired) == 0
 
-    def test_no_operation_type(self, matter_lock: MatterLock) -> None:
+    def test_no_operation_type(self, matter_lock_simple: MatterLock) -> None:
         """Event without lockOperationType fires with to_locked=None."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 data={
@@ -893,12 +836,12 @@ class TestLockOperationEvent:
         assert fired[0]["to_locked"] is None
         assert fired[0]["action_text"] == "operated"
 
-    def test_none_data_ignored(self, matter_lock: MatterLock) -> None:
+    def test_none_data_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Event with None data is ignored (no credentials)."""
         fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock._on_node_event(None, _make_node_event(data=None))
+        matter_lock_simple._on_node_event(None, _make_node_event(data=None))
 
         assert len(fired) == 0
 
@@ -911,78 +854,96 @@ class TestLockOperationEvent:
 class TestEventSubscription:
     """Test event subscription setup and teardown."""
 
-    # TODO: Replace with e2e test using a proper Matter node mock fixture.
-    # The old test used a plain integer identifier ("42") which doesn't match
-    # real Matter device identifiers ("deviceid_<fabric>-<node>-MatterNodeDevice").
-    # Now that we use get_node_from_device_entry from the Matter integration,
-    # this test needs a full Matter client/node mock to be meaningful.
-
-    def test_matter_node_id_no_device(self, matter_lock: MatterLock) -> None:
+    def test_matter_node_id_no_device(self, matter_lock_simple: MatterLock) -> None:
         """Test _matter_node_id returns None when no device entry."""
-        matter_lock.device_entry = None
-        assert matter_lock._matter_node_id is None
+        matter_lock_simple.device_entry = None
+        assert matter_lock_simple._matter_node_id is None
 
     def test_get_matter_client_no_data(
-        self, hass: HomeAssistant, matter_lock: MatterLock
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
         """Test _get_matter_client returns None when no Matter data."""
         hass.data.pop("matter", None)
-        assert matter_lock._get_matter_client() is None
+        assert matter_lock_simple._get_matter_client() is None
 
-    def test_setup_push_idempotent(self, matter_lock: MatterLock) -> None:
+    def test_setup_push_idempotent(self, matter_lock_simple: MatterLock) -> None:
         """Test setup_push_subscription is a no-op if already subscribed."""
-        matter_lock._event_unsub = lambda: None  # already subscribed
-        matter_lock.setup_push_subscription()  # should be a no-op
+        matter_lock_simple._event_unsub = lambda: None  # already subscribed
+        matter_lock_simple.setup_push_subscription()  # should be a no-op
         # If it tried to subscribe again, it would fail (no client)
-        assert matter_lock._event_unsub is not None
+        assert matter_lock_simple._event_unsub is not None
 
     def test_setup_push_no_client_raises(
-        self, hass: HomeAssistant, matter_lock: MatterLock
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
         """Test setup_push_subscription raises when client unavailable."""
         hass.data.pop("matter", None)
         with pytest.raises(LockDisconnected):
-            matter_lock.setup_push_subscription()
+            matter_lock_simple.setup_push_subscription()
 
-    def test_teardown_push_unsubscribes(self, matter_lock: MatterLock) -> None:
+    def test_teardown_push_unsubscribes(self, matter_lock_simple: MatterLock) -> None:
         """Test teardown_push_subscription cleans up event subscription."""
         unsub_called = [False]
 
         def _unsub() -> None:
             unsub_called[0] = True
 
-        matter_lock._event_unsub = _unsub
-        matter_lock.teardown_push_subscription()
+        matter_lock_simple._event_unsub = _unsub
+        matter_lock_simple.teardown_push_subscription()
         assert unsub_called[0]
-        assert matter_lock._event_unsub is None
+        assert matter_lock_simple._event_unsub is None
 
-    def test_teardown_push_no_subscription(self, matter_lock: MatterLock) -> None:
+    def test_teardown_push_no_subscription(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
         """Test teardown_push_subscription handles no active subscription."""
-        matter_lock._event_unsub = None
-        matter_lock.teardown_push_subscription()  # should not crash
+        matter_lock_simple._event_unsub = None
+        matter_lock_simple.teardown_push_subscription()  # should not crash
 
-    # TODO: The following tests need a proper Matter node mock fixture that
-    # provides get_matter() and get_node_from_device_entry() infrastructure.
-    # Replace with e2e tests using a full Matter client/node mock.
-    #
-    # Removed tests:
-    # - test_get_matter_client_success
-    # - test_setup_push_success
-    # - test_matter_node_id_invalid_identifier
-    # - test_get_matter_client_empty_data
+    # -- Tests using the full Matter integration fixture --
+
+    def test_matter_node_id_resolves(self, matter_lock: MatterLock) -> None:
+        """Test _matter_node_id resolves from real Matter integration device."""
+        assert matter_lock._matter_node_id == 16  # from mock_door_lock.json
+
+    def test_get_matter_client_from_integration(
+        self, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """Test _get_matter_client returns the client from the real integration."""
+        client = matter_lock._get_matter_client()
+        assert client is matter_client
+
+    def test_setup_push_subscription_success(
+        self, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """Test setup_push_subscription subscribes with correct node ID."""
+        matter_lock.setup_push_subscription()
+        assert matter_lock._event_unsub is not None
+        # Find LCM's subscription by its callback method name
+        lcm_calls = [
+            call
+            for call in matter_client.subscribe_events.call_args_list
+            if call.kwargs.get("event_filter") == EventType.NODE_EVENT
+            and hasattr(call.kwargs.get("callback"), "__func__")
+            and call.kwargs["callback"].__func__.__name__ == "_on_node_event"
+        ]
+        assert len(lcm_calls) == 1
+        assert lcm_calls[0].kwargs["node_filter"] == 16
+
+    # -- Tests using the simple fixture (no integration needed) --
 
     def test_get_matter_client_bad_adapter(
-        self, hass: HomeAssistant, matter_lock: MatterLock
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
         """Test _get_matter_client returns None when adapter has no matter_client."""
         mock_entry_data = MagicMock(spec=[])  # no attributes
         hass.data["matter"] = {"entry_id": mock_entry_data}
-        assert matter_lock._get_matter_client() is None
+        assert matter_lock_simple._get_matter_client() is None
 
     def test_setup_push_no_node_id_raises(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """Test setup_push_subscription raises when node ID is None."""
         mock_client = MagicMock()
@@ -991,12 +952,12 @@ class TestEventSubscription:
         mock_entry_data = MagicMock()
         mock_entry_data.adapter = mock_adapter
         hass.data["matter"] = {"entry_id": mock_entry_data}
-        matter_lock.device_entry = None  # no node ID
+        matter_lock_simple.device_entry = None  # no node ID
 
         with pytest.raises(LockDisconnected):
-            matter_lock.setup_push_subscription()
+            matter_lock_simple.setup_push_subscription()
 
-        assert matter_lock._event_unsub is None
+        assert matter_lock_simple._event_unsub is None
         mock_client.subscribe_events.assert_not_called()
 
 
@@ -1008,13 +969,13 @@ class TestEventSubscription:
 class TestLockUserChangeEvent:
     """Test _handle_lock_user_change callback and coordinator push updates."""
 
-    def test_pin_added_pushes_unknown(self, matter_lock: MatterLock) -> None:
+    def test_pin_added_pushes_unknown(self, matter_lock_simple: MatterLock) -> None:
         """Adding a PIN credential pushes SlotCode.UNREADABLE_CODE to coordinator."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {3: SlotCode.EMPTY}
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1030,13 +991,13 @@ class TestLockUserChangeEvent:
             {3: SlotCode.UNREADABLE_CODE}
         )
 
-    def test_pin_modified_pushes_unknown(self, matter_lock: MatterLock) -> None:
+    def test_pin_modified_pushes_unknown(self, matter_lock_simple: MatterLock) -> None:
         """Modifying a PIN credential pushes SlotCode.UNREADABLE_CODE to coordinator."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {5: SlotCode.UNREADABLE_CODE}
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1052,13 +1013,13 @@ class TestLockUserChangeEvent:
             {5: SlotCode.UNREADABLE_CODE}
         )
 
-    def test_pin_cleared_pushes_empty(self, matter_lock: MatterLock) -> None:
+    def test_pin_cleared_pushes_empty(self, matter_lock_simple: MatterLock) -> None:
         """Clearing a PIN credential pushes SlotCode.EMPTY to coordinator."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {2: SlotCode.UNREADABLE_CODE}
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1072,12 +1033,12 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
 
-    def test_non_pin_data_type_ignored(self, matter_lock: MatterLock) -> None:
+    def test_non_pin_data_type_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Non-PIN LockDataType (e.g. RFID=7) is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1091,12 +1052,12 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_missing_data_index_ignored(self, matter_lock: MatterLock) -> None:
+    def test_missing_data_index_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Event with no dataIndex is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1110,12 +1071,14 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_non_integer_data_index_ignored(self, matter_lock: MatterLock) -> None:
+    def test_non_integer_data_index_ignored(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
         """Non-integer dataIndex logs warning and is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1129,13 +1092,15 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_coordinator_data_none_no_push(self, matter_lock: MatterLock) -> None:
+    def test_coordinator_data_none_no_push(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
         """LockUserChange skips push when coordinator.data is None."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = None
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1149,12 +1114,14 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_unknown_operation_type_ignored(self, matter_lock: MatterLock) -> None:
+    def test_unknown_operation_type_ignored(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
         """Unknown DataOperationType is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1168,11 +1135,13 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_no_coordinator_does_not_crash(self, matter_lock: MatterLock) -> None:
+    def test_no_coordinator_does_not_crash(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
         """LockUserChange with no coordinator attached does not crash."""
-        matter_lock.coordinator = None
+        matter_lock_simple.coordinator = None
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1185,12 +1154,12 @@ class TestLockUserChangeEvent:
         )
         # No assert — just verifying it doesn't raise
 
-    def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
+    def test_wrong_cluster_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Event from non-DoorLock cluster is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
+        matter_lock_simple._on_node_event(
             None,
             _make_node_event(
                 cluster_id=999,  # not DoorLock
@@ -1217,11 +1186,11 @@ class TestOptimisticPushUpdates:
     async def test_set_usercode_pushes_unknown(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_set_usercode pushes SlotCode.UNREADABLE_CODE after service call."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
         register_mock_service(
             hass,
@@ -1230,7 +1199,7 @@ class TestOptimisticPushUpdates:
             AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
         )
 
-        result = await matter_lock.async_set_usercode(3, "1234")
+        result = await matter_lock_simple.async_set_usercode(3, "1234")
 
         assert result is True
         mock_coordinator.push_update.assert_called_once_with(
@@ -1240,10 +1209,10 @@ class TestOptimisticPushUpdates:
     async def test_set_usercode_no_coordinator(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_set_usercode without coordinator does not crash."""
-        matter_lock.coordinator = None
+        matter_lock_simple.coordinator = None
 
         register_mock_service(
             hass,
@@ -1252,17 +1221,17 @@ class TestOptimisticPushUpdates:
             AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
         )
 
-        result = await matter_lock.async_set_usercode(3, "1234")
+        result = await matter_lock_simple.async_set_usercode(3, "1234")
         assert result is True
 
     async def test_clear_usercode_pushes_empty(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_clear_usercode pushes SlotCode.EMPTY after clearing."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
         register_mock_service(
             hass,
@@ -1277,7 +1246,7 @@ class TestOptimisticPushUpdates:
             AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
         )
 
-        result = await matter_lock.async_clear_usercode(5)
+        result = await matter_lock_simple.async_clear_usercode(5)
 
         assert result is True
         mock_coordinator.push_update.assert_called_once_with({5: SlotCode.EMPTY})
@@ -1285,11 +1254,11 @@ class TestOptimisticPushUpdates:
     async def test_clear_empty_slot_no_push(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_clear_usercode on empty slot does not push to coordinator."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
         register_mock_service(
             hass,
@@ -1298,7 +1267,7 @@ class TestOptimisticPushUpdates:
             AsyncMock(return_value={LOCK_ENTITY_ID: {"credential_exists": False}}),
         )
 
-        result = await matter_lock.async_clear_usercode(5)
+        result = await matter_lock_simple.async_clear_usercode(5)
 
         assert result is False
         mock_coordinator.push_update.assert_not_called()
@@ -1306,11 +1275,11 @@ class TestOptimisticPushUpdates:
     async def test_set_usercode_failure_no_push(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_set_usercode does not push when service call fails."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
         register_mock_service(
             hass,
@@ -1320,18 +1289,18 @@ class TestOptimisticPushUpdates:
         )
 
         with pytest.raises(LockDisconnected):
-            await matter_lock.async_set_usercode(3, "1234")
+            await matter_lock_simple.async_set_usercode(3, "1234")
 
         mock_coordinator.push_update.assert_not_called()
 
     async def test_clear_usercode_failure_no_push(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_clear_usercode does not push when clear service fails."""
         mock_coordinator = MagicMock()
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
         register_mock_service(
             hass,
@@ -1347,19 +1316,19 @@ class TestOptimisticPushUpdates:
         )
 
         with pytest.raises(LockDisconnected):
-            await matter_lock.async_clear_usercode(5)
+            await matter_lock_simple.async_clear_usercode(5)
 
         mock_coordinator.push_update.assert_not_called()
 
     async def test_set_usercode_coordinator_data_none_no_push(
         self,
         hass: HomeAssistant,
-        matter_lock: MatterLock,
+        matter_lock_simple: MatterLock,
     ) -> None:
         """async_set_usercode skips push when coordinator.data is None."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = None
-        matter_lock.coordinator = mock_coordinator
+        matter_lock_simple.coordinator = mock_coordinator
 
         register_mock_service(
             hass,
@@ -1368,7 +1337,7 @@ class TestOptimisticPushUpdates:
             AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
         )
 
-        result = await matter_lock.async_set_usercode(3, "1234")
+        result = await matter_lock_simple.async_set_usercode(3, "1234")
 
         assert result is True
         mock_coordinator.push_update.assert_not_called()
