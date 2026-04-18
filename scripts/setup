@@ -53,19 +53,16 @@ fi
 pip install --upgrade uv
 uv pip install -r requirements_dev.txt
 
-# Install pre-commit as a uv-managed tool pinned to Python 3.13.
-# Avoids relying on whatever pre-commit (and underlying Python) the
-# user has on PATH — a Homebrew install linked against Python 3.14
-# fails on macOS with "_XML_SetAllocTrackerActivationThreshold not
-# found" because 3.14's bundled pyexpat is built against a newer
-# libexpat than the one /usr/lib/libexpat.1.dylib provides.
-# uv puts the binary at ~/.local/bin/pre-commit which typically wins
-# over /opt/homebrew/bin in $PATH. If you have an existing Homebrew
-# install of pre-commit, run `brew uninstall pre-commit` to remove
-# the broken one.
-uv tool install --force --python 3.13 pre-commit
-
-pre-commit install
+# Install git hooks. Prefer prek (fast Rust-based replacement).
+# If prek is unavailable, use a uv-managed pre-commit pinned to Python 3.13
+# instead of whatever pre-commit binary may already be on PATH (a Homebrew
+# install linked against Python 3.14 fails on macOS).
+if command -v prek &> /dev/null; then
+  prek install
+else
+  uv tool install --force --python 3.13 pre-commit
+  pre-commit install
+fi
 yarn install
 
 # Setup directories for HA and linking
