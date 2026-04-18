@@ -61,7 +61,6 @@ from custom_components.lock_code_manager.const import (
     CONF_NUMBER_OF_USES,
     CONF_PIN,
     CONF_SLOTS,
-    DOMAIN,
 )
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.models import SlotCode
@@ -209,7 +208,7 @@ async def test_subscribe_lock_codes(
     assert event["type"] == "event"
     assert event["event"][ATTR_LOCK_ENTITY_ID] == LOCK_1_ENTITY_ID
 
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.coordinator.push_update({1: "9999"})
     await hass.async_block_till_done()
 
@@ -590,7 +589,7 @@ async def test_subscribe_code_slot_coordinator_update(
     assert len(initial_locks) > 0
 
     # Update the lock coordinator
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.coordinator.push_update({1: "9999"})
     await hass.async_block_till_done()
 
@@ -856,7 +855,7 @@ async def test_set_usercode_operation_failure(
     """Test set_usercode websocket command when operation fails."""
     ws_client = await hass_ws_client(hass)
 
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
         "async_internal_set_usercode",
@@ -886,7 +885,7 @@ async def test_clear_usercode_operation_failure(
     """Test clear_usercode websocket command when operation fails."""
     ws_client = await hass_ws_client(hass)
 
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
         "async_internal_clear_usercode",
@@ -915,7 +914,7 @@ async def test_set_usercode_duplicate_code_error(
     """Test set_usercode websocket command returns error when duplicate code detected."""
     ws_client = await hass_ws_client(hass)
 
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
         "async_internal_set_usercode",
@@ -987,7 +986,7 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
     await hass.async_block_till_done()
 
     # Force coordinator refresh to pick up new code from mock lock
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     await lock.coordinator.async_refresh()
     await hass.async_block_till_done()
 
@@ -1056,7 +1055,7 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
     await hass.async_block_till_done()
 
     # Force coordinator refresh
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     await lock.coordinator.async_refresh()
     await hass.async_block_till_done()
 
@@ -1149,7 +1148,7 @@ async def test_coordinator_push_update_reflects_in_subscribe_lock_codes(
     assert event["type"] == "event"
 
     # Push coordinator update with new code for slot 1
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.coordinator.push_update({1: "9999"})
     await hass.async_block_till_done()
 
@@ -1199,7 +1198,7 @@ async def test_set_usercode_reflects_in_subscribe_lock_codes(
     assert set_msg["success"]
 
     # Force coordinator refresh to pick up the new code
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     await lock.coordinator.async_refresh()
     await hass.async_block_till_done()
 
@@ -2407,13 +2406,12 @@ async def test_subscribe_lock_codes_entity_tracking_refreshes_on_update(
     hass.states.async_set(new_entity_id, STATE_ON)
     await hass.async_block_till_done()
 
-    call_count = 0
+    counter = {"calls": 0}
 
     def _mock_get_slot_state_entity_ids(hass_arg, lock_entity_id_arg):
         """Return growing entity set to simulate entities appearing."""
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 1:
+        counter["calls"] += 1
+        if counter["calls"] <= 1:
             # First call (initial setup): return real entity IDs
             return real_ids
         # Subsequent calls: include the new entity
@@ -2481,7 +2479,7 @@ async def test_subscribe_lock_codes_tracking_refresh_noop_when_unchanged(
 
     # Trigger a coordinator update - _send_update calls _refresh_lock_state_tracking
     # with the same entity set, so it should be a no-op (early return)
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.coordinator.push_update({1: "9999"})
     await hass.async_block_till_done()
 
@@ -2519,13 +2517,12 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
     hass.states.async_set(new_entity_id, "test_value")
     await hass.async_block_till_done()
 
-    call_count = 0
+    counter = {"calls": 0}
 
     def _mock_get_slot_entity_data(hass_arg, config_entry_arg, slot_num_arg):
         """Return growing entity data to simulate entities appearing."""
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 1:
+        counter["calls"] += 1
+        if counter["calls"] <= 1:
             return real_entity_data
         # Return entity data with the new entity added via name_entity_id
         # (using a new SlotEntities with an extra entity)
@@ -2658,13 +2655,12 @@ async def test_subscribe_code_slot_condition_entity_tracked_after_addition(
     )
     await hass.async_block_till_done()
 
-    call_count = 0
+    counter = {"calls": 0}
 
     def _mock_get_condition(config_entry_arg, slot_num_arg):
         """Return None initially, then the condition entity on subsequent calls."""
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 1:
+        counter["calls"] += 1
+        if counter["calls"] <= 1:
             return None
         return condition_entity_id
 
