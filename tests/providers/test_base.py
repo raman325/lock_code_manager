@@ -761,7 +761,7 @@ async def test_execute_rate_limited_raises_when_device_not_available(
         ("****", True),
         ("*", True),
         (SlotCode.EMPTY, True),
-        (SlotCode.UNKNOWN, True),
+        (SlotCode.UNREADABLE_CODE, True),
         ("1234", False),
         ("12*4", False),
         ("0", False),

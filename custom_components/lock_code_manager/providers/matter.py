@@ -1,7 +1,7 @@
 """Matter lock provider.
 
 Handles PIN credential management via Matter lock services.
-PINs are write-only: occupied slots report SlotCode.UNKNOWN, cleared slots report
+PINs are write-only: occupied slots report SlotCode.UNREADABLE_CODE, cleared slots report
 SlotCode.EMPTY. Subscribes to DoorLock cluster events via the push framework for
 code slot tracking (LockOperation) and occupancy updates (LockUserChange).
 """
@@ -71,7 +71,7 @@ class MatterLock(BaseLock):
 
         Matter locks push occupancy changes via LockUserChange events.
         PINs are still write-only (values are never pushed), but slot
-        occupancy (UNKNOWN/EMPTY) is pushed in real time.
+        occupancy (UNREADABLE_CODE/EMPTY) is pushed in real time.
         """
         return True
 
@@ -335,7 +335,7 @@ class MatterLock(BaseLock):
         if operation == _DATA_OP_CLEAR:
             resolved: str | SlotCode = SlotCode.EMPTY
         elif operation in (_DATA_OP_ADD, _DATA_OP_MODIFY):
-            resolved = SlotCode.UNKNOWN
+            resolved = SlotCode.UNREADABLE_CODE
         else:
             LOGGER.debug(
                 "Lock %s: LockUserChange event with unknown operation %s for slot %s",
@@ -387,7 +387,7 @@ class MatterLock(BaseLock):
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes.
 
-        Returns all occupied PIN credential slots as SlotCode.UNKNOWN (PINs are
+        Returns all occupied PIN credential slots as SlotCode.UNREADABLE_CODE (PINs are
         write-only) and managed empty slots as SlotCode.EMPTY. Unmanaged
         occupied slots are included so callers like the lock reset config flow
         step can detect codes not managed by Lock Code Manager.
@@ -433,7 +433,7 @@ class MatterLock(BaseLock):
             len(all_slots),
         )
         return {
-            slot: SlotCode.UNKNOWN if slot in occupied_slots else SlotCode.EMPTY
+            slot: SlotCode.UNREADABLE_CODE if slot in occupied_slots else SlotCode.EMPTY
             for slot in all_slots
         }
 
@@ -447,7 +447,7 @@ class MatterLock(BaseLock):
         """Set a usercode on a code slot.
 
         Returns True unconditionally because Matter does not reveal whether
-        the credential value actually changed. Pushes SlotCode.UNKNOWN to the
+        the credential value actually changed. Pushes SlotCode.UNREADABLE_CODE to the
         coordinator immediately — the LockUserChange event will confirm.
 
         If the lock returns a "duplicate" status during sync (source="sync"),
@@ -508,7 +508,7 @@ class MatterLock(BaseLock):
         # Optimistic update: service call succeeded, push occupancy state
         # immediately. The LockUserChange event will confirm later.
         if self.coordinator and self.coordinator.data is not None:
-            self.coordinator.push_update({code_slot: SlotCode.UNKNOWN})
+            self.coordinator.push_update({code_slot: SlotCode.UNREADABLE_CODE})
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:

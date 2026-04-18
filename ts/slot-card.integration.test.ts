@@ -256,9 +256,9 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._formatLockCode(lock)).toBeNull();
         });
 
-        it('_formatLockCode returns spaced bullets for "unknown" sentinel', () => {
+        it('_formatLockCode returns spaced bullets for "unreadable_code" sentinel', () => {
             const lock = {
-                code: 'unknown',
+                code: 'unreadable_code',
                 entityId: 'lock.test',
                 inSync: true,
                 lockEntityId: 'lock.test',
@@ -268,7 +268,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
 
-        it('stores "empty" and "unknown" lock codes in _data', async () => {
+        it('stores "empty" and "unreadable_code" lock codes in _data', async () => {
             let capturedCallback: ((data: unknown) => void) | undefined;
             const card2 = document.createElement('lcm-slot') as SlotCardElement;
             const hass = createMockHassWithConnection({
@@ -285,7 +285,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 makeSlotCardData({
                     locks: [
                         {
-                            code: 'unknown',
+                            code: 'unreadable_code',
                             entity_id: 'lock.test_1',
                             in_sync: true,
                             name: 'Masked Lock'
@@ -300,7 +300,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 })
             );
 
-            expect(card2._data?.locks[0].code).toBe('unknown');
+            expect(card2._data?.locks[0].code).toBe('unreadable_code');
             expect(card2._data?.locks[1].code).toBe('empty');
         });
     });
@@ -1665,8 +1665,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._formatLockCode({ code: 'empty' })).toBeNull();
         });
 
-        it('returns bullets for unknown code', () => {
-            expect((card as any)._formatLockCode({ code: 'unknown' })).toBe('• • •');
+        it('returns bullets for unreadable code', () => {
+            expect((card as any)._formatLockCode({ code: 'unreadable_code' })).toBe('• • •');
         });
 
         it('returns masked code when not revealed', () => {

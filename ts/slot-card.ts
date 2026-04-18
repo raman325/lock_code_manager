@@ -29,7 +29,7 @@ import {
     ConditionEntityInfo,
     GetConfigEntriesResponse,
     LockCodeManagerSlotCardConfig,
-    SLOT_CODE_UNKNOWN,
+    SLOT_CODE_UNREADABLE,
     SlotCardConditions,
     SlotCardData,
     isSlotEmpty
@@ -1006,7 +1006,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         if (isSlotEmpty(lock.code)) return null;
-        if (lock.code === SLOT_CODE_UNKNOWN) return '• • •';
+        if (lock.code === SLOT_CODE_UNREADABLE) return '• • •';
         return shouldMask ? '•'.repeat(String(lock.code).length) : String(lock.code);
     }
 

@@ -4,7 +4,7 @@ import {
     CodeDisplayMode,
     LockCoordinatorSlotData,
     SLOT_CODE_EMPTY,
-    SLOT_CODE_UNKNOWN,
+    SLOT_CODE_UNREADABLE,
     isSlotEmpty,
     isSlotOccupied
 } from './types';
@@ -17,8 +17,8 @@ describe('SlotCode guard functions', () => {
         it('returns true for empty string', () => expect(isSlotEmpty('')).toBe(true));
         it('returns true for "empty" sentinel', () =>
             expect(isSlotEmpty(SLOT_CODE_EMPTY)).toBe(true));
-        it('returns false for "unknown" sentinel', () =>
-            expect(isSlotEmpty(SLOT_CODE_UNKNOWN)).toBe(false));
+        it('returns false for "unreadable_code" sentinel', () =>
+            expect(isSlotEmpty(SLOT_CODE_UNREADABLE)).toBe(false));
         it('returns false for a PIN string', () => expect(isSlotEmpty('1234')).toBe(false));
         it('returns false for a numeric code', () => expect(isSlotEmpty(5678)).toBe(false));
     });
@@ -28,8 +28,8 @@ describe('SlotCode guard functions', () => {
         it('returns false for empty string', () => expect(isSlotOccupied('')).toBe(false));
         it('returns false for "empty" sentinel', () =>
             expect(isSlotOccupied(SLOT_CODE_EMPTY)).toBe(false));
-        it('returns true for "unknown" sentinel', () =>
-            expect(isSlotOccupied(SLOT_CODE_UNKNOWN)).toBe(true));
+        it('returns true for "unreadable_code" sentinel', () =>
+            expect(isSlotOccupied(SLOT_CODE_UNREADABLE)).toBe(true));
         it('returns true for a PIN string', () => expect(isSlotOccupied('1234')).toBe(true));
         it('returns true for null with code_length', () =>
             expect(isSlotOccupied(null, 4)).toBe(true));
@@ -150,7 +150,7 @@ describe('LockCodesCard logic', () => {
         it('returns active when slot has unknown (unreadable) code', () => {
             const slot: LockCoordinatorSlotData = {
                 slot: 1,
-                code: 'unknown',
+                code: 'unreadable_code',
                 enabled: true
             };
             expect(getSlotStatus(slot)).toBe('active');
@@ -167,7 +167,7 @@ describe('LockCodesCard logic', () => {
             type: 'code' | 'masked' | 'empty';
             value: string;
         } {
-            if (slot.code === SLOT_CODE_UNKNOWN) return { type: 'masked', value: '• • •' };
+            if (slot.code === SLOT_CODE_UNREADABLE) return { type: 'masked', value: '• • •' };
             if (isSlotEmpty(slot.code)) {
                 if (slot.code_length)
                     return { type: 'masked', value: '•'.repeat(slot.code_length) };
@@ -208,7 +208,7 @@ describe('LockCodesCard logic', () => {
         });
 
         it('returns masked indicator for unknown (unreadable) code', () => {
-            const slot: LockCoordinatorSlotData = { slot: 1, code: 'unknown' };
+            const slot: LockCoordinatorSlotData = { slot: 1, code: 'unreadable_code' };
             expect(getCodeDisplay(slot)).toEqual({ type: 'masked', value: '• • •' });
         });
 

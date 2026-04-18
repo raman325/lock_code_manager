@@ -261,8 +261,8 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._hasCode({ slot: 1, code: 'empty' })).toBe(false);
         });
 
-        it('_hasCode returns true for "unknown" sentinel', () => {
-            expect((card as any)._hasCode({ slot: 1, code: 'unknown' })).toBe(true);
+        it('_hasCode returns true for "unreadable_code" sentinel', () => {
+            expect((card as any)._hasCode({ slot: 1, code: 'unreadable_code' })).toBe(true);
         });
 
         it('_hasCode returns true for code_length with null code', () => {
@@ -273,16 +273,18 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
         });
 
-        it('_getCodeClass returns "masked" for "unknown" sentinel', () => {
-            expect((card as any)._getCodeClass({ slot: 1, code: 'unknown' })).toBe('masked');
+        it('_getCodeClass returns "masked" for "unreadable_code" sentinel', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: 'unreadable_code' })).toBe(
+                'masked'
+            );
         });
 
         it('_formatCode returns dash for "empty" sentinel', () => {
             expect((card as any)._formatCode({ slot: 1, code: 'empty' })).toBe('—');
         });
 
-        it('_formatCode returns spaced bullets for "unknown" sentinel', () => {
-            expect((card as any)._formatCode({ slot: 1, code: 'unknown' })).toBe('• • •');
+        it('_formatCode returns spaced bullets for "unreadable_code" sentinel', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('• • •');
         });
         it('_startEditing clears edit value for "empty" sentinel', () => {
             const mockEvent = { stopPropagation: () => {} };
@@ -291,9 +293,9 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._editingSlot).toBe(1);
         });
 
-        it('_startEditing clears edit value for "unknown" sentinel', () => {
+        it('_startEditing clears edit value for "unreadable_code" sentinel', () => {
             const mockEvent = { stopPropagation: () => {} };
-            (card as any)._startEditing(mockEvent, { slot: 2, code: 'unknown' });
+            (card as any)._startEditing(mockEvent, { slot: 2, code: 'unreadable_code' });
             expect((card as any)._editValue).toBe('');
         });
 
@@ -304,7 +306,7 @@ describe('LockCodesCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
 
-        it('stores "empty" and "unknown" codes in _data', async () => {
+        it('stores "empty" and "unreadable_code" codes in _data', async () => {
             let capturedCallback: ((data: unknown) => void) | undefined;
             const card2 = document.createElement('lcm-lock-codes') as LockCodesCardElement;
             const hass = createMockHassWithConnection({
@@ -333,7 +335,7 @@ describe('LockCodesCard integration', () => {
                         },
                         {
                             slot: 2,
-                            code: 'unknown',
+                            code: 'unreadable_code',
                             managed: true,
                             enabled: true,
                             active: true,
@@ -345,7 +347,7 @@ describe('LockCodesCard integration', () => {
             );
 
             expect(card2._data?.slots[0].code).toBe('1234');
-            expect(card2._data?.slots[1].code).toBe('unknown');
+            expect(card2._data?.slots[1].code).toBe('unreadable_code');
             expect(card2._data?.slots[2].code).toBe('empty');
         });
     });
@@ -753,8 +755,10 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
         });
 
-        it('returns masked for unknown code', () => {
-            expect((card as any)._getCodeClass({ slot: 1, code: 'unknown' })).toBe('masked');
+        it('returns masked for unreadable code', () => {
+            expect((card as any)._getCodeClass({ slot: 1, code: 'unreadable_code' })).toBe(
+                'masked'
+            );
         });
 
         it('returns masked for code_length without code', () => {
@@ -814,8 +818,8 @@ describe('LockCodesCard integration', () => {
             await flush();
         });
 
-        it('returns bullets for unknown code', () => {
-            expect((card as any)._formatCode({ slot: 1, code: 'unknown' })).toBe('• • •');
+        it('returns bullets for unreadable code', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('• • •');
         });
 
         it('returns dash for empty slot with no configured code', () => {

@@ -2,7 +2,7 @@ import { EntityRegistryEntry } from './ha_type_stubs';
 
 /** Sentinel code values from backend SlotCode enum */
 export const SLOT_CODE_EMPTY = 'empty';
-export const SLOT_CODE_UNKNOWN = 'unknown';
+export const SLOT_CODE_UNREADABLE = 'unreadable_code';
 
 /** True if code represents a cleared/empty slot */
 export function isSlotEmpty(code: number | string | null): boolean {
@@ -11,7 +11,7 @@ export function isSlotEmpty(code: number | string | null): boolean {
 
 /** True if code represents an occupied slot (readable, masked, or unknown) */
 export function isSlotOccupied(code: number | string | null, codeLength?: number): boolean {
-    if (code === SLOT_CODE_UNKNOWN) return true;
+    if (code === SLOT_CODE_UNREADABLE) return true;
     if (isSlotEmpty(code)) return !!codeLength;
     return true;
 }
@@ -131,7 +131,7 @@ export interface LockCoordinatorSlotData {
     active?: boolean;
     /**
      * Code on the lock. Values: actual PIN string/number, null (no data),
-     * "empty" (slot cleared), "unknown" (code exists but unreadable)
+     * "empty" (slot cleared), "unreadable_code" (code exists but unreadable)
      */
     code: number | string | null;
     /** Present when masked (code is null but slot has a readable code) */
@@ -198,7 +198,7 @@ export interface LockCodeManagerSlotCardConfig {
 }
 
 export interface SlotCardLockStatus {
-    /** Code on the lock: actual PIN, null, "empty" (cleared), or "unknown" (unreadable) */
+    /** Code on the lock: actual PIN, null, "empty" (cleared), or "unreadable_code" (unreadable) */
     code: string | null;
     /** Code length when masked (readable code, not revealed) */
     code_length?: number;

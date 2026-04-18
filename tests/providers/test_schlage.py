@@ -196,7 +196,7 @@ async def test_get_usercodes_tagged_codes(
     schlage_lock: SchlageLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test get_usercodes returns UNKNOWN for tagged occupied slots, EMPTY for others."""
+    """Test get_usercodes returns UNREADABLE_CODE for tagged occupied slots, EMPTY for others."""
     mock_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:1] Guest", "code": "****"},
@@ -207,7 +207,7 @@ async def test_get_usercodes_tagged_codes(
 
     codes = await schlage_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.UNKNOWN
+    assert codes[1] is SlotCode.UNREADABLE_CODE
     assert codes[2] is SlotCode.EMPTY
 
 
@@ -279,7 +279,7 @@ async def test_get_usercodes_duplicate_tag_uses_first(
 
     codes = await schlage_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.UNKNOWN
+    assert codes[1] is SlotCode.UNREADABLE_CODE
     assert codes[2] is SlotCode.EMPTY
 
 
@@ -586,7 +586,7 @@ async def test_hard_refresh_codes(
         mock_tag.assert_awaited_once()
 
     assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.UNKNOWN
+    assert codes[2] is SlotCode.UNREADABLE_CODE
 
 
 # ---------------------------------------------------------------------------

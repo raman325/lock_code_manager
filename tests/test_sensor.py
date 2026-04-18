@@ -57,7 +57,7 @@ async def test_sensor_native_value_with_slot_code(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Test sensor native_value handles SlotCode.EMPTY and SlotCode.UNKNOWN."""
+    """Test sensor native_value handles SlotCode.EMPTY and SlotCode.UNREADABLE_CODE."""
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
@@ -84,8 +84,8 @@ async def test_sensor_native_value_with_slot_code(
     assert state is not None
     assert state.state == ""
 
-    # Test SlotCode.UNKNOWN -> sensor resolves to expected PIN from config
-    coordinator.async_set_updated_data({1: SlotCode.UNKNOWN})
+    # Test SlotCode.UNREADABLE_CODE -> sensor resolves to expected PIN from config
+    coordinator.async_set_updated_data({1: SlotCode.UNREADABLE_CODE})
     await hass.async_block_till_done()
     state = hass.states.get("sensor.test_1_code_slot_1")
     assert state is not None

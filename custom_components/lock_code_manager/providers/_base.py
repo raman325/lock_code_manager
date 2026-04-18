@@ -282,7 +282,7 @@ class BaseLock:
     @staticmethod
     def is_masked_or_empty(code: str | SlotCode | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
-        if code is None or code is SlotCode.EMPTY or code is SlotCode.UNKNOWN:
+        if code is None or code is SlotCode.EMPTY or code is SlotCode.UNREADABLE_CODE:
             return True
         code_str = str(code)
         return code_str == "*" * len(code_str)

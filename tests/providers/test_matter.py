@@ -225,7 +225,7 @@ async def test_get_usercodes(
     matter_lock: MatterLock,
     lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test get_usercodes returns UNKNOWN for occupied, EMPTY for cleared slots."""
+    """Test get_usercodes returns UNREADABLE_CODE for occupied, EMPTY for cleared slots."""
     mock_response = {
         LOCK_ENTITY_ID: {
             "max_users": 10,
@@ -248,7 +248,7 @@ async def test_get_usercodes(
 
     codes = await matter_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.UNKNOWN
+    assert codes[1] is SlotCode.UNREADABLE_CODE
     assert codes[2] is SlotCode.EMPTY
 
 
@@ -292,7 +292,7 @@ async def test_get_usercodes_unmanaged_occupied_slots(
     hass: HomeAssistant,
     matter_lock: MatterLock,
 ) -> None:
-    """Test get_usercodes returns unmanaged occupied slots as UNKNOWN."""
+    """Test get_usercodes returns unmanaged occupied slots as UNREADABLE_CODE."""
     register_mock_service(
         hass,
         MATTER_DOMAIN,
@@ -319,7 +319,7 @@ async def test_get_usercodes_unmanaged_occupied_slots(
         ),
     )
     codes = await matter_lock.async_get_usercodes()
-    assert codes == {5: SlotCode.UNKNOWN, 8: SlotCode.UNKNOWN}
+    assert codes == {5: SlotCode.UNREADABLE_CODE, 8: SlotCode.UNREADABLE_CODE}
 
 
 async def test_get_usercodes_invalid_credential_index_skipped(
@@ -348,7 +348,7 @@ async def test_get_usercodes_invalid_credential_index_skipped(
     )
     codes = await matter_lock.async_get_usercodes()
     # Only slot 3 should appear; "bad" index is skipped
-    assert codes == {3: SlotCode.UNKNOWN}
+    assert codes == {3: SlotCode.UNREADABLE_CODE}
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +527,7 @@ async def test_hard_refresh_codes(
     codes = await matter_lock.async_hard_refresh_codes()
 
     assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.UNKNOWN
+    assert codes[2] is SlotCode.UNREADABLE_CODE
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +666,7 @@ async def test_get_usercodes_multiple_credential_types(
     # Slot 1 has only RFID credential, not PIN
     assert codes[1] is SlotCode.EMPTY
     # Slot 2 has a PIN credential
-    assert codes[2] is SlotCode.UNKNOWN
+    assert codes[2] is SlotCode.UNREADABLE_CODE
 
 
 # =============================================================================
@@ -1034,7 +1034,7 @@ class TestLockUserChangeEvent:
     """Test _handle_lock_user_change callback and coordinator push updates."""
 
     def test_pin_added_pushes_unknown(self, matter_lock: MatterLock) -> None:
-        """Adding a PIN credential pushes SlotCode.UNKNOWN to coordinator."""
+        """Adding a PIN credential pushes SlotCode.UNREADABLE_CODE to coordinator."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {3: SlotCode.EMPTY}
         matter_lock.coordinator = mock_coordinator
@@ -1051,12 +1051,14 @@ class TestLockUserChangeEvent:
             ),
         )
 
-        mock_coordinator.push_update.assert_called_once_with({3: SlotCode.UNKNOWN})
+        mock_coordinator.push_update.assert_called_once_with(
+            {3: SlotCode.UNREADABLE_CODE}
+        )
 
     def test_pin_modified_pushes_unknown(self, matter_lock: MatterLock) -> None:
-        """Modifying a PIN credential pushes SlotCode.UNKNOWN to coordinator."""
+        """Modifying a PIN credential pushes SlotCode.UNREADABLE_CODE to coordinator."""
         mock_coordinator = MagicMock()
-        mock_coordinator.data = {5: SlotCode.UNKNOWN}
+        mock_coordinator.data = {5: SlotCode.UNREADABLE_CODE}
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1071,12 +1073,14 @@ class TestLockUserChangeEvent:
             ),
         )
 
-        mock_coordinator.push_update.assert_called_once_with({5: SlotCode.UNKNOWN})
+        mock_coordinator.push_update.assert_called_once_with(
+            {5: SlotCode.UNREADABLE_CODE}
+        )
 
     def test_pin_cleared_pushes_empty(self, matter_lock: MatterLock) -> None:
         """Clearing a PIN credential pushes SlotCode.EMPTY to coordinator."""
         mock_coordinator = MagicMock()
-        mock_coordinator.data = {2: SlotCode.UNKNOWN}
+        mock_coordinator.data = {2: SlotCode.UNREADABLE_CODE}
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1240,7 +1244,7 @@ class TestOptimisticPushUpdates:
         hass: HomeAssistant,
         matter_lock: MatterLock,
     ) -> None:
-        """async_set_usercode pushes SlotCode.UNKNOWN after service call."""
+        """async_set_usercode pushes SlotCode.UNREADABLE_CODE after service call."""
         mock_coordinator = MagicMock()
         matter_lock.coordinator = mock_coordinator
 
@@ -1254,7 +1258,9 @@ class TestOptimisticPushUpdates:
         result = await matter_lock.async_set_usercode(3, "1234")
 
         assert result is True
-        mock_coordinator.push_update.assert_called_once_with({3: SlotCode.UNKNOWN})
+        mock_coordinator.push_update.assert_called_once_with(
+            {3: SlotCode.UNREADABLE_CODE}
+        )
 
     async def test_set_usercode_no_coordinator(
         self,

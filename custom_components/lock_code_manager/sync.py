@@ -286,7 +286,7 @@ class SlotSyncManager:
             else slot_state.code_state
         )
         if slot_state.active_state == STATE_ON:
-            if lock_code is SlotCode.UNKNOWN:
+            if lock_code is SlotCode.UNREADABLE_CODE:
                 return slot_state.pin_state == self._last_set_pin
             if lock_code is SlotCode.EMPTY:
                 return False  # need to set

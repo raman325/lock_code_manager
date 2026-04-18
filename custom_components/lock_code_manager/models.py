@@ -25,11 +25,16 @@ class SlotCode(StrEnum):
     """Sentinel values for slot codes in coordinator data.
 
     Used alongside str values: a readable code is a plain string,
-    while EMPTY and UNKNOWN represent non-string slot states.
+    while EMPTY and UNREADABLE_CODE represent non-string slot states.
+
+    UNREADABLE_CODE means a code exists on the lock but its value cannot be
+    read back (for example, write-only locks like Matter). This is distinct
+    from Home Assistant's STATE_UNKNOWN ("unknown"), which represents a
+    sensor whose state is not yet known.
     """
 
     EMPTY = "empty"
-    UNKNOWN = "unknown"
+    UNREADABLE_CODE = "unreadable_code"
 
 
 @dataclass
