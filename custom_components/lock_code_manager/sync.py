@@ -428,9 +428,10 @@ class SlotSyncManager:
     def _update_in_sync_display(self) -> None:
         """Update the in_sync display state immediately if it changed.
 
-        This is a read-only check — no sync operations are performed.
-        Allows the UI to reflect state changes instantly while the tick
-        handles actual sync operations.
+        Read-only with respect to sync state — updates ``_in_sync`` and
+        writes the entity state for instant UI feedback, but does not
+        modify the circuit breaker tracker or any other sync state.
+        All sync state mutations happen exclusively in ``_async_tick_impl``.
         """
         if self._in_sync is None:
             return
@@ -440,13 +441,6 @@ class SlotSyncManager:
         expected = self.calculate_in_sync(slot_state)
         if expected != self._in_sync:
             self._in_sync = expected
-            # Reset circuit breaker on any transition between in-sync and
-            # out-of-sync. A True→False transition means the reconciliation
-            # state changed (for example, due to a desired-state edit or
-            # lock-side drift), so prior attempts should not carry over.
-            # False→True means sync succeeded and the tracker should be clean
-            # for next time.
-            self._reset_sync_tracker()
             self._write_state()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
@@ -465,7 +459,14 @@ class SlotSyncManager:
         await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:
-        """Core tick logic — called from _async_tick after dirty check."""
+        """Core tick logic — called from _async_tick after dirty check.
+
+        This is the single authoritative place for all sync state mutations:
+        circuit breaker tracking, sync operations, and ``_last_set_pin``
+        changes. The display callback (``_update_in_sync_display``) may
+        update ``_in_sync`` for immediate UI feedback, but the tick is the
+        only place that acts on sync state transitions.
+        """
         slot_state = self._resolve_slot_state()
         if slot_state is None:
             # State resolution failed — retry on next tick. We always retry
@@ -474,7 +475,16 @@ class SlotSyncManager:
             self._dirty = True
             return
 
+        prev_in_sync = self._in_sync
         expected_in_sync = self.calculate_in_sync(slot_state)
+
+        # Reset circuit breaker on any transition. True→False means the
+        # sync target changed (PIN edited, slot re-enabled) so prior
+        # attempts should not count. False→True is handled below in the
+        # "Back in sync" block. This is the ONLY place the tracker is
+        # reset — the display callback does not touch it.
+        if prev_in_sync is not None and prev_in_sync and not expected_in_sync:
+            self._reset_sync_tracker()
 
         # Initial load: detect sync state without performing sync operations.
         # This prevents premature sync attempts during entity setup when dependent
