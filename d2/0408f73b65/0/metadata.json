@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d20408f73b65",
+  "session_id": "9b4082f1-6f1a-4674-80fc-628e3964b57a",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-18T03:56:09.81792Z",
+  "branch": "fix/circuit-breaker-reset-on-sync",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "5a95107a9978",
+  "token_usage": {
+    "input_tokens": 1082,
+    "cache_creation_tokens": 720699,
+    "cache_read_tokens": 259961467,
+    "output_tokens": 189571,
+    "api_call_count": 887
+  },
+  "session_metrics": {
+    "turn_count": 77
+  }
+}

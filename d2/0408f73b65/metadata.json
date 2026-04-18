@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d20408f73b65",
+  "strategy": "manual-commit",
+  "branch": "fix/circuit-breaker-reset-on-sync",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d2/0408f73b65/0/metadata.json",
+      "transcript": "/d2/0408f73b65/0/full.jsonl",
+      "content_hash": "/d2/0408f73b65/0/content_hash.txt",
+      "prompt": "/d2/0408f73b65/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1082,
+    "cache_creation_tokens": 720699,
+    "cache_read_tokens": 259961467,
+    "output_tokens": 189571,
+    "api_call_count": 887
+  }
+}
