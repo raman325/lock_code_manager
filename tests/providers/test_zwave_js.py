@@ -115,6 +115,21 @@ async def test_connection_check_interval_is_none(zwave_js_lock: ZWaveJSLock) -> 
     assert zwave_js_lock.connection_check_interval is None
 
 
+async def test_setup_is_idempotent(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_code_manager_config_entry: MockConfigEntry,
+) -> None:
+    """Test that async_setup clears old listeners before re-registering."""
+    await zwave_js_lock.async_setup(lock_code_manager_config_entry)
+    assert len(zwave_js_lock._listeners) >= 1
+    count_after_first = len(zwave_js_lock._listeners)
+
+    # Call again — should not accumulate listeners
+    await zwave_js_lock.async_setup(lock_code_manager_config_entry)
+    assert len(zwave_js_lock._listeners) == count_after_first
+
+
 # CC version detection tests
 
 

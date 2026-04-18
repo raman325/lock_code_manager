@@ -168,6 +168,9 @@ class BaseLock:
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+    _setup_succeeded: bool = field(default=False, init=False)
+    _setup_running: bool = field(default=False, init=False)
+    _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     _push_retry: OneShotRetry | None = field(default=None, init=False)
     _push_disabled: bool = field(default=False, init=False)
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
@@ -379,6 +382,8 @@ class BaseLock:
     def subscribe_push_updates(self) -> None:
         """Subscribe to push-based value updates, scheduling a one-shot retry on transient failure.
 
+        Idempotent: safe to call when already subscribed (delegates to
+        ``setup_push_subscription`` which must be idempotent).
         ProviderNotImplementedError propagates.
         """
         # Block retry-driven calls after unsubscribe to prevent in-flight
@@ -465,11 +470,67 @@ class BaseLock:
         Provider ``async_setup()`` runs first so providers can initialize
         any state the coordinator needs during its first refresh.
         """
+        self._lcm_config_entry = config_entry
         try:
             await self.async_setup(config_entry)
+        except LockDisconnected as err:
+            LOGGER.warning(
+                "Provider setup failed for %s: %s. Coordinator will be "
+                "created but data will be unavailable until the lock "
+                "comes online. Setup will be retried when the lock "
+                "integration reconnects.",
+                self.lock.entity_id,
+                err,
+            )
+        else:
+            self._setup_succeeded = True
+
+        try:
             await self._async_setup_internal(config_entry)
         finally:
             self._setup_complete.set()
+
+    async def _async_on_integration_loaded(self) -> None:
+        """Handle provider integration LOADED transition.
+
+        Re-runs ``async_setup`` to re-initialize provider state (e.g.
+        re-register event listeners after an integration reload), then
+        refreshes the coordinator and subscribes to push updates.
+
+        Operations are chained sequentially so setup completes before
+        the coordinator refresh or push subscription begins.
+        """
+        if (
+            self._lcm_config_entry is None
+            or self._setup_running
+            or not self.lock_config_entry
+            or self.lock_config_entry.state != ConfigEntryState.LOADED
+        ):
+            return
+
+        self._setup_running = True
+        try:
+            await self.async_setup(self._lcm_config_entry)
+        except LockDisconnected:
+            LOGGER.debug(
+                "Provider setup failed for %s, will retry on next reconnect",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+        else:
+            if not self._setup_succeeded:
+                LOGGER.info(
+                    "Provider setup succeeded for %s",
+                    self.lock.entity_id,
+                )
+            self._setup_succeeded = True
+        finally:
+            self._setup_running = False
+
+        if self.coordinator:
+            await self.coordinator.async_request_refresh()
+        if self.supports_push:
+            self.subscribe_push_updates()
 
     @final
     async def _async_setup_internal(self, config_entry: ConfigEntry) -> None:
@@ -525,7 +586,12 @@ class BaseLock:
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by provider.
 
-        Default is a no-op; providers override to do one-time async setup.
+        Default is a no-op; providers override for provider-specific setup
+        (e.g. registering event listeners, validating capabilities).
+
+        Implementations MUST be idempotent — this is called on initial load
+        and again on every provider integration reconnect. Clean up any
+        previous state before re-initializing.
         """
 
     @final
@@ -563,13 +629,10 @@ class BaseLock:
                 return
 
             if to_state == ConfigEntryState.LOADED:
-                if self.coordinator:
-                    self.hass.async_create_task(
-                        self.coordinator.async_request_refresh(),
-                        f"Refresh coordinator for {self.lock.entity_id} after reload",
-                    )
-                if self.supports_push:
-                    self.subscribe_push_updates()
+                self.hass.async_create_task(
+                    self._async_on_integration_loaded(),
+                    f"Provider reconnect for {self.lock.entity_id}",
+                )
             elif (
                 self.supports_push and self._last_entry_state == ConfigEntryState.LOADED
             ):
