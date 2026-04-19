@@ -21,6 +21,20 @@ Locks from the following integrations are currently supported:
 - [Virtual](https://github.com/twrecked/hass-virtual) custom integration. See the
   [Wiki page on this integration](https://github.com/raman325/lock_code_manager/wiki/Virtual-integration)
   for more details on why it was built and how it works.
+- **Zigbee2MQTT** (MQTT): the lock must be paired in [Zigbee2MQTT](https://www.zigbee2mqtt.io/)
+  with PIN / user-code support exposed to Home Assistant through the **MQTT** integration.
+
+  **Setup checklist**
+
+  1. Configure the **MQTT** integration in Home Assistant (same broker Zigbee2MQTT uses).
+  2. In Zigbee2MQTT, ensure the lock supports **PIN / user codes** for your firmware (see device-specific Z2M docs).
+  3. Keep the Zigbee2MQTT **base topic** as the default `zigbee2mqtt`, or note that Lock Code Manager
+     currently assumes that prefix for MQTT topics.
+  4. In Home Assistant, the device must be recognized as a Zigbee2MQTT device (via MQTT discovery).
+     If you rename the **device** in HA, keep it aligned with the **friendly name** in Zigbee2MQTT,
+     because topics are built as `{base_topic}/{friendly_name}/set|get`.
+
+  During configuration, pick your `lock.*` entity from the **MQTT** integration like any other supported lock.
 
 The code was written to make it (I think) easy to add support for locks in other
 integrations. Check the [Wiki](https://github.com/raman325/lock_code_manager/wiki) if you

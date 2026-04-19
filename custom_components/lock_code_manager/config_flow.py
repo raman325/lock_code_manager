@@ -69,13 +69,19 @@ CODE_SLOTS_SCHEMA = vol.All(
     vol.Schema({vol.Coerce(int): CODE_SLOT_SCHEMA}), enabled_requires_pin
 )
 
+# Provider modules are named after files in ``providers/``; HA entity ``platform`` is the
+# integration domain (e.g. Zigbee2MQTT locks use the ``mqtt`` integration, not ``zigbee2mqtt``).
+_PROVIDER_MODULE_TO_PLATFORM = {
+    "zigbee2mqtt": "mqtt",
+}
+
 LOCKS_FILTER_CONFIG = [
-    sel.EntityFilterSelectorConfig(integration=integration, domain=LOCK_DOMAIN)
-    for integration in [
-        module.name
-        for module in pkgutil.iter_modules(providers.__path__)
-        if not module.ispkg and module.name not in ("_base", "const")
-    ]
+    sel.EntityFilterSelectorConfig(
+        integration=_PROVIDER_MODULE_TO_PLATFORM.get(module.name, module.name),
+        domain=LOCK_DOMAIN,
+    )
+    for module in pkgutil.iter_modules(providers.__path__)
+    if not module.ispkg and module.name not in ("_base", "const")
 ]
 LOCK_ENTITY_SELECTOR = sel.EntitySelector(
     sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
