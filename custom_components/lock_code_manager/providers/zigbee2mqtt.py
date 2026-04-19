@@ -217,13 +217,16 @@ class Zigbee2MQTTLock(BaseLock):
                 return
 
             def message_received(msg: ReceiveMessage) -> None:
-                """Handle incoming MQTT message."""
+                """Handle incoming MQTT message (may run off the event loop)."""
                 try:
                     payload = json.loads(msg.payload)
                 except (json.JSONDecodeError, TypeError):
                     return
 
-                self.hass.add_job(self._process_z2m_device_payload, payload)
+                def _deliver() -> None:
+                    self._process_z2m_device_payload(payload)
+
+                self.hass.loop.call_soon_threadsafe(_deliver)
 
             try:
                 self._unsubscribe = await async_subscribe(
