@@ -347,6 +347,10 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
+            # Same pattern as Z-Wave JS: MQTT state updates asynchronously; avoid sync
+            # loops by updating the coordinator immediately after a successful publish.
+            if self.coordinator:
+                self.coordinator.push_update({code_slot: str(usercode)})
             return True
 
         except Exception as err:
@@ -390,6 +394,8 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
+            if self.coordinator:
+                self.coordinator.push_update({code_slot: SlotCode.EMPTY})
             return True
 
         except Exception as err:
