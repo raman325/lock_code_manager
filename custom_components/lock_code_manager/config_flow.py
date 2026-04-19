@@ -71,9 +71,14 @@ CODE_SLOTS_SCHEMA = vol.All(
     vol.Schema({vol.Coerce(int): CODE_SLOT_SCHEMA}), enabled_requires_pin
 )
 
-# Build filters from supported HA entity platforms (keys of INTEGRATIONS_CLASS_MAP).
-# Do not scan ``providers/`` with pkgutil at runtime: in some HA installs (e.g. HACS) that
-# scan can yield nothing, which produces an empty filter list and "No items available".
+# Lock entity picker: one filter per Home Assistant integration ``platform`` we support.
+#
+# Use :data:`INTEGRATIONS_CLASS_MAP` keys (not ``pkgutil.iter_modules(providers)``).
+# Runtime package scans can see an empty module list when the integration is loaded from
+# a non-standard layout (notably HACS), which produced no filters and "No items available"
+# for locks. The map is the explicit registry: adding a provider means adding an entry here
+# and in ``providers/__init__.py`` — e.g. ``"mqtt"`` for Zigbee2MQTT locks under the MQTT
+# integration (platform ``mqtt``, not ``zigbee2mqtt``).
 LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
     for platform in INTEGRATIONS_CLASS_MAP
