@@ -1,7 +1,6 @@
 {
   "name": "Lock Code Manager",
-  "zip_release": true,
-  "filename": "lock_code_manager.zip",
+  "zip_release": false,
   "homeassistant": "2025.12.0",
   "render_readme": true
 }
