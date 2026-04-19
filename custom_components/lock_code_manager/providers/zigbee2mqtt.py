@@ -135,13 +135,14 @@ class Zigbee2MQTTLock(BaseLock):
         asyncio futures are not thread-safe.
         """
 
-        # Handle pin_code_added action
-        if payload.get("action") == "pin_code_added":
+        # Handle pin_code added / deleted (Z2M action events, not the users object)
+        if payload.get("action") in ("pin_code_added", "pin_code_deleted"):
             action_user = payload.get("action_user")
             if action_user is not None:
                 LOGGER.debug(
-                    "Lock %s received pin_code_added for user %s",
+                    "Lock %s received %s for user %s",
                     self.lock.entity_id,
+                    payload.get("action"),
                     action_user,
                 )
                 if self.coordinator:
@@ -162,10 +163,20 @@ class Zigbee2MQTTLock(BaseLock):
 
                 if isinstance(user_info, dict):
                     status = user_info.get("status")
-                    pin_code = user_info.get("pin_code", "")
+                    pin_code_present = "pin_code" in user_info
+                    pin_raw = user_info.get("pin_code")
 
-                    if status == "enabled" and pin_code:
-                        updates[user_id] = str(pin_code)
+                    # Zigbee2MQTT often omits pin_code when expose_pin is false (default on
+                    # several Yale models). Treating that as EMPTY makes the coordinator think
+                    # the slot is cleared, so disabling the slot skips clear_usercode while the
+                    # lock still holds the PIN. Only treat as EMPTY when MQTT exposes the field.
+                    if status == "enabled":
+                        if pin_raw:
+                            updates[user_id] = str(pin_raw)
+                        elif pin_code_present:
+                            updates[user_id] = SlotCode.EMPTY
+                        else:
+                            continue
                     else:
                         updates[user_id] = SlotCode.EMPTY
 
