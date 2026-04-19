@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
+    async_publish,
+    async_subscribe,
 )
+from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
@@ -29,13 +32,6 @@ DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 # User status values per Zigbee Cluster Library specification (same as ZHA)
 USER_STATUS_AVAILABLE = 0
 USER_STATUS_ENABLED = 1
-
-
-def _get_mqtt_component(hass):
-    """Get the MQTT component."""
-    if MQTT_DOMAIN not in hass.data:
-        return None
-    return hass.components.mqtt
 
 
 @dataclass(repr=False, eq=False)
@@ -116,8 +112,7 @@ class Zigbee2MQTTLock(BaseLock):
 
     async def async_is_integration_connected(self) -> bool:
         """Return whether the MQTT integration is connected."""
-        mqtt = _get_mqtt_component(self.hass)
-        if not mqtt:
+        if not mqtt_config_entry_enabled(self.hass):
             return False
 
         # Check if we can get the friendly name (device exists)
@@ -147,8 +142,7 @@ class Zigbee2MQTTLock(BaseLock):
             )
 
         async def _async_subscribe():
-            mqtt = _get_mqtt_component(self.hass)
-            if not mqtt:
+            if not mqtt_config_entry_enabled(self.hass):
                 return
 
             def message_received(msg: ReceiveMessage) -> None:
@@ -224,7 +218,9 @@ class Zigbee2MQTTLock(BaseLock):
                                     future.set_result(None)
 
             try:
-                self._unsubscribe = await mqtt.async_subscribe(topic, message_received)
+                self._unsubscribe = await async_subscribe(
+                    self.hass, topic, message_received
+                )
                 LOGGER.debug(
                     "Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id
                 )
@@ -252,8 +248,7 @@ class Zigbee2MQTTLock(BaseLock):
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
-        mqtt = _get_mqtt_component(self.hass)
-        if not mqtt:
+        if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
 
         if not await self.async_is_integration_connected():
@@ -281,7 +276,7 @@ class Zigbee2MQTTLock(BaseLock):
 
                 # Request PIN code for this slot
                 payload = json.dumps({"pin_code": {"user": slot_num}})
-                await mqtt.async_publish(get_topic, payload)
+                await async_publish(self.hass, get_topic, payload)
 
                 try:
                     # Wait for response with timeout
@@ -312,8 +307,7 @@ class Zigbee2MQTTLock(BaseLock):
         self, code_slot: int, usercode: str, name: str | None = None
     ) -> bool:
         """Set a usercode on a code slot."""
-        mqtt = _get_mqtt_component(self.hass)
-        if not mqtt:
+        if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
 
         if not await self.async_is_integration_connected():
@@ -336,7 +330,7 @@ class Zigbee2MQTTLock(BaseLock):
                 }
             )
 
-            await mqtt.async_publish(set_topic, payload)
+            await async_publish(self.hass, set_topic, payload)
             LOGGER.debug(
                 "Published set_pin_code for %s slot %s",
                 self.lock.entity_id,
@@ -355,8 +349,7 @@ class Zigbee2MQTTLock(BaseLock):
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """Clear a usercode on a code slot."""
-        mqtt = _get_mqtt_component(self.hass)
-        if not mqtt:
+        if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
 
         if not await self.async_is_integration_connected():
@@ -377,7 +370,7 @@ class Zigbee2MQTTLock(BaseLock):
                 }
             )
 
-            await mqtt.async_publish(set_topic, payload)
+            await async_publish(self.hass, set_topic, payload)
             LOGGER.debug(
                 "Published clear_pin_code for %s slot %s",
                 self.lock.entity_id,
