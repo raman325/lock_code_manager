@@ -3,6 +3,7 @@
 venv
 *.pyc
 .claude
+.cursor/
 .codex
 .coverage
 coverage/
