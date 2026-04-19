@@ -9,7 +9,13 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import Zigbee2MQT
 
 def _minimal_lock() -> Zigbee2MQTTLock:
     """Build a Zigbee2MQTTLock without Home Assistant test harness."""
-    lock_entity = SimpleNamespace(entity_id="lock.test", device_id=None)
+    lock_entity = SimpleNamespace(
+        entity_id="lock.test",
+        device_id=None,
+        platform="mqtt",
+        config_entry_id=None,
+        unique_id=None,
+    )
     return Zigbee2MQTTLock(
         MagicMock(),
         MagicMock(),
