@@ -64,7 +64,7 @@ for details.
 The best way to install this integration is via HACS.
 
 1. Set up your locks in Home Assistant through a supported integration
-   (Z-Wave, Matter, Schlage, etc.)
+   (Z-Wave, Matter, Schlage, Zigbee2MQTT/MQTT, etc.)
 2. Add this repository as a custom integration repository in HACS
 3. Go to Settings > Devices & Services > Add Integration
 4. Select Lock Code Manager
