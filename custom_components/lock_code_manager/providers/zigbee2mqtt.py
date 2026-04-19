@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
@@ -319,7 +319,11 @@ class Zigbee2MQTTLock(BaseLock):
         return data
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """Set a usercode on a code slot."""
         if not mqtt_config_entry_enabled(self.hass):
