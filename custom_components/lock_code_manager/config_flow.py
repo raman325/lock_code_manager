@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import logging
-import pkgutil
 from typing import Any
 
 import voluptuous as vol
@@ -22,7 +21,6 @@ from homeassistant.helpers import (
 )
 from homeassistant.util import slugify
 
-from . import providers
 from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
@@ -36,6 +34,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import get_entry_data
+from .providers import INTEGRATIONS_CLASS_MAP
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,19 +68,12 @@ CODE_SLOTS_SCHEMA = vol.All(
     vol.Schema({vol.Coerce(int): CODE_SLOT_SCHEMA}), enabled_requires_pin
 )
 
-# Provider modules are named after files in ``providers/``; HA entity ``platform`` is the
-# integration domain (e.g. Zigbee2MQTT locks use the ``mqtt`` integration, not ``zigbee2mqtt``).
-_PROVIDER_MODULE_TO_PLATFORM = {
-    "zigbee2mqtt": "mqtt",
-}
-
+# Build filters from supported HA entity platforms (keys of INTEGRATIONS_CLASS_MAP).
+# Do not scan ``providers/`` with pkgutil at runtime: in some HA installs (e.g. HACS) that
+# scan can yield nothing, which produces an empty filter list and "No items available".
 LOCKS_FILTER_CONFIG = [
-    sel.EntityFilterSelectorConfig(
-        integration=_PROVIDER_MODULE_TO_PLATFORM.get(module.name, module.name),
-        domain=LOCK_DOMAIN,
-    )
-    for module in pkgutil.iter_modules(providers.__path__)
-    if not module.ispkg and module.name not in ("_base", "const")
+    sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
+    for platform in INTEGRATIONS_CLASS_MAP
 ]
 LOCK_ENTITY_SELECTOR = sel.EntitySelector(
     sel.EntitySelectorConfig(filter=LOCKS_FILTER_CONFIG, multiple=True)
