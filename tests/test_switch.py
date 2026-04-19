@@ -2,9 +2,8 @@
 
 import logging
 
-from homeassistant.components.persistent_notification import (
-    _async_get_or_create_notifications,
-)
+import pytest
+
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TOGGLE
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -13,6 +12,10 @@ from homeassistant.components.text import (
 )
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
+
+from custom_components.lock_code_manager.const import DOMAIN
 
 from .common import SLOT_2_ENABLED_ENTITY, SLOT_2_PIN_ENTITY
 
@@ -49,15 +52,22 @@ async def test_switch_entity(
         blocking=True,
     )
 
-    # Attempt to toggle switch on. This should fail because the PIN value is empty
-    await hass.services.async_call(
-        SWITCH_DOMAIN,
-        SERVICE_TOGGLE,
-        target={ATTR_ENTITY_ID: SLOT_2_ENABLED_ENTITY},
-        blocking=True,
-    )
+    # Attempt to toggle switch on. This should raise because the PIN value is empty
+    with pytest.raises(HomeAssistantError, match="Set a PIN code"):
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TOGGLE,
+            target={ATTR_ENTITY_ID: SLOT_2_ENABLED_ENTITY},
+            blocking=True,
+        )
 
-    assert len(_async_get_or_create_notifications(hass)) == 1
+    # Should create a repair issue
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"pin_required_{lock_code_manager_config_entry.entry_id}_2"
+    issue = issue_registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.severity == "warning"
+    assert issue.is_fixable is True
 
     state = hass.states.get(SLOT_2_ENABLED_ENTITY)
     assert state
@@ -81,3 +91,7 @@ async def test_switch_entity(
     state = hass.states.get(SLOT_2_ENABLED_ENTITY)
     assert state
     assert state.state == STATE_ON
+
+    # The pin_required repair issue should be auto-deleted on successful turn on
+    issue = issue_registry.async_get_issue(DOMAIN, issue_id)
+    assert issue is None

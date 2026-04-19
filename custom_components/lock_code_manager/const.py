@@ -15,6 +15,10 @@ STRATEGY_FILENAME = "generated/lock-code-manager.js"
 STRATEGY_PATH = f"{FILES_URL_BASE}/{STRATEGY_FILENAME}"
 
 SERVICE_HARD_REFRESH_USERCODES = "hard_refresh_usercodes"
+SERVICE_SET_USERCODE = "set_usercode"
+SERVICE_CLEAR_USERCODE = "clear_usercode"
+SERVICE_SET_SLOT_CONDITION = "set_slot_condition"
+SERVICE_CLEAR_SLOT_CONDITION = "clear_slot_condition"
 
 ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
 ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
@@ -108,11 +112,13 @@ BACKOFF_FAILURE_THRESHOLD: int = 3
 BACKOFF_INITIAL_SECONDS: int = 60
 BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
 
+# Poll failure alerting
+POLL_FAILURE_ALERT_THRESHOLD: int = 12
+
 # Sync timing
 TICK_INTERVAL = timedelta(seconds=5)
 MAX_SYNC_ATTEMPTS = 3
 SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
-PUSH_SUBSCRIBE_RETRY_DELAY = timedelta(seconds=10)
 
 
 # Defaults

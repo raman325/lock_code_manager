@@ -13,16 +13,21 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
     BACKOFF_FAILURE_THRESHOLD,
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
-    CONF_SLOTS,
     DOMAIN,
+    POLL_FAILURE_ALERT_THRESHOLD,
 )
-from .data import get_entry_data
+from .data import get_entry_config
 from .exceptions import LockCodeManagerError
 from .models import SlotCode
 
@@ -79,9 +84,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
 
     def get_expected_pin(self, slot_num: int) -> str | None:
         """Return configured PIN for a slot, or None if disabled/unconfigured."""
-        slot_data = get_entry_data(self._config_entry, CONF_SLOTS, {}).get(
-            str(slot_num), {}
-        )
+        slot_data = get_entry_config(self._config_entry).slot(slot_num)
         if not slot_data.get(CONF_ENABLED):
             return None
         return slot_data.get(CONF_PIN) or None
@@ -90,13 +93,20 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         """Return whether LCM expects a PIN on this slot (enabled with PIN)."""
         return self.get_expected_pin(slot_num) is not None
 
+    @staticmethod
+    def _normalize_keys(
+        data: dict[Any, str | SlotCode],
+    ) -> dict[int, str | SlotCode]:
+        """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
+        return {int(k): v for k, v in data.items()}
+
     @callback
     def push_update(self, updates: dict[int, str | SlotCode]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
 
-        new_data = {**self.data, **updates}
+        new_data = {**self.data, **self._normalize_keys(updates)}
         # Skip update if data hasn't actually changed to avoid redundant logging
         # and unnecessary listener notifications
         if new_data == self.data:
@@ -136,6 +146,20 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                     self._lock.lock.entity_id,
                 )
 
+        if self._consecutive_failures == POLL_FAILURE_ALERT_THRESHOLD:
+            async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"lock_offline_{self._lock.lock.entity_id}",
+                is_fixable=False,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key="lock_offline",
+                translation_placeholders={
+                    "lock_entity_id": self._lock.lock.entity_id,
+                },
+            )
+
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""
         if self._consecutive_failures > 0:
@@ -147,20 +171,31 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             self._consecutive_failures = 0
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
+        # Unconditionally clear lock_offline issue on any successful poll.
+        # Runs outside the if-block so it also clears persisted issues that
+        # survive HA restarts (where _consecutive_failures resets to 0).
+        async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"lock_offline_{self._lock.lock.entity_id}",
+        )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Update usercodes."""
+        """Fetch usercodes from the provider, normalize slot keys to int, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
             self._apply_backoff()
-            # We can silently fail if we've never been able to retrieve data
+            # During cold start (before the first successful poll), do not
+            # raise UpdateFailed. That would fail the initial refresh and
+            # keep coordinator-backed entities unavailable until a
+            # successful poll completes.
             if not self.last_update_success:
                 return {}
             raise UpdateFailed from err
 
         self._reset_backoff()
-        return data
+        return self._normalize_keys(data)
 
     async def _async_drift_check(self, now: datetime) -> None:
         """
@@ -187,7 +222,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             self._lock.lock.entity_id,
         )
         try:
-            new_data = await self._lock.async_internal_hard_refresh_codes()
+            new_data = self._normalize_keys(
+                await self._lock.async_internal_hard_refresh_codes()
+            )
         except LockCodeManagerError as err:
             self._apply_backoff()
             _LOGGER.warning(
@@ -197,10 +234,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             )
             return
 
-        # Push subscription retry is handled by BaseLock's OneShotRetry
-        # and the config entry state listener — no need to retry here.
+        # Push subscription retry is handled by the config entry state
+        # listener and connection transition handler — no need to retry here.
 
-        # Compare with current data and notify if changed
         if new_data != self.data:
             _LOGGER.debug(
                 "Drift detected for %s, updating coordinator data",

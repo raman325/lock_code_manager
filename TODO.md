@@ -1,183 +1,107 @@
 # TODO
 
-## New Items
+## User-Facing Features
 
-- Unify design across slot and lock data cards, with a preference towards the slot card design.
-- **Config flow: lock reset step** — Add a config flow step that checks for existing
-  unmanaged codes on the lock. Inform the user the lock will be reset before configuring.
-  Either they cancel or proceed and all slots are cleared. LCM will re-set its managed
-  codes immediately after.
-- **Config flow: conflicting integration detection** — Check for Keymaster or other
-  code management integrations at setup and warn the user.
-- **Update migration docs** — Revise any wiki content that talks about "slowly migrating"
-  locks between tools. The guidance is now to commit fully to one tool.
-- **"Clear all unmanaged" UI action** — Add a button or service to clear all unmanaged
-  code slots on a lock, so users can clean up stale codes without manual intervention.
-- **Unify Z-Wave event 15 duplicate handler with CodeRejectedError** — The reactive
-  duplicate handler (`_async_handle_duplicate_code` in `zwave_js.py`) uses
-  `async_disable_slot` (shared helper in `util.py`). It should surface through
-  the exception hierarchy instead. Options: route through the coordinator to
-  trigger a sync manager state update, or have the provider set a flag that the
-  sync manager checks on next sync cycle. This would also allow the event 15
-  handler to reset the sync tracker.
-- **Investigate lock-specific duplicate detection carve-outs** — Some locks don't mask
-  PINs or don't reject duplicates. Explore whether duplicate detection behavior can be
-  adapted per lock capability rather than one-size-fits-all.
-- Add type checking to CI:
-  - Add type checking CI job to python-checks.yml (mypy already in pre-commit)
-  - Explore alternatives to mypy (Astral may have a replacement - check for "ty" or similar)
-  - Fix existing type errors (~49 errors as of Mar 2026)
-- Test visual editor for both cards.
+- **Config flow: conflicting integration detection** — Warn if Keymaster or other
+  code management integrations are detected at setup.
+- **Clear all unmanaged codes** — Button or service to clear unmanaged code slots
+  on a lock.
+- **Bulk operations** — Enable/disable multiple slots at once.
+- **Import/export slot configuration**
+- **PIN validation** — Warn on simple PINs ("1234", "0000"), duplicate PINs
+  across slots, format violations against lock requirements, and slot conflicts
+  across config entries.
+- **Service actions:**
+  - `set_temporary_code` — time-limited PIN
+  - `generate_pin` — auto-generate secure PIN
+  - `bulk_enable` / `bulk_disable`
+- **Custom Jinja templates** — Ship `.jinja` macros for LCM entity resolution
+  (e.g. `lcm_slot_entities(config_entry_id, slot_num)`). Auto-install to
+  `custom_templates/` during setup.
+
+## Providers
+
+**Current:** Akuvox, Matter, Schlage, Z-Wave JS, Virtual (testing)
+
+**Open PRs:** ZHA (#739), MQTT/Zigbee2MQTT (#740)
+
+**Future:** Nuki, SwitchBot, SmartThings
+
+**Cannot support:** esphome (no API), august/yale/yalexs_ble/yale_smart_alarm
+(library limitations)
+
+### Matter provider
+
+- **Direct Matter client commands** — Replace HA service calls
+  (`matter.set_lock_credential`, etc.) with direct `MatterClient.send_device_command()`
+  calls to get structured response objects (e.g., `SetCredentialResponse.status`
+  with `DlStatus.kDuplicate`). Currently duplicate detection relies on string
+  matching the error message. Direct commands would give typed status codes for
+  duplicate, occupied, resource exhausted, etc.
+
+- **Known Aqara U300 limitations** (discovered during live testing 2026-04-18):
+  - User names with spaces rejected (500 error from `set_lock_user`)
+  - Status `unknown(133)` when setting credential on occupied slot without clearing
+  - Lock disconnects from Thread network after repeated HA restarts (needs battery
+    pull + Matter server restart to recover)
+
+## Architecture Considerations
+
+- **Event-driven vs optimistic push updates** — Both Matter and Z-Wave JS need
+  optimistic pushes from set/clear methods. Z-Wave JS needs them to avoid sync
+  loops with stale cache reads. Matter needs them because PINs are write-only
+  (the lock never reports the actual value back). Removing optimistic pushes
+  is not viable for either provider. Event-only updates would leave a latency
+  window where the coordinator has stale data, triggering unnecessary re-sync
+  attempts.
+
+- **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
+  sensor entities to coordinator (survives entity recreation during config
+  updates).
+
+## Code Quality
+
+- **Dual storage pattern** — Simplify `data` + `options` config entry pattern.
+  Document when to use each.
+- **TypedDict for slot config** — Define `class SlotConfig(TypedDict)` with
+  `pin: NotRequired[str]`, `enabled: bool`, `name: NotRequired[str]`,
+  `entity_id: NotRequired[str]`, `number_of_uses: NotRequired[int]` to
+  replace `dict[str, Any]` for slot inner dicts. Gives pyright real signal
+  on slot reads/writes. Would let `EntryConfig.slots` be typed
+  `Mapping[int, SlotConfig]`.
+- **`coordinator.data` typing** — Currently `dict[int, str | SlotCode]`,
+  already int-keyed. `binary_sensor.py:281` and `entity.py:193` cast
+  defensively against `self.slot_num`'s type variance — could be cleaned
+  up once entities consistently carry int slot_num end-to-end.
+- **Other internal dict boundaries** — `websocket.py:401/442/524/529`
+  cast into websocket-internal lookup dicts; `__init__.py:561` casts at
+  a callback boundary. Same broader "typed slot_num everywhere" theme as
+  the EntryConfig migration; resolved by the SlotConfig TypedDict work
+  above plus typed callback signatures.
+- **Websocket optimization** — Add optional `include_entities`/`include_locks`
+  flags to `get_config_entry_data` command.
+- **Entity registry change detection** — Warn if LCM entity IDs change (reload
+  required).
+- **Provider diagnostics** — Add `get_diagnostic_data()` to `BaseLock` for
+  provider-specific diagnostic information.
 
 ## Testing
 
-- Strategy UI module has unit tests in `ts/*.test.ts` and Python tests for
-  resource registration/unload in `tests/test_init.py`; still need end-to-end
-  UI coverage (Lovelace resource registration + reload in a real frontend).
-- Add provider tests when new integrations beyond Z-Wave JS and virtual are added.
-- Test rate limiting and connection failure timing in live environment.
+- **Live Matter lock testing** — Remaining scenarios not yet validated
+  (2026-04-18):
+  - PIN change while in sync (re-sync via clear-then-set)
+  - Multiple config entries sharing the same lock (conflict detection)
+  - Hard refresh drift detection (verify 1-hour poll catches changes)
+  - Config flow re-add (picks up existing codes on lock)
 
-## Refactors and Maintenance
+## Frontend
 
-### Simplify Tests
+- Unify slot and lock data card designs (prefer slot card pattern).
+- Test visual editor for both cards.
 
-- Consolidate duplicate test setup code in `tests/common.py` into shared fixtures
-- Consider parametrized tests where multiple similar tests exist
-- Reduce test boilerplate with helper functions
+## Process
 
-### Simplify Code
-
-#### Dual Storage and Config Entry Patterns
-
-1. **Dual storage pattern** (`data` + `options` in config entries) - Can this be
-   simplified?
-2. **Clarify data vs options usage** — Document and standardize when to read from
-   `config_entry.data` vs `config_entry.options`. Current understanding: prefer
-   `options` only within the config entry update listener during options updates;
-   elsewhere use `data` to avoid mid-update inconsistencies.
-
-#### Other Complexity
-
-- **Entity unique ID format** - Is `{entry_id}|{slot}|{type}` optimal?
-- **`async_internal_*` method wrappers** — are all necessary?
-
-#### Sync Manager Follow-ups
-
-- Make unload symmetric with setup (unload treats everything as "remove all
-  slots/locks" through the same update_listener path)
-- Upgrade catch-all state tracking to targeted once entities are discovered
-  (currently deferred — modifying subscriptions from within a callback causes
-  timing issues)
-- Consider coordinator owning sync managers instead of binary sensor entities
-  (manager lifecycle would survive entity recreation during config updates)
-
-### Convert Config and Internal Dicts to Dataclasses
-
-Convert config entry data to typed dataclasses with `from_dict`/`from_entry`
-class methods. Use object instances internally instead of iterating through raw
-config dicts. Audit codebase for other complex dicts that would benefit from
-dataclass conversion (e.g., slot data, lock state, coordinator data). This
-improves type safety, IDE autocompletion, and code readability.
-
-**Why not Voluptuous?** Voluptuous is for validation, not object instantiation.
-Other options like `dacite` or Pydantic add dependencies.
-
-### Rewrite Matter Provider
-
-Rewrite PR #741 using the `SlotCode.UNKNOWN` model. The Matter provider:
-
-- Returns `SlotCode.UNKNOWN` for occupied slots (PINs are write-only)
-- Returns `SlotCode.EMPTY` for cleared slots
-- Handles user/credential mapping internally (SetUser + SetCredential)
-- Uses HA's `matter.set_lock_credential` / `matter.clear_lock_credential` services
-- Sync handles `UNKNOWN` natively (no special resolution needed)
-
-HA core Matter lock services: `set_lock_user`, `clear_lock_user`,
-`set_lock_credential`, `clear_lock_credential`, `get_lock_users`,
-`get_lock_credential_status`, `get_lock_info`.
-
-### Add Optional Flags to `get_config_entry_data` Websocket Command
-
-Not all callers need all the data from `get_config_entry_data`. Add optional
-`include_entities` and `include_locks` flags (default `True` for backwards
-compatibility) to skip expensive entity registry queries when not needed.
-
-### Entity Registry Change Detection
-
-Track entity registry updates and warn if LCM entities change entity IDs (reload
-required).
-
-### Add Provider Diagnostic Data Method
-
-Add `get_diagnostic_data()` method to `BaseLock` for exposing provider-specific
-diagnostic information.
-
-### Drift Detection Failure Alerting
-
-Add mechanism to alert users when drift detection consistently fails over
-extended periods (e.g., lock offline). Currently failures are logged but there is
-no visibility to users or entities.
-
-## Features
-
-### Add Support for Additional Lock Providers
-
-**Current Providers:**
-
-- Z-Wave JS (`zwave_js.py`)
-- Virtual (`virtual.py`) - for testing only
-
-**High Priority:**
-
-- **ZHA (Zigbee Home Automation)** - Very popular, supports many lock brands
-- **Matter** - Future-proof, industry standard (PR open)
-- **MQTT** - Generic protocol, many custom implementations
-
-**Medium Priority:**
-
-- **Nuki** - Popular in Europe
-- **Schlage** - Popular in North America
-- **SwitchBot** - Growing popularity
-- **SmartThings** - Large user base
-- **HomeKit Controller** - Apple ecosystem
-
-**Cannot Be Supported** (see README for details):
-
-- `esphome` - No user code API in ESPHome
-- `august`, `yale`, `yalexs_ble`, `yale_smart_alarm` - Library limitations
-
-See `AGENTS.md` for implementation approach and `BaseLock` interface.
-
-### Add Relevant New Home Assistant Core Features
-
-**Key Features to Evaluate:**
-
-1. **Selector Improvements** — Review config flow UI for better selectors
-2. **Repair Platform** — Consider adding repairs for common misconfigurations
-
-### Improve Dashboard UI/UX
-
-- Add visual indicator when codes are out of sync
-- Bulk operations (enable/disable multiple slots)
-- Import/export slot configuration
-- History view showing when codes were used
-
-### Add Service Actions
-
-- `lock_code_manager.set_temporary_code` - Create time-limited PIN
-- `lock_code_manager.generate_pin` - Auto-generate secure PIN
-- `lock_code_manager.bulk_enable` / `bulk_disable` - Enable/disable multiple slots
-- Note: `hard_refresh_usercodes` service already exists for lock-wide refresh.
-
-### Configuration Validation
-
-- Warn if PIN is too simple (e.g., "1234", "0000")
-- Warn if multiple slots use same PIN
-- Validate PIN format against lock requirements
-- Check for slot conflicts across config entries
-
-## Docs and Process
-
-- `CLAUDE.md` points to `AGENTS.md`; update `AGENTS.md` after architecture changes.
+- `CLAUDE.md` points to `AGENTS.md`; update `AGENTS.md` after architecture
+  changes.
 - Review TODOs after completing current work, when starting new features, during
   refactoring sessions, or on `/todos`.

@@ -1,0 +1,92 @@
+---
+blueprint:
+  name: "Lock Code Manager: Slot Usage Notifier"
+  description: >
+    Runs one or more actions when a Lock Code Manager code slot PIN
+    is used on a lock. Use this to send notifications, trigger scripts,
+    or run any other Home Assistant action.
+
+
+    **How it works**
+
+    When a code slot event fires (PIN used on lock), the automation
+    runs the configured actions. You can use the action editor to
+    configure any HA action — notifications, scripts, scenes, etc.
+
+
+    **Available template variables**
+
+    Your actions can reference these variables in templates:
+
+    - `slot_num` — the code slot number that was used
+
+    - `slot_name` — the user-configured name of the code slot
+
+    - `lock_name` — the friendly name of the lock where the PIN
+      was used
+
+    - `timestamp` — the date and time the event occurred
+
+
+    **Requirements**
+
+    This blueprint requires at least one lock that supports code slot
+    events (i.e. produces `*_code_slot_*_pin_used` events).
+
+
+    **Setup**
+
+    1. Import this blueprint and create an automation from it.
+
+    2. Select the code slot event entity to monitor.
+
+    3. Configure the actions to run when the PIN is used.
+  domain: automation
+  # yamllint disable-line rule:line-length
+  source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_notifier.yaml
+  input:
+    event_entity:
+      name: Code slot event entity
+      description: >
+        The Lock Code Manager event entity that fires when a PIN
+        is used. These are named like "Code slot X PIN used".
+      selector:
+        entity:
+          domain: event
+          integration: lock_code_manager
+    notify_actions:
+      name: Actions
+      description: >
+        The actions to run when a PIN is used. You can configure
+        any HA action here — notifications, scripts, etc. Use
+        template variables like `{{ slot_name }}` and
+        `{{ lock_name }}` in your action data.
+      selector:
+        action:
+
+mode: queued
+max: 10
+
+triggers:
+  - trigger: state
+    entity_id: !input event_entity
+    not_to:
+      - unknown
+      - unavailable
+
+variables:
+  event_entity_id: !input event_entity
+  slot_name: >-
+    {{ trigger.to_state.attributes.code_slot_name
+       | default('Unknown slot') }}
+  slot_num: >-
+    {{ trigger.to_state.attributes.code_slot
+       | default('?') }}
+  lock_name: >-
+    {{ state_attr(trigger.to_state.state, 'friendly_name')
+       | default('Unknown lock') }}
+  timestamp: >-
+    {{ trigger.to_state.last_updated | as_local
+       | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
+
+actions: !input notify_actions

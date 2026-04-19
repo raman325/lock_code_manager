@@ -22,8 +22,17 @@ entities.
   either make changes as needed or explain why you are not addressing a comment (comments that you make
   code changes for don't need a response). Resolve all comments as you address them or respond to them.
   Provide a summary of what was done or not done and ask for confirmation before committing the changes.
-- When running hass, pre-commit, or any other python driven commands, always run from the venv
-- Before committing, ensure pre-commit succeeds and tests pass.
+- When running hass or any other python driven commands, always run from the venv
+- Before committing, ensure pre-commit checks succeed and tests pass.
+- Use `prek` instead of `pre-commit` for running pre-commit checks (`prek run --all-files`).
+  `prek` is a faster drop-in replacement.
+
+### Git conventions
+
+- **Never amend commits after a PR has been created.** Always commit forward. Squash-on-merge
+  handles the final cleanup. Separate commits show what changed in response to each review round.
+- Force-push is only acceptable for rebasing onto an updated base branch, not for rewriting history.
+- Tests go with code changes in the same PR. Test-only PRs are only for refactoring existing tests.
 
 ## External repositories/directories that are relevant
 
@@ -177,7 +186,9 @@ See `TODO.md` for implementation details.
 scripts/setup
 ```
 
-Creates Python 3.13 venv, installs dependencies with uv, sets up pre-commit hooks, and installs Node dependencies.
+Creates Python 3.13 venv, installs dependencies with uv, sets up git hooks
+(preferring `prek` with fallback to uv-managed `pre-commit`), and installs
+Node dependencies.
 
 ### Testing
 
@@ -201,7 +212,7 @@ yarn test:coverage              # Run with coverage
 ### Linting
 
 ```bash
-pre-commit run --all-files     # Run all linters
+prek run --all-files           # Run all linters (preferred over pre-commit)
 ruff check                     # Python linting
 ruff format                    # Python formatting
 yarn lint                      # TypeScript/JavaScript linting
@@ -219,17 +230,52 @@ yarn watch                     # Watch mode for development
 
 - Python: Ruff for linting/formatting (line length: 88)
 - Import order: future → stdlib → third-party → homeassistant → first-party → local
+- **No inline/local imports** — always import at the top of the file. Restructure modules to avoid circular dependencies.
+- **No `nonlocal`/`global`** — use mutable containers or restructure instead.
 - Type annotations: Keep older style (`dict[str, Any]` not `dict[str, Any] | None` where possible)
-- Docstrings: Google style, required for all public functions
+- Docstrings: Required for all public functions. Prefer prose explaining intent over mechanical
+  re-statements of parameters. Do NOT add Google-style `Args:`/`Returns:` sections — type
+  annotations already convey type/shape. Mention parameters and return values inline only when
+  their semantics are non-obvious.
+- **Spell out acronyms** in code comments instead of using abbreviations.
+- **Prefer idiomatic Python** — comprehensions over loops, `next()` over `for`/`break`, concise expressions.
 - Async: Prefer async/await; use `hass.async_add_executor_job()` to wrap sync code
 
 ## Testing Notes
 
 - Uses `pytest-homeassistant-custom-component` for HA test utilities
-- `tests/conftest.py`: Shared fixtures
-- `tests/common.py`: Helper functions for setting up test config entries and coordinators
-- Mock Z-Wave JS nodes and events for testing lock providers
-- Tests verify entity creation/removal through config changes
+- `tests/conftest.py`: Shared fixtures (`mock_lock_config_entry`, `lock_code_manager_config_entry`)
+- `tests/common.py`: `MockLCMLock` (in-memory provider), mock entities, test constants
+- `tests/providers/helpers.py`: Shared test mixins for service-based providers
+
+### Test philosophy
+
+**Mock at the boundary, not the code under test.** Let as much end-to-end code run as possible.
+
+- **Provider tests**: Mock the external integration (Z-Wave client, Matter client), not LCM's own
+  `async_call_service`. Service calls should flow through the real HA service layer to the mock client.
+- **Integration tests**: Use `mock_lock_config_entry` (creates prerequisite lock entities) and
+  `lock_code_manager_config_entry` (runs real `async_setup_entry`). Don't manually inject `hass.data`.
+- **Pure-logic tests** (e.g., `calculate_in_sync`): Fine to use mocks since they test isolated logic.
+
+### Test structure
+
+Provider tests live in dedicated modules mirroring the integration's test patterns:
+
+```text
+tests/providers/
+  matter/          # conftest.py, helpers.py, fixtures/, test_matter.py
+  zwave_js/        # conftest.py, fixtures/, test_zwave_js.py
+  schlage/         # conftest.py, test_schlage.py
+  ...
+  helpers.py       # Shared test mixins (ServiceProviderConnectionTests, etc.)
+```
+
+### Test conventions
+
+- **Minimize caplog text assertions** — prefer checking parameters or structured data.
+- Provider `async_setup` must be idempotent — tests verify it can be called multiple times.
+- Don't use `MagicMock()` for coordinators when the real coordinator can be used.
 
 ## Adding Lock Provider Support
 

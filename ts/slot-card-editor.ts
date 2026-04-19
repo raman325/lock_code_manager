@@ -1,3 +1,4 @@
+import { mdiClose } from '@mdi/js';
 import { LitElement, TemplateResult, css, html, nothing } from 'lit';
 
 import { HomeAssistant } from './ha_type_stubs';
@@ -20,7 +21,7 @@ class LcmSlotCardEditor extends LitElement {
             margin-bottom: 16px;
         }
 
-        ha-textfield,
+        ha-input,
         ha-select {
             display: block;
             width: 100%;
@@ -40,6 +41,19 @@ class LcmSlotCardEditor extends LitElement {
 
         .checkbox-row label {
             cursor: pointer;
+        }
+
+        .helper-entry {
+            align-items: center;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .helper-entity-id {
+            color: var(--primary-text-color);
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .section-label {
@@ -94,22 +108,22 @@ class LcmSlotCardEditor extends LitElement {
                 >
                     ${this._configEntries.map(
                         (entry) =>
-                            html`<mwc-list-item .value=${entry.entry_id}
-                                >${entry.title}</mwc-list-item
+                            html`<ha-list-item .value=${entry.entry_id}
+                                >${entry.title}</ha-list-item
                             >`
                     )}
                 </ha-select>
             </div>
 
             <div class="editor-row">
-                <ha-textfield
+                <ha-input
                     .label=${'Slot Number'}
                     .value=${String(this._config.slot ?? '')}
                     type="number"
                     min="1"
                     max="9999"
                     @input=${this._slotChanged}
-                ></ha-textfield>
+                ></ha-input>
             </div>
 
             <div class="editor-row">
@@ -122,8 +136,7 @@ class LcmSlotCardEditor extends LitElement {
                     naturalMenuWidth
                 >
                     ${CODE_DISPLAY_OPTIONS.map(
-                        (opt) =>
-                            html`<mwc-list-item .value=${opt.value}>${opt.label}</mwc-list-item>`
+                        (opt) => html`<ha-list-item .value=${opt.value}>${opt.label}</ha-list-item>`
                     )}
                 </ha-select>
             </div>
@@ -161,6 +174,75 @@ class LcmSlotCardEditor extends LitElement {
                 ></ha-checkbox>
                 <label @click=${this._toggleShowLockSync}>Sync Status in Lock Status</label>
             </div>
+
+            <div class="checkbox-row">
+                <ha-checkbox
+                    .checked=${this._config.show_lock_count !== false}
+                    @change=${this._showLockCountChanged}
+                ></ha-checkbox>
+                <label @click=${this._toggleShowLockCount}>Lock Count</label>
+            </div>
+
+            <div class="section-label">Initially Expanded</div>
+
+            <div class="checkbox-row">
+                <ha-checkbox
+                    .checked=${!(
+                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                    ).includes('conditions')}
+                    @change=${(e: Event) =>
+                        this._toggleCollapsedSection(
+                            'conditions',
+                            !(e.target as HTMLInputElement).checked
+                        )}
+                ></ha-checkbox>
+                <label>Conditions</label>
+            </div>
+
+            <div class="checkbox-row">
+                <ha-checkbox
+                    .checked=${!(
+                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                    ).includes('lock_status')}
+                    @change=${(e: Event) =>
+                        this._toggleCollapsedSection(
+                            'lock_status',
+                            !(e.target as HTMLInputElement).checked
+                        )}
+                ></ha-checkbox>
+                <label>Lock Status</label>
+            </div>
+
+            <div class="section-label">Condition Helper Entities</div>
+
+            <div class="editor-row">
+                <ha-entity-picker
+                    .hass=${this._hass}
+                    .value=${''}
+                    .label=${'Add helper entity'}
+                    .includeDomains=${[
+                        'input_boolean',
+                        'input_datetime',
+                        'input_number',
+                        'input_text',
+                        'input_select',
+                        'timer',
+                        'counter'
+                    ]}
+                    @value-changed=${this._addConditionHelper}
+                ></ha-entity-picker>
+            </div>
+            ${(this._config.condition_helpers ?? []).map(
+                (eid: string, idx: number) => html`
+                    <div class="editor-row helper-entry">
+                        <span class="helper-entity-id">${eid}</span>
+                        <ha-icon-button
+                            .path=${mdiClose}
+                            @click=${() => this._removeConditionHelper(idx)}
+                        ></ha-icon-button>
+                    </div>
+                `
+            )}
         `;
     }
 
@@ -243,6 +325,38 @@ class LcmSlotCardEditor extends LitElement {
         this._updateConfig('show_lock_sync', target.checked);
     }
 
+    private _showLockCountChanged(ev: Event): void {
+        const target = ev.target as HTMLInputElement;
+        this._updateConfig('show_lock_count', target.checked);
+    }
+
+    private _toggleCollapsedSection(
+        section: 'conditions' | 'lock_status',
+        collapsed: boolean
+    ): void {
+        const current = this._config?.collapsed_sections ?? ['conditions', 'lock_status'];
+        const updated = collapsed
+            ? current.includes(section)
+                ? current
+                : [...current, section]
+            : current.filter((s: string) => s !== section);
+        this._updateConfig('collapsed_sections', updated);
+    }
+
+    private _addConditionHelper(e: CustomEvent): void {
+        const entityId = e.detail.value;
+        if (!entityId) return;
+        const current = this._config?.condition_helpers ?? [];
+        if (current.includes(entityId)) return;
+        this._updateConfig('condition_helpers', [...current, entityId]);
+    }
+
+    private _removeConditionHelper(idx: number): void {
+        const current = [...(this._config?.condition_helpers ?? [])];
+        current.splice(idx, 1);
+        this._updateConfig('condition_helpers', current.length > 0 ? current : undefined);
+    }
+
     private _toggleShowConditions(): void {
         this._updateConfig('show_conditions', this._config?.show_conditions === false);
     }
@@ -257,6 +371,10 @@ class LcmSlotCardEditor extends LitElement {
 
     private _toggleShowLockSync(): void {
         this._updateConfig('show_lock_sync', this._config?.show_lock_sync === false);
+    }
+
+    private _toggleShowLockCount(): void {
+        this._updateConfig('show_lock_count', this._config?.show_lock_count === false);
     }
 
     private _updateConfig<K extends keyof LockCodeManagerSlotCardConfig>(

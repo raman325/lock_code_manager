@@ -10,7 +10,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-import functools
+import logging
 import time
 from typing import Any, Literal, NoReturn, final
 
@@ -19,7 +19,7 @@ from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_STATE, CONF_NAME
 from homeassistant.core import Event, HomeAssistant, State, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
@@ -35,7 +35,6 @@ from ..const import (
     ATTR_TO,
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
-    PUSH_SUBSCRIBE_RETRY_DELAY,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import build_slot_unique_id, find_entry_for_lock_slot
@@ -45,8 +44,10 @@ from ..exceptions import (
     ProviderNotImplementedError,
 )
 from ..models import SlotCode
-from ..util import OneShotRetry, mask_pin
+from ..util import mask_pin
 from .const import LOGGER
+
+_LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
@@ -138,13 +139,16 @@ class BaseLock:
 
     Exception Handling
     ------------------
-    Provider implementations should raise LockCodeManagerError (or subclasses like
-    LockDisconnected) for lock communication failures. The coordinator catches
-    LockCodeManagerError and handles it appropriately (e.g., retrying, logging).
+    Provider implementations should raise LockCodeManagerProviderError (or one of
+    its subclasses: LockDisconnected, CodeRejectedError/DuplicateCodeError,
+    ProviderNotImplementedError) for any failure originating from the lock or
+    its integration. The coordinator catches LockCodeManagerError (the broader
+    parent) and handles it appropriately (e.g., retrying, logging).
 
-    Do NOT raise generic exceptions or HomeAssistantError directly - always use
-    LCM-derived exceptions so the coordinator can distinguish lock failures from
-    other errors.
+    Do NOT raise generic exceptions, HomeAssistantError, or the bare
+    LockCodeManagerError directly — always use LockCodeManagerProviderError
+    or a subclass so callers can distinguish provider failures from
+    LCM-internal exceptions.
     """
 
     hass: HomeAssistant = field(repr=False)
@@ -163,19 +167,16 @@ class BaseLock:
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
     _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
-    _push_retry: OneShotRetry | None = field(default=None, init=False)
-    _push_disabled: bool = field(default=False, init=False)
+    _setup_succeeded: bool = field(default=False, init=False)
+    _setup_running: bool = field(default=False, init=False)
+    _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
+    _rejected_code_slots: set[int] = field(default_factory=set, init=False)
 
     @final
-    async def _async_executor_call(
-        self, func: Callable[..., Any], *args: Any, **kwargs: Any
-    ) -> Any:
-        """Run a sync method in the executor."""
-        if kwargs:
-            return await self.hass.async_add_executor_job(
-                functools.partial(func, *args, **kwargs)
-            )
-        return await self.hass.async_add_executor_job(func, *args)
+    @callback
+    def mark_code_rejected(self, code_slot: int) -> None:
+        """Mark a slot as having its code rejected so the next set attempt raises DuplicateCodeError."""
+        self._rejected_code_slots.add(code_slot)
 
     @final
     async def _execute_rate_limited(
@@ -231,6 +232,15 @@ class BaseLock:
     def __post_init__(self) -> None:
         """Post initialization."""
         if not (device_id := self.lock.device_id):
+            _LOGGER.warning(
+                "Lock %s does not have a device ID; push updates and "
+                "event subscriptions will be unavailable. "
+                "platform=%s, config_entry_id=%s, unique_id=%s",
+                self.lock.entity_id,
+                self.lock.platform,
+                self.lock.config_entry_id,
+                self.lock.unique_id,
+            )
             return
         self.device_entry = self.dev_reg.async_get(device_id)
 
@@ -272,7 +282,7 @@ class BaseLock:
     @staticmethod
     def is_masked_or_empty(code: str | SlotCode | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
-        if code is None or code is SlotCode.EMPTY or code is SlotCode.UNKNOWN:
+        if code is None or code is SlotCode.EMPTY or code is SlotCode.UNREADABLE_CODE:
             return True
         code_str = str(code)
         return code_str == "*" * len(code_str)
@@ -367,44 +377,38 @@ class BaseLock:
     @final
     @callback
     def subscribe_push_updates(self) -> None:
-        """Subscribe to push-based value updates with automatic retry.
+        """Subscribe to push-based value updates.
 
-        Calls the provider's setup_push_subscription(). Any exception other than
-        ProviderNotImplementedError is treated as a potentially transient failure:
-        it is logged at debug level and a one-shot retry is scheduled. Permanent
-        errors (ProviderNotImplementedError) propagate immediately.
+        Idempotent: safe to call when already subscribed (delegates to
+        ``setup_push_subscription`` which must be idempotent).
+
+        On failure, logs and returns — no automatic retry. The existing
+        reconnect paths (state listener, connection transition handler)
+        will call this again when the integration comes back online.
         """
-        # Block retry-driven calls after unsubscribe to prevent in-flight retries
-        # from resubscribing after teardown. Explicit calls (from setup or state
-        # listener) clear the flag and cancel any stale pending retry.
-        if self._push_disabled:
-            if self._push_retry and self._push_retry.active:
-                return
-            self._push_disabled = False
-            if self._push_retry:
-                self._push_retry.cancel()
         try:
             self.setup_push_subscription()
         except ProviderNotImplementedError:
             raise
-        except Exception as err:  # noqa: BLE001
+        except LockDisconnected as err:
             LOGGER.debug(
-                "Lock %s: push subscription deferred: %s",
+                "Lock %s: push subscription deferred (disconnected): %s",
                 self.lock.entity_id,
                 err,
             )
-            self._ensure_push_retry().schedule()
-        else:
-            # Subscription succeeded — cancel any pending retry
-            if self._push_retry is not None:
-                self._push_retry.cancel()
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning(
+                "Lock %s: push subscription failed unexpectedly: %s",
+                self.lock.entity_id,
+                err,
+            )
 
     @callback
     def setup_push_subscription(self) -> None:
         """Subscribe to push-based value updates.
 
-        Override in subclasses that support push. Raise on failure to trigger
-        automatic retry via BaseLock.subscribe_push_updates().
+        Override in subclasses that support push. Raise on failure;
+        the caller will log and retry on the next reconnect event.
 
         Implementations MUST be idempotent (no-op if already subscribed).
         """
@@ -413,31 +417,13 @@ class BaseLock:
             "Override this method to subscribe to real-time value updates "
             "and call coordinator.push_update({slot: value}) when updates arrive. "
             "Must be idempotent (no-op if already subscribed). "
-            "Raise on failure to trigger automatic retry.",
+            "Raise on failure.",
         )
-
-    def _ensure_push_retry(self) -> OneShotRetry:
-        """Return the push retry helper, creating it on first use."""
-        if self._push_retry is None:
-            self._push_retry = OneShotRetry(
-                self.hass,
-                PUSH_SUBSCRIBE_RETRY_DELAY,
-                self.subscribe_push_updates,
-                f"push subscription for {self.lock.entity_id}",
-            )
-        return self._push_retry
 
     @final
     @callback
     def unsubscribe_push_updates(self) -> None:
-        """Unsubscribe from push-based value updates.
-
-        Sets _push_disabled to prevent in-flight retries from resubscribing,
-        cancels any pending retry, and calls teardown_push_subscription().
-        """
-        self._push_disabled = True
-        if self._push_retry is not None:
-            self._push_retry.cancel()
+        """Unsubscribe from push-based value updates."""
         self.teardown_push_subscription()
 
     @callback
@@ -458,15 +444,70 @@ class BaseLock:
         """
         Set up lock and coordinator, signaling completion to waiters.
 
-        Provider-specific async_setup() runs first so providers can initialize
-        any state the coordinator needs during its first refresh. Then the base
-        setup creates the coordinator and subscribes to push updates.
+        Provider ``async_setup()`` runs first so providers can initialize
+        any state the coordinator needs during its first refresh.
         """
+        self._lcm_config_entry = config_entry
         try:
             await self.async_setup(config_entry)
+        except LockDisconnected as err:
+            LOGGER.warning(
+                "Provider setup failed for %s: %s. Coordinator will be "
+                "created but data will be unavailable until the lock "
+                "comes online. Setup will be retried when the lock "
+                "integration reconnects.",
+                self.lock.entity_id,
+                err,
+            )
+        else:
+            self._setup_succeeded = True
+
+        try:
             await self._async_setup_internal(config_entry)
         finally:
             self._setup_complete.set()
+
+    async def _async_on_integration_loaded(self) -> None:
+        """Handle provider integration LOADED transition.
+
+        Re-runs ``async_setup`` to re-initialize provider state (e.g.
+        re-register event listeners after an integration reload), then
+        refreshes the coordinator and subscribes to push updates.
+
+        Operations are chained sequentially so setup completes before
+        the coordinator refresh or push subscription begins.
+        """
+        if (
+            self._lcm_config_entry is None
+            or self._setup_running
+            or not self.lock_config_entry
+            or self.lock_config_entry.state != ConfigEntryState.LOADED
+        ):
+            return
+
+        self._setup_running = True
+        try:
+            await self.async_setup(self._lcm_config_entry)
+        except LockDisconnected:
+            LOGGER.debug(
+                "Provider setup failed for %s, will retry on next reconnect",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+        else:
+            if not self._setup_succeeded:
+                LOGGER.info(
+                    "Provider setup succeeded for %s",
+                    self.lock.entity_id,
+                )
+            self._setup_succeeded = True
+        finally:
+            self._setup_running = False
+
+        if self.coordinator:
+            await self.coordinator.async_request_refresh()
+        if self.supports_push:
+            self.subscribe_push_updates()
 
     @final
     async def _async_setup_internal(self, config_entry: ConfigEntry) -> None:
@@ -519,29 +560,24 @@ class BaseLock:
             else:
                 self.subscribe_push_updates()
 
-    def setup(self) -> None:
-        """Set up lock by provider."""
-        pass
-
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """
-        Set up lock by provider.
+        """Set up lock by provider.
 
-        Overridden by providers that need custom one time async setup logic.
+        Default is a no-op; providers override for provider-specific setup
+        (e.g. registering event listeners, validating capabilities).
+
+        Implementations MUST be idempotent — this is called on initial load
+        and again on every provider integration reconnect. Clean up any
+        previous state before re-initializing.
         """
-        await self.hass.async_add_executor_job(self.setup)
 
     @final
     async def async_wait_for_setup(self) -> None:
         """Wait until async_setup has completed."""
         await self._setup_complete.wait()
 
-    def unload(self, remove_permanently: bool) -> None:
-        """Unload lock."""
-        pass
-
     async def async_unload(self, remove_permanently: bool) -> None:
-        """Unload lock."""
+        """Tear down config-entry-state listener and push subscription."""
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()
             self._config_entry_state_unsub = None
@@ -550,19 +586,9 @@ class BaseLock:
         if self.supports_push:
             self.unsubscribe_push_updates()
 
-        await self.hass.async_add_executor_job(self.unload, remove_permanently)
-
-    def is_integration_connected(self) -> bool:
-        """Return whether the integration's client/driver/broker is connected."""
-        raise NotImplementedError()
-
-    def is_device_available(self) -> bool:
-        """Return whether the physical device is available for commands."""
-        return True
-
     async def async_is_device_available(self) -> bool:
         """Return whether the physical device is available for commands."""
-        return await self._async_executor_call(self.is_device_available)
+        return True
 
     @final
     def _setup_config_entry_state_listener(self) -> None:
@@ -580,13 +606,10 @@ class BaseLock:
                 return
 
             if to_state == ConfigEntryState.LOADED:
-                if self.coordinator:
-                    self.hass.async_create_task(
-                        self.coordinator.async_request_refresh(),
-                        f"Refresh coordinator for {self.lock.entity_id} after reload",
-                    )
-                if self.supports_push:
-                    self.subscribe_push_updates()
+                self.hass.async_create_task(
+                    self._async_on_integration_loaded(),
+                    f"Provider reconnect for {self.lock.entity_id}",
+                )
             elif (
                 self.supports_push and self._last_entry_state == ConfigEntryState.LOADED
             ):
@@ -599,8 +622,13 @@ class BaseLock:
         )
 
     async def async_is_integration_connected(self) -> bool:
-        """Return whether the integration's client/driver/broker is connected."""
-        return await self._async_executor_call(self.is_integration_connected)
+        """Return True iff the lock's parent config entry is loaded.
+
+        Providers override for integration-specific connection signals.
+        """
+        if not self.lock_config_entry:
+            return False
+        return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     @final
     async def async_internal_is_integration_connected(self) -> bool:
@@ -617,7 +645,9 @@ class BaseLock:
         lock_entry = self.lock_config_entry
         if not self.supports_push or not lock_entry:
             return
-        # Only react to connection transitions when the config entry is loaded.
+        # Skip during SETUP_IN_PROGRESS: the setup path handles the initial
+        # subscription, and a parallel subscribe here would race with
+        # coordinator creation in _async_setup_internal.
         if lock_entry.state != ConfigEntryState.LOADED:
             return
         if self._last_connection_up is False and is_up:
@@ -630,87 +660,39 @@ class BaseLock:
         elif self._last_connection_up is True and not is_up:
             self.unsubscribe_push_updates()
 
-    def hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh and return all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync with
-        the lock. Returns codes in the same format as get_usercodes().
-
-        Raises:
-            LockDisconnected: If the lock cannot be communicated with.
-
-        """
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+        """Re-fetch all codes from the lock and return them in the same shape as async_get_usercodes()."""
         self._raise_not_implemented(
-            "hard_refresh_codes",
+            "async_hard_refresh_codes",
             "Override this method to re-fetch codes from the lock device.",
         )
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh and return all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync with
-        the lock. Returns codes in the same format as async_get_usercodes().
-        """
-        return await self._async_executor_call(self.hard_refresh_codes)
-
     @final
     async def async_internal_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh and return all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync with
-        the lock. Returns codes in the same format as async_internal_get_usercodes().
-        """
+        """Rate-limited wrapper around async_hard_refresh_codes()."""
         return await self._execute_rate_limited(
             "refresh", self.async_hard_refresh_codes
         )
 
-    def set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+    async def async_set_usercode(
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """
-        Set a usercode on a code slot.
+        """Set a usercode on a code slot.
 
-        Returns True if the value was changed, False if already set to this value.
-        If the provider cannot determine whether a change occurred, return True
-        to ensure the coordinator refreshes and verifies the state.
+        Returns True if the value was changed, False if already set to this
+        value. If the provider cannot determine whether a change occurred,
+        return True so the coordinator refreshes and verifies the state.
 
-        Optimistic Updates
-        ------------------
-        For providers where the underlying integration's value cache updates
-        asynchronously (e.g., Z-Wave JS push notifications), the base class
-        coordinator refresh may read stale data, causing sync loops.
-
-        In these cases, call ``self.coordinator.push_update({code_slot: usercode})``
-        after a successful set operation to update coordinator data immediately.
-        This prevents the sync sensor from seeing a mismatch and retrying.
-
-        Providers with synchronous caches (like Virtual) don't need this as
-        get_usercodes() returns the updated value immediately.
-
-        Raises:
-            LockDisconnected: If the lock cannot be communicated with.
-
+        ``source`` indicates whether the call originates from the sync
+        manager ("sync") or a user action ("direct").
         """
         self._raise_not_implemented(
-            "set_usercode",
+            "async_set_usercode",
             "Override this method to set a usercode on the lock.",
-        )
-
-    async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
-    ) -> bool:
-        """
-        Set a usercode on a code slot.
-
-        Returns True if the value was changed, False if already set to this value.
-        If the provider cannot determine whether a change occurred, return True
-        to ensure the coordinator refreshes and verifies the state.
-        """
-        return await self._async_executor_call(
-            self.set_usercode, code_slot, usercode, name=name
         )
 
     @final
@@ -729,15 +711,32 @@ class BaseLock:
             self.mask_pin(usercode),
             source,
         )
-        # Check for duplicate PINs under the lock so coordinator data
-        # can't change between the check and the set operation
+
+        def _pre_execute_checks() -> None:
+            """Run pre-execution checks atomically inside the operation lock.
+
+            Checks for duplicate PINs (from coordinator data) and for codes
+            previously rejected by the lock firmware (from event 15).
+            """
+            # Clear the firmware-rejection flag first so it doesn't persist
+            # if _check_duplicate_code raises its own DuplicateCodeError
+            firmware_rejected = code_slot in self._rejected_code_slots
+            self._rejected_code_slots.discard(code_slot)
+            self._check_duplicate_code(code_slot, str(usercode))
+            if firmware_rejected:
+                raise DuplicateCodeError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                )
+
         changed = await self._execute_rate_limited(
             "set",
             self.async_set_usercode,
             code_slot,
             usercode,
-            pre_execute=lambda: self._check_duplicate_code(code_slot, str(usercode)),
+            pre_execute=_pre_execute_checks,
             name=name,
+            source=source,
         )
         # Refresh coordinator to update entity states from cache (only if changed).
         # Skip for push-based providers — they update the coordinator optimistically
@@ -747,45 +746,17 @@ class BaseLock:
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    def clear_usercode(self, code_slot: int) -> bool:
-        """
-        Clear a usercode on a code slot.
+    async def async_clear_usercode(self, code_slot: int) -> bool:
+        """Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
-        If the provider cannot determine whether a change occurred, return True
-        to ensure the coordinator refreshes and verifies the state.
-
-        Optimistic Updates
-        ------------------
-        For providers where the underlying integration's value cache updates
-        asynchronously (e.g., Z-Wave JS push notifications), the base class
-        coordinator refresh may read stale data, causing sync loops.
-
-        In these cases, call ``self.coordinator.push_update({code_slot: ""})``
-        after a successful clear operation to update coordinator data immediately.
-        This prevents the sync sensor from seeing a mismatch and retrying.
-
-        Providers with synchronous caches (like Virtual) don't need this as
-        get_usercodes() returns the updated value immediately.
-
-        Raises:
-            LockDisconnected: If the lock cannot be communicated with.
-
+        If the provider cannot determine whether a change occurred, return
+        True so the coordinator refreshes and verifies the state.
         """
         self._raise_not_implemented(
-            "clear_usercode",
+            "async_clear_usercode",
             "Override this method to clear a usercode from the lock.",
         )
-
-    async def async_clear_usercode(self, code_slot: int) -> bool:
-        """
-        Clear a usercode on a code slot.
-
-        Returns True if the value was changed, False if already cleared.
-        If the provider cannot determine whether a change occurred, return True
-        to ensure the coordinator refreshes and verifies the state.
-        """
-        return await self._async_executor_call(self.clear_usercode, code_slot)
 
     @final
     async def async_internal_clear_usercode(
@@ -803,85 +774,24 @@ class BaseLock:
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )
-        # Refresh coordinator to update entity states from cache (only if changed).
-        # Skip for push-based providers — they update the coordinator optimistically
-        # via push_update() in their set/clear methods, and refreshing from cache
-        # could overwrite the optimistic update with stale data when the underlying
-        # driver defers cache updates until device confirmation.
+        # Push-based providers handle this via push_update(); see async_internal_set_usercode.
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    def get_usercodes(self) -> dict[int, str | SlotCode]:
-        """
-        Get dictionary of code slots and usercodes.
-
-        Called by data coordinator to get data for code slot sensors.
-
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
-
-        Raises:
-            LockDisconnected: If the lock cannot be communicated with.
-
-        """
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+        """Return a dict of {slot_num: usercode_or_SlotCode_sentinel} for the data coordinator."""
         self._raise_not_implemented(
-            "get_usercodes",
+            "async_get_usercodes",
             "Override this method to retrieve usercodes from the lock.",
         )
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """
-        Get dictionary of code slots and usercodes.
-
-        Called by data coordinator to get data for code slot sensors.
-
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
-
-        Raises:
-            LockDisconnected: If the lock cannot be communicated with.
-
-        """
-        return await self._async_executor_call(self.get_usercodes)
-
     @final
     async def async_internal_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """
-        Get dictionary of code slots and usercodes.
+        """Rate-limited wrapper around async_get_usercodes().
 
-        Called by data coordinator to get data for code slot sensors.
-
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
+        Slot keys are int; values are usercode strings or SlotCode sentinels.
         """
         return await self._execute_rate_limited("get", self.async_get_usercodes)
-
-    @final
-    def call_service(
-        self,
-        domain: str,
-        service: str,
-        service_data: dict[str, Any] | None = None,
-        blocking: bool = True,
-    ):
-        """Call a hass service and log a failure on an error."""
-        try:
-            self.hass.services.call(
-                domain, service, service_data=service_data, blocking=blocking
-            )
-        except Exception as err:
-            LOGGER.error(
-                "Error calling %s.%s service call: %s", domain, service, str(err)
-            )
 
     @final
     async def async_call_service(
@@ -889,14 +799,30 @@ class BaseLock:
         domain: str,
         service: str,
         service_data: dict[str, Any] | None = None,
+        target: dict[str, Any] | None = None,
         blocking: bool = True,
-    ):
-        """Call a hass service and re-raise failures as LockDisconnected."""
+        return_response: bool = False,
+    ) -> dict[str, Any] | None:
+        """Call a hass service and re-raise failures as LockDisconnected.
+
+        When ``return_response=True``, returns the service response (as a
+        dict) so callers don't have to write their own service-call wrapper
+        just to access response data. ``target`` mirrors HA's standard
+        target dict for platform-aware services.
+        """
         try:
-            await self.hass.services.async_call(
-                domain, service, service_data=service_data, blocking=blocking
+            return await self.hass.services.async_call(
+                domain,
+                service,
+                service_data=service_data,
+                target=target,
+                blocking=blocking,
+                return_response=return_response,
             )
-        except Exception as err:
+        except HomeAssistantError as err:
+            # ServiceValidationError is a subclass of HomeAssistantError so
+            # it's covered here. CancelledError and programming bugs (TypeError,
+            # KeyError) deliberately propagate.
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )

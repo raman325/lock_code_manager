@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
-from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
-from ..data import get_entry_data
+from ..const import DOMAIN
+from ..data import get_managed_slots
 from ..models import SlotCode
 from ._base import BaseLock
 
@@ -60,17 +60,16 @@ class VirtualLock(BaseLock):
         return True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh and return all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync with
-        the lock. Returns codes in the same format as async_get_usercodes().
-        """
+        """Reload from store and return all codes."""
         self._data = data if (data := await self._store.async_load()) else {}
         return await self.async_get_usercodes()
 
     async def async_set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """
         Set a usercode on a code slot.
@@ -97,15 +96,27 @@ class VirtualLock(BaseLock):
         return True
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes."""
-        code_slots = {
-            int(code_slot)
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
-            for code_slot in get_entry_data(entry, CONF_SLOTS, {})
-            if self.lock.entity_id in get_entry_data(entry, CONF_LOCKS, [])
-        }
+        """Get dictionary of code slots and usercodes.
+
+        Returns all slots with data plus managed empty slots. Unmanaged
+        occupied slots are included so callers like the lock reset config
+        flow step can detect codes not managed by Lock Code Manager.
+        """
+        managed_slots = get_managed_slots(self.hass, self.lock.entity_id)
+        stored_slots = set()
+        for k in self._data:
+            try:
+                stored_slots.add(int(k))
+            except (TypeError, ValueError):
+                _LOGGER.warning(
+                    "Virtual lock %s: skipping stored slot with invalid key %r",
+                    self.lock.entity_id,
+                    k,
+                )
+                continue
+        all_slots = managed_slots | stored_slots
         data: dict[int, str | SlotCode] = {}
-        for slot_num in code_slots:
+        for slot_num in all_slots:
             slot_key = str(slot_num)
             if slot_key in self._data:
                 data[slot_num] = str(self._data[slot_key]["code"])

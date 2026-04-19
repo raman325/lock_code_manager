@@ -3,3 +3,75 @@ hard_refresh_usercodes:
   target:
     entity:
       domain: lock
+
+set_usercode:
+  fields:
+    lock_entity_id:
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+    usercode:
+      required: true
+      selector:
+        text:
+
+clear_usercode:
+  fields:
+    lock_entity_id:
+      required: true
+      selector:
+        entity:
+          domain: lock
+    code_slot:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+
+set_slot_condition:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    slot:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box
+    entity_id:
+      required: true
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - calendar
+            - input_boolean
+            - schedule
+            - switch
+
+clear_slot_condition:
+  fields:
+    config_entry_id:
+      required: true
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    slot:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 9999
+          mode: box

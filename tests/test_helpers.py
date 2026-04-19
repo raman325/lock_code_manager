@@ -10,10 +10,6 @@ from custom_components.lock_code_manager.helpers import get_locks_from_targets
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
-# =============================================================================
-# get_locks_from_targets Tests
-# =============================================================================
-
 
 async def test_get_locks_from_targets_with_entity_ids(
     hass: HomeAssistant,
@@ -72,7 +68,6 @@ async def test_get_locks_from_targets_with_area_id(
     lock_code_manager_config_entry,
 ):
     """Test get_locks_from_targets resolves area IDs to locks."""
-    # Assign lock.test_1 to an area
     area_reg = ar.async_get(hass)
     area = area_reg.async_get_or_create("test_area")
     ent_reg = er.async_get(hass)

@@ -14,6 +14,19 @@ class LockCodeManagerError(HomeAssistantError):
     """Base class for lock_code_manager exceptions."""
 
 
+class LockCodeManagerProviderError(LockCodeManagerError):
+    """Base class for exceptions raised by lock providers.
+
+    Subclasses cover real provider-side failures: communication problems
+    (``LockDisconnected``), the lock rejecting a code (``CodeRejectedError``,
+    ``DuplicateCodeError``), or the provider declining to implement an
+    operation (``ProviderNotImplementedError``).
+
+    Catching this class lets callers ask "did this error come from the
+    lock provider?" without enumerating every provider error type.
+    """
+
+
 class EntityNotFoundError(LockCodeManagerError):
     """Raise when en entity is not found."""
 
@@ -25,7 +38,7 @@ class EntityNotFoundError(LockCodeManagerError):
         super().__init__(f"Entity not found for lock {lock} slot {slot_num} key {key}")
 
 
-class CodeRejectedError(LockCodeManagerError):
+class CodeRejectedError(LockCodeManagerProviderError):
     """Raised when the lock will not accept a PIN on a slot."""
 
     def __init__(self, code_slot: int, lock_entity_id: str, reason: str | None = None):
@@ -47,33 +60,41 @@ class DuplicateCodeError(CodeRejectedError):
     def __init__(
         self,
         code_slot: int,
-        conflicting_slot: int,
-        conflicting_slot_managed: bool,
         lock_entity_id: str,
+        conflicting_slot: int | None = None,
+        conflicting_slot_managed: bool = False,
     ):
         """Initialize the error."""
         self.conflicting_slot = conflicting_slot
         self.conflicting_slot_managed = conflicting_slot_managed
-        managed_str = "managed" if conflicting_slot_managed else "unmanaged"
+        if conflicting_slot is not None:
+            managed_str = "managed" if conflicting_slot_managed else "unmanaged"
+            reason = f"PIN duplicates {managed_str} slot {conflicting_slot}"
+        else:
+            reason = "duplicate detected by lock firmware"
         super().__init__(
             code_slot,
             lock_entity_id,
-            f"PIN duplicates {managed_str} slot {conflicting_slot}",
+            reason,
         )
 
 
-class LockDisconnected(LockCodeManagerError):
+class LockDisconnected(LockCodeManagerProviderError):
     """Raised when lock can't be communicated with."""
 
 
-class ProviderNotImplementedError(LockCodeManagerError, NotImplementedError):
-    """
-    Raised when a provider method is not implemented.
+class LockOperationFailed(LockCodeManagerProviderError):
+    """Raised when the lock is reachable but the operation failed.
 
-    This exception should be raised by BaseLock methods that must be overridden
-    by provider subclasses. It combines LockCodeManagerError (so the coordinator
-    can catch it uniformly) with NotImplementedError (for standard Python semantics).
+    This covers cases like the lock not supporting a requested operation
+    or the provider rejecting the command for a lock-side reason. Unlike
+    ``LockDisconnected``, the lock is online — the specific operation
+    just could not be completed.
     """
+
+
+class ProviderNotImplementedError(LockCodeManagerProviderError, NotImplementedError):
+    """Raised when a provider method that subclasses must override is called."""
 
     def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
         """Initialize the error."""

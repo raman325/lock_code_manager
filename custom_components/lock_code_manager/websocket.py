@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Coroutine
-import copy
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import wraps
 import logging
@@ -18,7 +18,6 @@ from homeassistant.components.calendar import (
     SERVICE_GET_EVENTS,
 )
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
-from homeassistant.components.input_boolean import DOMAIN as INPUT_BOOLEAN_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.schedule import (
     ATTR_NEXT_EVENT as SCHEDULE_ATTR_NEXT_EVENT,
@@ -45,6 +44,7 @@ from homeassistant.core import (
     callback,
     split_entity_id,
 )
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util, slugify
@@ -85,6 +85,7 @@ from .const import (
     ATTR_SLOT,
     ATTR_SLOT_NUM,
     ATTR_USERCODE,
+    CONDITION_ENTITY_DOMAINS,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
     CONF_ENTITIES,
@@ -94,10 +95,15 @@ from .const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
-    EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import get_entry_data
-from .models import SlotCode, SlotEntityData, SlotEntityIds, SlotMetadata
+from .data import get_entry_config, get_managed_slots
+from .helpers import (
+    async_clear_slot_condition,
+    async_clear_usercode,
+    async_set_slot_condition,
+    async_set_usercode,
+)
+from .models import SlotCode
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -185,11 +191,7 @@ def _get_slot_condition_entity_id(
     config_entry: ConfigEntry, slot_num: int
 ) -> str | None:
     """Get condition entity ID from slot config."""
-    slots_data = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_config = slots_data.get(slot_num) or slots_data.get(str(slot_num)) or {}
-    if isinstance(slot_config, dict):
-        return slot_config.get(CONF_ENTITY_ID)
-    return None
+    return get_entry_config(config_entry).slot(slot_num).get(CONF_ENTITY_ID)
 
 
 def async_get_entry(
@@ -258,8 +260,10 @@ async def async_setup(hass: HomeAssistant) -> bool:
     websocket_api.async_register_command(hass, get_config_entry_data)
     websocket_api.async_register_command(hass, subscribe_lock_codes)
     websocket_api.async_register_command(hass, subscribe_code_slot)
-    websocket_api.async_register_command(hass, set_lock_usercode)
-    websocket_api.async_register_command(hass, update_slot_condition)
+    websocket_api.async_register_command(hass, ws_set_usercode)
+    websocket_api.async_register_command(hass, ws_clear_usercode)
+    websocket_api.async_register_command(hass, ws_set_slot_condition)
+    websocket_api.async_register_command(hass, ws_clear_slot_condition)
 
     return True
 
@@ -279,28 +283,9 @@ async def get_config_entry_data(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """
-    Return complete config entry data for Lock Code Manager.
-
-    This is the primary data-fetching command for the frontend. It returns all
-    static configuration and entity registry data needed to render the dashboard.
-
-    Frontend usage:
-    - generate-view.ts: Fetches slot numbers for section generation, lock entity
-      IDs for badges, and lock names for sorting/display
-    - slot-section-strategy.ts: Fetches entities for legacy slot card generation
-    - dashboard-strategy.ts: Fetches data for dashboard view generation
-    - view-strategy.ts: Fetches config entry and entities for view rendering
-
-    Sends:
-        config_entry: The config entry JSON fragment (entry_id, title, etc.)
-        entities: List of entity registry entries for this config entry
-        locks: List of lock objects with entity_id and friendly name
-        slots: Mapping of slot numbers to calendar entity IDs (or null)
-
-    """
+    """Return the config entry fragment, entity registry entries, lock list, and slot calendar mapping."""
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    entry_config = get_entry_config(config_entry)
 
     connection.send_result(
         msg["id"],
@@ -318,22 +303,13 @@ async def get_config_entry_data(
                     CONF_NAME: _get_lock_friendly_name(hass, lock),
                 }
                 for lock_id, lock in all_locks.items()
-                if lock_id in entry_lock_ids
+                if entry_config.has_lock(lock_id)
             ],
             CONF_SLOTS: {
-                k: v.get(CONF_ENTITY_ID)
-                for k, v in get_entry_data(config_entry, CONF_SLOTS, {}).items()
+                k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()
             },
         },
     )
-
-
-def _slot_sort_key(slot: Any) -> tuple[int, str]:
-    """Return a stable sort key for slot numbers that may be non-numeric."""
-    try:
-        return (0, f"{int(slot):010d}")
-    except (TypeError, ValueError):
-        return (1, str(slot))
 
 
 def _serialize_slot(
@@ -348,16 +324,7 @@ def _serialize_slot(
     enabled: bool | None = None,
     config_entry_id: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Serialize a single slot, optionally masking the code.
-
-    - code/code_length: What's actually on the lock (actual state)
-    - configured_code/configured_code_length: What LCM has configured (desired state)
-      Always included for managed slots, even if code is active on lock.
-    - active: True if enabled + conditions met, False if inactive, None if unknown
-    - enabled: True if enabled switch is ON, False if OFF, None if unknown
-    - config_entry_id: ID of the LCM config entry managing this slot (for navigation)
-    """
+    """Serialize a slot dict, masking the code unless ``reveal`` is True."""
     result: dict[str, Any] = {ATTR_SLOT: slot}
     if name:
         result[CONF_NAME] = name
@@ -370,7 +337,7 @@ def _serialize_slot(
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
 
-    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unknown"),
+    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
     # regular codes are masked or revealed, None stays None.
     if isinstance(code, SlotCode):
         result[ATTR_CODE] = str(code)
@@ -391,52 +358,59 @@ def _serialize_slot(
     return result
 
 
-def _slot_variants(slot: Any) -> set[Any]:
-    """Return comparable variants of a slot identifier (string/int)."""
-    variants: set[Any] = {slot}
-    try:
-        slot_int = int(slot)
-    except (TypeError, ValueError):
-        variants.add(str(slot))
-    else:
-        variants.add(slot_int)
-        variants.add(str(slot_int))
-    return variants
+@dataclass
+class SlotEntities:
+    """Entity IDs for a single slot's LCM entities."""
+
+    slot_num: int
+    config_entry_id: str | None = None
+    name_entity_id: str | None = None
+    pin_entity_id: str | None = None
+    enabled_entity_id: str | None = None
+    active_entity_id: str | None = None
+    number_of_uses_entity_id: str | None = None
+    event_entity_id: str | None = None
+
+    def all_entity_ids(self) -> list[str]:
+        """Return all non-None entity IDs (excluding config_entry_id)."""
+        return [
+            eid
+            for eid in (
+                self.name_entity_id,
+                self.pin_entity_id,
+                self.enabled_entity_id,
+                self.active_entity_id,
+                self.number_of_uses_entity_id,
+                self.event_entity_id,
+            )
+            if eid
+        ]
 
 
-def _get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[Any]:
-    """Return slot identifiers managed by LCM for a given lock."""
-    managed_slots: set[Any] = set()
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
-            continue
-        for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
-            managed_slots.update(_slot_variants(slot_num))
-    return managed_slots
+@dataclass
+class SlotMetadata:
+    """Parsed values for a single slot, derived from LCM entity states."""
+
+    name: str | None = None
+    configured_pin: str | None = None
+    active: bool | None = None
+    enabled: bool | None = None
 
 
 def _get_slot_entity_ids(
     hass: HomeAssistant, lock_entity_id: str
-) -> dict[int, SlotEntityIds]:
-    """
-    Get entity IDs for all slots managed by LCM for a lock.
-
-    Returns a dict mapping slot number to SlotEntityIds containing the entity IDs
-    for name, PIN, active, and enabled entities.
-
-    Note: If multiple config entries manage the same lock with overlapping slot
-    numbers (which shouldn't happen in normal use), the last entry wins. This is
-    expected behavior since slot conflicts are validated during config flow.
-    """
-    slot_entities: dict[int, SlotEntityIds] = {}
+) -> dict[int, SlotEntities]:
+    """Return a dict of slot number to SlotEntities for the four primary per-slot entities."""
+    slot_entities: dict[int, SlotEntities] = {}
     ent_reg = er.async_get(hass)
 
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if lock_entity_id not in get_entry_data(entry, CONF_LOCKS, []):
+        config = get_entry_config(entry)
+        if not config.has_lock(lock_entity_id):
             continue
 
-        for slot_num in get_entry_data(entry, CONF_SLOTS, {}):
-            slot_int = int(slot_num)
+        for slot_int in config.slots:
+            slot_num = slot_int
 
             # Build unique IDs for each entity type
             name_uid = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
@@ -444,15 +418,19 @@ def _get_slot_entity_ids(
             active_uid = f"{entry.entry_id}|{slot_num}|{ATTR_ACTIVE}"
             enabled_uid = f"{entry.entry_id}|{slot_num}|{CONF_ENABLED}"
 
-            slot_entities[slot_int] = SlotEntityIds(
+            slot_entities[slot_int] = SlotEntities(
                 slot_num=slot_int,
                 config_entry_id=entry.entry_id,
-                name=ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, name_uid),
-                pin=ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, pin_uid),
-                active=ent_reg.async_get_entity_id(
+                name_entity_id=ent_reg.async_get_entity_id(
+                    TEXT_DOMAIN, DOMAIN, name_uid
+                ),
+                pin_entity_id=ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, pin_uid),
+                active_entity_id=ent_reg.async_get_entity_id(
                     BINARY_SENSOR_DOMAIN, DOMAIN, active_uid
                 ),
-                enabled=ent_reg.async_get_entity_id(SWITCH_DOMAIN, DOMAIN, enabled_uid),
+                enabled_entity_id=ent_reg.async_get_entity_id(
+                    SWITCH_DOMAIN, DOMAIN, enabled_uid
+                ),
             )
 
     return slot_entities
@@ -461,22 +439,14 @@ def _get_slot_entity_ids(
 def _get_slot_metadata(
     hass: HomeAssistant, lock_entity_id: str
 ) -> dict[int, SlotMetadata]:
-    """
-    Get all slot metadata from LCM entities for a lock in one pass.
-
-    Returns a dict mapping slot number to SlotMetadata containing:
-    - name: From text entity
-    - configured_pin: From text entity
-    - active: From binary sensor (True=on, False=off, None=unknown)
-    - enabled: From switch (True=on, False=off, None=unknown)
-    """
+    """Return a dict of slot number to SlotMetadata for all slots LCM manages on a lock."""
     slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
     return {
         slot_num: SlotMetadata(
-            name=_get_text_state(hass, ids.name),
-            configured_pin=_get_text_state(hass, ids.pin),
-            active=_get_bool_state(hass, ids.active),
-            enabled=_get_bool_state(hass, ids.enabled),
+            name=_get_text_state(hass, ids.name_entity_id),
+            configured_pin=_get_text_state(hass, ids.pin_entity_id),
+            active=_get_bool_state(hass, ids.active_entity_id),
+            enabled=_get_bool_state(hass, ids.enabled_entity_id),
         )
         for slot_num, ids in slot_entities.items()
     }
@@ -492,7 +462,7 @@ def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list
     slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
     entity_ids: list[str] = []
     for ids in slot_entities.values():
-        entity_ids.extend(ids.all_ids())
+        entity_ids.extend(ids.all_entity_ids())
     return entity_ids
 
 
@@ -512,35 +482,25 @@ def _serialize_lock_coordinator(
     """Serialize coordinator data for a lock."""
     coordinator = lock.coordinator
     data = coordinator.data if coordinator is not None else {}
-    managed_slots = _get_managed_slots(hass, lock.lock.entity_id)
+    managed_slots = get_managed_slots(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
 
-    def _get_metadata(slot: Any) -> SlotMetadata | None:
-        if str(slot).isdigit():
-            return slot_metadata.get(int(slot))
-        return None
-
-    def _get_config_entry_id(slot: Any) -> str | None:
-        if str(slot).isdigit():
-            slot_ids = slot_entity_ids.get(int(slot))
-            return slot_ids.config_entry_id if slot_ids else None
-        return None
-
     slots = []
-    for slot, code in sorted(data.items(), key=lambda item: _slot_sort_key(item[0])):
-        meta = _get_metadata(slot)
+    for slot, code in sorted(data.items()):
+        meta = slot_metadata.get(slot)
+        slot_ids = slot_entity_ids.get(slot)
         slots.append(
             _serialize_slot(
                 slot,
                 code,
                 reveal=reveal,
                 name=meta.name if meta else None,
-                managed=slot in managed_slots or str(slot) in managed_slots,
+                managed=slot in managed_slots,
                 configured_code=meta.configured_pin if meta else None,
                 active=meta.active if meta else None,
                 enabled=meta.enabled if meta else None,
-                config_entry_id=_get_config_entry_id(slot),
+                config_entry_id=slot_ids.config_entry_id if slot_ids else None,
             )
         )
 
@@ -627,10 +587,6 @@ async def subscribe_lock_codes(
             _send_update()
 
     # Track coordinator updates (lock code changes).
-    # Note: if coordinator is None AND the initial entity set is empty, nothing
-    # drives re-resolution of entities. This is acceptable because coordinators
-    # are always present for real lock providers; None only occurs in degenerate
-    # test scenarios where no actual lock hardware is involved.
     unsub_coordinator = (
         coordinator.async_add_listener(_send_update) if coordinator else lambda: None
     )
@@ -655,7 +611,7 @@ async def subscribe_lock_codes(
 
 def _get_slot_entity_data(
     hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int
-) -> SlotEntityData:
+) -> SlotEntities:
     """Get entity IDs for a specific slot."""
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
@@ -664,7 +620,7 @@ def _get_slot_entity_data(
         unique_id = f"{entry_id}|{slot_num}|{key}"
         return ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)
 
-    return SlotEntityData(
+    return SlotEntities(
         slot_num=slot_num,
         name_entity_id=_get_entity_id(TEXT_DOMAIN, CONF_NAME),
         pin_entity_id=_get_entity_id(TEXT_DOMAIN, CONF_PIN),
@@ -685,7 +641,7 @@ def _get_slot_in_sync_entity_ids(
     """
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
-    lock_entity_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    lock_entity_ids = get_entry_config(config_entry).locks
 
     in_sync_map: dict[str, str] = {}
     for lock_entity_id in lock_entity_ids:
@@ -884,7 +840,7 @@ def _serialize_slot_card_data(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
     slot_num: int,
-    slot_entities: SlotEntityData,
+    slot_entities: SlotEntities,
     in_sync_map: dict[str, str],
     *,
     reveal: bool,
@@ -907,7 +863,7 @@ def _serialize_slot_card_data(
 
     # Build per-lock status
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    entry_lock_ids = get_entry_config(config_entry).locks
 
     locks_data: list[dict[str, Any]] = [
         _build_lock_status(
@@ -1006,9 +962,8 @@ async def subscribe_code_slot(
     slot_num = msg[ATTR_SLOT]
     reveal = msg["reveal"]
 
-    # Validate slot exists in config (slot keys can be int or str)
-    slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    if slot_num not in slots and str(slot_num) not in slots:
+    # Validate slot exists in config
+    if not get_entry_config(config_entry).has_slot(slot_num):
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_NOT_FOUND,
@@ -1019,7 +974,7 @@ async def subscribe_code_slot(
     # Re-resolve entity IDs on each update to handle entities created after
     # subscription (for example, during initial config setup when entities may
     # not exist yet). These are lightweight entity registry lookups.
-    def _resolve_entity_ids() -> tuple[SlotEntityData, dict[str, str], str | None]:
+    def _resolve_entity_ids() -> tuple[SlotEntities, dict[str, str], str | None]:
         """Resolve current entity IDs for this slot from the entity registry."""
         return (
             _get_slot_entity_data(hass, config_entry, slot_num),
@@ -1096,7 +1051,7 @@ async def subscribe_code_slot(
 
     @callback
     def _refresh_state_tracking(
-        current_entities: SlotEntityData,
+        current_entities: SlotEntities,
         current_in_sync: dict[str, str],
         current_condition: str | None = None,
     ) -> None:
@@ -1126,7 +1081,7 @@ async def subscribe_code_slot(
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
     all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
-    entry_lock_ids = get_entry_data(config_entry, CONF_LOCKS, [])
+    entry_lock_ids = get_entry_config(config_entry).locks
 
     for lock_entity_id in entry_lock_ids:
         lock = all_locks.get(lock_entity_id)
@@ -1146,48 +1101,30 @@ async def subscribe_code_slot(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/set_lock_usercode",
+        vol.Required("type"): "lock_code_manager/set_usercode",
         vol.Required(ATTR_LOCK_ENTITY_ID): str,
         vol.Required(ATTR_CODE_SLOT): int,
-        vol.Optional(ATTR_USERCODE): str,
+        vol.Required(ATTR_USERCODE): str,
     }
 )
 @websocket_api.async_response
-async def set_lock_usercode(
+async def ws_set_usercode(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """
-    Set or clear a usercode on a lock slot.
-
-    If usercode is provided, sets the code. If usercode is empty or not provided,
-    clears the code slot.
+    """Set a usercode on a lock slot.
 
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
     """
-    lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
-    code_slot = msg[ATTR_CODE_SLOT]
-    usercode = msg.get(ATTR_USERCODE, "").strip()
-
-    lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
-    if not lock:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_FOUND,
-            f"Lock {lock_entity_id} is not managed by Lock Code Manager",
-        )
-        return
-
     try:
-        if usercode:
-            # Set the usercode
-            await lock.async_internal_set_usercode(code_slot, usercode)
-        else:
-            # Clear the usercode
-            await lock.async_internal_clear_usercode(code_slot)
+        await async_set_usercode(
+            hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT], msg[ATTR_USERCODE]
+        )
         connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
     except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
         connection.send_error(
             msg["id"],
@@ -1196,119 +1133,102 @@ async def set_lock_usercode(
         )
 
 
-# Supported domains for condition entities
-CONDITION_ENTITY_DOMAINS = frozenset(
+@websocket_api.websocket_command(
     {
-        BINARY_SENSOR_DOMAIN,
-        CALENDAR_DOMAIN,
-        INPUT_BOOLEAN_DOMAIN,
-        SCHEDULE_DOMAIN,
-        SWITCH_DOMAIN,
+        vol.Required("type"): "lock_code_manager/clear_usercode",
+        vol.Required(ATTR_LOCK_ENTITY_ID): str,
+        vol.Required(ATTR_CODE_SLOT): int,
     }
 )
+@websocket_api.async_response
+async def ws_clear_usercode(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Clear a usercode from a lock slot.
+
+    This is intended for managing unmanaged slots directly on the lock.
+    For LCM-managed slots, use the entity services instead.
+    """
+    try:
+        await async_clear_usercode(hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT])
+        connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
+        connection.send_error(
+            msg["id"],
+            websocket_api.const.ERR_UNKNOWN_ERROR,
+            str(err),
+        )
 
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "lock_code_manager/update_slot_condition",
+        vol.Required("type"): "lock_code_manager/set_slot_condition",
         vol.Exclusive("config_entry_title", "entry"): str,
         vol.Exclusive("config_entry_id", "entry"): str,
         vol.Required(ATTR_SLOT): int,
-        vol.Optional(CONF_ENTITY_ID): vol.Any(
-            cv.entity_domain(CONDITION_ENTITY_DOMAINS), None
-        ),
-        vol.Optional(CONF_NUMBER_OF_USES): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=1)), None
-        ),
+        vol.Required(CONF_ENTITY_ID): cv.entity_domain(CONDITION_ENTITY_DOMAINS),
     }
 )
 @websocket_api.async_response
 @async_get_entry
-async def update_slot_condition(
+async def ws_set_slot_condition(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
+    """Set a condition entity for a slot.
+
+    The condition entity must exist in hass.states and must not belong to an
+    excluded platform (for example, the scheduler integration).
     """
-    Update condition settings for a slot.
-
-    Allows adding, changing, or removing:
-    - entity_id: Condition entity (calendar, schedule, binary_sensor, switch, input_boolean)
-    - number_of_uses: Usage tracking (positive int to enable, None to disable)
-
-    Only fields present in the message are updated. To remove a field, pass None/null.
-    """
-    slot_num = msg[ATTR_SLOT]
-
-    # Validate slot exists
-    slots = get_entry_data(config_entry, CONF_SLOTS, {})
-    slot_key = slot_num if slot_num in slots else str(slot_num)
-    if slot_key not in slots:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_FOUND,
-            f"Slot {slot_num} not found in config entry",
+    try:
+        await async_set_slot_condition(
+            hass, config_entry.entry_id, msg[ATTR_SLOT], msg[CONF_ENTITY_ID]
         )
-        return
-
-    # Verify entity exists if provided
-    if (entity_id := msg.get(CONF_ENTITY_ID)) is not None and not hass.states.get(
-        entity_id
-    ):
+        connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        error_str = str(err)
+        if "not found" in error_str.lower():
+            code = websocket_api.const.ERR_NOT_FOUND
+        elif "not supported" in error_str.lower():
+            code = websocket_api.const.ERR_NOT_SUPPORTED
+        else:
+            code = websocket_api.const.ERR_UNKNOWN_ERROR
+        connection.send_error(msg["id"], code, error_str)
+    except Exception as err:
         connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_NOT_FOUND,
-            f"Entity {entity_id} not found",
+            msg["id"], websocket_api.const.ERR_UNKNOWN_ERROR, str(err)
         )
-        return
 
-    # Check for excluded platforms with a single registry lookup
-    if entity_id is not None:
-        ent_reg = er.async_get(hass)
-        entity_entry = ent_reg.async_get(entity_id)
-        if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:
-            connection.send_error(
-                msg["id"],
-                websocket_api.const.ERR_NOT_SUPPORTED,
-                f"Entities from the '{entity_entry.platform}' integration are not "
-                "supported as condition entities. See the wiki for details: "
-                "https://github.com/raman325/lock_code_manager/wiki/"
-                "Unsupported-Condition-Entity-Integrations",
-            )
-            return
 
-    # Update config entry data
-    data = copy.deepcopy(dict(config_entry.data))
-    slot_config = data[CONF_SLOTS][slot_key]
-
-    # Update entity_id if present in message
-    if CONF_ENTITY_ID in msg:
-        entity_id = msg[CONF_ENTITY_ID]
-        if entity_id is None:
-            # Remove the key entirely
-            slot_config.pop(CONF_ENTITY_ID, None)
-        else:
-            slot_config[CONF_ENTITY_ID] = entity_id
-
-    # Update number_of_uses if present in message
-    if CONF_NUMBER_OF_USES in msg:
-        num_uses = msg[CONF_NUMBER_OF_USES]
-        if num_uses is None:
-            # Remove the key entirely (disables tracking, removes entity)
-            slot_config.pop(CONF_NUMBER_OF_USES, None)
-        else:
-            slot_config[CONF_NUMBER_OF_USES] = num_uses
-
-    data[CONF_SLOTS][slot_key] = slot_config
-
-    # Only update if data actually changed
-    if data != config_entry.data:
-        # Set options to trigger async_update_listener which will:
-        # 1. Create/remove entities as needed
-        # 2. Copy options to data and clear options
-        # We must NOT update data directly here, as the listener compares
-        # config_entry.data (old) with config_entry.options (new) to detect changes
-        hass.config_entries.async_update_entry(config_entry, options=data)
-
-    connection.send_result(msg["id"], {"success": True})
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "lock_code_manager/clear_slot_condition",
+        vol.Exclusive("config_entry_title", "entry"): str,
+        vol.Exclusive("config_entry_id", "entry"): str,
+        vol.Required(ATTR_SLOT): int,
+    }
+)
+@websocket_api.async_response
+@async_get_entry
+async def ws_clear_slot_condition(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+    config_entry: ConfigEntry,
+) -> None:
+    """Clear the condition entity from a slot."""
+    try:
+        await async_clear_slot_condition(hass, config_entry.entry_id, msg[ATTR_SLOT])
+        connection.send_result(msg["id"], {"success": True})
+    except ServiceValidationError as err:
+        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
+    except Exception as err:
+        connection.send_error(
+            msg["id"], websocket_api.const.ERR_UNKNOWN_ERROR, str(err)
+        )

@@ -4,7 +4,7 @@ ci:
 minimum_pre_commit_version: 3.2.0
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.8
+    rev: v0.15.10
     hooks:
       - id: ruff-check
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -28,6 +28,7 @@ repos:
       - id: check-merge-conflict
       - id: check-xml
       - id: check-yaml
+        exclude: ^blueprints/
       - id: debug-statements
       - id: end-of-file-fixer
       - id: requirements-txt-fixer
@@ -80,7 +81,7 @@ repos:
 
   # Ensure all code is as secure as possible and follows best practices
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: a66e98df7b4aeeb3724184b332785976d062b92e  # frozen: v1.19.1
+    rev: 0f369d245750787ce34997d464ed9605391a5283  # frozen: v1.20.1
     hooks:
       - id: mypy
         files: ^(custom_components)/.+\.py$

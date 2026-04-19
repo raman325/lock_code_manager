@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Literal
 
 from homeassistant.components.calendar import CalendarEntity, CalendarEvent
 from homeassistant.components.lock import LockEntity
@@ -62,6 +63,7 @@ class MockLCMLock(BaseLock):
         """Initialize mock lock."""
         super().__init__(*args, **kwargs)
         self._connected = True
+        self._hard_refresh_interval: timedelta | None = None
         self.codes: dict[int, str] = {1: "1234", 2: "5678"}
         self.service_calls: defaultdict[str, list] = defaultdict(list)
 
@@ -70,39 +72,34 @@ class MockLCMLock(BaseLock):
         """Return integration domain."""
         return "test"
 
-    @callback
-    def setup(self) -> None:
-        """Set up lock."""
-
-    @callback
-    def unload(self, remove_permanently: bool) -> None:
-        """Unload lock."""
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """Return configurable hard refresh interval."""
+        return self._hard_refresh_interval
 
     def set_connected(self, connected: bool) -> None:
         """Set connection state for testing."""
         self._connected = connected
 
-    def is_integration_connected(self) -> bool:
+    async def async_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
-    def hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """
-        Perform hard refresh all codes.
-
-        Needed for integrations where usercodes are cached and may get out of sync
-        with the lock.
-        """
+    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+        """Perform hard refresh of all codes."""
         self.service_calls["hard_refresh_codes"].append(())
-        return self.get_usercodes()
+        return await self.async_get_usercodes()
 
-    def set_usercode(
-        self, code_slot: int, usercode: str, name: str | None = None
+    async def async_set_usercode(
+        self,
+        code_slot: int,
+        usercode: str,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """
-        Set a usercode on a code slot.
+        """Set a usercode on a code slot.
 
-        Returns True if the value was changed, False if already set to this value.
+        Returns True if the value was changed, False if already set.
         """
         if self.codes.get(code_slot) == usercode:
             return False
@@ -110,9 +107,8 @@ class MockLCMLock(BaseLock):
         self.service_calls["set_usercode"].append((code_slot, usercode, name))
         return True
 
-    def clear_usercode(self, code_slot: int) -> bool:
-        """
-        Clear a usercode on a code slot.
+    async def async_clear_usercode(self, code_slot: int) -> bool:
+        """Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
         """
@@ -122,21 +118,36 @@ class MockLCMLock(BaseLock):
         self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    def get_usercodes(self) -> dict[int, str | SlotCode]:
-        """
-        Get dictionary of code slots and usercodes.
-
-        Called by data coordinator to get data for code slot sensors.
-
-        Key is code slot, value is usercode, e.g.:
-        {
-            1: '1234',
-            'B': '5678',
-        }
-        """
+    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+        """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
         return snapshot
+
+
+@dataclass(repr=False, eq=False)
+class MockLCMPushLock(MockLCMLock):
+    """Mock lock that supports push-based updates."""
+
+    def __init__(self, *args, **kwargs):
+        """Initialize mock push lock."""
+        super().__init__(*args, **kwargs)
+        self._supports_push = True
+        self._subscribe_called = False
+        self._unsubscribe_called = False
+
+    @property
+    def supports_push(self) -> bool:
+        """Return whether this lock supports push-based updates."""
+        return self._supports_push
+
+    def setup_push_subscription(self) -> None:
+        """Subscribe to push-based value updates."""
+        self._subscribe_called = True
+
+    def teardown_push_subscription(self) -> None:
+        """Unsubscribe from push-based value updates."""
+        self._unsubscribe_called = True
 
 
 class MockLockEntity(LockEntity):

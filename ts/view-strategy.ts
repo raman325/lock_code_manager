@@ -62,6 +62,7 @@ export class LockCodeManagerViewStrategy extends ReactiveElement {
             return generateView(hass, config_entry, {
                 codeDisplay,
                 collapsedSections: config.collapsed_sections,
+                conditionHelpers: config.condition_helpers,
                 showCodeSensors,
                 showConditions: config.show_conditions ?? DEFAULT_SHOW_CONDITIONS,
                 showLockCards,

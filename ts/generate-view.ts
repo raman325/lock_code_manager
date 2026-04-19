@@ -32,14 +32,15 @@ export async function generateView(
     options: GenerateViewOptions
 ): Promise<LovelaceViewConfig> {
     const {
-        showCodeSensors: show_code_sensors,
-        showLockSync: show_lock_sync,
-        showLockCards: show_lock_cards,
         codeDisplay: code_display,
-        useSlotCards: use_slot_cards,
+        collapsedSections: collapsed_sections,
+        conditionHelpers,
+        showCodeSensors: show_code_sensors,
         showConditions: show_conditions = true,
+        showLockCards: show_lock_cards,
         showLockStatus: show_lock_status = true,
-        collapsedSections: collapsed_sections
+        showLockSync: show_lock_sync,
+        useSlotCards: use_slot_cards
     } = options;
     const configEntryData = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
         config_entry_id: configEntry.entry_id,
@@ -72,6 +73,9 @@ export async function generateView(
             strategy: {
                 code_display,
                 collapsed_sections,
+                ...(conditionHelpers?.[slotNum]?.length && {
+                    condition_helpers: conditionHelpers[slotNum]
+                }),
                 config_entry_id: configEntry.entry_id,
                 show_code_sensors,
                 show_conditions,

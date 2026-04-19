@@ -1,5 +1,21 @@
 import { EntityRegistryEntry } from './ha_type_stubs';
 
+/** Sentinel code values from backend SlotCode enum */
+export const SLOT_CODE_EMPTY = 'empty';
+export const SLOT_CODE_UNREADABLE = 'unreadable_code';
+
+/** True if code represents a cleared/empty slot */
+export function isSlotEmpty(code: number | string | null): boolean {
+    return code === null || code === '' || code === SLOT_CODE_EMPTY;
+}
+
+/** True if code represents an occupied slot (readable, masked, or unreadable) */
+export function isSlotOccupied(code: number | string | null, codeLength?: number): boolean {
+    if (code === SLOT_CODE_UNREADABLE) return true;
+    if (isSlotEmpty(code)) return !!codeLength;
+    return true;
+}
+
 export interface LockCodeManagerEntityEntry extends EntityRegistryEntry {
     key: string;
     lockEntityId?: string;
@@ -36,6 +52,8 @@ export interface LockCodeManagerStrategyConfig {
 }
 
 export interface LockCodeManagerDashboardStrategyConfig extends LockCodeManagerStrategyConfig {
+    /** Condition helper entity IDs per config entry and slot */
+    condition_helpers?: Record<string, Record<number, string[]>>;
     /** Show lock cards in per-config-entry views (default: true). Feeds show_lock_cards to views. */
     show_per_configuration_lock_cards?: boolean;
     type: 'custom:lock-code-manager';
@@ -53,6 +71,8 @@ export interface SlotMapping {
 }
 
 export interface LockCodeManagerViewStrategyConfig extends LockCodeManagerStrategyConfig {
+    /** Condition helper entity IDs per slot */
+    condition_helpers?: Record<number, string[]>;
     config_entry_id?: string;
     config_entry_title?: string;
     type: 'custom:lock-code-manager';
@@ -63,6 +83,8 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
     collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Condition helper entity IDs for this slot */
+    condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
     config_entry_id: string;
     /** Show code sensors in lock status section */
@@ -109,7 +131,7 @@ export interface LockCoordinatorSlotData {
     active?: boolean;
     /**
      * Code on the lock. Values: actual PIN string/number, null (no data),
-     * "empty" (slot cleared), "unknown" (code exists but unreadable)
+     * "empty" (slot cleared), "unreadable_code" (code exists but unreadable)
      */
     code: number | string | null;
     /** Present when masked (code is null but slot has a readable code) */
@@ -154,6 +176,8 @@ export interface LockCodeManagerSlotCardConfig {
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
     collapsed_sections?: ('conditions' | 'lock_status')[];
+    /** Condition helper entity IDs for this slot */
+    condition_helpers?: string[];
     /** Config entry ID for the LCM instance (use this OR config_entry_title) */
     config_entry_id?: string;
     /** Config entry title for the LCM instance (use this OR config_entry_id) */
@@ -174,7 +198,7 @@ export interface LockCodeManagerSlotCardConfig {
 }
 
 export interface SlotCardLockStatus {
-    /** Code on the lock: actual PIN, null, "empty" (cleared), or "unknown" (unreadable) */
+    /** Code on the lock: actual PIN, null, "empty" (cleared), or "unreadable_code" (unreadable) */
     code: string | null;
     /** Code length when masked (readable code, not revealed) */
     code_length?: number;
@@ -303,6 +327,7 @@ export type GetConfigEntriesResponse = ConfigEntryJSONFragment[];
 export interface GenerateViewOptions {
     codeDisplay: CodeDisplayMode;
     collapsedSections?: ('conditions' | 'lock_status')[];
+    conditionHelpers?: Record<number, string[]>;
     showCodeSensors: boolean;
     showConditions?: boolean;
     showLockCards: boolean;

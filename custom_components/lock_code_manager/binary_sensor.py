@@ -1,13 +1,4 @@
-"""Binary sensor entities for lock_code_manager.
-
-LockCodeManagerActiveEntity: PIN active status (enabled + conditions met).
-LockCodeManagerCodeSlotInSyncEntity: Per-lock sync status — thin observer
-    that delegates all sync logic to SlotSyncManager.
-
-Sync logic (state comparison, set/clear operations, circuit breaking) is
-implemented in SlotSyncManager (sync.py) to separate domain logic from
-entity state display.
-"""
+"""Binary sensor entities for lock_code_manager."""
 
 from __future__ import annotations
 
@@ -42,7 +33,7 @@ from .const import (
     EVENT_PIN_USED,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import get_slot_data
+from .data import get_entry_config
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
@@ -114,7 +105,9 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
     @property
     def _condition_entity_id(self) -> str | None:
         """Return condition entity ID for this slot."""
-        return get_slot_data(self.config_entry, self.slot_num).get(CONF_ENTITY_ID)
+        return (
+            get_entry_config(self.config_entry).slot(self.slot_num).get(CONF_ENTITY_ID)
+        )
 
     @callback
     def _cleanup_condition_subscription(self) -> None:
@@ -134,7 +127,9 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         )
 
         states: dict[str, bool | None] = {}
-        for key, state in get_slot_data(self.config_entry, self.slot_num).items():
+        for key, state in (
+            get_entry_config(self.config_entry).slot(self.slot_num).items()
+        ):
             if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
                 continue
 
@@ -235,11 +230,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
     CoordinatorEntity[LockUsercodeUpdateCoordinator],
     BinarySensorEntity,
 ):
-    """PIN synced binary sensor entity for lock code manager.
-
-    Thin observer that delegates all sync logic to SlotSyncManager.
-    Reads manager.in_sync for display state.
-    """
+    """PIN synced binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -259,9 +250,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
         CoordinatorEntity.__init__(self, coordinator)
 
         @callback
-        def _sync_and_write_state() -> None:
+        def _sync_and_write_state(in_sync: bool | None) -> None:
             """Sync _attr_is_on from manager and write HA state."""
-            self._attr_is_on = self._sync_manager.in_sync
+            self._attr_is_on = in_sync
             self.async_write_ha_state()
 
         self._sync_manager = SlotSyncManager(

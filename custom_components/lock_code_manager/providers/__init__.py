@@ -1,18 +1,20 @@
-"""
-Integrations module.
-
-There should be one file per integration, named after the integration.
-"""
+"""Lock provider implementations."""
 
 from __future__ import annotations
 
 from ._base import BaseLock
+from .akuvox import AkuvoxLock
+from .matter import MatterLock
+from .schlage import SchlageLock
 from .virtual import VirtualLock
 from .zigbee2mqtt import Zigbee2MQTTLock
 from .zwave_js import ZWaveJSLock
 
 INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
-    "mqtt": Zigbee2MQTTLock,  # MQTT locks are Zigbee2MQTT
+    "local_akuvox": AkuvoxLock,
+    "matter": MatterLock,
+    "mqtt": Zigbee2MQTTLock,
+    "schlage": SchlageLock,
     "virtual": VirtualLock,
     "zwave_js": ZWaveJSLock,
 }

@@ -36,7 +36,7 @@
     "@rollup/plugin-typescript": "^12.3.0",
     "@stylistic/eslint-plugin-js": "^3.1.0",
     "@tsconfig/node20": "^20.1.9",
-    "@types/node": "^25.5.0",
+    "@types/node": "^25.6.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "@vitest/coverage-v8": "^4.0.16",
@@ -48,14 +48,14 @@
     "eslint-plugin-prettier": "^5.5.5",
     "eslint-plugin-typescript-sort-keys": "^3.3.0",
     "eslint-plugin-unused-imports": "^4.4.1",
-    "jsdom": "^29.0.1",
+    "jsdom": "^29.0.2",
     "markdownlint-cli": "^0.48.0",
-    "prettier": "^3.8.1",
+    "prettier": "^3.8.3",
     "prettier-plugin-package": "^2.0.0",
     "rollup": "^4.60.1",
     "ts-node": "^10.9.2",
     "tslib": "^2.8.1",
-    "typescript": "^6.0.2",
+    "typescript": "^6.0.3",
     "vitest": "^4.0.16"
   }
 }

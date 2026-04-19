@@ -19,3 +19,4 @@ docs/
 .serena/
 .github/hooks/
 .opencode/
+junit.xml

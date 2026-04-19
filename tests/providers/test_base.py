@@ -3,12 +3,14 @@
 import asyncio
 from datetime import datetime, timedelta
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
@@ -90,19 +92,23 @@ async def test_base(hass: HomeAssistant):
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     with pytest.raises(NotImplementedError):
         assert lock.domain
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_is_integration_connected()
-    # Note: hard_refresh, set, and clear operations now check connection first,
-    # so they raise NotImplementedError from is_integration_connected() instead of
-    # the expected error from the unimplemented method
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_hard_refresh_codes()
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_clear_usercode(1)
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_set_usercode(1, "1234")
-    with pytest.raises(NotImplementedError):
-        await lock.async_internal_get_usercodes()
+    # async_is_integration_connected has a sensible default — it returns
+    # False here because the test config entry isn't in the LOADED state.
+    assert await lock.async_internal_is_integration_connected() is False
+    # hard_refresh / set / clear / get all check connection first via
+    # _execute_rate_limited; since the default connection check returned
+    # False above, they raise LockDisconnected before reaching the abstract
+    # method that would raise NotImplementedError. Patch the connection
+    # check to True so we actually exercise the abstract methods.
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_hard_refresh_codes()
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_clear_usercode(1)
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_set_usercode(1, "1234")
+        with pytest.raises(NotImplementedError):
+            await lock.async_internal_get_usercodes()
 
 
 async def test_config_entry_state_change_resubscribes(
@@ -203,13 +209,8 @@ async def test_rate_limiting_set_usercode(
     lock_code_manager_config_entry,
 ):
     """Test that operations are rate limited with minimum delay between calls."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-
-    # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
 
     # First operation should execute immediately
@@ -238,12 +239,8 @@ async def test_rate_limiting_mixed_operations(
     lock_code_manager_config_entry,
 ):
     """Test that rate limiting applies across different operation types."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    # Reset the last operation time to ensure clean test isolation
     lock_provider._last_operation_time = 0.0
 
     # First operation: set usercode
@@ -264,13 +261,8 @@ async def test_rate_limiting_get_usercodes(
     lock_code_manager_config_entry,
 ):
     """Test that get operations are also rate limited."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-
-    # Reset the last operation time to ensure clean test
     lock_provider._last_operation_time = 0.0
 
     # First get should be fast
@@ -292,12 +284,8 @@ async def test_operations_are_serialized(
     lock_code_manager_config_entry,
 ):
     """Test that multiple parallel operations are serialized by the lock."""
-    # Arrange: shorter delay for faster assertions
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Set a smaller delay for testing
     lock_provider._min_operation_delay = TEST_OPERATION_DELAY
-    # Reset the last operation time to ensure clean test isolation
     lock_provider._last_operation_time = 0.0
 
     # Start multiple operations in parallel
@@ -355,23 +343,44 @@ async def test_async_call_service_raises_lock_disconnected_on_error(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_call_service raises LockDisconnected when service call fails."""
+    """Test that async_call_service wraps HA service errors as LockDisconnected."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
-    # Register a service that raises an error
     async def failing_service(call):
-        raise ValueError("Service failed")
+        raise HomeAssistantError("Service failed")
 
     hass.services.async_register("test_domain", "failing_service", failing_service)
 
-    # Calling a failing service should raise LockDisconnected
     with pytest.raises(
         LockDisconnected, match="Service call test_domain.failing_service failed"
     ):
         await lock_provider.async_call_service("test_domain", "failing_service", {})
 
-    # Clean up
     hass.services.async_remove("test_domain", "failing_service")
+
+
+async def test_async_call_service_propagates_non_ha_exceptions(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Non-HomeAssistantError exceptions must propagate, not become LockDisconnected.
+
+    Wrapping programming errors (TypeError) or shutdown signals
+    (asyncio.CancelledError) as LockDisconnected would trigger false
+    "lock offline" issues, drift backoff, and push-resub loops.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    async def buggy_service(call):
+        raise TypeError("programmer made a mistake")
+
+    hass.services.async_register("test_domain", "buggy_service", buggy_service)
+
+    with pytest.raises(TypeError, match="programmer made a mistake"):
+        await lock_provider.async_call_service("test_domain", "buggy_service", {})
+
+    hass.services.async_remove("test_domain", "buggy_service")
 
 
 async def test_set_usercode_refreshes_coordinator_on_change(
@@ -592,6 +601,115 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
     await lock.async_unload(False)
 
 
+async def test_async_setup_internal_creates_coordinator_when_setup_fails(
+    hass: HomeAssistant,
+):
+    """Test that coordinator is created even when async_setup raises."""
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_setup_fail",
+        config_entry=config_entry,
+    )
+
+    lock = BaseLock(
+        hass,
+        dev_reg,
+        entity_reg,
+        config_entry,
+        lock_entity,
+    )
+
+    # Make async_setup raise an exception
+    with (
+        patch.object(
+            lock,
+            "async_setup",
+            side_effect=LockDisconnected("provider unavailable"),
+        ),
+        patch(
+            "custom_components.lock_code_manager.coordinator."
+            "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
+        ),
+        patch(
+            "custom_components.lock_code_manager.coordinator."
+            "LockUsercodeUpdateCoordinator.async_refresh"
+        ),
+    ):
+        # Should not raise even though async_setup failed
+        await lock.async_setup_internal(config_entry)
+
+    # Coordinator should still have been created
+    assert lock.coordinator is not None
+    # Setup complete should be signaled
+    assert lock._setup_complete.is_set()
+    # Setup should be marked as failed
+    assert lock._setup_succeeded is False
+
+    # Simulate reconnect: mock lock_config_entry as LOADED, async_setup succeeds
+    mock_entry = MagicMock()
+    mock_entry.state = ConfigEntryState.LOADED
+    lock.lock_config_entry = mock_entry
+    with patch.object(lock, "async_setup", return_value=None):
+        await lock._async_on_integration_loaded()
+
+    assert lock._setup_succeeded is True
+
+
+async def test_on_integration_loaded_skips_when_no_config_entry(
+    hass: HomeAssistant,
+):
+    """Test that _async_on_integration_loaded is a no-op when _lcm_config_entry is None."""
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock_no_entry", config_entry=config_entry
+    )
+
+    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+    # _lcm_config_entry is None (async_setup_internal never called)
+    assert lock._lcm_config_entry is None
+    # Should be a no-op, not raise
+    await lock._async_on_integration_loaded()
+    assert lock._setup_succeeded is False
+
+
+async def test_on_integration_loaded_retries_on_disconnect(
+    hass: HomeAssistant,
+):
+    """Test that _async_on_integration_loaded retries setup on LockDisconnected."""
+    entity_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "test_lock_retry", config_entry=config_entry
+    )
+
+    lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
+    lock._lcm_config_entry = config_entry
+
+    # async_setup raises LockDisconnected — should not propagate
+    with patch.object(
+        lock, "async_setup", side_effect=LockDisconnected("still offline")
+    ):
+        await lock._async_on_integration_loaded()
+
+    assert lock._setup_succeeded is False
+
+
 async def test_set_usercode_skips_refresh_for_push_provider(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -723,7 +841,6 @@ async def test_is_device_available_default_returns_true(hass: HomeAssistant):
     )
 
     # Default implementation returns True
-    assert lock.is_device_available() is True
     assert await lock.async_is_device_available() is True
 
 
@@ -754,7 +871,7 @@ async def test_execute_rate_limited_raises_when_device_not_available(
         ("****", True),
         ("*", True),
         (SlotCode.EMPTY, True),
-        (SlotCode.UNKNOWN, True),
+        (SlotCode.UNREADABLE_CODE, True),
         ("1234", False),
         ("12*4", False),
         ("0", False),

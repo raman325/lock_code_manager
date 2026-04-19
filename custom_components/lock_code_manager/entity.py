@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 from typing import Any, final
 
@@ -23,10 +22,9 @@ from homeassistant.helpers.event import TrackStates, async_track_state_change_fi
 from .const import (
     ATTR_CODE_SLOT,
     ATTR_TO,
-    CONF_SLOTS,
     DOMAIN,
 )
-from .data import build_slot_unique_id, get_slot_data
+from .data import build_slot_unique_id, get_entry_config
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 
@@ -79,7 +77,7 @@ class BaseLockCodeManagerEntity(Entity):
     @property
     def _state(self) -> Any:
         """Return state of entity."""
-        return get_slot_data(self.config_entry, self.slot_num).get(self.key)
+        return get_entry_config(self.config_entry).slot(self.slot_num).get(self.key)
 
     @final
     def _get_uid(self, key: str) -> str:
@@ -101,9 +99,12 @@ class BaseLockCodeManagerEntity(Entity):
             self.key,
             value,
         )
-        data = copy.deepcopy(dict(self.config_entry.data))
-        data[CONF_SLOTS][self.slot_num][self.key] = value
-        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+        new_config = get_entry_config(self.config_entry).with_slot_field_set(
+            self.slot_num, self.key, value
+        )
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data=new_config.to_dict()
+        )
         self.async_write_ha_state()
 
     async def _internal_async_remove(self) -> None:

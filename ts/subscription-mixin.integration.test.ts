@@ -198,4 +198,32 @@ describe('LcmSubscriptionMixin integration', () => {
 
         expect(el._error).toBe('Websocket connection unavailable');
     });
+
+    describe('_formatSubscriptionError', () => {
+        beforeEach(() => {
+            el = document.createElement('test-subscription-element') as TestSubscriptionElement;
+            container.appendChild(el);
+        });
+
+        it('returns message from Error instance', () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            expect((el as any)._formatSubscriptionError(new Error('test error'))).toBe(
+                'test error'
+            );
+        });
+
+        it('returns message from object with message property', () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            expect((el as any)._formatSubscriptionError({ message: 'obj error' })).toBe(
+                'obj error'
+            );
+        });
+
+        it('returns JSON for unknown error shapes', () => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const result = (el as any)._formatSubscriptionError({ code: 42 });
+            expect(result).toContain('Failed to subscribe');
+            expect(result).toContain('42');
+        });
+    });
 });

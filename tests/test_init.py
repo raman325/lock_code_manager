@@ -22,7 +22,11 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
@@ -35,6 +39,11 @@ from custom_components.lock_code_manager.const import (
     EVENT_PIN_USED,
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
+)
+from custom_components.lock_code_manager.repairs import (
+    AcknowledgeRepairFlow,
+    NumberOfUsesDeprecatedFlow,
+    async_create_fix_flow,
 )
 
 from .common import (
@@ -658,3 +667,253 @@ async def test_lovelace_not_updated_on_non_structural_change(
     await hass.async_block_till_done()
 
     assert len(events) == 0
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_unload_fires_lock_removed_callbacks(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that unloading an entry fires lock-removed callbacks for each lock."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    callbacks = runtime_data.callbacks
+
+    removed_locks: list[str] = []
+    callbacks.register_lock_removed_handler(removed_locks.append)
+
+    # Verify locks are present before unload
+    assert set(runtime_data.locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Both locks should have had their removed callbacks fired
+    assert set(removed_locks) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_repair_issue_created(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that a repair issue is created when slots have number_of_uses."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            "2": {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                CONF_NUMBER_OF_USES: 5,
+            },
+        },
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Repair Test", title="Repair Test"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is not None
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_no_repair_when_absent(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that no repair issue is created when no slots have number_of_uses."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="No Repair Test", title="No Repair Test"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is None
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_repair_flow_strips_data(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that the repair flow strips number_of_uses from all entries."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            "2": {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                CONF_NUMBER_OF_USES: 5,
+            },
+        },
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Repair Flow Test", title="Repair Flow"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Verify repair issue exists
+    issue_reg = ir.async_get(hass)
+    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is not None
+
+    # Execute the repair flow (simulate user clicking Submit)
+    flow = NumberOfUsesDeprecatedFlow()
+    flow.hass = hass
+    result = await flow.async_step_init(user_input={})
+
+    assert result["type"] == "create_entry"
+
+    # Listener normalizes slot keys to int before persisting; look up by int.
+    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][2]
+    # Slot 1 should be unchanged
+    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][1]
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+@pytest.mark.parametrize("config", [{}])
+async def test_number_of_uses_repair_flow_shows_form(
+    hass: HomeAssistant,
+    setup_lovelace_ui,
+    mock_lock_config_entry,
+):
+    """Test that the repair flow shows a form on initial step."""
+    flow = NumberOfUsesDeprecatedFlow()
+    flow.hass = hass
+    result = await flow.async_step_init(user_input=None)
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+
+
+async def test_async_create_fix_flow():
+    """Test async_create_fix_flow returns the correct flow."""
+    flow = await async_create_fix_flow(None, "number_of_uses_deprecated", None)
+    assert isinstance(flow, NumberOfUsesDeprecatedFlow)
+
+
+async def test_async_create_fix_flow_slot_disabled():
+    """Test async_create_fix_flow returns AcknowledgeRepairFlow for slot_disabled."""
+    flow = await async_create_fix_flow(None, "slot_disabled_abc_1", None)
+    assert isinstance(flow, AcknowledgeRepairFlow)
+
+
+async def test_acknowledge_repair_flow_steps():
+    """Test AcknowledgeRepairFlow shows form then creates entry on confirm."""
+    flow = AcknowledgeRepairFlow()
+    # First call shows the form
+    result = await flow.async_step_init(user_input=None)
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+    # Second call with input creates the entry
+    result = await flow.async_step_init(user_input={})
+    assert result["type"] == "create_entry"
+
+
+async def test_async_create_fix_flow_pin_required():
+    """Test async_create_fix_flow returns AcknowledgeRepairFlow for pin_required."""
+    flow = await async_create_fix_flow(None, "pin_required_abc_1", None)
+    assert isinstance(flow, AcknowledgeRepairFlow)
+
+
+async def test_async_create_fix_flow_unknown():
+    """Test async_create_fix_flow raises for unknown issue."""
+    with pytest.raises(ValueError, match="Unknown issue"):
+        await async_create_fix_flow(None, "unknown_issue", None)
+
+
+async def test_unload_cleans_up_repair_issues(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that unloading an entry deletes slot_disabled and pin_required repair issues."""
+    entry_id = lock_code_manager_config_entry.entry_id
+    issue_reg = ir.async_get(hass)
+
+    # Create repair issues that should be cleaned up on unload
+    for slot_num in (1, 2):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"slot_disabled_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="slot_disabled",
+            translation_placeholders={"slot_num": str(slot_num), "reason": "test"},
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"pin_required_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="pin_required",
+            translation_placeholders={
+                "slot_num": str(slot_num),
+                "config_entry_title": "test",
+            },
+        )
+
+    # Create lock_offline issues for both locks
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"lock_offline_{lock_id}",
+            is_fixable=False,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="lock_offline",
+            translation_placeholders={"lock_entity_id": lock_id},
+        )
+
+    # Verify issues exist
+    assert issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1") is not None
+    assert issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_2") is not None
+    assert (
+        issue_reg.async_get_issue(DOMAIN, f"lock_offline_{LOCK_1_ENTITY_ID}")
+        is not None
+    )
+
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # All issues for this entry should be deleted
+    for slot_num in (1, 2):
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
+            is None
+        )
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+            is None
+        )
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is None

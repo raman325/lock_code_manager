@@ -290,6 +290,63 @@ describe('LockCodeManagerDashboardStrategy', () => {
             expect(view.strategy.show_lock_status).toBe(false);
         });
 
+        it('narrows condition_helpers per config entry', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [
+                    { entry_id: 'entry1', title: 'Front Door' },
+                    { entry_id: 'entry2', title: 'Back Door' }
+                ],
+                locksPerEntry: { entry1: [], entry2: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({
+                    condition_helpers: {
+                        entry1: { 1: ['input_boolean.helper1'] },
+                        entry2: { 2: ['input_boolean.helper2'] }
+                    },
+                    show_all_lock_cards_view: false
+                }),
+                hass
+            );
+
+            const view1 = result.views[0] as {
+                strategy: { condition_helpers: Record<number, string[]> };
+            };
+            expect(view1.strategy.condition_helpers).toEqual({
+                1: ['input_boolean.helper1']
+            });
+
+            const view2 = result.views[1] as {
+                strategy: { condition_helpers: Record<number, string[]> };
+            };
+            expect(view2.strategy.condition_helpers).toEqual({
+                2: ['input_boolean.helper2']
+            });
+        });
+
+        it('passes undefined condition_helpers when config entry has no helpers', async () => {
+            const hass = createDashboardMockHass({
+                configEntries: [{ entry_id: 'entry1', title: 'Lock' }],
+                locksPerEntry: { entry1: [] }
+            });
+
+            const result = await LockCodeManagerDashboardStrategy.generate(
+                testConfig({
+                    condition_helpers: {
+                        other_entry: { 1: ['input_boolean.helper1'] }
+                    },
+                    show_all_lock_cards_view: false
+                }),
+                hass
+            );
+
+            const view = result.views[0] as {
+                strategy: { condition_helpers: undefined };
+            };
+            expect(view.strategy.condition_helpers).toBeUndefined();
+        });
+
         it('passes use_slot_cards config to view strategies', async () => {
             const hass = createDashboardMockHass({
                 configEntries: [{ entry_id: 'entry1', title: 'Lock' }],

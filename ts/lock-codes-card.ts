@@ -1,16 +1,21 @@
 import { mdiCheck, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
-import { LitElement, TemplateResult, css, html, nothing } from 'lit';
+import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { HomeAssistant } from './ha_type_stubs';
-import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from './shared-styles';
+import { lockCodesCardStyles } from './lock-codes-card.styles';
 import { LcmSubscriptionMixin } from './subscription-mixin';
 import {
     CodeDisplayMode,
+    GetConfigEntriesResponse,
+    LockCodeManagerConfigEntryDataResponse,
     LockCodesCardConfig,
     LockCoordinatorData,
-    LockCoordinatorSlotData
+    LockCoordinatorSlotData,
+    SLOT_CODE_UNREADABLE,
+    isSlotEmpty,
+    isSlotOccupied
 } from './types';
 
 const DEFAULT_TITLE = 'Lock Codes';
@@ -27,357 +32,7 @@ interface SlotGroup {
 }
 
 class LockCodesCard extends LockCodesCardBase {
-    static styles = [
-        lcmCssVars,
-        lcmBadgeStyles,
-        lcmCodeStyles,
-        lcmRevealButtonStyles,
-        css`
-            :host {
-                display: block;
-            }
-
-            ha-card {
-                padding: 0;
-            }
-
-            .card-header {
-                align-items: center;
-                border-bottom: 1px solid var(--lcm-border-color);
-                display: flex;
-                gap: 12px;
-                padding: 16px;
-            }
-
-            .header-icon {
-                align-items: center;
-                background: var(--lcm-active-bg);
-                border-radius: 50%;
-                color: var(--primary-color);
-                display: flex;
-                height: 40px;
-                justify-content: center;
-                width: 40px;
-            }
-
-            .header-icon ha-icon {
-                --mdc-icon-size: 24px;
-            }
-
-            .card-header-title {
-                color: var(--primary-text-color);
-                font-size: 18px;
-                font-weight: 500;
-            }
-
-            .card-content {
-                padding: 16px;
-            }
-
-            .slots-grid {
-                display: grid;
-                gap: 10px;
-                grid-template-columns: repeat(2, 1fr);
-            }
-
-            @media (max-width: 400px) {
-                .slots-grid {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            .slot-chip {
-                background: var(--lcm-section-bg);
-                border-radius: 12px;
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-                min-width: 0;
-                overflow: hidden;
-                padding: 12px 12px 14px;
-                position: relative;
-            }
-
-            /* Active LCM Managed: Primary blue with tinted background */
-            .slot-chip.active.managed {
-                background: var(--lcm-active-bg-gradient);
-            }
-
-            /* Active Unmanaged (not LCM): Neutral gray, plain background */
-            .slot-chip.active.unmanaged {
-                background: linear-gradient(
-                    135deg,
-                    rgba(var(--rgb-primary-text-color), 0.06),
-                    rgba(var(--rgb-primary-text-color), 0.02)
-                );
-            }
-
-            /* Inactive LCM Managed: Muted blue, slightly faded */
-            .slot-chip.inactive.managed {
-                background: rgba(var(--rgb-primary-color), 0.05);
-                opacity: 0.85;
-            }
-
-            /* Disabled LCM Managed: Very muted, clear disabled state */
-            .slot-chip.disabled.managed {
-                background: rgba(var(--rgb-primary-text-color), 0.04);
-                opacity: 0.65;
-            }
-
-            .slot-chip.empty {
-                background: var(--lcm-section-bg);
-                opacity: 0.7;
-            }
-
-            .slot-chip.full-width {
-                grid-column: 1 / -1;
-                justify-self: center;
-                max-width: 360px;
-                width: 100%;
-            }
-
-            .slot-chip.clickable {
-                cursor: pointer;
-                transition:
-                    transform 0.1s ease,
-                    box-shadow 0.2s ease;
-            }
-
-            .slot-chip.clickable:hover {
-                box-shadow: 0 2px 8px rgba(var(--rgb-primary-color), 0.25);
-                transform: translateY(-1px);
-            }
-
-            .slot-chip.clickable:active {
-                transform: translateY(0);
-            }
-
-            .slot-top {
-                align-items: flex-start;
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-            }
-
-            .slot-badges {
-                align-items: center;
-                display: inline-flex;
-                flex-wrap: wrap;
-                gap: 6px;
-            }
-
-            .slot-label {
-                color: var(--secondary-text-color);
-                font-size: var(--lcm-section-header-size);
-                font-weight: 500;
-                letter-spacing: 0.03em;
-                text-transform: uppercase;
-                width: 100%;
-            }
-
-            .slot-name {
-                color: var(--primary-text-color);
-                font-size: 15px;
-                font-weight: 500;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
-            .slot-name.unnamed {
-                color: var(--secondary-text-color);
-                font-weight: 400;
-            }
-
-            /* Disabled slot: strikethrough name */
-            .slot-chip.disabled .slot-name {
-                color: var(--secondary-text-color);
-                text-decoration: line-through;
-            }
-
-            .slot-code-row {
-                align-items: center;
-                display: flex;
-                gap: 8px;
-                justify-content: space-between;
-            }
-
-            .slot-code-actions {
-                display: inline-flex;
-            }
-
-            /* Editable code for unmanaged slots */
-            .slot-code-edit {
-                display: flex;
-                flex-direction: column;
-                gap: 4px;
-                width: 100%;
-            }
-
-            .slot-code-edit-row {
-                align-items: center;
-                display: flex;
-                gap: 8px;
-            }
-
-            .slot-code-input {
-                background: var(--card-background-color, #fff);
-                border: 1px solid var(--primary-color);
-                border-radius: 6px;
-                color: var(--primary-text-color);
-                flex: 1;
-                font-family: var(--lcm-code-font);
-                font-size: 14px;
-                font-weight: 500;
-                min-width: 0;
-                letter-spacing: var(--lcm-code-letter-spacing);
-                min-width: 0;
-                outline: none;
-                padding: 6px 10px;
-            }
-
-            .slot-code-input:focus {
-                box-shadow: 0 0 0 1px var(--primary-color);
-            }
-
-            .slot-code-input::placeholder {
-                color: var(--secondary-text-color);
-                font-weight: 400;
-                letter-spacing: normal;
-            }
-
-            .slot-code-edit-buttons {
-                display: flex;
-                gap: 4px;
-            }
-
-            .slot-code-edit-buttons ha-icon-button {
-                --mdc-icon-button-size: 32px;
-                --mdc-icon-size: 18px;
-            }
-
-            .slot-edit-help {
-                color: var(--secondary-text-color);
-                font-size: 10px;
-            }
-
-            /* Editable code display (click to edit) */
-            .lcm-code.editable {
-                border-radius: 4px;
-                cursor: pointer;
-                margin: -2px -4px;
-                padding: 2px 4px;
-                transition: background-color 0.2s;
-            }
-
-            .lcm-code.editable:hover {
-                background: var(--lcm-active-bg);
-            }
-
-            .empty-summary {
-                align-items: center;
-                background: var(--lcm-section-bg);
-                border: 1px dashed var(--lcm-border-color-strong);
-                border-radius: 10px;
-                color: var(--secondary-text-color);
-                display: flex;
-                font-size: 12px;
-                gap: 8px;
-                grid-column: 1 / -1;
-                padding: 8px 12px;
-            }
-
-            .empty-summary ha-icon {
-                --mdc-icon-size: 16px;
-                color: var(--secondary-text-color);
-            }
-
-            .empty-summary-label {
-                color: var(--secondary-text-color);
-                font-size: var(--lcm-section-header-size);
-                font-weight: 600;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-            }
-
-            .empty-summary-range {
-                color: var(--primary-text-color);
-                font-size: 13px;
-                font-weight: 500;
-            }
-
-            .message {
-                color: var(--secondary-text-color);
-                font-style: italic;
-            }
-
-            /* Summary table */
-            .summary-table {
-                border-collapse: collapse;
-                font-size: 12px;
-                margin-top: 16px;
-                width: 100%;
-            }
-
-            .summary-table th,
-            .summary-table td {
-                padding: 6px 8px;
-                text-align: center;
-            }
-
-            .summary-table th {
-                background: rgba(var(--rgb-primary-text-color), 0.04);
-                color: var(--secondary-text-color);
-                font-size: 10px;
-                font-weight: 600;
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-            }
-
-            .summary-table th:first-child {
-                border-radius: 6px 0 0 0;
-                text-align: left;
-            }
-
-            .summary-table th:last-child {
-                border-radius: 0 6px 0 0;
-            }
-
-            .summary-table td {
-                border-top: 1px solid var(--lcm-border-color);
-                color: var(--primary-text-color);
-                font-weight: 500;
-            }
-
-            .summary-table td:first-child {
-                color: var(--secondary-text-color);
-                font-size: var(--lcm-section-header-size);
-                font-weight: 600;
-                letter-spacing: 0.03em;
-                text-align: left;
-                text-transform: uppercase;
-            }
-
-            .summary-table tr:last-child td:first-child {
-                border-radius: 0 0 0 6px;
-            }
-
-            .summary-table tr:last-child td:last-child {
-                border-radius: 0 0 6px 0;
-            }
-
-            .summary-table .total-row td {
-                background: rgba(var(--rgb-primary-text-color), 0.02);
-                border-top: 2px solid var(--lcm-border-color-strong);
-                font-weight: 600;
-            }
-
-            .summary-cell-zero {
-                color: var(--disabled-text-color) !important;
-                font-weight: 400 !important;
-            }
-        `
-    ];
+    static styles = lockCodesCardStyles;
 
     // Note: _revealed, _unsub, _subscribing provided by LcmSubscriptionMixin
     @property({ attribute: false }) _hass?: HomeAssistant;
@@ -405,8 +60,36 @@ class LockCodesCard extends LockCodesCardBase {
         return document.createElement('lcm-lock-codes-editor');
     }
 
-    static getStubConfig(): Partial<LockCodesCardConfig> {
-        return { lock_entity_id: '' };
+    static async getStubConfig(hass: HomeAssistant): Promise<Record<string, unknown>> {
+        const stub = { lock_entity_id: 'lock.stub', type: 'custom:lcm-lock-codes' };
+        try {
+            return await Promise.race([
+                (async () => {
+                    const entries = await hass.callWS<GetConfigEntriesResponse>({
+                        domain: 'lock_code_manager',
+                        type: 'config_entries/get'
+                    });
+                    if (entries.length > 0) {
+                        const data = await hass.callWS<LockCodeManagerConfigEntryDataResponse>({
+                            config_entry_id: entries[0].entry_id,
+                            type: 'lock_code_manager/get_config_entry_data'
+                        });
+                        if (data.locks.length > 0) {
+                            return {
+                                lock_entity_id: data.locks[0].entity_id,
+                                type: 'custom:lcm-lock-codes'
+                            };
+                        }
+                    }
+                    return stub;
+                })(),
+                new Promise<Record<string, unknown>>((resolve) =>
+                    setTimeout(() => resolve(stub), 2000)
+                )
+            ]);
+        } catch {
+            return stub;
+        }
     }
 
     setConfig(config: LockCodesCardConfig): void {
@@ -418,7 +101,10 @@ class LockCodesCard extends LockCodesCardBase {
             this._data = undefined;
         }
         this._config = config;
-        void this._subscribe();
+        this._isStub = config.lock_entity_id === 'lock.stub';
+        if (!this._isStub) {
+            void this._subscribe();
+        }
     }
 
     // Mixin abstract method implementations
@@ -444,6 +130,16 @@ class LockCodesCard extends LockCodesCardBase {
     // connectedCallback and disconnectedCallback provided by mixin
 
     protected render(): TemplateResult {
+        // Show static preview for card picker (stub config)
+        if (this._isStub) {
+            return html`<ha-card>
+                <div class="card-header">
+                    <div class="header-icon"><ha-icon icon="mdi:lock-smart"></ha-icon></div>
+                    <span class="card-header-title">Lock Code Manager Lock Codes</span>
+                </div>
+            </ha-card>`;
+        }
+
         const hassLockName =
             this._hass?.states[this._config?.lock_entity_id ?? '']?.attributes?.friendly_name;
         const lockName =
@@ -481,7 +177,7 @@ class LockCodesCard extends LockCodesCardBase {
         }
         // Get the current code value (if any); sentinels are not editable values
         const currentCode =
-            slot.code !== null && slot.code !== 'empty' && slot.code !== 'unknown'
+            isSlotOccupied(slot.code) && slot.code !== SLOT_CODE_UNREADABLE
                 ? String(slot.code)
                 : '';
         this._editValue = currentCode;
@@ -525,12 +221,21 @@ class LockCodesCard extends LockCodesCardBase {
         const usercode = this._editValue.trim();
 
         try {
-            await this._hass.connection.sendMessagePromise({
-                code_slot: typeof slot === 'string' ? parseInt(slot, 10) : slot,
-                lock_entity_id: this._config.lock_entity_id,
-                type: 'lock_code_manager/set_lock_usercode',
-                usercode: usercode || undefined
-            });
+            const slotNum = typeof slot === 'string' ? parseInt(slot, 10) : slot;
+            if (usercode) {
+                await this._hass.connection.sendMessagePromise({
+                    code_slot: slotNum,
+                    lock_entity_id: this._config.lock_entity_id,
+                    type: 'lock_code_manager/set_usercode',
+                    usercode
+                });
+            } else {
+                await this._hass.connection.sendMessagePromise({
+                    code_slot: slotNum,
+                    lock_entity_id: this._config.lock_entity_id,
+                    type: 'lock_code_manager/clear_usercode'
+                });
+            }
             // Success - exit edit mode
             this._editingSlot = null;
             this._editValue = '';
@@ -559,33 +264,39 @@ class LockCodesCard extends LockCodesCardBase {
         }
 
         const groups = this._groupSlots(slots);
-        const result: TemplateResult[] = [];
+        const borrowedSlots = this._identifyBorrowedSlots(groups);
+        const result = this._renderGroupsWithBorrowing(groups, borrowedSlots);
+        return html`<div class="slots-grid">${result}</div>`;
+    }
 
-        // Track slots borrowed from empty groups so we can adjust their ranges
-        const borrowedSlots = new Set<number | string>();
-
-        // First pass: identify slots to borrow from empty groups
+    /** Find empty-group slots to "borrow" so lone active slots get a grid partner. */
+    private _identifyBorrowedSlots(groups: SlotGroup[]): Set<number | string> {
+        const borrowed = new Set<number | string>();
         for (let i = 0; i < groups.length; i++) {
             const group = groups[i];
-            const prevGroup = i > 0 ? groups[i - 1] : null;
-            const nextGroup = i < groups.length - 1 ? groups[i + 1] : null;
-
             if (group.type === 'active' && group.slots.length === 1) {
                 const [slot] = group.slots;
                 const slotNum = typeof slot.slot === 'string' ? parseInt(slot.slot, 10) : slot.slot;
                 const isOdd = slotNum % 2 === 1;
+                const prevGroup = i > 0 ? groups[i - 1] : null;
+                const nextGroup = i < groups.length - 1 ? groups[i + 1] : null;
 
                 if (isOdd && nextGroup?.type === 'empty' && nextGroup.slots.length > 0) {
-                    // Odd slot before empty range - borrow first slot from empty range
-                    borrowedSlots.add(nextGroup.slots[0].slot);
+                    borrowed.add(nextGroup.slots[0].slot);
                 } else if (!isOdd && prevGroup?.type === 'empty' && prevGroup.slots.length > 0) {
-                    // Even slot after empty range - borrow last slot from empty range
-                    borrowedSlots.add(prevGroup.slots[prevGroup.slots.length - 1].slot);
+                    borrowed.add(prevGroup.slots[prevGroup.slots.length - 1].slot);
                 }
             }
         }
+        return borrowed;
+    }
 
-        // Second pass: render with borrowed slots
+    /** Render slot groups, pairing lone active slots with borrowed empty neighbors. */
+    private _renderGroupsWithBorrowing(
+        groups: SlotGroup[],
+        borrowedSlots: Set<number | string>
+    ): TemplateResult[] {
+        const result: TemplateResult[] = [];
         for (let i = 0; i < groups.length; i++) {
             const group = groups[i];
             const prevGroup = i > 0 ? groups[i - 1] : null;
@@ -599,7 +310,6 @@ class LockCodesCard extends LockCodesCardBase {
                     const isOdd = slotNum % 2 === 1;
 
                     if (isOdd && nextGroup?.type === 'empty' && nextGroup.slots.length > 0) {
-                        // Odd slot on left, borrowed empty slot on right
                         result.push(this._renderSlotChip(slot, false));
                         result.push(this._renderEmptySlotChip(nextGroup.slots[0]));
                     } else if (
@@ -607,23 +317,19 @@ class LockCodesCard extends LockCodesCardBase {
                         prevGroup?.type === 'empty' &&
                         prevGroup.slots.length > 0
                     ) {
-                        // Borrowed empty slot on left, even slot on right
                         result.push(
                             this._renderEmptySlotChip(prevGroup.slots[prevGroup.slots.length - 1])
                         );
                         result.push(this._renderSlotChip(slot, false));
                     } else {
-                        // No adjacent empty group to borrow from - use full width
                         result.push(this._renderSlotChip(slot, true));
                     }
                 } else {
-                    // Multiple slots - render normally
                     for (const slot of group.slots) {
                         result.push(this._renderSlotChip(slot, false));
                     }
                 }
             } else {
-                // Empty group - filter out borrowed slots and render if any remain
                 const remainingSlots = group.slots.filter((s) => !borrowedSlots.has(s.slot));
                 if (remainingSlots.length > 0) {
                     result.push(
@@ -636,8 +342,7 @@ class LockCodesCard extends LockCodesCardBase {
                 }
             }
         }
-
-        return html`<div class="slots-grid">${result}</div>`;
+        return result;
     }
 
     private _renderEmptySlotChip(slot: LockCoordinatorSlotData): TemplateResult {
@@ -820,48 +525,56 @@ class LockCodesCard extends LockCodesCardBase {
         const isEditing = this._editingSlot === slot.slot;
         const isUnmanaged = slot.managed !== true;
 
-        // Editing mode for unmanaged slots
         if (isEditing && isUnmanaged) {
-            return html`
-                <div class="slot-code-edit" @click=${(e: Event) => e.stopPropagation()}>
-                    <div class="slot-code-edit-row">
-                        <input
-                            class="slot-code-input"
-                            type="text"
-                            inputmode="numeric"
-                            pattern="[0-9]*"
-                            placeholder="PIN"
-                            .value=${this._editValue}
-                            @input=${this._handleEditInput}
-                            @keydown=${this._handleEditKeydown}
-                            ?disabled=${this._saving}
-                        />
-                        <div class="slot-code-edit-buttons">
-                            <ha-icon-button
-                                .path=${mdiCheck}
-                                @click=${() => this._saveCode(slot.slot)}
-                                .label=${'Save'}
-                                ?disabled=${this._saving}
-                            ></ha-icon-button>
-                            <ha-icon-button
-                                .path=${mdiClose}
-                                @click=${this._cancelEdit}
-                                .label=${'Cancel'}
-                                ?disabled=${this._saving}
-                            ></ha-icon-button>
-                        </div>
-                    </div>
-                    <span class="slot-edit-help">
-                        ${this._saving ? 'Saving...' : 'Enter to save, Esc to cancel'}
-                    </span>
-                </div>
-            `;
+            return this._renderCodeEditMode(slot);
         }
+        return this._renderCodeDisplayMode(slot, hasCode, mode, isUnmanaged && !isEditing);
+    }
 
-        // Normal display mode
-        const isEditable = isUnmanaged && !isEditing;
+    private _renderCodeEditMode(slot: LockCoordinatorSlotData): TemplateResult {
+        return html`
+            <div class="slot-code-edit" @click=${(e: Event) => e.stopPropagation()}>
+                <div class="slot-code-edit-row">
+                    <input
+                        class="slot-code-input"
+                        type="text"
+                        inputmode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="PIN"
+                        .value=${this._editValue}
+                        @input=${this._handleEditInput}
+                        @keydown=${this._handleEditKeydown}
+                        ?disabled=${this._saving}
+                    />
+                    <div class="slot-code-edit-buttons">
+                        <ha-icon-button
+                            .path=${mdiCheck}
+                            @click=${() => this._saveCode(slot.slot)}
+                            .label=${'Save'}
+                            ?disabled=${this._saving}
+                        ></ha-icon-button>
+                        <ha-icon-button
+                            .path=${mdiClose}
+                            @click=${this._cancelEdit}
+                            .label=${'Cancel'}
+                            ?disabled=${this._saving}
+                        ></ha-icon-button>
+                    </div>
+                </div>
+                <span class="slot-edit-help">
+                    ${this._saving ? 'Saving...' : 'Enter to save, Esc to cancel'}
+                </span>
+            </div>
+        `;
+    }
+
+    private _renderCodeDisplayMode(
+        slot: LockCoordinatorSlotData,
+        hasCode: boolean,
+        mode: CodeDisplayMode,
+        isEditable: boolean
+    ): TemplateResult {
         const editableClass = isEditable ? 'editable' : '';
-
         return html`
             <div class="slot-code-row">
                 <span
@@ -889,22 +602,17 @@ class LockCodesCard extends LockCodesCardBase {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
-        // Active code on the lock
-        if (slot.code === 'empty') return 'no-code';
-        if (slot.code === 'unknown') return 'masked';
-        if (slot.code !== null && slot.code !== '') return '';
-        if (slot.code_length) return 'masked';
+        if (slot.code === SLOT_CODE_UNREADABLE || slot.code_length) return 'masked';
+        if (!isSlotEmpty(slot.code)) return '';
 
-        // No active code - check for configured code (disabled LCM slot)
+        // Empty/null code on the lock — check for a configured PIN
+        // (disabled LCM slot where the code hasn't been pushed yet).
         if (slot.configured_code) {
-            // We have the actual code - choose class based on display mode
             return shouldMask ? 'disabled masked' : 'disabled';
         }
         if (slot.configured_code_length) {
-            // Only have length (always masked)
             return 'disabled masked';
         }
-
         return 'no-code';
     }
 
@@ -913,13 +621,12 @@ class LockCodesCard extends LockCodesCardBase {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
         // Active code on the lock
-        if (slot.code === 'empty') return '—';
-        if (slot.code === 'unknown') return '• • •';
-        if (slot.code !== null && slot.code !== '') {
+        if (slot.code === SLOT_CODE_UNREADABLE) return '• • •';
+        if (isSlotEmpty(slot.code)) {
+            if (slot.code_length) return '•'.repeat(slot.code_length);
+            // Fall through to configured code or dash below
+        } else if (slot.code !== null) {
             return shouldMask ? '•'.repeat(String(slot.code).length) : String(slot.code);
-        }
-        if (slot.code_length) {
-            return '•'.repeat(slot.code_length);
         }
 
         // Disabled LCM slot: show configured code (respect masking)
@@ -1039,9 +746,7 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     private _hasCode(slot: LockCoordinatorSlotData): boolean {
-        if (slot.code === 'empty') return false;
-        if (slot.code !== null && slot.code !== '') return true;
-        return !!slot.code_length;
+        return isSlotOccupied(slot.code, slot.code_length);
     }
 }
 
@@ -1049,7 +754,12 @@ customElements.define('lcm-lock-codes', LockCodesCard);
 
 declare global {
     interface Window {
-        customCards?: Array<{ description: string; name: string; type: string }>;
+        customCards?: Array<{
+            description: string;
+            name: string;
+            preview?: boolean;
+            type: string;
+        }>;
     }
 }
 
@@ -1057,5 +767,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
     description: 'Displays lock slot codes from Lock Code Manager',
     name: 'LCM Lock Codes Card',
-    type: 'custom:lcm-lock-codes'
+    preview: true,
+    type: 'lcm-lock-codes'
 });
