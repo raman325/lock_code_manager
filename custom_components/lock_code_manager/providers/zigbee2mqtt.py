@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
@@ -15,6 +15,7 @@ from homeassistant.components.mqtt import (
     async_subscribe,
 )
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
+from homeassistant.core import callback
 
 from ..const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from ..data import get_entry_data
@@ -126,6 +127,76 @@ class Zigbee2MQTTLock(BaseLock):
 
         return True
 
+    @callback
+    def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
+        """Apply device-topic JSON inside the event loop.
+
+        MQTT may invoke subscription callbacks from a worker thread; coordinator and
+        asyncio futures are not thread-safe.
+        """
+
+        # Handle pin_code_added action
+        if payload.get("action") == "pin_code_added":
+            action_user = payload.get("action_user")
+            if action_user is not None:
+                LOGGER.debug(
+                    "Lock %s received pin_code_added for user %s",
+                    self.lock.entity_id,
+                    action_user,
+                )
+                if self.coordinator:
+                    self.hass.async_create_task(
+                        self.coordinator.async_request_refresh()
+                    )
+            return
+
+        # Handle users data in state update
+        users_data = payload.get("users")
+        if users_data and isinstance(users_data, dict):
+            updates: dict[int, str | SlotCode] = {}
+            for user_id_str, user_info in users_data.items():
+                try:
+                    user_id = int(user_id_str)
+                except (ValueError, TypeError):
+                    continue
+
+                if isinstance(user_info, dict):
+                    status = user_info.get("status")
+                    pin_code = user_info.get("pin_code", "")
+
+                    if status == "enabled" and pin_code:
+                        updates[user_id] = str(pin_code)
+                    else:
+                        updates[user_id] = SlotCode.EMPTY
+
+            if updates and self.coordinator:
+                LOGGER.debug(
+                    "Lock %s received push update for slots: %s",
+                    self.lock.entity_id,
+                    list(updates.keys()),
+                )
+                self.coordinator.push_update(updates)
+
+        # Handle response to get request with pin_code data
+        pin_code_data = payload.get("pin_code")
+        if pin_code_data and isinstance(pin_code_data, dict):
+            user_id = pin_code_data.get("user")
+            if user_id is not None:
+                try:
+                    user_id = int(user_id)
+                except (ValueError, TypeError):
+                    return
+
+                if user_id in self._pending_codes:
+                    future = self._pending_codes.pop(user_id)
+                    if not future.done():
+                        user_enabled = pin_code_data.get("user_enabled", False)
+                        pin_code = pin_code_data.get("pin_code", "")
+                        if user_enabled and pin_code:
+                            future.set_result(str(pin_code))
+                        else:
+                            future.set_result(None)
+
     def setup_push_subscription(self) -> None:
         """Subscribe to MQTT updates for this lock."""
         if self._unsubscribe is not None:
@@ -152,70 +223,7 @@ class Zigbee2MQTTLock(BaseLock):
                 except (json.JSONDecodeError, TypeError):
                     return
 
-                # Handle pin_code_added action
-                if payload.get("action") == "pin_code_added":
-                    action_user = payload.get("action_user")
-                    if action_user is not None:
-                        LOGGER.debug(
-                            "Lock %s received pin_code_added for user %s",
-                            self.lock.entity_id,
-                            action_user,
-                        )
-                        # Trigger coordinator refresh to get updated codes
-                        if self.coordinator:
-                            self.hass.async_create_task(
-                                self.coordinator.async_request_refresh()
-                            )
-                    return
-
-                # Handle users data in state update
-                users_data = payload.get("users")
-                if users_data and isinstance(users_data, dict):
-                    updates: dict[int, str | SlotCode] = {}
-                    for user_id_str, user_info in users_data.items():
-                        try:
-                            user_id = int(user_id_str)
-                        except (ValueError, TypeError):
-                            continue
-
-                        if isinstance(user_info, dict):
-                            status = user_info.get("status")
-                            pin_code = user_info.get("pin_code", "")
-
-                            # Check if slot is enabled
-                            if status == "enabled" and pin_code:
-                                updates[user_id] = str(pin_code)
-                            else:
-                                updates[user_id] = SlotCode.EMPTY
-
-                    if updates and self.coordinator:
-                        LOGGER.debug(
-                            "Lock %s received push update for slots: %s",
-                            self.lock.entity_id,
-                            list(updates.keys()),
-                        )
-                        self.coordinator.push_update(updates)
-
-                # Handle response to get request with pin_code data
-                pin_code_data = payload.get("pin_code")
-                if pin_code_data and isinstance(pin_code_data, dict):
-                    user_id = pin_code_data.get("user")
-                    if user_id is not None:
-                        try:
-                            user_id = int(user_id)
-                        except (ValueError, TypeError):
-                            return
-
-                        # Complete any pending future for this slot
-                        if user_id in self._pending_codes:
-                            future = self._pending_codes.pop(user_id)
-                            if not future.done():
-                                user_enabled = pin_code_data.get("user_enabled", False)
-                                pin_code = pin_code_data.get("pin_code", "")
-                                if user_enabled and pin_code:
-                                    future.set_result(str(pin_code))
-                                else:
-                                    future.set_result(None)
+                self.hass.add_job(self._process_z2m_device_payload, payload)
 
             try:
                 self._unsubscribe = await async_subscribe(
