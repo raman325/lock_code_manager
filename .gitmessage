@@ -1,9 +1,0 @@
-
-
-# Subject line (required): type(scope): short summary (~72 chars).
-# Types: fix | feat | style | refactor | test | docs | chore | perf
-# Scopes (examples): zigbee2mqtt | zwave_js | mqtt | config_flow | coordinator
-#
-# Example: fix(zigbee2mqtt): do not infer EMPTY when pin_code omitted in MQTT state
-#
-# Body (optional): blank line after subject, then explain why / what changed.

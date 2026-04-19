@@ -55,11 +55,6 @@ uv pip install -r requirements_dev.txt
 
 
 pre-commit install
-
-# Remember conventional-style commit subjects (template is .gitmessage)
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-git -C "${REPO_ROOT}" config commit.template "${REPO_ROOT}/.gitmessage"
-
 yarn install
 
 # Setup directories for HA and linking
