@@ -134,7 +134,6 @@ class Zigbee2MQTTLock(BaseLock):
         MQTT may invoke subscription callbacks from a worker thread; coordinator and
         asyncio futures are not thread-safe.
         """
-
         # Handle pin_code added / deleted (Z2M action events, not the users object)
         if payload.get("action") in ("pin_code_added", "pin_code_deleted"):
             action_user = payload.get("action_user")
