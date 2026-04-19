@@ -368,12 +368,15 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected("Could not determine MQTT topic")
 
         try:
-            # Clear by setting user_enabled to false
+            # Z2M: many locks need user_enabled false and pin_code null to clear the slot
+            # (user_enabled only is not always enough on the device).
             payload = json.dumps(
                 {
                     "pin_code": {
                         "user": code_slot,
+                        "user_type": "unrestricted",
                         "user_enabled": False,
+                        "pin_code": None,
                     }
                 }
             )
