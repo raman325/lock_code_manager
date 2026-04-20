@@ -602,7 +602,7 @@ class SlotSyncManager:
             return
         except (LockDisconnected, LockOperationFailed) as err:
             _LOGGER.info(
-                "%s: Lock disconnected during %s usercode: %s. Will retry on next tick.",
+                "%s: Lock operation failed during %s usercode: %s. Will retry on next tick.",
                 self._log_prefix,
                 "set" if slot_state.active_state == STATE_ON else "clear",
                 err,
