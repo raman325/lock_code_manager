@@ -175,6 +175,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         _reset_backoff (successful poll or push update).
         """
         self._suspended = True
+        _LOGGER.info("Sync suspended for %s", self._lock.lock.entity_id)
 
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""

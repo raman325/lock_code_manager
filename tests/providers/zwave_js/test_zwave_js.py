@@ -14,6 +14,7 @@ from zwave_js_server.const.command_class.lock import (
     CodeSlotStatus,
 )
 from zwave_js_server.event import Event as ZwaveEvent
+from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.node import Node
 
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
@@ -614,7 +615,9 @@ async def test_v1_set_usercode_poll_failure_raises_lock_disconnected(
     mock_coordinator.data = {4: ""}
     zwave_js_lock.coordinator = mock_coordinator
 
-    mock_get_usercode_from_node.side_effect = RuntimeError("Z-Wave command failed")
+    mock_get_usercode_from_node.side_effect = FailedZWaveCommand(
+        "msg_id", 202, "Node presumed dead"
+    )
 
     with pytest.raises(LockDisconnected, match="Post-set verification poll failed"):
         await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
@@ -642,9 +645,62 @@ async def test_v1_clear_usercode_poll_failure_raises_lock_disconnected(
     mock_coordinator.data = {2: "1234"}
     zwave_js_lock.coordinator = mock_coordinator
 
-    mock_get_usercode_from_node.side_effect = RuntimeError("Z-Wave command failed")
+    mock_get_usercode_from_node.side_effect = FailedZWaveCommand(
+        "msg_id", 202, "Node presumed dead"
+    )
 
     with pytest.raises(LockDisconnected, match="Post-clear verification poll failed"):
+        await zwave_js_lock.async_clear_usercode(2)
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_v1_set_usercode_poll_non_zwave_error_propagates(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    mock_get_usercode_from_node,
+) -> None:
+    """Non-Z-Wave errors from V1 post-set poll propagate uncaught.
+
+    Only FailedZWaveCommand is wrapped as LockDisconnected. Other
+    exceptions (programming errors) should propagate so the sync
+    manager's generic handler can suspend the lock and surface the bug.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {4: ""}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    mock_get_usercode_from_node.side_effect = RuntimeError("unexpected bug")
+
+    with pytest.raises(RuntimeError, match="unexpected bug"):
+        await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_v1_clear_usercode_poll_non_zwave_error_propagates(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    mock_get_usercode_from_node,
+) -> None:
+    """Non-Z-Wave errors from V1 post-clear poll propagate uncaught."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    mock_get_usercode_from_node.side_effect = RuntimeError("unexpected bug")
+
+    with pytest.raises(RuntimeError, match="unexpected bug"):
         await zwave_js_lock.async_clear_usercode(2)
 
     await zwave_js_lock.async_unload(False)

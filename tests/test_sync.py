@@ -629,6 +629,112 @@ class TestSyncStateMachine:
         mock_disable.assert_called_once()
         assert manager._coordinator.suspended is False
 
+    async def test_suspend_creates_repair_issue(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Suspension creates a per-lock slot_suspended repair issue."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected"),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        issue_registry = async_get_issue_registry(hass)
+        entry_id = lock_code_manager_config_entry.entry_id
+        lock_entity_id = manager._lock.lock.entity_id
+        issue = issue_registry.async_get_issue(
+            DOMAIN, f"slot_suspended_{entry_id}_{lock_entity_id}"
+        )
+        assert issue is not None
+        assert issue.severity == IssueSeverity.WARNING
+
+    async def test_slot_suspended_issue_deleted_on_recovery(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """slot_suspended repair issue is deleted when slot comes back in sync."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        entry_id = lock_code_manager_config_entry.entry_id
+        lock_entity_id = manager._lock.lock.entity_id
+
+        # Create a slot_suspended issue
+        issue_id = f"slot_suspended_{entry_id}_{lock_entity_id}"
+        async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            is_persistent=True,
+            severity=IssueSeverity.WARNING,
+            translation_key="slot_suspended",
+            translation_placeholders={
+                "lock_entity_id": lock_entity_id,
+                "lock_name": lock_entity_id,
+                "reason": "test",
+            },
+        )
+
+        issue_registry = async_get_issue_registry(hass)
+        assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+        # Set manager to OUT_OF_SYNC so the tick evaluates sync state
+        manager._state = SyncState.OUT_OF_SYNC
+
+        # Trigger a tick — coordinator has matching code so slot resolves to in sync
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        assert manager._state is SyncState.IN_SYNC
+        assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+    async def test_post_sync_verification_failure_stays_out_of_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Sync succeeds but post-sync check shows still out of sync."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        # _perform_sync succeeds but coordinator data stays EMPTY
+        # (simulating a lock that silently rejects the code).
+        # Also prevent coordinator refresh from re-fetching real data.
+        with (
+            patch.object(
+                manager,
+                "_perform_sync",
+                new_callable=AsyncMock,
+            ),
+            patch.object(
+                manager._coordinator,
+                "async_refresh",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        # Sync "succeeded" but verify check shows still out of sync
+        assert manager._state is SyncState.OUT_OF_SYNC
+
 
 class TestSyncStatusAttribute:
     """Tests for sync_status extra state attribute."""

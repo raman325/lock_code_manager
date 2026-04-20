@@ -27,6 +27,7 @@ from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
+from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.node import Node
 from zwave_js_server.util.lock import (
     get_usercode,
@@ -446,7 +447,7 @@ class ZWaveJSLock(BaseLock):
         if self._usercode_cc_version < 2:
             try:
                 await get_usercode_from_node(self.node, code_slot)
-            except Exception as err:
+            except FailedZWaveCommand as err:
                 raise LockDisconnected(
                     f"Post-set verification poll failed for "
                     f"{self.lock.entity_id} slot {code_slot}: {err}"
@@ -494,7 +495,7 @@ class ZWaveJSLock(BaseLock):
         if self._usercode_cc_version < 2:
             try:
                 await get_usercode_from_node(self.node, code_slot)
-            except Exception as err:
+            except FailedZWaveCommand as err:
                 raise LockDisconnected(
                     f"Post-clear verification poll failed for "
                     f"{self.lock.entity_id} slot {code_slot}: {err}"

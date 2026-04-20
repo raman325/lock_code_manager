@@ -442,7 +442,8 @@ class SlotSyncManager:
     def _request_sync_check(self, *_args: Any) -> None:
         """Request a sync check on the next tick.
 
-        Transitions IN_SYNC -> OUT_OF_SYNC if calculate_in_sync returns False.
+        Transitions IN_SYNC -> OUT_OF_SYNC if calculate_in_sync returns False
+        (also resets circuit breaker since the sync target changed).
         Transitions SUSPENDED -> OUT_OF_SYNC if the coordinator is no longer suspended.
         No-op for LOADING, OUT_OF_SYNC, SYNCING.
         """
@@ -452,11 +453,6 @@ class SlotSyncManager:
                 self._state = SyncState.OUT_OF_SYNC
                 self._reset_sync_tracker()
                 self._write_state()
-        elif self._state is SyncState.OUT_OF_SYNC:
-            # Sync target changed (PIN edited, slot toggled) while already
-            # out of sync — reset circuit breaker so stale attempt counts
-            # from a prior sync cycle don't trip the breaker prematurely.
-            self._reset_sync_tracker()
         elif self._state is SyncState.SUSPENDED:
             if not self._coordinator.suspended:
                 self._state = SyncState.OUT_OF_SYNC
