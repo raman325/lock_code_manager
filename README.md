@@ -33,8 +33,10 @@ Supported lock integrations:
 [hass-virtual][hass-virtual])
 
 ² **Zigbee2MQTT (MQTT)** — Pair the lock in [Zigbee2MQTT][zigbee2mqtt] with PIN/user-code support for your firmware.
-The **Code Events** column refers to PIN-used automations from Lock Code Manager’s event entity (which slots were used to lock/unlock).
-Zigbee2MQTT publishes device JSON and actions, but this provider does not yet map Z2M lock/unlock payloads to those events — the table correctly shows **No**.
+The **Code Events** column refers to PIN-used automations from Lock Code Manager’s event entity
+(which slots were used to lock/unlock).
+Zigbee2MQTT publishes device JSON and actions, but this provider does not yet map Z2M lock/unlock payloads to those
+events — the table correctly shows **No**.
 Configure Home Assistant’s **MQTT** integration on the **same broker** Zigbee2MQTT uses.
 The default Zigbee2MQTT base topic `zigbee2mqtt` matches what Lock Code Manager expects unless you customize topics
 (`{base_topic}/{friendly_name}/set|get`).
