@@ -70,10 +70,11 @@ class Zigbee2MQTTLock(BaseLock):
         return timedelta(seconds=30)
 
     def _get_friendly_name(self) -> str | None:
-        """Get the Zigbee2MQTT friendly name for this device."""
-        if self._friendly_name is not None:
-            return self._friendly_name
+        """Get the Zigbee2MQTT friendly name for this device.
 
+        Reads ``device_registry`` name on each call so renames stay aligned with the
+        Zigbee2MQTT friendly name (cached value alone would go stale).
+        """
         if not self.device_entry:
             LOGGER.debug("No device entry for %s", self.lock.entity_id)
             return None
@@ -88,14 +89,15 @@ class Zigbee2MQTTLock(BaseLock):
             LOGGER.debug("Device %s is not a Zigbee2MQTT device", self.lock.entity_id)
             return None
 
-        # The device name is the friendly_name in Zigbee2MQTT
-        self._friendly_name = self.device_entry.name
-        LOGGER.debug(
-            "Found Zigbee2MQTT friendly name for %s: %s",
-            self.lock.entity_id,
-            self._friendly_name,
-        )
-        return self._friendly_name
+        name = self.device_entry.name
+        if name != self._friendly_name:
+            self._friendly_name = name
+            LOGGER.debug(
+                "Zigbee2MQTT friendly name for %s: %s",
+                self.lock.entity_id,
+                name,
+            )
+        return name
 
     def _get_topic(self, suffix: str = "") -> str | None:
         """Get the MQTT topic for this device."""
@@ -277,42 +279,51 @@ class Zigbee2MQTTLock(BaseLock):
         # Get configured code slots for this lock (any LCM entry that includes this lock).
         code_slots = get_managed_slots(self.hass, self.lock.entity_id)
 
-        data: dict[int, str | SlotCode] = {}
+        if not code_slots:
+            return {}
 
-        for slot_num in code_slots:
+        loop = asyncio.get_running_loop()
+
+        async def wait_pin_response(
+            slot_num: int, future: asyncio.Future[str | None]
+        ) -> tuple[int, str | SlotCode]:
+            """Wait for MQTT pin_code reply or timeout; always clear pending entry."""
             try:
-                # Create a future to wait for response
-                future: asyncio.Future[str | None] = asyncio.Future()
-                self._pending_codes[slot_num] = future
-
-                # Request PIN code for this slot
-                payload = json.dumps({"pin_code": {"user": slot_num}})
-                await async_publish(self.hass, get_topic, payload)
-
                 try:
-                    # Wait for response with timeout
                     result = await asyncio.wait_for(future, timeout=10.0)
-                    data[slot_num] = result if result else SlotCode.EMPTY
+                    value = result if result else SlotCode.EMPTY
                 except TimeoutError:
                     LOGGER.debug(
                         "Timeout waiting for PIN code response for %s slot %s",
                         self.lock.entity_id,
                         slot_num,
                     )
-                    data[slot_num] = SlotCode.EMPTY
-                finally:
-                    self._pending_codes.pop(slot_num, None)
+                    value = SlotCode.EMPTY
+                except Exception as err:
+                    LOGGER.debug(
+                        "Failed to get PIN for %s slot %s: %s",
+                        self.lock.entity_id,
+                        slot_num,
+                        err,
+                    )
+                    value = SlotCode.EMPTY
+                return slot_num, value
+            finally:
+                self._pending_codes.pop(slot_num, None)
 
-            except Exception as err:
-                LOGGER.debug(
-                    "Failed to get PIN for %s slot %s: %s",
-                    self.lock.entity_id,
-                    slot_num,
-                    err,
-                )
-                data[slot_num] = SlotCode.EMPTY
+        pending: list[tuple[int, asyncio.Future[str | None]]] = []
+        for slot_num in code_slots:
+            future = loop.create_future()
+            self._pending_codes[slot_num] = future
+            payload = json.dumps({"pin_code": {"user": slot_num}})
+            await async_publish(self.hass, get_topic, payload)
+            pending.append((slot_num, future))
 
-        return data
+        pairs = await asyncio.gather(
+            *[wait_pin_response(sn, fut) for sn, fut in pending],
+        )
+
+        return dict(pairs)
 
     async def async_set_usercode(
         self,
