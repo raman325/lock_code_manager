@@ -186,3 +186,431 @@ create the PR
 ---
 
 check review comments. Add test coverage (see CI)
+
+---
+
+review PR 1063
+
+---
+
+<task-notification>
+<task-id>aa94b241cb1370835</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9d662aaa-f935-4906-a164-65e1a04fe236/tasks/aa94b241cb1370835.output</output-file>
+<status>completed</status>
+<summary>Agent "Silent failure hunt: PR 1063" completed</summary>
+<result>Now I have a comprehensive understanding of the PR. Let me compile my findings.
+
+---
+
+## Error Handling Audit: PR #1063 (Zigbee2MQTT Lock Provider)
+
+### File: `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/zigbee2mqtt.py`
+
+---
+
+### ISSUE 1: Silent JSON parse failure in `message_received`
+
+**Location:** Lines 347-349 (in the diff, actual lines within `setup_push_subscription`)
+
+```python
+try:
+    payload = json.loads(msg.payload)
+except (json.JSONDecodeError, TypeError):
+    return
+```
+
+**Severity:** MEDIUM
+
+**Issue Description:** When an MQTT message arrives with malformed JSON, the handler silently returns without any logging. If Zigbee2MQTT sends corrupt data, the user has no way to know their push updates are being dropped. This could cause the coordinator to never receive updates, resulting in stale data with no indication of why.
+
+**Hidden Errors:** `TypeError` here also catches cases where `msg.payload` is an unexpected type (not just `None`/bytes vs str mismatch), potentially masking programming errors in the MQTT layer.
+
+**User Impact:** The lock appears to stop receiving push updates with zero diagnostic information. Users would see stale codes and have no idea why.
+
+**Recommendation:** Add a debug-level log so that repeated parse failures are at least visible in debug logs:
+
+```python
+except (json.JSONDecodeError, TypeError) as err:
+    LOGGER.debug(
+        "Ignoring unparseable MQTT payload for %s: %s",
+        self.lock.entity_id,
+        err,
+    )
+    return
+```
+
+---
+
+### ISSUE 2: Timeout in `async_get_usercodes` silently returns `SlotCode.EMPTY` instead of signaling failure
+
+**Location:** Lines 411-420 (the `wait_pin_response` inner function)
+
+```python
+except TimeoutError:
+    LOGGER.debug(
+        "Timeout waiting for PIN code response for %s slot %s",
+        self.lock.entity_id,
+        slot_num,
+    )
+    value = SlotCode.EMPTY
+```
+
+**Severity:** CRITICAL
+
+**Issue Description:** When an MQTT `get` request times out (the lock did not respond), the slot is reported as `SlotCode.EMPTY`. This is semantically wrong -- a timeout means "we do not know what the lock holds," not "the slot is empty." If the lock is temporarily unresponsive or the MQTT broker drops the reply, the coordinator will believe all slots are empty and may attempt to re-push codes or report incorrect state. Worse, with the generic `except Exception` fallback below it, ANY unexpected error (including `CancelledError` on Python 3.8, programming bugs) also silently becomes `SlotCode.EMPTY`.
+
+**Hidden Errors:** The broader `except Exception` on lines 421-428 catches absolutely everything -- `RuntimeError`, `AttributeError`, `KeyError`, etc. -- and maps them all to `SlotCode.EMPTY` with only a debug log.
+
+**User Impact:** If the lock is temporarily slow or the broker drops a message, the sync manager sees empty slots and may trigger unnecessary set operations or report false "slot cleared" state. The user sees their codes apparently disappear and reappear, with only debug-level logs to explain why.
+
+**Recommendation:** Timeouts for ALL slots should raise `LockDisconnected` rather than returning empty values. A partial timeout (some slots respond, others do not) could either return only the successful slots or raise. At minimum, if a majority of slots timeout, this should raise `LockDisconnected`:
+
+```python
+except TimeoutError:
+    LOGGER.warning(
+        "Timeout waiting for PIN code response for %s slot %s - lock may be unresponsive",
+        self.lock.entity_id,
+        slot_num,
+    )
+    value = SlotCode.UNKNOWN  # or raise LockDisconnected
+```
+
+If `SlotCode.UNKNOWN` does not exist, the right pattern is to raise `LockDisconnected` when timeouts occur, since a non-responding lock IS effectively disconnected.
+
+---
+
+### ISSUE 3: `setup_push_subscription` subscription failure is logged but not propagated
+
+**Location:** Lines 357-369 (the `_async_subscribe` inner function)
+
+```python
+except Exception as err:
+    LOGGER.error(
+        "Failed to subscribe to MQTT for %s: %s",
+        self.lock.entity_id,
+        err,
+    )
+```
+
+**Severity:** HIGH
+
+**Issue Description:** When `async_subscribe` raises any exception, it is logged but never propagated. The `_unsubscribe` field remains `None`, meaning the lock has no push subscription active, yet nothing signals this failure to the coordinator or the caller. The base class docstring says "Raise on failure; the caller will log and retry on the next reconnect event" -- but the fire-and-forget `hass.async_create_task(_async_subscribe())` pattern prevents any exception from reaching the caller of `setup_push_subscription()`.
+
+**Hidden Errors:** This broad `except Exception` catches everything: `HomeAssistantError`, `TypeError`, `ValueError`, `RuntimeError`, `asyncio.CancelledError` -- all swallowed with just a log.
+
+**User Impact:** The lock provider reports `supports_push = True` but silently has no subscription active. The coordinator disables polling because it trusts push mode, so the user gets NO updates at all -- neither push nor poll.
+
+**Recommendation:** The `setup_push_subscription` method should await the subscription or set a flag that the coordinator can check. The base class expects `setup_push_subscription` to raise on failure. The fire-and-forget task pattern violates this contract:
+
+```python
+def setup_push_subscription(self) -&gt; None:
+    """Subscribe to MQTT updates for this lock."""
+    if self._unsubscribe is not None:
+        return
+
+    topic = self._get_topic()
+    if not topic:
+        raise LockDisconnected(...)
+
+    if not mqtt_config_entry_enabled(self.hass):
+        raise LockDisconnected("MQTT integration not enabled")
+
+    # Since this is a sync method, schedule and track subscription
+    self._subscription_task = self.hass.async_create_task(self._async_subscribe(topic))
+```
+
+Or better, if the base class allows it, make the subscription synchronous or provide a mechanism to report async setup failures.
+
+---
+
+### ISSUE 4: `async_set_usercode` and `async_clear_usercode` wrap ALL exceptions as `LockDisconnected`
+
+**Location:** Lines 490-497 and 535-542
+
+```python
+except Exception as err:
+    LOGGER.error(...)
+    raise LockDisconnected(f"Failed to set PIN: {err}") from err
+```
+
+**Severity:** HIGH
+
+**Issue Description:** Every possible exception from `async_publish` (and json.dumps, though unlikely to fail here) is converted to `LockDisconnected`. This includes programming errors (`TypeError`, `AttributeError`), authentication errors, permission errors, and more. The sync manager distinguishes between `LockDisconnected` (transient, retry later), `LockOperationFailed` (lock-side rejection), and `CodeRejectedError` (code not accepted). By mapping everything to `LockDisconnected`, the retry system will perpetually retry what might be a permanent failure or a bug.
+
+**Hidden Errors:** `TypeError` (if payload construction fails), `AttributeError` (if hass internals change), `PermissionError`, MQTT-specific auth failures -- all become "disconnected" and trigger retry logic.
+
+**User Impact:** A permanent configuration error (wrong topic, auth failure) will cause infinite retries with no useful feedback. The user sees "lock disconnected" when the real problem is something else entirely.
+
+**Recommendation:** Narrow the exception handling. Only catch MQTT-specific communication exceptions as `LockDisconnected`. Let programming errors propagate naturally:
+
+```python
+from homeassistant.components.mqtt.exceptions import MqttError  # if available
+
+try:
+    await async_publish(self.hass, set_topic, payload)
+except (OSError, TimeoutError) as err:
+    raise LockDisconnected(f"MQTT publish failed: {err}") from err
+except Exception as err:
+    raise LockOperationFailed(
+        f"Unexpected error setting PIN for {self.lock.entity_id} slot {code_slot}: {err}"
+    ) from err
+```
+
+---
+
+### ISSUE 5: `async_set_usercode` calls `coordinator.push_update` immediately without verifying success
+
+**Location:** Lines 486-488
+
+```python
+if self.coordinator:
+    self.coordinator.push_update({code_slot: str(usercode)})
+return True
+```
+
+**Severity:** HIGH
+
+**Issue Description:** After `async_publish` returns, the code immediately tells the coordinator "this code is now set." However, MQTT publish only means the message was sent to the broker -- it does NOT confirm the lock received or applied the code. If the lock is offline, the message sits in the broker queue (or is dropped with QoS 0). The coordinator now believes the slot has the new code, so the sync manager considers the slot in-sync. If the lock never receives the message, the actual state diverges silently.
+
+This is acknowledged in the comment ("Same pattern as Z-Wave JS") but Z-Wave JS has a confirmed delivery mechanism. MQTT with default QoS 0 does not.
+
+**User Impact:** Users believe their code is set on the lock when it may not be. This is a security concern for a lock management system -- the user thinks a code is active but it never reached the lock.
+
+**Recommendation:** Either:
+1. Do not call `push_update` immediately; let the next poll/push cycle from the lock confirm the state, OR
+2. Document that this is a deliberate optimistic update and rely on `hard_refresh_interval` to catch divergence, OR
+3. After publishing set, publish a get for the same slot and wait for confirmation before calling push_update.
+
+At minimum, add a comment explaining the risk and how `hard_refresh_interval` mitigates it.
+
+---
+
+### ISSUE 6: `_process_z2m_device_payload` silently skips invalid user IDs
+
+**Location:** Lines 274-276
+
+```python
+try:
+    user_id = int(user_id_str)
+except (ValueError, TypeError):
+    continue
+```
+
+**Severity:** MEDIUM
+
+**Issue Description:** If the users dictionary contains non-numeric keys (indicating a data format problem or protocol change in Zigbee2MQTT), they are silently skipped. No logging, no indication that data is being dropped.
+
+**User Impact:** If Zigbee2MQTT changes its payload format, data silently stops being processed with no diagnostic trace.
+
+**Recommendation:** Add debug logging:
+```python
+except (ValueError, TypeError):
+    LOGGER.debug("Skipping non-numeric user ID %r from %s", user_id_str, self.lock.entity_id)
+    continue
+```
+
+---
+
+### ISSUE 7: `_process_z2m_device_payload` pin_code response also silently skips invalid user IDs
+
+**Location:** Lines 311-313
+
+```python
+try:
+    user_id = int(user_id)
+except (ValueError, TypeError):
+    return
+```
+
+**Severity:** MEDIUM
+
+**Issue Description:** Same pattern as Issue 6 but worse -- this is a response to an explicit `get` request. If the lock returns a non-numeric user ID in a pin_code response, the pending future is never resolved, leading to a timeout. The connection between "bad response" and "timeout" is invisible.
+
+**User Impact:** The get request times out (Issue 2 compounds this -- timeout becomes `SlotCode.EMPTY`) with no indication that a response DID arrive but was unparseable.
+
+**Recommendation:** Log at warning level since this indicates a real protocol mismatch:
+```python
+except (ValueError, TypeError):
+    LOGGER.warning(
+        "Received pin_code response with non-numeric user ID %r for %s",
+        user_id,
+        self.lock.entity_id,
+    )
+    return
+```
+
+---
+
+### ISSUE 8: No validation that `async_publish` actually succeeded before returning `True`
+
+**Location:** Lines 478 and 525
+
+**Severity:** MEDIUM
+
+**Issue Description:** `async_publish` in Home Assistant's MQTT component does not raise on QoS 0 delivery failure. The `await` completes when the message is handed to the MQTT client library, not when it reaches the broker. Returning `True` implies success but provides no actual guarantee.
+
+**User Impact:** The return value `True` gives a false sense of confirmation. If the MQTT client is disconnected at the moment of publish, the message may be silently dropped.
+
+**Recommendation:** This is somewhat inherent to MQTT QoS 0, but the provider should at least check MQTT client connectivity before publishing (which it partially does via `async_is_integration_connected`). Consider using QoS 1 for set/clear operations if the HA MQTT component supports it.
+
+---
+
+### ISSUE 9: `async_is_integration_connected` may give false positives
+
+**Location:** Lines 230-244
+
+**Severity:** MEDIUM
+
+**Issue Description:** The connection check verifies: (1) MQTT config entry is enabled, (2) friendly name resolves, and (3) entity state is not "unavailable." However, the entity state can lag behind actual MQTT connectivity. The MQTT broker connection could be down while the HA entity still shows "locked" from its last known state. This means `async_is_integration_connected` returns `True` while the broker is unreachable, and the subsequent `async_publish` may fail silently (or raise depending on the HA MQTT implementation).
+
+**User Impact:** Operations proceed against a disconnected broker, leading to the issues described in Issue 5.
+
+**Recommendation:** Consider also checking `hass.data["mqtt"].connected` or the MQTT client's connection state if exposed by HA's MQTT component.
+
+---
+
+### Summary of Critical Findings
+
+| # | Severity | Issue |
+|---|----------|-------|
+| 1 | MEDIUM | Silent JSON parse failure with no logging |
+| 2 | CRITICAL | Timeout treated as "slot empty" -- masks communication failures |
+| 3 | HIGH | Subscription failure swallowed by fire-and-forget task, violates base class contract |
+| 4 | HIGH | Broad `except Exception` wraps all errors as `LockDisconnected` |
+| 5 | HIGH | Optimistic state update without delivery confirmation (security risk for lock manager) |
+| 6 | MEDIUM | Invalid user IDs silently skipped without logging |
+| 7 | MEDIUM | pin_code response parse failure causes invisible timeout |
+| 8 | MEDIUM | `True` return value does not reflect actual delivery |
+| 9 | MEDIUM | Connection check may give false positives |
+
+The most dangerous pattern in this PR is **Issue 2** combined with **Issue 5**: timeouts are treated as "empty" rather than "unknown," and writes are optimistically confirmed. Together, these create a scenario where:
+1. Lock goes temporarily offline
+2. A `get` times out, coordinator sees all slots as empty
+3. Sync manager re-pushes codes (publishes set)
+4. publish "succeeds" (handed to client), coordinator marks slots as set
+5. Lock is still offline, messages are dropped
+6. Lock comes back online with OLD codes, coordinator believes NEW codes are set
+7. State divergence is invisible until the next hard refresh (up to 1 hour later)</result>
+<usage><total_tokens>35241</total_tokens><tool_uses>8</tool_uses><duration_ms>122855</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a667a53e2ab23ebf9</task-id>
+<tool-use-id>toolu_01FkW67wjth8GJCRuUKGuFnY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9d662aaa-f935-4906-a164-65e1a04fe236/tasks/a667a53e2ab23ebf9.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 1063: Zigbee2MQTT provider" completed</summary>
+<result>This confirms the issue. Both Matter and Z-Wave JS implementations of `setup_push_subscription` are truly synchronous `@callback` methods that complete the subscription inline. The Zigbee2MQTT implementation defers the actual subscription to an async task, which breaks the contract.
+
+Here is my review:
+
+---
+
+## Review: PR #1063 - Zigbee2MQTT Lock Provider
+
+**Files reviewed:**
+- `/custom_components/lock_code_manager/providers/zigbee2mqtt.py` (new, 427 lines)
+- `/tests/providers/test_zigbee2mqtt.py` (new, 370 lines)
+- `/custom_components/lock_code_manager/providers/__init__.py` (modified)
+- `/custom_components/lock_code_manager/config_flow.py` (modified)
+- `/custom_components/lock_code_manager/manifest.json` (modified)
+- `README.md` (modified)
+
+---
+
+### Critical (90-100)
+
+**1. `setup_push_subscription` violates the synchronous `@callback` contract -- race condition and broken idempotency** (Confidence: 95)
+
+File: `custom_components/lock_code_manager/providers/zigbee2mqtt.py`, lines ~326-371
+
+The base class defines `setup_push_subscription` as `@callback` (synchronous, must not await). Both Z-Wave JS and Matter implement it fully synchronously -- subscription happens inline and the unsub handle is stored before return.
+
+The Zigbee2MQTT implementation does `hass.async_create_task(_async_subscribe())` and returns immediately. This means:
+
+1. `_unsubscribe` is still `None` when the method returns, so the idempotency guard (`if self._unsubscribe is not None: return`) is ineffective. A rapid reconnect cycle (which calls `subscribe_push_updates` again) will spawn duplicate subscriptions.
+2. The caller (`subscribe_push_updates` in `_base.py`) expects that on successful return, the subscription IS active. Instead, it might silently fail later inside the task with no error propagation.
+3. If the task fails, the `LockDisconnected` exception is swallowed (only logged) and the system believes push is active.
+
+**Fix:** HA's `async_subscribe` for MQTT needs to be awaited, but `setup_push_subscription` is `@callback`. The pattern used by other providers is that the subscription API itself is synchronous. Since MQTT's `async_subscribe` is async, you need a different approach. Options:
+- Override `async_setup()` to do the initial subscription (await `async_subscribe` there and store the unsub). Then make `setup_push_subscription` a no-op that just validates `_unsubscribe is not None` or re-subscribes synchronously if you can cache a reference.
+- Or, coordinate via a flag: set a `_subscribing` sentinel immediately so the idempotency guard works, then schedule the task. On failure, clear the sentinel.
+
+---
+
+**2. `call_soon_threadsafe` is unnecessary and introduces an extra scheduling hop** (Confidence: 82)
+
+File: `custom_components/lock_code_manager/providers/zigbee2mqtt.py`, lines ~345-355
+
+In Home Assistant, MQTT `message_received` callbacks registered via `async_subscribe` are already dispatched on the event loop. The code wraps the handler in `hass.loop.call_soon_threadsafe(_deliver)`, which is only needed if invoked from a non-event-loop thread. Since HA's MQTT dispatcher runs callbacks on the event loop, this adds an unnecessary extra scheduling hop. More importantly, `_process_z2m_device_payload` is decorated `@callback` -- it's designed to run synchronously on the loop.
+
+**Fix:** Remove the `call_soon_threadsafe` wrapper and call `self._process_z2m_device_payload(payload)` directly in `message_received`. Alternatively, if you want to be defensive about thread safety, verify that HA's MQTT guarantees callbacks on the event loop (it does since HA 2023.x+).
+
+---
+
+### Important (80-89)
+
+**3. `async_is_integration_connected` conflates device availability with integration connectivity** (Confidence: 85)
+
+File: `custom_components/lock_code_manager/providers/zigbee2mqtt.py`, lines ~230-244
+
+The base class separates concerns: `async_is_integration_connected()` checks if the integration/service layer is reachable, while `async_is_device_available()` checks if the physical device is responsive. The Zigbee2MQTT implementation checks entity state == "unavailable" inside `async_is_integration_connected`, but "unavailable" typically means the device is offline (Zigbee radio unreachable), not that MQTT itself is down.
+
+Per the base class contract (and AGENTS.md guidance item 4): "Optionally override `is_device_available()` to return `False` when the physical device is unresponsive." The entity state check belongs there.
+
+**Fix:** Split the logic:
+- `async_is_integration_connected`: only check `mqtt_config_entry_enabled(self.hass)` and that the friendly name can be resolved.
+- Override `async_is_device_available`: check `state.state != "unavailable"`.
+
+---
+
+**4. `async_get_usercodes` returns `SlotCode.EMPTY` on timeout -- may incorrectly trigger slot clears** (Confidence: 83)
+
+File: `custom_components/lock_code_manager/providers/zigbee2mqtt.py`, lines ~410-420
+
+When the MQTT response times out (10s), the code returns `SlotCode.EMPTY` for that slot. If the lock is just slow to respond (Zigbee congestion, sleeping end device), the coordinator sees EMPTY, thinks the slot is clear, and will attempt to re-program the PIN -- creating a sync loop. Other providers (Z-Wave JS) raise `UpdateFailed` in polling scenarios when the device doesn't respond, which tells the coordinator to retry later without making state assumptions.
+
+**Fix:** Consider raising `UpdateFailed` (from `homeassistant.helpers.update_coordinator`) if ANY slot times out during `async_get_usercodes`, or at minimum use `SlotCode.UNKNOWN` if such a sentinel exists. Alternatively, preserve the last-known value from the coordinator cache on timeout rather than assuming empty.
+
+---
+
+**5. Missing `@callback` decorator on `setup_push_subscription` and `teardown_push_subscription`** (Confidence: 88)
+
+File: `custom_components/lock_code_manager/providers/zigbee2mqtt.py`, lines ~326, ~373
+
+The base class defines both `setup_push_subscription` and `teardown_push_subscription` with the `@callback` decorator. The overrides in this PR omit the decorator. While functionally it may work, it breaks the contract and could cause issues with HA's callback safety checks.
+
+**Fix:** Add `@callback` decorator to both methods (imported already from `homeassistant.core`).
+
+---
+
+**6. No `async_fire_code_slot_event` call for lock/unlock actions with PIN** (Confidence: 82)
+
+File: `custom_components/lock_code_manager/providers/zigbee2mqtt.py`
+
+Zigbee2MQTT publishes `action: "lock"` / `action: "unlock"` events with user information when a PIN is used. The provider handles `pin_code_added` and `pin_code_deleted` actions but does not fire code slot events for lock/unlock operations. The README claims "Code Events: Yes" for this provider, and AGENTS.md says providers should "Call `async_fire_code_slot_event()` when lock events indicate PIN usage."
+
+**Fix:** Add handling for lock/unlock actions that include a user identifier, calling `self.async_fire_code_slot_event(code_slot, ...)` to match the provider's advertised capabilities.
+
+---
+
+### Summary
+
+The most critical issue is #1 (the async subscription inside a synchronous `@callback` method), which will cause race conditions and silent subscription failures in production. Issues #3-#6 are important correctness/contract compliance issues that should be addressed before merge.</result>
+<usage><total_tokens>44277</total_tokens><tool_uses>19</tool_uses><duration_ms>131952</duration_ms></usage>
+</task-notification>
+
+---
+
+yes, just mention this is coming from you
+
+---
+
+yes, just mention this is coming from you
+
+---
+
+coverage is still not up to snuff according to codecov
