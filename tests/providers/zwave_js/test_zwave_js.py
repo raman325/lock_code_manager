@@ -33,7 +33,10 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from custom_components.lock_code_manager.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.exceptions import (
+    DuplicateCodeError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.models import (
     LockCodeManagerConfigEntryRuntimeData,
     SlotCode,
@@ -589,6 +592,62 @@ async def test_v2_set_usercode_does_not_poll_slot(
     mock_get_usercode_from_node.assert_not_called()
 
     await zwave_js_lock_v2.async_unload(False)
+
+
+async def test_v1_set_usercode_poll_failure_raises_lock_disconnected(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    mock_get_usercode_from_node,
+) -> None:
+    """Test that a V1 set poll failure raises LockDisconnected.
+
+    When get_usercode_from_node raises after a V1 set operation, the error
+    should be wrapped as LockDisconnected so it routes into the retry path
+    instead of the generic exception handler that would suspend the lock.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {4: ""}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    mock_get_usercode_from_node.side_effect = RuntimeError("Z-Wave command failed")
+
+    with pytest.raises(LockDisconnected, match="Post-set verification poll failed"):
+        await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
+
+    await zwave_js_lock.async_unload(False)
+
+
+async def test_v1_clear_usercode_poll_failure_raises_lock_disconnected(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    mock_get_usercode_from_node,
+) -> None:
+    """Test that a V1 clear poll failure raises LockDisconnected.
+
+    When get_usercode_from_node raises after a V1 clear operation, the error
+    should be wrapped as LockDisconnected so it routes into the retry path
+    instead of the generic exception handler that would suspend the lock.
+    """
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: "1234"}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    mock_get_usercode_from_node.side_effect = RuntimeError("Z-Wave command failed")
+
+    with pytest.raises(LockDisconnected, match="Post-clear verification poll failed"):
+        await zwave_js_lock.async_clear_usercode(2)
+
+    await zwave_js_lock.async_unload(False)
 
 
 async def test_set_usercode_no_coordinator(
