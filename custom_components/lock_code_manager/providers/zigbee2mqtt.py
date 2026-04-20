@@ -29,10 +29,6 @@ if TYPE_CHECKING:
 # Default Zigbee2MQTT base topic
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 
-# User status values per Zigbee Cluster Library specification (same as ZHA)
-USER_STATUS_AVAILABLE = 0
-USER_STATUS_ENABLED = 1
-
 
 @dataclass(repr=False, eq=False)
 class Zigbee2MQTTLock(BaseLock):
