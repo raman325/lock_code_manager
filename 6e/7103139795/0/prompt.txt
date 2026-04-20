@@ -1,0 +1,134 @@
+see https://github.com/raman325/lock_code_manager/issues/1061. I always intended for one lock being unavailable/disconnected from being independent of managing the other locks. So if setting a slot, and 2/3 locks respond, set it on 2, and set it on the third when it comes back. I'm thinking about this dirty marker we have in the Slot Sync Manager. Do we have a dirty marker per slot? If not, we should and we should consider having roundtrip confirmation that clears the dirty marker. That way on every tick, we just check the dirty markers and attempt to set. Anything that fails or we tried to do but didn't work stays dirty, and we have specific handling for e.g. duplicates. This is just a high level idea, let me know after reviewing the codebase and the issue if that sounds like the righ tapproach or if there are better approaches
+
+---
+
+shouldn't the lock/slot be unavailable in these scenarios?
+
+---
+
+how about duplicate code? we don't want to mark unavailable, and disabling the slot feels right. But it feels like we should be consistent across errors and how they get handled
+
+---
+
+yes
+
+---
+
+we probably need some attribute on the in sync sensor saying that this is a different kind of False. I imagine we want the dashboard to expose these somehow
+
+---
+
+attribute works, I'd just change syncing to out_of_sync or something like that because that's the actual *state*
+
+---
+
+yes, it also forces us to carve out more and more known errors
+
+---
+
+I think when the slot is disabled, we should say sync_status = suspended
+
+---
+
+yeah I think that's the right approach now that I think about it
+
+---
+
+I think we do B. It's overkill, but it's a better design that eliminates the bug
+
+---
+
+cant you go from synced to out of sync?
+
+---
+
+this state diagram is confusing me because the same state is mentioned multiple times so its hard to see the whole flow. Can you display it with every state only appearing once?
+
+---
+
+yeah so its still not correct because loading can go to out of sync too. It's close though
+
+---
+
+sort of, not all of the arrows show both directions where they should
+
+---
+
+LOADING -> SYNCED
+LOADING -> OUT_OF_SYNC
+SYNCED -> OUT_OF_SYNC
+SYNCING -> OUT_OF_SYNC
+SUSPENDED -> OUT_OF_SYNC
+OUT_OF_SYNC -> SYNCING
+SYNCING -> SUSPENDED
+SYNCING -> SYNCED
+
+did I miss any aedges?
+
+---
+
+if we had SYNCED -> SYNCING that would replace SYNCED -> OUT_OF_SYNC right? that means you can only get to SYNCED from LOADING or SYNCING which is probably cleaner. Thoughts?
+
+---
+
+got it, so then SYNCING can only be gotten to from being OUT_OF_SYNC. That sounds right because that's when we actually attempt to sync and need to be in the SYNCING state to block other actors
+
+---
+
+yes
+
+---
+
+let's have a `syncing` sync_status - it gives us more flexibility in styling. Beyond that lets continue
+
+---
+
+should we be wrapping all FailedZWaveCommand errors in LockDisconnected? The answer could be yes, but I have to ask the question
+
+---
+
+yes
+
+---
+
+don't we need a separate slot disabled repair issue still for the duplicate or do we have a separate duplicate code repair? If so then proceed
+
+---
+
+the issue key for the second probably shouldn't include a slot num if it's per lock
+
+---
+
+yes per lock, because if it's a transient issue it will affect all slots. We should show alls lots impacted
+
+---
+
+1
+
+---
+
+yes, connectivity is validated through the coordinator
+
+---
+
+present the plan
+
+---
+
+continue
+
+---
+
+present plan first
+
+---
+
+proceed subagent-driven
+
+---
+
+check latest 3 review comments from copilot
+
+---
+
+should we just have cancelled error asa an explicit callout so that version doesn't matter?

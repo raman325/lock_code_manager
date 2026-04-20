@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6e7103139795",
+  "strategy": "manual-commit",
+  "branch": "worktree-sync-state-machine",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6e/7103139795/0/metadata.json",
+      "transcript": "/6e/7103139795/0/full.jsonl",
+      "content_hash": "/6e/7103139795/0/content_hash.txt",
+      "prompt": "/6e/7103139795/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 458,
+    "cache_creation_tokens": 1152566,
+    "cache_read_tokens": 64933100,
+    "output_tokens": 104866,
+    "api_call_count": 321
+  }
+}
