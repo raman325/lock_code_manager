@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a12fe4a8612b",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-20T22:48:10.643383Z",
+  "branch": "refactor/base-lock-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "51e68a8475b8",
+  "token_usage": {
+    "input_tokens": 631,
+    "cache_creation_tokens": 2023498,
+    "cache_read_tokens": 115037555,
+    "output_tokens": 144172,
+    "api_call_count": 454
+  },
+  "session_metrics": {
+    "turn_count": 67
+  }
+}
