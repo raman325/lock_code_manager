@@ -30,6 +30,21 @@ from .const import LOGGER
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 
 
+def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
+    """Return True when MQTT exposes a usable PIN value (including numeric zero).
+
+    Plain truthiness is unsafe: ``0`` is a valid digit and must not be treated as
+    absent. Boolean JSON values are ignored because they are not PIN payloads.
+    """
+    if pin_raw is None:
+        return False
+    if isinstance(pin_raw, bool):
+        return False
+    if isinstance(pin_raw, str):
+        return pin_raw.strip() != ""
+    return str(pin_raw) != ""
+
+
 @dataclass(repr=False, eq=False)
 class Zigbee2MQTTLock(BaseLock):
     """Class to represent Zigbee2MQTT lock."""
@@ -124,6 +139,20 @@ class Zigbee2MQTTLock(BaseLock):
             return f"{self._base_topic}/{friendly_name}/{suffix}"
         return f"{self._base_topic}/{friendly_name}"
 
+    def _maybe_raise_wrong_bridge_disconnect(self) -> None:
+        """Raise when MQTT works but this entity cannot map to a Zigbee2MQTT topic."""
+        if self.device_entry is None:
+            return
+        if any(
+            len(identifier) >= 2 and str(identifier[1]).startswith("zigbee2mqtt_")
+            for identifier in self.device_entry.identifiers
+        ):
+            return
+        raise LockDisconnected(
+            "This entity is not a Zigbee2MQTT lock (device registry lacks a "
+            "zigbee2mqtt_* identifier)."
+        )
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
@@ -182,7 +211,7 @@ class Zigbee2MQTTLock(BaseLock):
                     # the slot is cleared, so disabling the slot skips clear_usercode while the
                     # lock still holds the PIN. Only treat as EMPTY when MQTT exposes the field.
                     if status == "enabled":
-                        if pin_raw:
+                        if _mqtt_payload_pin_has_code_value(pin_raw):
                             updates[user_id] = str(pin_raw)
                         elif pin_code_present:
                             updates[user_id] = SlotCode.EMPTY
@@ -217,8 +246,8 @@ class Zigbee2MQTTLock(BaseLock):
                     future = self._pending_codes.pop(user_id)
                     if not future.done():
                         user_enabled = pin_code_data.get("user_enabled", False)
-                        pin_code = pin_code_data.get("pin_code", "")
-                        if user_enabled and pin_code:
+                        pin_code = pin_code_data.get("pin_code")
+                        if user_enabled and _mqtt_payload_pin_has_code_value(pin_code):
                             future.set_result(str(pin_code))
                         else:
                             future.set_result(None)
@@ -337,6 +366,7 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected("MQTT component not available")
 
         if not await self.async_is_integration_connected():
+            self._maybe_raise_wrong_bridge_disconnect()
             raise LockDisconnected("Lock not connected")
 
         if not await self.async_is_device_available():
@@ -411,6 +441,7 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected("MQTT component not available")
 
         if not await self.async_is_integration_connected():
+            self._maybe_raise_wrong_bridge_disconnect()
             raise LockDisconnected("Lock not connected")
 
         set_topic = self._get_topic("set")
@@ -460,6 +491,7 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected("MQTT component not available")
 
         if not await self.async_is_integration_connected():
+            self._maybe_raise_wrong_bridge_disconnect()
             raise LockDisconnected("Lock not connected")
 
         set_topic = self._get_topic("set")

@@ -90,7 +90,7 @@ async def test_get_friendly_name_rejects_non_z2m_bridge(
 
 
 async def test_pin_code_get_disabled_or_empty_pin_sets_future_none() -> None:
-    """PIN response with disabled user or empty pin resolves the pending future with None."""
+    """PIN response with disabled user, empty pin, or numeric zero."""
     loop = asyncio.get_running_loop()
     lock = _minimal_lock()
 
@@ -107,6 +107,13 @@ async def test_pin_code_get_disabled_or_empty_pin_sets_future_none() -> None:
         {"pin_code": {"user": 8, "user_enabled": True, "pin_code": ""}}
     )
     assert fut_empty.done() and fut_empty.result() is None
+
+    fut_zero = loop.create_future()
+    lock._pending_codes[9] = fut_zero
+    lock._process_z2m_device_payload(
+        {"pin_code": {"user": 9, "user_enabled": True, "pin_code": 0}}
+    )
+    assert fut_zero.done() and fut_zero.result() == "0"
 
 
 async def test_async_is_integration_connected_paths(
@@ -214,6 +221,16 @@ def test_users_enabled_with_pin_updates() -> None:
         {"users": {"5": {"status": "enabled", "pin_code": "4242"}}}
     )
     lock.coordinator.push_update.assert_called_once_with({5: "4242"})
+
+
+def test_users_enabled_with_numeric_zero_pin_updates() -> None:
+    """Numeric zero is a valid digit; it must not be treated as a missing PIN."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock._process_z2m_device_payload(
+        {"users": {"2": {"status": "enabled", "pin_code": 0}}}
+    )
+    lock.coordinator.push_update.assert_called_once_with({2: "0"})
 
 
 def test_users_enabled_pin_null_clears_slot() -> None:
@@ -562,6 +579,27 @@ class TestAsyncGetUsercodes:
         ):
             await lock.async_get_usercodes()
 
+    async def test_async_get_usercodes_raises_when_not_zigbee2mqtt_bridge(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock,
+    ) -> None:
+        """MQTT-only locks without a zigbee2mqtt_* device id get an explicit error."""
+        lock = zigbee2mqtt_lock_wrong_identifier
+        hass.states.async_set(lock.lock.entity_id, "locked")
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.get_managed_slots",
+                return_value={1},
+            ),
+            pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
+        ):
+            await lock.async_get_usercodes()
+
     async def test_async_get_usercodes_raises_when_get_topic_unavailable(
         self,
         hass: HomeAssistant,
@@ -716,6 +754,23 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="Lock not connected"),
         ):
             await lock.async_clear_usercode(9)
+
+    async def test_async_set_usercode_raises_when_not_zigbee2mqtt_bridge(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock,
+    ) -> None:
+        """MQTT lock without zigbee2mqtt_* id fails set with the same hint as reads."""
+        lock = zigbee2mqtt_lock_wrong_identifier
+        hass.states.async_set(lock.lock.entity_id, "locked")
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
+        ):
+            await lock.async_set_usercode(1, "1234")
 
     async def test_async_set_usercode_raises_when_topic_unavailable(
         self,
