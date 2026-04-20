@@ -352,6 +352,54 @@ describe('LockCodesCard integration', () => {
         });
     });
 
+    describe('sync_status data handling', () => {
+        it('stores sync_status from subscription data', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            el.setConfig({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const testData = makeLockCoordinatorData({ sync_status: 'suspended' });
+            capturedCallback!(testData);
+
+            expect(el._data?.sync_status).toBe('suspended');
+        });
+
+        it('sync_status is undefined when not provided', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            el.setConfig({
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const testData = makeLockCoordinatorData();
+            capturedCallback!(testData);
+
+            expect(el._data?.sync_status).toBeUndefined();
+        });
+    });
+
     describe('getStubConfig', () => {
         it('returns lock entity from first config entry when data exists', async () => {
             const LockCodesCard = customElements.get('lcm-lock-codes') as unknown as {

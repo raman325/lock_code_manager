@@ -57,6 +57,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             config_entry=config_entry,
         )
         self.data: dict[int, str | SlotCode] = {}
+        self._slot_sync_mgrs_suspended: bool = False
         self._config_entry = config_entry
         self._consecutive_failures: int = 0
         self._original_update_interval: timedelta | None = update_interval
@@ -160,8 +161,28 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                 },
             )
 
+    @property
+    def slot_sync_mgrs_suspended(self) -> bool:
+        """Return whether slot sync operations are suspended for this lock."""
+        return self._slot_sync_mgrs_suspended
+
+    def suspend_slot_sync_mgrs(self) -> None:
+        """Suspend slot sync managers for this lock.
+
+        Called by any SlotSyncManager that hits a circuit breaker or
+        unexpected error. All sync managers for this lock will see the
+        flag and stop retrying. Cleared automatically on recovery via
+        _reset_backoff (successful poll or push update).
+        """
+        self._slot_sync_mgrs_suspended = True
+        _LOGGER.info("Slot sync suspended for %s", self._lock.lock.entity_id)
+        # Notify listeners so other SlotSyncManagers for this lock
+        # transition to SUSPENDED on their next _request_sync_check.
+        self.async_update_listeners()
+
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""
+        self._slot_sync_mgrs_suspended = False
         if self._consecutive_failures > 0:
             _LOGGER.info(
                 "Lock %s recovered after %d consecutive failures",

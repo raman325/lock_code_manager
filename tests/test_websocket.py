@@ -51,6 +51,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
     ATTR_SLOT_NUM,
+    ATTR_SYNC_STATUS,
     ATTR_USERCODE,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
@@ -220,6 +221,42 @@ async def test_subscribe_lock_codes(
         1: "9999",
         2: "5678",
     }
+
+
+async def test_subscribe_lock_codes_sync_status(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """Test sync_status appears in subscribe_lock_codes when suspended."""
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Initial event should not have sync_status
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    assert ATTR_SYNC_STATUS not in event["event"]
+
+    # Suspend sync managers
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.coordinator.suspend_slot_sync_mgrs()
+    await hass.async_block_till_done()
+
+    # Updated event should have sync_status == "suspended"
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    assert updated["event"][ATTR_SYNC_STATUS] == "suspended"
 
 
 async def test_subscribe_lock_codes_masked(
