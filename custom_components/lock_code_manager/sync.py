@@ -450,7 +450,13 @@ class SlotSyncManager:
             slot_state = self._resolve_slot_state()
             if slot_state is not None and not self.calculate_in_sync(slot_state):
                 self._state = SyncState.OUT_OF_SYNC
+                self._reset_sync_tracker()
                 self._write_state()
+        elif self._state is SyncState.OUT_OF_SYNC:
+            # Sync target changed (PIN edited, slot toggled) while already
+            # out of sync — reset circuit breaker so stale attempt counts
+            # from a prior sync cycle don't trip the breaker prematurely.
+            self._reset_sync_tracker()
         elif self._state is SyncState.SUSPENDED:
             if not self._coordinator.suspended:
                 self._state = SyncState.OUT_OF_SYNC
@@ -519,6 +525,11 @@ class SlotSyncManager:
                         self._hass,
                         DOMAIN,
                         f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                    )
+                    async_delete_issue(
+                        self._hass,
+                        DOMAIN,
+                        f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
                     )
             else:
                 self._state = SyncState.OUT_OF_SYNC
