@@ -14,10 +14,15 @@ from homeassistant.helpers.issue_registry import (
     async_create_issue,
     async_get as async_get_issue_registry,
 )
+from homeassistant.util import dt as dt_util
 
-from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.exceptions import LockOperationFailed
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.const import DOMAIN, MAX_SYNC_ATTEMPTS
+from custom_components.lock_code_manager.exceptions import (
+    CodeRejectedError,
+    LockDisconnected,
+    LockOperationFailed,
+)
+from custom_components.lock_code_manager.models import SlotCode, SyncState
 from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
 from .common import SLOT_1_IN_SYNC_ENTITY
@@ -348,7 +353,7 @@ class TestSlotDisabledIssueCleanup:
         assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
 
         # Initialize the manager state so it thinks it was out of sync
-        manager._in_sync = False
+        manager._state = SyncState.OUT_OF_SYNC
 
         # Trigger a tick that will find the slot in sync (coordinator has matching code)
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
@@ -372,8 +377,7 @@ class TestLockOperationFailedRetry:
 
         # Force out-of-sync state so _perform_sync is called:
         # set coordinator data to EMPTY so the slot appears to need a set
-        manager._in_sync = False
-        manager._dirty = True
+        manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[1] = SlotCode.EMPTY
 
         with patch.object(
@@ -385,7 +389,242 @@ class TestLockOperationFailedRetry:
             await manager._async_tick()
             await hass.async_block_till_done()
 
-        # Should retry (dirty=True) rather than disable the slot
-        assert manager._dirty is True
-        # Slot should not have been disabled (in_sync stays False, not None)
-        assert manager._in_sync is False
+        # Should retry (OUT_OF_SYNC) rather than disable the slot
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+
+class TestSyncStateMachine:
+    """Tests for SyncState transitions in SlotSyncManager."""
+
+    async def test_initial_state_is_loading(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Manager starts in LOADING then transitions after a tick resolves entities."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        # The initial tick during async_start may not resolve entities yet
+        # (they may not be registered), but after full setup + a tick,
+        # the manager should transition out of LOADING.
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state in (SyncState.SYNCED, SyncState.OUT_OF_SYNC)
+
+    async def test_loading_to_out_of_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """LOADING transitions to OUT_OF_SYNC when slot is not in sync on startup."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.LOADING
+        # Make coordinator data mismatch (slot active but lock has empty code)
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+    async def test_loading_to_synced(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """LOADING transitions to SYNCED when already in sync."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        # The mock lock has code "1234" in slot 1, and the config also has "1234".
+        # Trigger a tick to complete initial loading.
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.SYNCED
+
+    async def test_synced_to_out_of_sync_on_state_change(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SYNCED transitions to OUT_OF_SYNC when coordinator data changes."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+        assert manager._state is SyncState.SYNCED
+
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._request_sync_check()
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+    async def test_out_of_sync_to_synced_after_successful_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """OUT_OF_SYNC transitions through SYNCING to SYNCED on success."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        # First get out of LOADING state
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.SYNCED
+
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._request_sync_check()
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.SYNCED
+
+    async def test_syncing_to_out_of_sync_on_lock_disconnected(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SYNCING transitions to OUT_OF_SYNC on LockDisconnected."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockDisconnected("test"),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+    async def test_syncing_to_suspended_on_unexpected_error(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SYNCING transitions to SUSPENDED on generic exception."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("unexpected"),
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        assert manager._state is SyncState.SUSPENDED
+        assert manager._coordinator.suspended is True
+
+    async def test_syncing_to_suspended_on_circuit_breaker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Circuit breaker trips transitions to SUSPENDED."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
+        manager._sync_attempt_first = dt_util.utcnow()
+
+        await manager._async_tick()
+        await hass.async_block_till_done()
+
+        assert manager._state is SyncState.SUSPENDED
+        assert manager._coordinator.suspended is True
+
+    async def test_suspended_skips_tick(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SUSPENDED state skips tick processing."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.SUSPENDED
+
+        with patch.object(manager, "_async_tick_impl") as mock_tick_impl:
+            await manager._async_tick()
+            mock_tick_impl.assert_not_called()
+
+    async def test_suspended_to_out_of_sync_on_coordinator_recovery(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SUSPENDED transitions to OUT_OF_SYNC when coordinator clears suspended flag."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.SUSPENDED
+        manager._coordinator.suspended = True
+
+        manager._coordinator.suspended = False
+        manager._request_sync_check()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+    async def test_suspended_stays_suspended_when_coordinator_still_suspended(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SUSPENDED stays SUSPENDED when coordinator flag is still set."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.SUSPENDED
+        manager._coordinator.suspended = True
+
+        manager._request_sync_check()
+        assert manager._state is SyncState.SUSPENDED
+
+    async def test_code_rejected_still_disables_slot(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """CodeRejectedError still calls _disable_slot (profile-wide)."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with (
+            patch.object(
+                manager,
+                "_perform_sync",
+                new_callable=AsyncMock,
+                side_effect=CodeRejectedError(1, "lock.test_1"),
+            ),
+            patch.object(
+                manager,
+                "_disable_slot",
+                new_callable=AsyncMock,
+            ) as mock_disable,
+        ):
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        mock_disable.assert_called_once()
+        assert manager._coordinator.suspended is False

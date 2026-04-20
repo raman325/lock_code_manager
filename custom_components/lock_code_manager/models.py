@@ -21,6 +21,24 @@ if TYPE_CHECKING:
     from .providers import BaseLock
 
 
+class SyncState(StrEnum):
+    """State machine for slot sync reconciliation.
+
+    LOADING: initial state, waiting for entity states to resolve.
+    SYNCED: desired state matches actual state on the lock.
+    OUT_OF_SYNC: mismatch detected, pending sync on next tick.
+    SYNCING: sync operation in progress.
+    SUSPENDED: circuit breaker tripped or unexpected error; awaiting
+        coordinator recovery (suspended flag cleared).
+    """
+
+    LOADING = "loading"
+    SYNCED = "synced"
+    OUT_OF_SYNC = "out_of_sync"
+    SYNCING = "syncing"
+    SUSPENDED = "suspended"
+
+
 class SlotCode(StrEnum):
     """Sentinel values for slot codes in coordinator data.
 
