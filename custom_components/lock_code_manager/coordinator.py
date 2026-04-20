@@ -57,6 +57,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             config_entry=config_entry,
         )
         self.data: dict[int, str | SlotCode] = {}
+        self.suspended: bool = False
         self._config_entry = config_entry
         self._consecutive_failures: int = 0
         self._original_update_interval: timedelta | None = update_interval
@@ -162,6 +163,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
 
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""
+        self.suspended = False
         if self._consecutive_failures > 0:
             _LOGGER.info(
                 "Lock %s recovered after %d consecutive failures",
