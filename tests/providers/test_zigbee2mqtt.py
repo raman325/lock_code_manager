@@ -18,6 +18,7 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import Zigbee2MQT
 
 Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
+Z2M_GET_TOPIC = f"{Z2M_FULL_TOPIC}/get"
 
 
 def _minimal_lock() -> Zigbee2MQTTLock:
@@ -231,3 +232,139 @@ class TestPushSubscription:
 
         with pytest.raises(LockDisconnected):
             lock.setup_push_subscription()
+
+
+class TestAsyncGetUsercodes:
+    """Request/response path for async_get_usercodes via MQTT get + pin_code futures."""
+
+    async def test_publishes_get_payload_for_each_managed_slot(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """Each managed slot triggers async_publish on the device get topic."""
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+
+        publishes: list[tuple[str, str]] = []
+
+        async def fake_publish(
+            hass_inner: HomeAssistant, topic: str, payload: str, **kwargs: object
+        ) -> None:
+            publishes.append((topic, payload))
+            body = json.loads(payload)
+            slot = body["pin_code"]["user"]
+            lock._process_z2m_device_payload(
+                {
+                    "pin_code": {
+                        "user": slot,
+                        "user_enabled": True,
+                        "pin_code": f"PIN{slot}",
+                    }
+                }
+            )
+
+        managed = {4, 8}
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.get_managed_slots",
+                return_value=managed,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                side_effect=fake_publish,
+            ),
+        ):
+            result = await lock.async_get_usercodes()
+
+        assert len(publishes) == 2
+        assert all(t == Z2M_GET_TOPIC for t, _ in publishes)
+        published_slots = {
+            json.loads(payload)["pin_code"]["user"] for _, payload in publishes
+        }
+        assert published_slots == managed
+        assert result == {4: "PIN4", 8: "PIN8"}
+
+    async def test_pin_code_get_response_maps_slot_value(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """MQTT pin_code dict on the device topic resolves the pending future."""
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+
+        async def fake_publish(
+            hass_inner: HomeAssistant, topic: str, payload: str, **kwargs: object
+        ) -> None:
+            body = json.loads(payload)
+            assert body == {"pin_code": {"user": 3}}
+            lock._process_z2m_device_payload(
+                {
+                    "pin_code": {
+                        "user": 3,
+                        "user_enabled": True,
+                        "pin_code": "7788",
+                    }
+                }
+            )
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.get_managed_slots",
+                return_value={3},
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                side_effect=fake_publish,
+            ),
+        ):
+            result = await lock.async_get_usercodes()
+
+        assert result == {3: "7788"}
+
+    async def test_wait_for_timeout_yields_slot_empty(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """If no pin_code reply arrives in time, the slot is SlotCode.EMPTY."""
+
+        async def immediate_timeout(
+            _awaitable: object, _timeout: float | None = None
+        ) -> None:
+            raise TimeoutError
+
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.get_managed_slots",
+                return_value={11},
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
+                side_effect=immediate_timeout,
+            ),
+        ):
+            result = await lock.async_get_usercodes()
+
+        assert result == {11: SlotCode.EMPTY}
