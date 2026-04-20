@@ -37,9 +37,10 @@ from ..const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
-from ..data import build_slot_unique_id, find_entry_for_lock_slot
+from ..data import build_slot_unique_id, find_entry_for_lock_slot, get_managed_slots
 from ..exceptions import (
     DuplicateCodeError,
+    LockCodeManagerError,
     LockDisconnected,
     ProviderNotImplementedError,
 )
@@ -424,7 +425,10 @@ class BaseLock:
     @callback
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from push-based value updates."""
-        self.teardown_push_subscription()
+        try:
+            self.teardown_push_subscription()
+        except ProviderNotImplementedError:
+            pass
 
     @callback
     def teardown_push_subscription(self) -> None:
@@ -627,7 +631,11 @@ class BaseLock:
         Providers override for integration-specific connection signals.
         """
         if not self.lock_config_entry:
-            return False
+            raise LockCodeManagerError(
+                f"Lock {self.lock.entity_id} has no lock_config_entry. "
+                f"Providers without a config entry must override "
+                f"async_is_integration_connected()."
+            )
         return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     @final
@@ -829,6 +837,11 @@ class BaseLock:
             raise LockDisconnected(
                 f"Service call {domain}.{service} failed: {err}"
             ) from err
+
+    @final
+    def _get_managed_slots(self) -> set[int]:
+        """Return set of slot numbers managed by Lock Code Manager for this lock."""
+        return get_managed_slots(self.hass, self.lock.entity_id)
 
     @final
     @callback

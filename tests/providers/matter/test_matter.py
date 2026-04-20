@@ -1123,28 +1123,6 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_coordinator_data_none_no_push(
-        self, matter_lock_simple: MatterLock
-    ) -> None:
-        """LockUserChange skips push when coordinator.data is None."""
-        mock_coordinator = MagicMock()
-        mock_coordinator.data = None
-        matter_lock_simple.coordinator = mock_coordinator
-
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                event_id=4,
-                data={
-                    "lockDataType": 6,  # PIN
-                    "dataOperationType": 0,  # Add
-                    "dataIndex": 1,
-                },
-            ),
-        )
-
-        mock_coordinator.push_update.assert_not_called()
-
     def test_unknown_operation_type_ignored(
         self, matter_lock_simple: MatterLock
     ) -> None:
@@ -1349,26 +1327,4 @@ class TestOptimisticPushUpdates:
         with pytest.raises(LockDisconnected):
             await matter_lock_simple.async_clear_usercode(5)
 
-        mock_coordinator.push_update.assert_not_called()
-
-    async def test_set_usercode_coordinator_data_none_no_push(
-        self,
-        hass: HomeAssistant,
-        matter_lock_simple: MatterLock,
-    ) -> None:
-        """async_set_usercode skips push when coordinator.data is None."""
-        mock_coordinator = MagicMock()
-        mock_coordinator.data = None
-        matter_lock_simple.coordinator = mock_coordinator
-
-        register_mock_service(
-            hass,
-            MATTER_DOMAIN,
-            "set_lock_credential",
-            AsyncMock(return_value={LOCK_ENTITY_ID: {}}),
-        )
-
-        result = await matter_lock_simple.async_set_usercode(3, "1234")
-
-        assert result is True
         mock_coordinator.push_update.assert_not_called()

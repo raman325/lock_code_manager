@@ -22,9 +22,7 @@ from datetime import timedelta
 from typing import Literal
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from ..data import get_managed_slots
 from ..exceptions import LockCodeManagerProviderError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
@@ -62,10 +60,6 @@ class SchlageLock(BaseLock):
         """Return scan interval for usercodes."""
         return timedelta(minutes=5)
 
-    def _get_managed_slots(self) -> set[int]:
-        """Return managed slot numbers for this lock."""
-        return get_managed_slots(self.hass, self.lock.entity_id)
-
     async def _async_get_codes(self) -> dict[str, dict[str, str]]:
         """Call ``schlage.get_codes`` and return the response dict.
 
@@ -97,32 +91,20 @@ class SchlageLock(BaseLock):
     async def _async_add_code(self, name: str, code: str) -> None:
         """Add a new code with the given name and PIN."""
         entity_id = self.lock.entity_id
-        try:
-            await self.hass.services.async_call(
-                SCHLAGE_DOMAIN,
-                "add_code",
-                service_data={"entity_id": entity_id, "name": name, "code": code},
-                blocking=True,
-            )
-        except (ServiceValidationError, HomeAssistantError) as err:
-            raise LockDisconnected(
-                f"Schlage add_code failed for {entity_id}: {err}"
-            ) from err
+        await self.async_call_service(
+            SCHLAGE_DOMAIN,
+            "add_code",
+            service_data={"entity_id": entity_id, "name": name, "code": code},
+        )
 
     async def _async_delete_code(self, name: str) -> None:
         """Delete a code by its full name (including any Lock Code Manager tag)."""
         entity_id = self.lock.entity_id
-        try:
-            await self.hass.services.async_call(
-                SCHLAGE_DOMAIN,
-                "delete_code",
-                service_data={"entity_id": entity_id, "name": name},
-                blocking=True,
-            )
-        except (ServiceValidationError, HomeAssistantError) as err:
-            raise LockDisconnected(
-                f"Schlage delete_code failed for {entity_id}: {err}"
-            ) from err
+        await self.async_call_service(
+            SCHLAGE_DOMAIN,
+            "delete_code",
+            service_data={"entity_id": entity_id, "name": name},
+        )
 
     async def async_is_device_available(self) -> bool:
         """Return whether the Schlage lock device is available for commands."""

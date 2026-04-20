@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
@@ -25,6 +26,7 @@ from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.exceptions import LockCodeManagerError
 from custom_components.lock_code_manager.providers import BaseLock
 
 
@@ -81,7 +83,7 @@ class ServiceProviderConnectionTests:
         provider_domain: str,
         provider_lock_class: type[BaseLock],
     ) -> None:
-        """Test integration not connected when lock has no config entry."""
+        """Test integration raises when lock has no config entry."""
         entity_reg = er.async_get(hass)
         lock_entity = entity_reg.async_get_or_create(
             "lock",
@@ -96,7 +98,8 @@ class ServiceProviderConnectionTests:
             None,
             lock_entity,
         )
-        assert await lock.async_is_integration_connected() is False
+        with pytest.raises(LockCodeManagerError):
+            await lock.async_is_integration_connected()
 
 
 class ServiceProviderDeviceAvailabilityTests:

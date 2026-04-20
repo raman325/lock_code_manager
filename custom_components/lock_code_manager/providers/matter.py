@@ -23,7 +23,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from ..data import get_managed_slots
 from ..exceptions import (
     DuplicateCodeError,
     LockCodeManagerProviderError,
@@ -63,11 +62,6 @@ class MatterLock(BaseLock):
     def domain(self) -> str:
         """Return integration domain."""
         return MATTER_DOMAIN
-
-    @property
-    def supports_code_slot_events(self) -> bool:
-        """Return whether this lock supports code slot events."""
-        return True
 
     @property
     def supports_push(self) -> bool:
@@ -385,7 +379,7 @@ class MatterLock(BaseLock):
             resolved,
         )
 
-        if self.coordinator and self.coordinator.data is not None:
+        if self.coordinator:
             self.coordinator.push_update({code_slot: resolved})
 
     # -- Credential helpers --------------------------------------------------
@@ -424,7 +418,7 @@ class MatterLock(BaseLock):
         occupied slots are included so callers like the lock reset config flow
         step can detect codes not managed by Lock Code Manager.
         """
-        managed_slots = get_managed_slots(self.hass, self.lock.entity_id)
+        managed_slots = self._get_managed_slots()
 
         lock_data = await self._async_call_service(
             "get_lock_users",
@@ -539,7 +533,7 @@ class MatterLock(BaseLock):
                 )
         # Optimistic update: service call succeeded, push occupancy state
         # immediately. The LockUserChange event will confirm later.
-        if self.coordinator and self.coordinator.data is not None:
+        if self.coordinator:
             self.coordinator.push_update({code_slot: SlotCode.UNREADABLE_CODE})
         return True
 
@@ -563,7 +557,7 @@ class MatterLock(BaseLock):
         await self._clear_lock_credential(code_slot)
         # Optimistic update: clear succeeded, push empty state immediately.
         # The LockUserChange event will confirm later.
-        if self.coordinator and self.coordinator.data is not None:
+        if self.coordinator:
             self.coordinator.push_update({code_slot: SlotCode.EMPTY})
         return True
 

@@ -53,7 +53,6 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
-from ..data import get_managed_slots
 from ..exceptions import LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
@@ -121,11 +120,6 @@ class ZWaveJSLock(BaseLock):
     @property
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
-        return True
-
-    @property
-    def supports_code_slot_events(self) -> bool:
-        """Return whether this lock supports code slot events."""
         return True
 
     @property
@@ -354,15 +348,18 @@ class ZWaveJSLock(BaseLock):
         """Return integration domain."""
         return ZWAVE_JS_DOMAIN
 
+    def _clear_listeners(self) -> None:
+        """Unsubscribe and clear all HA event bus listeners."""
+        for listener in self._listeners:
+            listener()
+        self._listeners.clear()
+
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by provider.
 
         Idempotent: clears existing listeners before re-registering.
         """
-        listeners = list(self._listeners)
-        self._listeners.clear()
-        for listener in listeners:
-            listener()
+        self._clear_listeners()
         self._listeners.append(
             self.hass.bus.async_listen(
                 ZWAVE_JS_NOTIFICATION_EVENT,
@@ -373,10 +370,7 @@ class ZWaveJSLock(BaseLock):
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
-        listeners = list(self._listeners)
-        self._listeners.clear()
-        for listener in listeners:
-            listener()
+        self._clear_listeners()
         await super().async_unload(remove_permanently)
 
     async def async_is_integration_connected(self) -> bool:
@@ -523,7 +517,7 @@ class ZWaveJSLock(BaseLock):
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
-        code_slots = get_managed_slots(self.hass, self.lock.entity_id)
+        code_slots = self._get_managed_slots()
         data: dict[int, str | SlotCode] = {}
 
         if not await self.async_is_integration_connected():
