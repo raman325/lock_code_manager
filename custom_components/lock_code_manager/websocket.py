@@ -84,6 +84,7 @@ from .const import (
     ATTR_SCHEDULE_NEXT_EVENT,
     ATTR_SLOT,
     ATTR_SLOT_NUM,
+    ATTR_SYNC_STATUS,
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CONDITIONS,
@@ -755,6 +756,11 @@ def _build_lock_status(
     in_sync_entity_id = in_sync_map.get(lock_entity_id)
     in_sync = _get_bool_state(hass, in_sync_entity_id)
     last_synced = _get_last_changed(hass, in_sync_entity_id)
+    sync_status: str | None = None
+    if in_sync_entity_id:
+        in_sync_state = hass.states.get(in_sync_entity_id)
+        if in_sync_state:
+            sync_status = in_sync_state.attributes.get(ATTR_SYNC_STATUS)
 
     # Get code from coordinator — SlotCode sentinels pass through as strings
     coordinator = lock.coordinator
@@ -775,6 +781,8 @@ def _build_lock_status(
         CONF_NAME: lock_name,
         ATTR_IN_SYNC: in_sync,
     }
+    if sync_status:
+        lock_status[ATTR_SYNC_STATUS] = sync_status
     if last_synced:
         lock_status[ATTR_LAST_SYNCED] = last_synced
     if code_on_lock is not None:
