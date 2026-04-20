@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "06fd64996697",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-20T17:29:09.803736Z",
+  "branch": "feat/sync-status-dashboard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "1c5040357520",
+  "token_usage": {
+    "input_tokens": 535,
+    "cache_creation_tokens": 1538634,
+    "cache_read_tokens": 87849221,
+    "output_tokens": 118470,
+    "api_call_count": 386
+  },
+  "session_metrics": {
+    "turn_count": 55
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-20T17:29:09.176771Z",
+    "agent_lines": 0,
+    "human_added": 232,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 232,
+    "agent_percentage": 0
+  }
+}
