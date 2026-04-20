@@ -926,6 +926,237 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
+    describe('sync_status data handling', () => {
+        it('stores sync_status from subscription data in lock entries', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const dataWithSyncStatus = makeSlotCardData({
+                locks: [
+                    {
+                        code: '1234',
+                        entity_id: 'lock.test_1',
+                        in_sync: false,
+                        name: 'Test Lock',
+                        sync_status: 'suspended'
+                    }
+                ]
+            });
+            capturedCallback!(dataWithSyncStatus);
+
+            expect(el._data?.locks[0].sync_status).toBe('suspended');
+        });
+
+        it('stores sync_status "syncing" in lock entries', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const dataWithSyncStatus = makeSlotCardData({
+                locks: [
+                    {
+                        code: '1234',
+                        entity_id: 'lock.test_1',
+                        in_sync: false,
+                        name: 'Test Lock',
+                        sync_status: 'syncing'
+                    }
+                ]
+            });
+            capturedCallback!(dataWithSyncStatus);
+
+            expect(el._data?.locks[0].sync_status).toBe('syncing');
+        });
+
+        it('lock entry has no sync_status when not provided', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            el = document.createElement('lcm-slot') as SlotCardElement;
+            const hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            el.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            el.hass = hass;
+
+            container.appendChild(el);
+            await flush();
+
+            const dataWithoutSyncStatus = makeSlotCardData();
+            capturedCallback!(dataWithoutSyncStatus);
+
+            expect(el._data?.locks[0].sync_status).toBeUndefined();
+        });
+    });
+
+    describe('_renderLockRow sync status rendering', () => {
+        let card: SlotCardElement;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        function flattenTemplateValues(result: any): string {
+            // Recursively flatten Lit TemplateResult values into a single string
+            const parts: string[] = [];
+            if (result?.strings) {
+                parts.push(...result.strings);
+            }
+            for (const v of result?.values ?? []) {
+                if (v && typeof v === 'object' && 'strings' in v) {
+                    parts.push(flattenTemplateValues(v));
+                } else if (v !== undefined && v !== null) {
+                    parts.push(String(v));
+                }
+            }
+            return parts.join(' ');
+        }
+
+        it('renders synced state with check-circle icon', () => {
+            const lock = {
+                code: '1234',
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: true,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: 'in_sync'
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('synced');
+            expect(text).toContain('mdi:check-circle');
+        });
+
+        it('renders out_of_sync state with clock-outline icon', () => {
+            const lock = {
+                code: '1234',
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: false,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: 'out_of_sync'
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('pending');
+            expect(text).toContain('mdi:clock-outline');
+        });
+
+        it('renders syncing state with sync icon', () => {
+            const lock = {
+                code: '1234',
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: false,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: 'syncing'
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('syncing');
+            expect(text).toContain('mdi:sync');
+        });
+
+        it('renders suspended state with alert-circle icon', () => {
+            const lock = {
+                code: null,
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: false,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: 'suspended'
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('suspended');
+            expect(text).toContain('mdi:alert-circle');
+        });
+
+        it('falls back to inSync boolean when syncStatus is undefined', () => {
+            const lock = {
+                code: '1234',
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: false,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: undefined
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('pending');
+            expect(text).toContain('mdi:clock-outline');
+        });
+
+        it('renders unknown state when syncStatus undefined and inSync is null', () => {
+            const lock = {
+                code: null,
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: null,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: undefined
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('unknown');
+            expect(text).toContain('mdi:help-circle');
+        });
+
+        it('shows status text instead of last-synced when suspended', () => {
+            const lock = {
+                code: null,
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: false,
+                lastSynced: '2026-04-20T12:00:00Z',
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: 'suspended'
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).not.toContain('Last synced to lock');
+            expect(text).toContain('Suspended');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('_navigateToLock', () => {
         let card: SlotCardElement & Record<string, unknown>;
 

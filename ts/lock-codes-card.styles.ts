@@ -354,6 +354,27 @@ const lockCodesCardComponentStyles = css`
         color: var(--disabled-text-color) !important;
         font-weight: 400 !important;
     }
+
+    ha-card.suspended {
+        border: 1px solid var(--lcm-error-color);
+        opacity: 0.85;
+    }
+
+    .suspended-banner {
+        align-items: center;
+        background: rgba(244, 67, 54, 0.08);
+        border-bottom: 1px solid var(--lcm-border-color);
+        color: var(--lcm-error-color);
+        display: flex;
+        font-size: 12px;
+        font-weight: 500;
+        gap: 8px;
+        padding: 8px 16px;
+    }
+
+    .suspended-banner ha-icon {
+        --mdc-icon-size: 16px;
+    }
 `;
 
 export const lockCodesCardStyles = [

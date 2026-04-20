@@ -505,11 +505,14 @@ def _serialize_lock_coordinator(
             )
         )
 
-    return {
+    result: dict[str, Any] = {
         ATTR_LOCK_ENTITY_ID: lock.lock.entity_id,
         ATTR_LOCK_NAME: _get_lock_friendly_name(hass, lock),
         CONF_SLOTS: slots,
     }
+    if coordinator and coordinator.slot_sync_mgrs_suspended:
+        result[ATTR_SYNC_STATUS] = "suspended"
+    return result
 
 
 @websocket_api.websocket_command(

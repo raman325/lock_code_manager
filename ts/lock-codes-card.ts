@@ -146,14 +146,22 @@ class LockCodesCard extends LockCodesCardBase {
             this._data?.lock_name ?? hassLockName ?? this._config?.lock_entity_id ?? '';
         const headerTitle = this._config?.title ?? lockName ?? DEFAULT_TITLE;
 
+        const isSuspended = this._data?.sync_status === 'suspended';
+
         return html`
-            <ha-card>
+            <ha-card class="${isSuspended ? 'suspended' : ''}">
                 <div class="card-header">
                     <div class="header-icon">
                         <ha-icon icon="mdi:lock-smart"></ha-icon>
                     </div>
                     <span class="card-header-title">${headerTitle}</span>
                 </div>
+                ${isSuspended
+                    ? html`<div class="suspended-banner">
+                          <ha-icon icon="mdi:alert-circle"></ha-icon>
+                          <span>Sync suspended — lock is unreachable</span>
+                      </div>`
+                    : nothing}
                 <div class="card-content">
                     ${this._error
                         ? html`<div class="message">${this._error}</div>`

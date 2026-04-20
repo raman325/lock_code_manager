@@ -160,6 +160,8 @@ export interface LockCoordinatorData {
     lock_entity_id: string;
     lock_name: string;
     slots: LockCoordinatorSlotData[];
+    /** Present when slot sync managers are suspended for this lock */
+    sync_status?: string;
 }
 
 export type CodeDisplayMode = 'masked' | 'unmasked' | 'masked_with_reveal';
@@ -208,6 +210,8 @@ export interface SlotCardLockStatus {
     /** Last sync timestamp (ISO) */
     last_synced?: string;
     name: string;
+    /** Granular sync status: in_sync, out_of_sync, syncing, suspended */
+    sync_status?: string;
 }
 
 /** Calendar event information */
