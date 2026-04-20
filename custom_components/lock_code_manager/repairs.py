@@ -66,6 +66,6 @@ async def async_create_fix_flow(
     """Create a fix flow for a repair issue."""
     if issue_id == "number_of_uses_deprecated":
         return NumberOfUsesDeprecatedFlow()
-    if issue_id.startswith("slot_disabled_") or issue_id.startswith("pin_required_"):
+    if issue_id.startswith(("slot_disabled_", "pin_required_", "slot_suspended_")):
         return AcknowledgeRepairFlow()
     raise ValueError(f"Unknown issue: {issue_id}")
