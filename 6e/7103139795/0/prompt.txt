@@ -132,3 +132,15 @@ check latest 3 review comments from copilot
 ---
 
 should we just have cancelled error asa an explicit callout so that version doesn't matter?
+
+---
+
+we can remove it - I mean more that, in what scenarios does CancelledError actually occur that matter to us
+
+---
+
+is there harm in writing syncing to state?
+
+---
+
+yes
