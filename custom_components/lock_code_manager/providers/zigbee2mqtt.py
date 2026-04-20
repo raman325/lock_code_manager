@@ -279,7 +279,7 @@ class Zigbee2MQTTLock(BaseLock):
                 )
                 return
 
-            self.hass.async_add_job(self._process_z2m_device_payload, payload)
+            self.hass.add_job(self._process_z2m_device_payload, payload)
 
         try:
             self._unsubscribe = await async_subscribe(
