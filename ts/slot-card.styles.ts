@@ -496,6 +496,14 @@ const slotCardComponentStyles = css`
         font-size: 11px;
     }
 
+    .lock-synced-time.synced {
+        color: var(--lcm-success-color);
+    }
+
+    .lock-synced-time.pending {
+        color: var(--lcm-warning-color);
+    }
+
     .lock-synced-time.suspended {
         color: var(--lcm-error-color);
         font-weight: 500;
