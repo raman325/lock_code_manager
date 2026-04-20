@@ -376,7 +376,7 @@ class SlotSyncManager:
     def _suspend_lock(self, reason: str) -> None:
         """Suspend this lock and create a per-lock repair issue."""
         self._state = SyncState.SUSPENDED
-        self._coordinator.suspended = True
+        self._coordinator.suspend()
         self._reset_sync_tracker()
         self._write_state()
 

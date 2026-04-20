@@ -754,7 +754,7 @@ async def test_coordinator_suspended_cleared_on_successful_poll(
     hass: HomeAssistant, poll_lock, poll_coordinator
 ) -> None:
     """Successful poll clears suspended flag."""
-    poll_coordinator.suspended = True
+    poll_coordinator.suspend()
     await poll_coordinator.async_refresh()
     assert poll_coordinator.suspended is False
 
@@ -763,7 +763,7 @@ async def test_coordinator_suspended_cleared_on_push_update(
     hass: HomeAssistant, push_lock, push_coordinator
 ) -> None:
     """Push update clears suspended flag."""
-    push_coordinator.suspended = True
+    push_coordinator.suspend()
     push_coordinator.push_update({1: "1234"})
     assert push_coordinator.suspended is False
 
@@ -772,7 +772,7 @@ async def test_coordinator_suspended_not_cleared_on_failed_poll(
     hass: HomeAssistant, poll_lock, poll_coordinator
 ) -> None:
     """Failed poll does not clear suspended flag."""
-    poll_coordinator.suspended = True
+    poll_coordinator.suspend()
     poll_lock.set_connected(False)
     await poll_coordinator.async_refresh()
     assert poll_coordinator.suspended is True

@@ -574,9 +574,9 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.SUSPENDED
-        manager._coordinator.suspended = True
+        manager._coordinator.suspend()
 
-        manager._coordinator.suspended = False
+        manager._coordinator._suspended = False
         manager._request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
@@ -592,7 +592,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.SUSPENDED
-        manager._coordinator.suspended = True
+        manager._coordinator.suspend()
 
         manager._request_sync_check()
         assert manager._state is SyncState.SUSPENDED
@@ -674,7 +674,7 @@ class TestSyncStatusAttribute:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.suspended = True
+        manager._coordinator.suspend()
         manager._state = SyncState.SUSPENDED
         manager._write_state()
         await hass.async_block_till_done()
