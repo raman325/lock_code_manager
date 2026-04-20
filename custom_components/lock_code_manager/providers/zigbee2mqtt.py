@@ -7,24 +7,24 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import json
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from homeassistant.components.mqtt import (
     DOMAIN as MQTT_DOMAIN,
     async_publish,
     async_subscribe,
 )
+from homeassistant.components.mqtt.models import ReceiveMessage
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 
 from ..data import get_managed_slots
 from ..exceptions import LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
-
-if TYPE_CHECKING:
-    from homeassistant.components.mqtt.models import ReceiveMessage
 
 # Default Zigbee2MQTT base topic
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
@@ -52,6 +52,11 @@ class Zigbee2MQTTLock(BaseLock):
         return True
 
     @property
+    def supports_code_slot_events(self) -> bool:
+        """PIN-used lock/unlock events via Z2M actions are not wired yet."""
+        return False
+
+    @property
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes.
 
@@ -68,6 +73,10 @@ class Zigbee2MQTTLock(BaseLock):
     def connection_check_interval(self) -> timedelta | None:
         """Return interval for connection checks."""
         return timedelta(seconds=30)
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Subscribe to the device topic before the coordinator runs its first poll."""
+        await self._async_ensure_device_subscription()
 
     def _get_friendly_name(self) -> str | None:
         """Get the Zigbee2MQTT friendly name for this device.
@@ -109,28 +118,22 @@ class Zigbee2MQTTLock(BaseLock):
         return f"{self._base_topic}/{friendly_name}"
 
     async def async_is_integration_connected(self) -> bool:
-        """Return whether the MQTT integration is connected."""
+        """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
             return False
 
-        # Check if we can get the friendly name (device exists)
-        if not self._get_friendly_name():
-            return False
+        return bool(self._get_friendly_name())
 
-        # Check entity state for availability
+    async def async_is_device_available(self) -> bool:
+        """Return whether the lock entity reports an operational state."""
         state = self.hass.states.get(self.lock.entity_id)
         if state is None or state.state == "unavailable":
             return False
-
         return True
 
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
-        """Apply device-topic JSON inside the event loop.
-
-        MQTT may invoke subscription callbacks from a worker thread; coordinator and
-        asyncio futures are not thread-safe.
-        """
+        """Apply device-topic JSON on the Home Assistant event loop."""
         # Handle pin_code added / deleted (Z2M action events, not the users object)
         if payload.get("action") in ("pin_code_added", "pin_code_deleted"):
             action_user = payload.get("action_user")
@@ -155,6 +158,11 @@ class Zigbee2MQTTLock(BaseLock):
                 try:
                     user_id = int(user_id_str)
                 except (ValueError, TypeError):
+                    LOGGER.warning(
+                        "Skipping non-numeric Zigbee2MQTT user key %r for %s",
+                        user_id_str,
+                        self.lock.entity_id,
+                    )
                     continue
 
                 if isinstance(user_info, dict):
@@ -192,6 +200,10 @@ class Zigbee2MQTTLock(BaseLock):
                 try:
                     user_id = int(user_id)
                 except (ValueError, TypeError):
+                    LOGGER.warning(
+                        "Ignoring pin_code payload with non-numeric user for %s",
+                        self.lock.entity_id,
+                    )
                     return
 
                 if user_id in self._pending_codes:
@@ -204,10 +216,57 @@ class Zigbee2MQTTLock(BaseLock):
                         else:
                             future.set_result(None)
 
-    def setup_push_subscription(self) -> None:
-        """Subscribe to MQTT updates for this lock."""
+    async def _async_ensure_device_subscription(self) -> None:
+        """Subscribe to the Z2M device topic; idempotent."""
         if self._unsubscribe is not None:
-            return  # Already subscribed
+            return
+
+        if not mqtt_config_entry_enabled(self.hass):
+            raise LockDisconnected("MQTT component not available")
+
+        topic = self._get_topic()
+        if not topic:
+            raise LockDisconnected(
+                f"Cannot subscribe for {self.lock.entity_id} — "
+                "not a Zigbee2MQTT device or friendly name unavailable"
+            )
+
+        def message_received(msg: ReceiveMessage) -> None:
+            """Handle incoming MQTT messages (may run off the event loop)."""
+            try:
+                payload = json.loads(msg.payload)
+            except (json.JSONDecodeError, TypeError) as err:
+                LOGGER.debug(
+                    "Ignoring invalid MQTT JSON for %s: %s",
+                    self.lock.entity_id,
+                    err,
+                )
+                return
+
+            self.hass.async_add_job(self._process_z2m_device_payload, payload)
+
+        try:
+            self._unsubscribe = await async_subscribe(
+                self.hass, topic, message_received
+            )
+            LOGGER.debug(
+                "Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id
+            )
+        except HomeAssistantError as err:
+            LOGGER.error(
+                "Failed to subscribe to MQTT for %s: %s",
+                self.lock.entity_id,
+                err,
+            )
+            raise LockDisconnected(
+                f"Failed to subscribe to MQTT for {self.lock.entity_id}"
+            ) from err
+
+    @callback
+    def setup_push_subscription(self) -> None:
+        """Ensure MQTT subscription (normally already done in ``async_setup``)."""
+        if self._unsubscribe is not None:
+            return
 
         topic = self._get_topic()
         if not topic:
@@ -219,38 +278,31 @@ class Zigbee2MQTTLock(BaseLock):
                 f"Cannot subscribe to push updates for {self.lock.entity_id} - no topic"
             )
 
-        async def _async_subscribe():
-            if not mqtt_config_entry_enabled(self.hass):
-                return
+        if not mqtt_config_entry_enabled(self.hass):
+            LOGGER.debug(
+                "Deferring MQTT push subscribe for %s — MQTT integration disabled",
+                self.lock.entity_id,
+            )
+            return
 
-            def message_received(msg: ReceiveMessage) -> None:
-                """Handle incoming MQTT message (may run off the event loop)."""
-                try:
-                    payload = json.loads(msg.payload)
-                except (json.JSONDecodeError, TypeError):
-                    return
-
-                def _deliver() -> None:
-                    self._process_z2m_device_payload(payload)
-
-                self.hass.loop.call_soon_threadsafe(_deliver)
-
+        async def _subscribe_or_log() -> None:
             try:
-                self._unsubscribe = await async_subscribe(
-                    self.hass, topic, message_received
-                )
+                await self._async_ensure_device_subscription()
+            except LockDisconnected as err:
                 LOGGER.debug(
-                    "Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id
-                )
-            except Exception as err:
-                LOGGER.error(
-                    "Failed to subscribe to MQTT for %s: %s",
+                    "Lock %s: push subscription deferred (disconnected): %s",
                     self.lock.entity_id,
                     err,
                 )
+            except Exception:
+                LOGGER.exception(
+                    "Lock %s: MQTT subscribe failed unexpectedly",
+                    self.lock.entity_id,
+                )
 
-        self.hass.async_create_task(_async_subscribe())
+        self.hass.async_create_task(_subscribe_or_log())
 
+    @callback
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from MQTT updates."""
         if self._unsubscribe:
@@ -272,6 +324,9 @@ class Zigbee2MQTTLock(BaseLock):
         if not await self.async_is_integration_connected():
             raise LockDisconnected("Lock not connected")
 
+        if not await self.async_is_device_available():
+            raise LockDisconnected("Device not available")
+
         get_topic = self._get_topic("get")
         if not get_topic:
             raise LockDisconnected("Could not determine MQTT topic")
@@ -292,13 +347,15 @@ class Zigbee2MQTTLock(BaseLock):
                 try:
                     result = await asyncio.wait_for(future, timeout=10.0)
                     value = result if result else SlotCode.EMPTY
-                except TimeoutError:
+                except TimeoutError as err:
                     LOGGER.debug(
                         "Timeout waiting for PIN code response for %s slot %s",
                         self.lock.entity_id,
                         slot_num,
                     )
-                    value = SlotCode.EMPTY
+                    raise LockDisconnected(
+                        "Timed out waiting for PIN code response from the lock"
+                    ) from err
                 except Exception as err:
                     LOGGER.debug(
                         "Failed to get PIN for %s slot %s: %s",
@@ -306,7 +363,9 @@ class Zigbee2MQTTLock(BaseLock):
                         slot_num,
                         err,
                     )
-                    value = SlotCode.EMPTY
+                    raise LockDisconnected(
+                        f"Failed to read PIN slot {slot_num}: {err}"
+                    ) from err
                 return slot_num, value
             finally:
                 self._pending_codes.pop(slot_num, None)
@@ -362,13 +421,13 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
-            # Same pattern as Z-Wave JS: MQTT state updates asynchronously; avoid sync
-            # loops by updating the coordinator immediately after a successful publish.
+            # QoS 0 has no delivery confirmation; optimistic update matches other push
+            # providers. Drift is bounded by hard_refresh_interval and MQTT state pushes.
             if self.coordinator:
                 self.coordinator.push_update({code_slot: str(usercode)})
             return True
 
-        except Exception as err:
+        except (HomeAssistantError, OSError) as err:
             LOGGER.error(
                 "Failed to set PIN for %s slot %s: %s",
                 self.lock.entity_id,
@@ -413,7 +472,7 @@ class Zigbee2MQTTLock(BaseLock):
                 self.coordinator.push_update({code_slot: SlotCode.EMPTY})
             return True
 
-        except Exception as err:
+        except (HomeAssistantError, OSError) as err:
             LOGGER.error(
                 "Failed to clear PIN for %s slot %s: %s",
                 self.lock.entity_id,

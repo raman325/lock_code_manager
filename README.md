@@ -23,7 +23,7 @@ Supported lock integrations:
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | Yes | Yes | Some locks mask PINs |
-| [Zigbee2MQTT][zigbee2mqtt] (MQTT)² | Varies | Yes | Yes | Same broker as Z2M; PIN support depends on lock |
+| [Zigbee2MQTT][zigbee2mqtt] (MQTT)² | Varies | Yes | No | Same broker as Z2M; PIN-used events not implemented yet; PIN support depends on lock |
 | [Matter][wiki-matter] | No | Yes | Yes | PINs write-only per spec |
 | [Schlage WiFi][wiki-schlage] | No | No | No | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | Yes | No | No | Local API, polling-based |
