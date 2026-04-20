@@ -26,6 +26,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.models import SyncState
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
@@ -213,13 +214,16 @@ async def async_trigger_sync_tick(
 ) -> None:
     """Manually trigger a sync tick for an in-sync entity.
 
-    Encapsulates the pattern of marking an entity dirty and triggering an
-    immediate tick, useful for testing tick-based sync behavior without
-    waiting for the natural 5-second tick interval.
+    Encapsulates the pattern of forcing an entity into a tickable state and
+    triggering an immediate tick, useful for testing tick-based sync behavior
+    without waiting for the natural 5-second tick interval.
     """
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if set_dirty:
-        entity_obj._sync_manager._dirty = True
+    if set_dirty and entity_obj._sync_manager._state not in (
+        SyncState.LOADING,
+        SyncState.OUT_OF_SYNC,
+    ):
+        entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
     await entity_obj._sync_manager._async_tick()
     await hass.async_block_till_done()
 
@@ -230,11 +234,10 @@ async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
     During entity setup, the initial tick in async_start may fail if dependent
     entities (active, code sensor) are not yet registered. This helper triggers
     a tick to complete initial state loading, but only if the entity hasn't
-    been initialized yet (_in_sync is None).
+    been initialized yet (state is LOADING).
     """
     entity_obj = get_in_sync_entity_obj(hass, entity_id)
-    if entity_obj._sync_manager._in_sync is None:
-        entity_obj._sync_manager._dirty = True
+    if entity_obj._sync_manager._state is SyncState.LOADING:
         await entity_obj._sync_manager._async_tick()
         await hass.async_block_till_done()
 
@@ -247,7 +250,10 @@ async def async_trigger_sync_tick_for_manager(
     Useful when you already have the entity object or need to trigger
     ticks on multiple managers in a loop.
     """
-    if set_dirty:
-        sync_manager._dirty = True
+    if set_dirty and sync_manager._state not in (
+        SyncState.LOADING,
+        SyncState.OUT_OF_SYNC,
+    ):
+        sync_manager._state = SyncState.OUT_OF_SYNC
     await sync_manager._async_tick()
     await hass.async_block_till_done()

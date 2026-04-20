@@ -1,13 +1,12 @@
 """Slot sync manager — owns desired vs actual reconciliation.
 
 Compares entity states (active, PIN, name) against coordinator data (actual lock
-code) and drives set/clear operations to reconcile. Uses a periodic tick for
-retries and circuit-breaking (disable slot after max failures).
+code) and drives set/clear operations to reconcile. Uses a state machine
+(SyncState enum) with periodic tick for retries and per-lock suspension on
+repeated failures.
 
 Tick interval: 5 seconds (TICK_INTERVAL)
 Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WINDOW)
-
-Extracted from binary_sensor.py to separate domain logic from entity state display.
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ from .const import (
     TICK_INTERVAL,
 )
 from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
-from .models import SlotCode
+from .models import SlotCode, SyncState
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
@@ -89,21 +88,20 @@ class SlotSyncManager:
     Compares desired state (from entity states: active, PIN) against actual
     state (from coordinator data) and drives set/clear operations to reconcile.
 
-    The manager discovers entity IDs from the entity registry, subscribes to
-    their state changes and coordinator updates, and drives sync operations
-    via periodic ticks. State changes mark the slot dirty; reconciliation
-    happens on the next tick. Includes circuit breaker protection that
-    disables the slot after repeated sync failures within a time window.
+    Uses a state machine (SyncState) with five states: LOADING, IN_SYNC,
+    OUT_OF_SYNC, SYNCING, SUSPENDED. State changes mark the slot for
+    re-evaluation; reconciliation happens on the next tick. Includes circuit
+    breaker protection that suspends the lock after repeated sync failures.
 
-    The in-sync binary sensor entity reads manager.in_sync for display.
+    The in-sync binary sensor entity reads manager.in_sync and
+    manager.sync_status for display.
 
     State mutation rules:
-        - ``_update_in_sync_display`` is read-only: updates ``_in_sync``
-          for instant UI feedback but does not modify sync state.
+        - ``_request_sync_check`` transitions IN_SYNC -> OUT_OF_SYNC or
+          SUSPENDED -> OUT_OF_SYNC for immediate UI feedback.
         - ``_async_tick_impl`` is the single authoritative place for all
-          sync state mutations: circuit breaker, sync operations,
-          ``_last_set_pin``, transition detection via ``_tick_in_sync``.
-        - ``_mark_dirty`` only sets ``_dirty = True``.
+          other state transitions, circuit breaker, sync operations,
+          and ``_last_set_pin`` changes.
 
     Lifecycle methods (async_start, async_stop) are idempotent and re-entrant.
     """
@@ -143,15 +141,11 @@ class SlotSyncManager:
             ATTR_CODE: (SENSOR_DOMAIN, f"{base_uid}|{ATTR_CODE}|{lock_entity_id}"),
         }
 
-        # State — _in_sync is the display state (updated by both the tick
-        # and the display callback for instant UI). _tick_in_sync is the
-        # tick's own view, updated only by the tick, used for transition
-        # detection (circuit breaker reset).
-        self._in_sync: bool | None = None
-        self._tick_in_sync: bool | None = None
+        # Sync state machine — single source of truth replacing _dirty,
+        # _in_sync, and _tick_in_sync.
+        self._state: SyncState = SyncState.LOADING
         self._entity_id_map: dict[str, str] = {}
         self._tracked_entity_ids: set[str] = set()
-        self._dirty: bool = False
 
         # Track the last PIN we successfully set, so we can detect when the
         # configured PIN changes while the lock code is UNKNOWN (masked/write-only).
@@ -179,14 +173,22 @@ class SlotSyncManager:
     @property
     def in_sync(self) -> bool | None:
         """Return current sync state (None = not yet determined)."""
-        return self._in_sync
+        if self._state is SyncState.LOADING:
+            return None
+        return self._state is SyncState.IN_SYNC
+
+    @property
+    def sync_status(self) -> str | None:
+        """Return granular sync status for dashboard display."""
+        if self._state is SyncState.LOADING:
+            return None
+        return self._state.value
 
     async def async_start(self) -> None:
         """Start the sync manager -- discover entities, subscribe, initial tick."""
         if self._started:
             return
         self._started = True
-        self._dirty = True
         self._setup_state_tracking()
         self._setup_coordinator_listener()
         self._tick_unsub = async_track_time_interval(
@@ -371,6 +373,31 @@ class SlotSyncManager:
         finally:
             self._reset_sync_tracker()
 
+    def _suspend_lock(self, reason: str) -> None:
+        """Suspend this lock and create a per-lock repair issue."""
+        self._state = SyncState.SUSPENDED
+        self._coordinator.suspend_slot_sync_mgrs()
+        self._reset_sync_tracker()
+        self._write_state()
+
+        issue_id = (
+            f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}"
+        )
+        async_create_issue(
+            self._hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            is_persistent=True,
+            severity=IssueSeverity.WARNING,
+            translation_key="slot_suspended",
+            translation_placeholders={
+                "lock_entity_id": self._lock.lock.entity_id,
+                "lock_name": self._lock.display_name or self._lock.lock.entity_id,
+                "reason": reason,
+            },
+        )
+
     # -- Attempt tracking + circuit breaker ----------------------------------
 
     def _reset_sync_tracker(self) -> None:
@@ -412,96 +439,70 @@ class SlotSyncManager:
         self._state_writer(self.in_sync)
 
     @callback
-    def _mark_dirty(self, *_args: Any) -> None:
-        """Mark slot as needing sync check on next tick.
+    def _request_sync_check(self, *_args: Any) -> None:
+        """Request a sync check on the next tick.
 
-        Also immediately updates the display state (in_sync) if it changed,
-        so the UI reflects changes without waiting for the next tick.
+        Transitions IN_SYNC -> OUT_OF_SYNC if calculate_in_sync returns False
+        (also resets circuit breaker since the sync target changed).
+        Transitions SUSPENDED -> OUT_OF_SYNC if the coordinator is no longer suspended.
+        No-op for LOADING, OUT_OF_SYNC, SYNCING.
         """
-        self._dirty = True
-        self._update_in_sync_display()
+        if self._state is SyncState.IN_SYNC:
+            slot_state = self._resolve_slot_state()
+            if slot_state is not None and not self.calculate_in_sync(slot_state):
+                self._state = SyncState.OUT_OF_SYNC
+                self._reset_sync_tracker()
+                self._write_state()
+        elif self._state is SyncState.SUSPENDED:
+            if not self._coordinator.slot_sync_mgrs_suspended:
+                self._state = SyncState.OUT_OF_SYNC
+                self._write_state()
 
     @callback
-    def _mark_dirty_if_relevant(self, event: Event[EventStateChangedData]) -> None:
-        """Mark dirty only if the state change is for a tracked entity.
+    def _request_sync_check_if_relevant(
+        self, event: Event[EventStateChangedData]
+    ) -> None:
+        """Request sync check only if the state change is for a tracked entity.
 
-        Used by the catch-all state tracking fallback to avoid setting dirty
-        on every HA state change. Falls back to always-dirty if entity IDs
-        haven't been discovered yet.
+        Used by the catch-all state tracking fallback to avoid unnecessary
+        checks on every HA state change. Falls back to always-checking if
+        entity IDs haven't been discovered yet.
         """
         if not self._tracked_entity_ids or (
             event.data["entity_id"] in self._tracked_entity_ids
         ):
-            self._dirty = True
-            self._update_in_sync_display()
-
-    @callback
-    def _update_in_sync_display(self) -> None:
-        """Update the in_sync display state immediately if it changed.
-
-        Read-only with respect to sync state — updates ``_in_sync`` and
-        writes the entity state for instant UI feedback, but does not
-        modify the circuit breaker tracker or any other sync state.
-        All sync state mutations happen exclusively in ``_async_tick_impl``.
-        """
-        if self._in_sync is None:
-            return
-        slot_state = self._resolve_slot_state()
-        if slot_state is None:
-            return
-        expected = self.calculate_in_sync(slot_state)
-        if expected != self._in_sync:
-            self._in_sync = expected
-            self._write_state()
+            self._request_sync_check()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
         if not self._started:
             return
 
-        # Try upgrading before the dirty check — catch-all mode may prevent
-        # dirty from being set for entities not yet in _tracked_entity_ids
+        # Try upgrading before the state check — catch-all mode may prevent
+        # _request_sync_check from firing for entities not yet tracked
         self._try_upgrade_state_tracking()
 
-        if not self._dirty:
+        if self._state in (SyncState.IN_SYNC, SyncState.SYNCING, SyncState.SUSPENDED):
             return
 
-        self._dirty = False
         await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:
-        """Core tick logic — called from _async_tick after dirty check.
+        """Core tick logic — called from _async_tick for LOADING and OUT_OF_SYNC states.
 
         This is the single authoritative place for all sync state mutations:
         circuit breaker tracking, sync operations, and ``_last_set_pin``
-        changes. The display callback (``_update_in_sync_display``) may
-        update ``_in_sync`` for immediate UI feedback, but the tick is the
-        only place that acts on sync state transitions.
+        changes.
         """
         slot_state = self._resolve_slot_state()
         if slot_state is None:
-            # State resolution failed — retry on next tick. We always retry
-            # (not just during initial load) because the coordinator may not
-            # have data yet for a newly enabled slot.
-            self._dirty = True
+            # State resolution failed — stay in current state and retry.
             return
 
         expected_in_sync = self.calculate_in_sync(slot_state)
 
-        # Reset circuit breaker when the tick detects any in_sync
-        # transition. Uses _tick_in_sync (tick-only state) instead of
-        # _in_sync (which the display callback may have already updated).
-        # True→False: sync target changed (PIN edit), prior attempts
-        # should not count. False→True: sync succeeded, clean slate.
-        if self._tick_in_sync is not None and self._tick_in_sync != expected_in_sync:
-            self._reset_sync_tracker()
-        self._tick_in_sync = expected_in_sync
-
-        # Initial load: detect sync state without performing sync operations.
-        # This prevents premature sync attempts during entity setup when dependent
-        # entities (active, code sensor) may not yet be registered. If out of sync,
-        # we schedule a sync for the next tick after entities are ready.
-        if self._in_sync is None:
+        # -- LOADING: detect initial sync state without performing operations --
+        if self._state is SyncState.LOADING:
             if slot_state.active_state not in (STATE_ON, STATE_OFF):
                 if not self._logged_invalid_state:
                     _LOGGER.debug(
@@ -511,128 +512,167 @@ class SlotSyncManager:
                         slot_state.active_state,
                     )
                     self._logged_invalid_state = True
-                self._dirty = True  # retry next tick
                 return
 
-            self._in_sync = expected_in_sync
-            _LOGGER.debug(
-                "%s: Initial state loaded, in_sync=%s",
-                self._log_prefix,
-                expected_in_sync,
-            )
-            if expected_in_sync and slot_state.active_state == STATE_ON:
-                # Clear any persisted slot_disabled issue from before restart,
-                # but only if the slot is enabled — a disabled slot can be
-                # "in sync" (no code desired, no code on lock) without the
-                # circuit breaker condition being resolved.
+            if expected_in_sync:
+                self._state = SyncState.IN_SYNC
+                if slot_state.active_state == STATE_ON:
+                    async_delete_issue(
+                        self._hass,
+                        DOMAIN,
+                        f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                    )
+                # Per-lock issue: clear regardless of slot active state
                 async_delete_issue(
                     self._hass,
                     DOMAIN,
-                    f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                    f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
                 )
-            self._write_state()
-            if not expected_in_sync:
-                self._dirty = True  # schedule sync on next tick
-            return
-
-        # Out of sync: perform sync
-        if not expected_in_sync:
-            self._in_sync = False
-            self._write_state()
-
-            # Circuit breaker
-            if slot_state.active_state == STATE_ON and self._sync_attempts_exceeded():
-                _LOGGER.error(
-                    "%s: Sync attempts exceeded (%s in %s window), disabling slot",
-                    self._log_prefix,
-                    self._sync_attempt_count,
-                    SYNC_ATTEMPT_WINDOW,
-                )
-                await self._disable_slot(
-                    f"Lock **{self._lock.lock.entity_id}**: slot "
-                    f"**{self._slot_num}** failed to sync after "
-                    f"{self._sync_attempt_count} consecutive attempts. "
-                    f"The lock may be rejecting the code silently. "
-                    f"Slot {self._slot_num} has been disabled. Check the "
-                    f"code and re-enable the slot.",
-                )
-                return
-
-            # Perform sync operation (may raise)
-            try:
-                await self._perform_sync(slot_state)
-            except CodeRejectedError as err:
-                _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)
-                await self._disable_slot(
-                    f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
-                    f"has been disabled. {err}\n\n"
-                    f"Fix the issue and re-enable the slot.",
-                )
-                return
-            except (LockDisconnected, LockOperationFailed) as err:
-                _LOGGER.info(
-                    "%s: Lock disconnected during %s usercode: %s. Will retry on next tick.",
-                    self._log_prefix,
-                    "set" if slot_state.active_state == STATE_ON else "clear",
-                    err,
-                )
-                self._dirty = True
-                return
-            except Exception as err:
-                _LOGGER.exception(
-                    "%s: Unexpected error during %s usercode - this may indicate a bug. "
-                    "Slot will be disabled to prevent infinite retry loop. Error: %s: %s",
-                    self._log_prefix,
-                    "set" if slot_state.active_state == STATE_ON else "clear",
-                    type(err).__name__,
-                    err,
-                )
-                # For unexpected errors, disable the slot immediately rather than
-                # retrying forever. This prevents infinite retries of programming errors.
-                await self._disable_slot(
-                    f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}** "
-                    f"encountered an unexpected error during sync. This may indicate a bug "
-                    f"in the lock code manager integration. Check logs for details and "
-                    f"report this issue.\n\nError: {type(err).__name__}: {err}",
-                )
-                return
             else:
-                # Sync succeeded - refresh coordinator to verify
-                # Skip for push providers — they update coordinator optimistically
-                # via push_update() and refreshing from cache could read stale data.
-                if not self._lock.supports_push:
-                    try:
-                        await self._coordinator.async_refresh()
-                    except Exception:  # noqa: BLE001
-                        _LOGGER.exception(
-                            "%s: Coordinator refresh failed after sync operation. "
-                            "Sync may have succeeded but verification failed. "
-                            "Will retry on next tick.",
-                            self._log_prefix,
-                        )
-                        # Still mark dirty so we retry, but log at ERROR level
-                        self._dirty = True
+                self._state = SyncState.OUT_OF_SYNC
 
+            _LOGGER.debug(
+                "%s: Initial state loaded, state=%s",
+                self._log_prefix,
+                self._state.value,
+            )
+            self._write_state()
             return
 
-        # Back in sync
-        if not self._in_sync:
-            self._in_sync = True
+        # -- OUT_OF_SYNC: check coordinator suspend flag, then attempt sync --
+        if self._coordinator.slot_sync_mgrs_suspended:
+            self._state = SyncState.SUSPENDED
             self._write_state()
-            # Only clear slot_disabled when the slot is enabled — a disabled
-            # slot can be "in sync" without the issue being resolved
+            return
+
+        if expected_in_sync:
+            # Became in sync without us doing anything (external change)
+            self._state = SyncState.IN_SYNC
+            self._reset_sync_tracker()
+            self._write_state()
             if slot_state.active_state == STATE_ON:
                 async_delete_issue(
                     self._hass,
                     DOMAIN,
                     f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
                 )
+            # Per-lock issue: clear regardless of slot active state
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+            )
+            return
+
+        # Circuit breaker check (set operations only)
+        if slot_state.active_state == STATE_ON and self._sync_attempts_exceeded():
+            _LOGGER.error(
+                "%s: Sync attempts exceeded (%s in %s window), suspending lock",
+                self._log_prefix,
+                self._sync_attempt_count,
+                SYNC_ATTEMPT_WINDOW,
+            )
+            self._suspend_lock(
+                f"Lock **{self._lock.lock.entity_id}**: slot "
+                f"**{self._slot_num}** failed to sync after "
+                f"{self._sync_attempt_count} consecutive attempts. "
+                f"The lock may be rejecting the code silently or "
+                f"experiencing communication issues. "
+                f"Sync has been suspended for this lock. It will "
+                f"resume automatically when the lock recovers.",
+            )
+            return
+
+        # Perform sync
+        self._state = SyncState.SYNCING
+        self._write_state()
+        try:
+            await self._perform_sync(slot_state)
+        except CodeRejectedError as err:
+            _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)
+            await self._disable_slot(
+                f"Lock **{err.lock_entity_id}**: slot **{err.code_slot}** "
+                f"has been disabled. {err}\n\n"
+                f"Fix the issue and re-enable the slot.",
+            )
+            # After disable, the slot active switch turns off. The next
+            # _request_sync_check will see the slot as in-sync (no code
+            # desired, no code on lock). Set to OUT_OF_SYNC so the next
+            # tick resolves to IN_SYNC.
+            self._state = SyncState.OUT_OF_SYNC
+            return
+        except (LockDisconnected, LockOperationFailed) as err:
+            _LOGGER.info(
+                "%s: Lock operation failed during %s usercode: %s. Will retry on next tick.",
+                self._log_prefix,
+                "set" if slot_state.active_state == STATE_ON else "clear",
+                err,
+            )
+            self._state = SyncState.OUT_OF_SYNC
+            return
+        except Exception as err:
+            _LOGGER.exception(
+                "%s: Unexpected error during %s usercode. "
+                "Sync suspended for this lock to prevent infinite retry loop. "
+                "Error: %s: %s",
+                self._log_prefix,
+                "set" if slot_state.active_state == STATE_ON else "clear",
+                type(err).__name__,
+                err,
+            )
+            self._suspend_lock(
+                f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}** "
+                f"encountered an unexpected error during sync. This may indicate a bug "
+                f"in the lock code manager integration. Check logs for details and "
+                f"report this issue.\n\nError: {type(err).__name__}: {err}",
+            )
+            return
+        else:
+            # Sync succeeded — refresh coordinator to verify.
+            # Skip for push providers — they update coordinator optimistically
+            # via push_update() and refreshing from cache could read stale data.
+            if not self._lock.supports_push:
+                try:
+                    await self._coordinator.async_refresh()
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception(
+                        "%s: Coordinator refresh failed after sync operation. "
+                        "Sync may have succeeded but verification failed. "
+                        "Will retry on next tick.",
+                        self._log_prefix,
+                    )
+                    self._state = SyncState.OUT_OF_SYNC
+                    return
+
+        # Check if sync actually worked
+        slot_state = self._resolve_slot_state()
+        if slot_state is not None and self.calculate_in_sync(slot_state):
+            self._state = SyncState.IN_SYNC
+            self._reset_sync_tracker()
+            self._write_state()
+            if slot_state.active_state == STATE_ON:
+                async_delete_issue(
+                    self._hass,
+                    DOMAIN,
+                    f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
+                )
+            # Per-lock issue: clear regardless of slot active state
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+            )
+        else:
+            self._state = SyncState.OUT_OF_SYNC
+            self._write_state()
 
     # -- State tracking subscriptions ----------------------------------------
 
     def _setup_coordinator_listener(self) -> None:
         """Subscribe to coordinator updates."""
-        self._coordinator_unsub = self._coordinator.async_add_listener(self._mark_dirty)
+        self._coordinator_unsub = self._coordinator.async_add_listener(
+            self._request_sync_check
+        )
 
     @callback
     def _cleanup_state_tracking(self) -> None:
@@ -657,7 +697,7 @@ class SlotSyncManager:
         self._state_tracking_unsub = async_track_state_change_event(
             self._hass,
             self._tracked_entity_ids,
-            self._mark_dirty,
+            self._request_sync_check,
         )
         self._tracking_all_states = False
         _LOGGER.debug(
@@ -671,7 +711,7 @@ class SlotSyncManager:
 
         If all entity IDs are available, tracks only those specific entities.
         Otherwise, tracks all state changes via a catch-all subscription that
-        filters by tracked entity IDs in _mark_dirty_if_relevant. The catch-all
+        filters by tracked entity IDs in _request_sync_check_if_relevant. The catch-all
         is upgraded to targeted tracking in _try_upgrade_state_tracking(), which
         runs at the start of each tick (safe because it's outside a callback).
         """
@@ -681,14 +721,14 @@ class SlotSyncManager:
             self._state_tracking_unsub = async_track_state_change_event(
                 self._hass,
                 self._tracked_entity_ids,
-                self._mark_dirty,
+                self._request_sync_check,
             )
             self._tracking_all_states = False
         else:
             tracker = async_track_state_change_filtered(
                 self._hass,
                 TrackStates(True, set(), set()),
-                self._mark_dirty_if_relevant,
+                self._request_sync_check_if_relevant,
             )
             self._state_tracking_unsub = tracker.async_remove
             self._tracking_all_states = True

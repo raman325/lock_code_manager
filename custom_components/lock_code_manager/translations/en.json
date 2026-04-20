@@ -78,7 +78,17 @@
         "name": "active"
       },
       "in_sync": {
-        "name": "Code slot {slot_num} in sync"
+        "name": "Code slot {slot_num} in sync",
+        "state_attributes": {
+          "sync_status": {
+            "state": {
+              "in_sync": "In sync",
+              "out_of_sync": "Out of sync",
+              "syncing": "Syncing",
+              "suspended": "Suspended"
+            }
+          }
+        }
       }
     },
     "event": {
@@ -181,6 +191,17 @@
           "init": {
             "title": "PIN required for slot {slot_num}",
             "description": "A PIN is required to enable slot {slot_num} on the lock configuration **{config_entry_title}**. Please set a PIN before enabling this slot.\n\nClick **Submit** to acknowledge this issue."
+          }
+        }
+      }
+    },
+    "slot_suspended": {
+      "title": "Lock Code Manager: Sync suspended for {lock_name}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Sync suspended for {lock_name}",
+            "description": "Sync has been suspended for lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nThe lock will resume syncing automatically when it recovers. Click **Submit** to acknowledge this issue."
           }
         }
       }
