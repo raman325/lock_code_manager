@@ -27,6 +27,7 @@ export const lcmCssVars = css`
         /* Status colors */
         --lcm-success-color: var(--success-color, #4caf50);
         --lcm-warning-color: var(--warning-color, #ff9800);
+        --lcm-error-color: var(--error-color, #f44336);
         --lcm-disabled-color: var(--disabled-text-color, #9e9e9e);
 
         /* Badge styling */
@@ -100,7 +101,8 @@ export const lcmBadgeStyles = css`
 
 /**
  * Shared status indicator styles (sync icons, status dots).
- * Classes: .lcm-sync-icon.synced, .lcm-sync-icon.pending, .lcm-sync-icon.unknown
+ * Classes: .lcm-sync-icon.synced, .lcm-sync-icon.pending, .lcm-sync-icon.syncing,
+ *          .lcm-sync-icon.suspended, .lcm-sync-icon.unknown
  */
 export const lcmStatusIndicatorStyles = css`
     .lcm-sync-icon {
@@ -113,6 +115,14 @@ export const lcmStatusIndicatorStyles = css`
 
     .lcm-sync-icon.pending {
         color: var(--lcm-warning-color);
+    }
+
+    .lcm-sync-icon.syncing {
+        color: var(--lcm-warning-color);
+    }
+
+    .lcm-sync-icon.suspended {
+        color: var(--lcm-error-color);
     }
 
     .lcm-sync-icon.unknown {

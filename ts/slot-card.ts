@@ -49,6 +49,8 @@ interface LockSyncStatus {
     lastSynced?: string;
     lockEntityId: string;
     name: string;
+    /** Granular sync status: in_sync, out_of_sync, syncing, suspended */
+    syncStatus?: string;
 }
 
 /** Maps editable field names to their entity key, HA service, and value transform. */
@@ -283,7 +285,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 inSync: lock.in_sync,
                 lastSynced: lock.last_synced,
                 lockEntityId: lock.entity_id,
-                name: lock.name
+                name: lock.name,
+                syncStatus: lock.sync_status
             };
         });
 
@@ -941,16 +944,44 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         let iconClass: string;
         let statusText: string;
+        let icon: string;
 
-        if (lock.inSync === true) {
-            iconClass = 'synced';
-            statusText = 'Synced';
-        } else if (lock.inSync === false) {
-            iconClass = 'pending';
-            statusText = 'Pending';
-        } else {
-            iconClass = 'unknown';
-            statusText = 'Unknown';
+        switch (lock.syncStatus) {
+            case 'in_sync':
+                iconClass = 'synced';
+                statusText = 'Synced';
+                icon = 'mdi:check-circle';
+                break;
+            case 'out_of_sync':
+                iconClass = 'pending';
+                statusText = 'Out of sync';
+                icon = 'mdi:clock-outline';
+                break;
+            case 'syncing':
+                iconClass = 'syncing';
+                statusText = 'Syncing';
+                icon = 'mdi:sync';
+                break;
+            case 'suspended':
+                iconClass = 'suspended';
+                statusText = 'Suspended';
+                icon = 'mdi:alert-circle';
+                break;
+            default:
+                // Fallback for when sync_status is not available
+                if (lock.inSync === true) {
+                    iconClass = 'synced';
+                    statusText = 'Synced';
+                    icon = 'mdi:check-circle';
+                } else if (lock.inSync === false) {
+                    iconClass = 'pending';
+                    statusText = 'Out of sync';
+                    icon = 'mdi:clock-outline';
+                } else {
+                    iconClass = 'unknown';
+                    statusText = 'Unknown';
+                    icon = 'mdi:help-circle';
+                }
         }
 
         // Format code display
@@ -959,10 +990,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return html`
             <div class="lock-row">
                 ${showSync
-                    ? html`<ha-icon
-                          class="lcm-sync-icon ${iconClass}"
-                          icon="mdi:check-circle"
-                      ></ha-icon>`
+                    ? html`<ha-icon class="lcm-sync-icon ${iconClass}" icon="${icon}"></ha-icon>`
                     : nothing}
                 <div class="lock-info">
                     <span
@@ -972,7 +1000,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     >
                         ${lock.name}
                     </span>
-                    ${showSync && lock.lastSynced
+                    ${showSync && lock.syncStatus !== 'suspended' && lock.lastSynced
                         ? html`<span class="lock-synced-time">
                               Last synced to lock
                               <ha-relative-time
@@ -981,7 +1009,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                               ></ha-relative-time>
                           </span>`
                         : showSync
-                          ? html`<span class="lock-synced-time">${statusText}</span>`
+                          ? html`<span class="lock-synced-time ${iconClass}">${statusText}</span>`
                           : nothing}
                 </div>
                 ${showCodeSensors && codeDisplay
