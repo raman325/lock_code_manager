@@ -522,11 +522,12 @@ class SlotSyncManager:
                         DOMAIN,
                         f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
                     )
-                    async_delete_issue(
-                        self._hass,
-                        DOMAIN,
-                        f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
-                    )
+                # Per-lock issue: clear regardless of slot active state
+                async_delete_issue(
+                    self._hass,
+                    DOMAIN,
+                    f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+                )
             else:
                 self._state = SyncState.OUT_OF_SYNC
 
@@ -555,11 +556,12 @@ class SlotSyncManager:
                     DOMAIN,
                     f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
                 )
-                async_delete_issue(
-                    self._hass,
-                    DOMAIN,
-                    f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
-                )
+            # Per-lock issue: clear regardless of slot active state
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+            )
             return
 
         # Circuit breaker check (set operations only)
@@ -653,11 +655,12 @@ class SlotSyncManager:
                     DOMAIN,
                     f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
                 )
-                async_delete_issue(
-                    self._hass,
-                    DOMAIN,
-                    f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
-                )
+            # Per-lock issue: clear regardless of slot active state
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+            )
         else:
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()

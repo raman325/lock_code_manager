@@ -432,7 +432,7 @@ class TestSyncStateMachine:
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """LOADING transitions to SYNCED when already in sync."""
+        """LOADING transitions to IN_SYNC when already in sync."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
         # The mock lock has code "1234" in slot 1, and the config also has "1234".
@@ -446,7 +446,7 @@ class TestSyncStateMachine:
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """SYNCED transitions to OUT_OF_SYNC when coordinator data changes."""
+        """IN_SYNC transitions to OUT_OF_SYNC when coordinator data changes."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
@@ -462,7 +462,7 @@ class TestSyncStateMachine:
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """OUT_OF_SYNC transitions through SYNCING to SYNCED on success."""
+        """OUT_OF_SYNC transitions through SYNCING to IN_SYNC on success."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 

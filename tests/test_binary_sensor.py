@@ -1030,7 +1030,7 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     )
     await hass.async_block_till_done()
 
-    # _request_sync_check transitions SYNCED -> OUT_OF_SYNC
+    # _request_sync_check transitions IN_SYNC -> OUT_OF_SYNC
     assert sync_mgr._state is SyncState.OUT_OF_SYNC
 
     # Tick fires — expired window causes _record_sync_attempt to reset
@@ -1039,7 +1039,7 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     await sync_mgr._async_tick()
     await hass.async_block_till_done()
 
-    # Sync succeeded — lock should be SYNCED, not SUSPENDED
+    # Sync succeeded — lock should be IN_SYNC, not SUSPENDED
     assert sync_mgr._state is SyncState.IN_SYNC
     # Tracker reset after successful sync
     assert sync_mgr._sync_attempt_count == 0

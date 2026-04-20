@@ -277,8 +277,10 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
+    def extra_state_attributes(self) -> dict[str, str]:
         """Return extra state attributes."""
+        if self._attr_sync_status is None:
+            return {}
         return {ATTR_SYNC_STATUS: self._attr_sync_status}
 
     async def async_added_to_hass(self) -> None:

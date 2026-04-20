@@ -176,6 +176,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         """
         self._suspended = True
         _LOGGER.info("Sync suspended for %s", self._lock.lock.entity_id)
+        # Notify listeners so other SlotSyncManagers for this lock
+        # transition to SUSPENDED on their next _request_sync_check.
+        self.async_update_listeners()
 
     def _reset_backoff(self) -> None:
         """Reset failure counter and restore original update interval."""

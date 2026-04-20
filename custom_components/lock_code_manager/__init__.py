@@ -598,6 +598,9 @@ async def async_unload_entry(
             )
             if not still_managed:
                 async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
+            async_delete_issue(
+                hass, DOMAIN, f"slot_suspended_{entry_id}_{lock_entity_id}"
+            )
 
     if not hass_data.get(CONF_LOCKS):
         await _async_cleanup_strategy_resource(hass, hass_data)
