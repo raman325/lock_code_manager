@@ -519,12 +519,12 @@ class TestAsyncGetUsercodes:
 
         assert result == {3: "7788"}
 
-    async def test_wait_for_timeout_raises_lock_disconnected(
+    async def test_wait_for_timeout_maps_slot_to_empty(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """If no pin_code reply arrives in time, the refresh fails (unknown state)."""
+        """If no pin_code reply arrives in time, that slot is EMPTY so refresh still succeeds."""
         real_wait_for = asyncio.wait_for
 
         async def fast_pin_timeout(
@@ -554,8 +554,9 @@ class TestAsyncGetUsercodes:
                 side_effect=fast_pin_timeout,
             ),
         ):
-            with pytest.raises(LockDisconnected, match="Timed out waiting"):
-                await lock.async_get_usercodes()
+            result = await lock.async_get_usercodes()
+
+        assert result == {11: SlotCode.EMPTY}
 
     async def test_async_get_usercodes_raises_when_lock_not_connected(
         self,
@@ -984,12 +985,12 @@ class TestAsyncSetClearHardRefresh:
 
         assert refresh == direct == {12: "ABC"}
 
-    async def test_wait_pin_non_timeout_exception_raises_lock_disconnected(
+    async def test_wait_pin_non_timeout_exception_maps_slot_to_empty(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """Unexpected errors during wait_for surface as LockDisconnected."""
+        """Unexpected errors during wait_for treat the slot as EMPTY so the coordinator loads."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
 
@@ -1013,9 +1014,10 @@ class TestAsyncSetClearHardRefresh:
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.asyncio.wait_for",
                 side_effect=boom,
             ),
-            pytest.raises(LockDisconnected, match="Failed to read PIN slot 21"),
         ):
-            await lock.async_get_usercodes()
+            result = await lock.async_get_usercodes()
+
+        assert result == {21: SlotCode.EMPTY}
 
     async def test_setup_push_subscribe_failure_leaves_unsub_none(
         self,

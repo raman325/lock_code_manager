@@ -383,24 +383,28 @@ class Zigbee2MQTTLock(BaseLock):
             return {}
 
         loop = asyncio.get_running_loop()
+        data: dict[int, str | SlotCode] = {}
 
-        async def wait_pin_response(
-            slot_num: int, future: asyncio.Future[str | None]
-        ) -> tuple[int, str | SlotCode]:
-            """Wait for MQTT pin_code reply or timeout; always clear pending entry."""
+        # Query one slot at a time so Zigbee2MQTT / firmware can answer each GET before
+        # the next. Parallel gathers plus per-slot timeouts used to raise and fail the
+        # entire refresh, leaving coordinator.data empty — sync then skips every slot
+        # (see SlotSyncManager._resolve_slot_state).
+        for slot_num in sorted(code_slots):
+            future = loop.create_future()
+            self._pending_codes[slot_num] = future
+            payload = json.dumps({"pin_code": {"user": slot_num}})
             try:
+                await async_publish(self.hass, get_topic, payload)
                 try:
                     result = await asyncio.wait_for(future, timeout=10.0)
-                    value = result if result else SlotCode.EMPTY
-                except TimeoutError as err:
+                    data[slot_num] = result if result else SlotCode.EMPTY
+                except TimeoutError:
                     LOGGER.debug(
                         "Timeout waiting for PIN code response for %s slot %s",
                         self.lock.entity_id,
                         slot_num,
                     )
-                    raise LockDisconnected(
-                        "Timed out waiting for PIN code response from the lock"
-                    ) from err
+                    data[slot_num] = SlotCode.EMPTY
                 except Exception as err:
                     LOGGER.debug(
                         "Failed to get PIN for %s slot %s: %s",
@@ -408,26 +412,11 @@ class Zigbee2MQTTLock(BaseLock):
                         slot_num,
                         err,
                     )
-                    raise LockDisconnected(
-                        f"Failed to read PIN slot {slot_num}: {err}"
-                    ) from err
-                return slot_num, value
+                    data[slot_num] = SlotCode.EMPTY
             finally:
                 self._pending_codes.pop(slot_num, None)
 
-        pending: list[tuple[int, asyncio.Future[str | None]]] = []
-        for slot_num in code_slots:
-            future = loop.create_future()
-            self._pending_codes[slot_num] = future
-            payload = json.dumps({"pin_code": {"user": slot_num}})
-            await async_publish(self.hass, get_topic, payload)
-            pending.append((slot_num, future))
-
-        pairs = await asyncio.gather(
-            *[wait_pin_response(sn, fut) for sn, fut in pending],
-        )
-
-        return dict(pairs)
+        return data
 
     async def async_set_usercode(
         self,
