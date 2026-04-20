@@ -585,6 +585,7 @@ class SlotSyncManager:
 
         # Perform sync
         self._state = SyncState.SYNCING
+        self._write_state()
         try:
             await self._perform_sync(slot_state)
         except CodeRejectedError as err:
