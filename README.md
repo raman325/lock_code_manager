@@ -32,7 +32,12 @@ Supported lock integrations:
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
 
-² **Zigbee2MQTT (MQTT)** — Pair the lock in [Zigbee2MQTT][zigbee2mqtt] with PIN/user-code support for your firmware. Configure Home Assistant’s **MQTT** integration on the **same broker** Zigbee2MQTT uses. The default Zigbee2MQTT base topic `zigbee2mqtt` matches what Lock Code Manager expects unless you customize topics (`{base_topic}/{friendly_name}/set|get`). During LCM setup, choose your `lock.*` entity from **MQTT**. If you rename the device in HA, keep it aligned with the **friendly name** in Zigbee2MQTT.
+² **Zigbee2MQTT (MQTT)** — Pair the lock in [Zigbee2MQTT][zigbee2mqtt] with PIN/user-code support for your firmware.
+Configure Home Assistant’s **MQTT** integration on the **same broker** Zigbee2MQTT uses.
+The default Zigbee2MQTT base topic `zigbee2mqtt` matches what Lock Code Manager expects unless you customize topics
+(`{base_topic}/{friendly_name}/set|get`).
+During LCM setup, choose your `lock.*` entity from **MQTT**.
+If you rename the device in HA, keep it aligned with the **friendly name** in Zigbee2MQTT.
 
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
