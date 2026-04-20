@@ -409,7 +409,7 @@ class TestSyncStateMachine:
         # (they may not be registered), but after full setup + a tick,
         # the manager should transition out of LOADING.
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
-        assert manager._state in (SyncState.SYNCED, SyncState.OUT_OF_SYNC)
+        assert manager._state in (SyncState.IN_SYNC, SyncState.OUT_OF_SYNC)
 
     async def test_loading_to_out_of_sync(
         self,
@@ -438,7 +438,7 @@ class TestSyncStateMachine:
         # The mock lock has code "1234" in slot 1, and the config also has "1234".
         # Trigger a tick to complete initial loading.
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
-        assert manager._state is SyncState.SYNCED
+        assert manager._state is SyncState.IN_SYNC
 
     async def test_synced_to_out_of_sync_on_state_change(
         self,
@@ -450,7 +450,7 @@ class TestSyncStateMachine:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-        assert manager._state is SyncState.SYNCED
+        assert manager._state is SyncState.IN_SYNC
 
         manager._coordinator.data[1] = SlotCode.EMPTY
         manager._request_sync_check()
@@ -468,14 +468,14 @@ class TestSyncStateMachine:
 
         # First get out of LOADING state
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
-        assert manager._state is SyncState.SYNCED
+        assert manager._state is SyncState.IN_SYNC
 
         manager._coordinator.data[1] = SlotCode.EMPTY
         manager._request_sync_check()
         assert manager._state is SyncState.OUT_OF_SYNC
 
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
-        assert manager._state is SyncState.SYNCED
+        assert manager._state is SyncState.IN_SYNC
 
     async def test_syncing_to_out_of_sync_on_lock_disconnected(
         self,
@@ -644,7 +644,7 @@ class TestSyncStatusAttribute:
 
         state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
         assert state is not None
-        assert state.attributes.get("sync_status") == "synced"
+        assert state.attributes.get("sync_status") == "in_sync"
 
     async def test_sync_status_out_of_sync(
         self,

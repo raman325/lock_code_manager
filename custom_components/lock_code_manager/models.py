@@ -25,7 +25,7 @@ class SyncState(StrEnum):
     """State machine for slot sync reconciliation.
 
     LOADING: initial state, waiting for entity states to resolve.
-    SYNCED: desired state matches actual state on the lock.
+    IN_SYNC: desired state matches actual state on the lock.
     OUT_OF_SYNC: mismatch detected, pending sync on next tick.
     SYNCING: sync operation in progress.
     SUSPENDED: circuit breaker tripped or unexpected error; awaiting
@@ -33,7 +33,7 @@ class SyncState(StrEnum):
     """
 
     LOADING = "loading"
-    SYNCED = "synced"
+    IN_SYNC = "in_sync"
     OUT_OF_SYNC = "out_of_sync"
     SYNCING = "syncing"
     SUSPENDED = "suspended"

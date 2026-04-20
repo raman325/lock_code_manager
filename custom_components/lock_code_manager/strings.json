@@ -82,7 +82,7 @@
         "state_attributes": {
           "sync_status": {
             "state": {
-              "synced": "Synced",
+              "in_sync": "In sync",
               "out_of_sync": "Out of sync",
               "syncing": "Syncing",
               "suspended": "Suspended"

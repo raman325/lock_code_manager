@@ -472,7 +472,7 @@ async def test_in_sync_waits_for_missing_pin_state(
         hass, in_sync_entity_obj._sync_manager, set_dirty=False
     )
 
-    assert in_sync_entity_obj._sync_manager._state is SyncState.SYNCED, (
+    assert in_sync_entity_obj._sync_manager._state is SyncState.IN_SYNC, (
         "In-sync sensor should initialize once dependent states are available"
     )
 
@@ -1040,7 +1040,7 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     await hass.async_block_till_done()
 
     # Sync succeeded — lock should be SYNCED, not SUSPENDED
-    assert sync_mgr._state is SyncState.SYNCED
+    assert sync_mgr._state is SyncState.IN_SYNC
     # Tracker reset after successful sync
     assert sync_mgr._sync_attempt_count == 0
 

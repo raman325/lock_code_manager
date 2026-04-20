@@ -88,7 +88,7 @@ class SlotSyncManager:
     Compares desired state (from entity states: active, PIN) against actual
     state (from coordinator data) and drives set/clear operations to reconcile.
 
-    Uses a state machine (SyncState) with five states: LOADING, SYNCED,
+    Uses a state machine (SyncState) with five states: LOADING, IN_SYNC,
     OUT_OF_SYNC, SYNCING, SUSPENDED. State changes mark the slot for
     re-evaluation; reconciliation happens on the next tick. Includes circuit
     breaker protection that suspends the lock after repeated sync failures.
@@ -97,7 +97,7 @@ class SlotSyncManager:
     manager.sync_status for display.
 
     State mutation rules:
-        - ``_request_sync_check`` transitions SYNCED -> OUT_OF_SYNC or
+        - ``_request_sync_check`` transitions IN_SYNC -> OUT_OF_SYNC or
           SUSPENDED -> OUT_OF_SYNC for immediate UI feedback.
         - ``_async_tick_impl`` is the single authoritative place for all
           other state transitions, circuit breaker, sync operations,
@@ -175,7 +175,7 @@ class SlotSyncManager:
         """Return current sync state (None = not yet determined)."""
         if self._state is SyncState.LOADING:
             return None
-        return self._state is SyncState.SYNCED
+        return self._state is SyncState.IN_SYNC
 
     @property
     def sync_status(self) -> str | None:
@@ -442,11 +442,11 @@ class SlotSyncManager:
     def _request_sync_check(self, *_args: Any) -> None:
         """Request a sync check on the next tick.
 
-        Transitions SYNCED -> OUT_OF_SYNC if calculate_in_sync returns False.
+        Transitions IN_SYNC -> OUT_OF_SYNC if calculate_in_sync returns False.
         Transitions SUSPENDED -> OUT_OF_SYNC if the coordinator is no longer suspended.
         No-op for LOADING, OUT_OF_SYNC, SYNCING.
         """
-        if self._state is SyncState.SYNCED:
+        if self._state is SyncState.IN_SYNC:
             slot_state = self._resolve_slot_state()
             if slot_state is not None and not self.calculate_in_sync(slot_state):
                 self._state = SyncState.OUT_OF_SYNC
@@ -486,7 +486,7 @@ class SlotSyncManager:
         # _request_sync_check from firing for entities not yet tracked
         self._try_upgrade_state_tracking()
 
-        if self._state in (SyncState.SYNCED, SyncState.SYNCING, SyncState.SUSPENDED):
+        if self._state in (SyncState.IN_SYNC, SyncState.SYNCING, SyncState.SUSPENDED):
             return
 
         await self._async_tick_impl()
@@ -519,7 +519,7 @@ class SlotSyncManager:
                 return
 
             if expected_in_sync:
-                self._state = SyncState.SYNCED
+                self._state = SyncState.IN_SYNC
                 if slot_state.active_state == STATE_ON:
                     async_delete_issue(
                         self._hass,
@@ -550,7 +550,7 @@ class SlotSyncManager:
 
         if expected_in_sync:
             # Became in sync without us doing anything (external change)
-            self._state = SyncState.SYNCED
+            self._state = SyncState.IN_SYNC
             self._reset_sync_tracker()
             self._write_state()
             if slot_state.active_state == STATE_ON:
@@ -599,7 +599,7 @@ class SlotSyncManager:
             # After disable, the slot active switch turns off. The next
             # _request_sync_check will see the slot as in-sync (no code
             # desired, no code on lock). Set to OUT_OF_SYNC so the next
-            # tick resolves to SYNCED.
+            # tick resolves to IN_SYNC.
             self._state = SyncState.OUT_OF_SYNC
             return
         except (LockDisconnected, LockOperationFailed) as err:
@@ -648,7 +648,7 @@ class SlotSyncManager:
         # Check if sync actually worked
         slot_state = self._resolve_slot_state()
         if slot_state is not None and self.calculate_in_sync(slot_state):
-            self._state = SyncState.SYNCED
+            self._state = SyncState.IN_SYNC
             self._reset_sync_tracker()
             self._write_state()
             if slot_state.active_state == STATE_ON:
