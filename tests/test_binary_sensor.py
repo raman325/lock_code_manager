@@ -947,7 +947,7 @@ async def test_sync_attempts_exceeded_disables_slot(
 
     # Lock should be suspended (not slot disabled)
     assert sync_mgr._state is SyncState.SUSPENDED
-    assert coordinator.suspended is True
+    assert coordinator.slot_sync_mgrs_suspended is True
 
     # The "9999" code should never have been sent to the lock — the tracker
     # check fires BEFORE the sync operation
@@ -1154,7 +1154,7 @@ async def test_unexpected_error_during_sync_suspends_lock(
 
         # Verify that the lock was suspended
         assert in_sync_entity_obj._sync_manager._state is SyncState.SUSPENDED
-        assert coordinator.suspended is True
+        assert coordinator.slot_sync_mgrs_suspended is True
 
 
 async def test_sync_manager_handles_string_slot_num(

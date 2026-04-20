@@ -747,35 +747,35 @@ async def test_coordinator_suspended_flag_defaults_false(
 ) -> None:
     """Coordinator starts with suspended=False."""
     coordinator = LockUsercodeUpdateCoordinator(hass, poll_lock, lcm_config_entry)
-    assert coordinator.suspended is False
+    assert coordinator.slot_sync_mgrs_suspended is False
 
 
 async def test_coordinator_suspended_cleared_on_successful_poll(
     hass: HomeAssistant, poll_lock, poll_coordinator
 ) -> None:
     """Successful poll clears suspended flag."""
-    poll_coordinator.suspend()
+    poll_coordinator.suspend_slot_sync_mgrs()
     await poll_coordinator.async_refresh()
-    assert poll_coordinator.suspended is False
+    assert poll_coordinator.slot_sync_mgrs_suspended is False
 
 
 async def test_coordinator_suspended_cleared_on_push_update(
     hass: HomeAssistant, push_lock, push_coordinator
 ) -> None:
     """Push update clears suspended flag."""
-    push_coordinator.suspend()
+    push_coordinator.suspend_slot_sync_mgrs()
     push_coordinator.push_update({1: "1234"})
-    assert push_coordinator.suspended is False
+    assert push_coordinator.slot_sync_mgrs_suspended is False
 
 
 async def test_coordinator_suspended_not_cleared_on_failed_poll(
     hass: HomeAssistant, poll_lock, poll_coordinator
 ) -> None:
     """Failed poll does not clear suspended flag."""
-    poll_coordinator.suspend()
+    poll_coordinator.suspend_slot_sync_mgrs()
     poll_lock.set_connected(False)
     await poll_coordinator.async_refresh()
-    assert poll_coordinator.suspended is True
+    assert poll_coordinator.slot_sync_mgrs_suspended is True
 
 
 async def test_lock_offline_issue_persists_across_shutdown(

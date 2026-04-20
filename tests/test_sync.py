@@ -524,7 +524,7 @@ class TestSyncStateMachine:
             await hass.async_block_till_done()
 
         assert manager._state is SyncState.SUSPENDED
-        assert manager._coordinator.suspended is True
+        assert manager._coordinator.slot_sync_mgrs_suspended is True
 
     async def test_syncing_to_suspended_on_circuit_breaker(
         self,
@@ -545,7 +545,7 @@ class TestSyncStateMachine:
         await hass.async_block_till_done()
 
         assert manager._state is SyncState.SUSPENDED
-        assert manager._coordinator.suspended is True
+        assert manager._coordinator.slot_sync_mgrs_suspended is True
 
     async def test_suspended_skips_tick(
         self,
@@ -574,9 +574,9 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.SUSPENDED
-        manager._coordinator.suspend()
+        manager._coordinator.suspend_slot_sync_mgrs()
 
-        manager._coordinator._suspended = False
+        manager._coordinator._slot_sync_mgrs_suspended = False
         manager._request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
@@ -592,7 +592,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.SUSPENDED
-        manager._coordinator.suspend()
+        manager._coordinator.suspend_slot_sync_mgrs()
 
         manager._request_sync_check()
         assert manager._state is SyncState.SUSPENDED
@@ -627,7 +627,7 @@ class TestSyncStateMachine:
             await hass.async_block_till_done()
 
         mock_disable.assert_called_once()
-        assert manager._coordinator.suspended is False
+        assert manager._coordinator.slot_sync_mgrs_suspended is False
 
     async def test_suspend_creates_repair_issue(
         self,
@@ -780,7 +780,7 @@ class TestSyncStatusAttribute:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.suspend()
+        manager._coordinator.suspend_slot_sync_mgrs()
         manager._state = SyncState.SUSPENDED
         manager._write_state()
         await hass.async_block_till_done()
