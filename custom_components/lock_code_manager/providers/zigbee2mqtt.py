@@ -53,7 +53,14 @@ class Zigbee2MQTTLock(BaseLock):
 
     @property
     def supports_code_slot_events(self) -> bool:
-        """PIN-used lock/unlock events via Z2M actions are not wired yet."""
+        """Whether LCM should advertise PIN-used code-slot events for this lock.
+
+        When True, the lock can appear under the integration’s code-slot **event**
+        entity so automations know which slot was used. Zigbee2MQTT can report
+        lock/unlock **action** payloads, but this provider does not yet call
+        ``async_fire_code_slot_event`` for them, so we return False and keep the
+        README **Code Events** row accurate.
+        """
         return False
 
     @property
@@ -264,7 +271,15 @@ class Zigbee2MQTTLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Ensure MQTT subscription (normally already done in ``async_setup``)."""
+        """Ensure MQTT subscription (normally already done in ``async_setup``).
+
+        The authoritative subscribe happens in ``async_setup`` via ``await``, so the
+        coordinator’s first poll sees incoming MQTT. This path only runs when the
+        subscription is still missing (e.g. reconnect). ``async_subscribe`` is async,
+        so completion is scheduled as a task; failures are logged instead of raising
+        through this synchronous ``@callback`` to avoid unhandled task exceptions on
+        the event loop (see ``_subscribe_or_log``).
+        """
         if self._unsubscribe is not None:
             return
 
@@ -421,8 +436,11 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
-            # QoS 0 has no delivery confirmation; optimistic update matches other push
-            # providers. Drift is bounded by hard_refresh_interval and MQTT state pushes.
+            # Optimistic coordinator update after HA accepts the publish call (MQTT is
+            # typically QoS 0: no end-to-end delivery guarantee to the lock). Removing
+            # this would leave cards showing stale PINs until the next device JSON push
+            # or poll; we keep it aligned with other push providers. Mitigate drift via
+            # ``hard_refresh_interval`` and incoming MQTT ``users`` / pin_code payloads.
             if self.coordinator:
                 self.coordinator.push_update({code_slot: str(usercode)})
             return True
@@ -468,6 +486,7 @@ class Zigbee2MQTTLock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
+            # Same optimistic pattern as ``async_set_usercode`` (see comment there).
             if self.coordinator:
                 self.coordinator.push_update({code_slot: SlotCode.EMPTY})
             return True
