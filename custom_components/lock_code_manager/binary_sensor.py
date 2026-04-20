@@ -29,6 +29,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
+    ATTR_SYNC_STATUS,
     CONF_NUMBER_OF_USES,
     EVENT_PIN_USED,
 )
@@ -249,10 +250,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
         )
         CoordinatorEntity.__init__(self, coordinator)
 
+        self._attr_sync_status: str | None = None
+
         @callback
         def _sync_and_write_state(in_sync: bool | None) -> None:
             """Sync _attr_is_on from manager and write HA state."""
             self._attr_is_on = in_sync
+            self._attr_sync_status = self._sync_manager.sync_status
             self.async_write_ha_state()
 
         self._sync_manager = SlotSyncManager(
@@ -271,6 +275,11 @@ class LockCodeManagerCodeSlotInSyncEntity(
         return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
             int(self.slot_num) in self.coordinator.data
         )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """Return extra state attributes."""
+        return {ATTR_SYNC_STATUS: self._attr_sync_status}
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""

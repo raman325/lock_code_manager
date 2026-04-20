@@ -628,3 +628,57 @@ class TestSyncStateMachine:
 
         mock_disable.assert_called_once()
         assert manager._coordinator.suspended is False
+
+
+class TestSyncStatusAttribute:
+    """Tests for sync_status extra state attribute."""
+
+    async def test_sync_status_synced(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """sync_status is 'synced' when in sync."""
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+        state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
+        assert state is not None
+        assert state.attributes.get("sync_status") == "synced"
+
+    async def test_sync_status_out_of_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """sync_status is 'out_of_sync' when out of sync."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._write_state()
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
+        assert state is not None
+        assert state.attributes.get("sync_status") == "out_of_sync"
+
+    async def test_sync_status_suspended(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """sync_status is 'suspended' when suspended."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._coordinator.suspended = True
+        manager._state = SyncState.SUSPENDED
+        manager._write_state()
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
+        assert state is not None
+        assert state.attributes.get("sync_status") == "suspended"
