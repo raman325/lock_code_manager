@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9879a56f0713",
+  "strategy": "manual-commit",
+  "branch": "task/sync-state-enum",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/const.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/98/79a56f0713/0/metadata.json",
+      "transcript": "/98/79a56f0713/0/full.jsonl",
+      "content_hash": "/98/79a56f0713/0/content_hash.txt",
+      "prompt": "/98/79a56f0713/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1838,
+    "cache_creation_tokens": 1746650,
+    "cache_read_tokens": 679281500,
+    "output_tokens": 330292,
+    "api_call_count": 1479
+  }
+}
