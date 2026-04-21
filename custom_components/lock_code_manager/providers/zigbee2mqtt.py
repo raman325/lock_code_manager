@@ -383,7 +383,7 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected("Could not determine MQTT topic")
 
         # Get configured code slots for this lock (any LCM entry that includes this lock).
-        code_slots = self._get_managed_slots()
+        code_slots = self.managed_slots
 
         if not code_slots:
             return {}

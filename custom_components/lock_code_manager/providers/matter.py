@@ -418,7 +418,7 @@ class MatterLock(BaseLock):
         occupied slots are included so callers like the lock reset config flow
         step can detect codes not managed by Lock Code Manager.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
 
         lock_data = await self._async_call_service(
             "get_lock_users",

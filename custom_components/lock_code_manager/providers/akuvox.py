@@ -169,7 +169,7 @@ class AkuvoxLock(BaseLock):
         available managed slot and their names are updated on the device
         to include the ``[LCM:<slot>]`` tag via ``modify_user``.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         if not managed_slots:
             return
 
@@ -236,7 +236,7 @@ class AkuvoxLock(BaseLock):
 
         Only codes whose slot numbers fall within the managed set are returned.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         if not managed_slots:
             return {}
 

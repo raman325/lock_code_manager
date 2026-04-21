@@ -517,7 +517,7 @@ class ZWaveJSLock(BaseLock):
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """Get dictionary of code slots and usercodes."""
-        code_slots = self._get_managed_slots()
+        code_slots = self.managed_slots
         data: dict[int, str | SlotCode] = {}
 
         if not await self.async_is_integration_connected():

@@ -130,7 +130,7 @@ class SchlageLock(BaseLock):
         Discovers untagged codes and assigns them to the next available managed
         slot by renaming (add tagged, delete original).
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         if not managed_slots:
             return
 
@@ -239,7 +239,7 @@ class SchlageLock(BaseLock):
         This method only reads and classifies codes; auto-tagging of unmanaged
         codes is handled by ``_async_tag_unmanaged_codes()``.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         if not managed_slots:
             return {}
 

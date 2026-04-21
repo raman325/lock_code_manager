@@ -839,8 +839,9 @@ class BaseLock:
             ) from err
 
     @final
-    def _get_managed_slots(self) -> set[int]:
-        """Return set of slot numbers managed by Lock Code Manager for this lock."""
+    @property
+    def managed_slots(self) -> set[int]:
+        """Return slot numbers managed by Lock Code Manager for this lock."""
         return get_managed_slots(self.hass, self.lock.entity_id)
 
     @final

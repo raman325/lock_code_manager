@@ -101,7 +101,7 @@ class VirtualLock(BaseLock):
         occupied slots are included so callers like the lock reset config
         flow step can detect codes not managed by Lock Code Manager.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         stored_slots = set()
         for k in self._data:
             try:

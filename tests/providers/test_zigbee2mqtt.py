@@ -469,7 +469,7 @@ class TestAsyncGetUsercodes:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value=managed,
             ),
             patch(
@@ -517,7 +517,7 @@ class TestAsyncGetUsercodes:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value={3},
             ),
             patch(
@@ -552,7 +552,7 @@ class TestAsyncGetUsercodes:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value={11},
             ),
             patch(
@@ -586,7 +586,7 @@ class TestAsyncGetUsercodes:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value={7},
             ),
             patch(
@@ -634,7 +634,7 @@ class TestAsyncGetUsercodes:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value={1},
             ),
             pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
@@ -694,7 +694,7 @@ class TestAsyncSetClearHardRefresh:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value=set(),
             ),
             patch(
@@ -1035,7 +1035,7 @@ class TestAsyncSetClearHardRefresh:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value={12},
             ),
             patch(
@@ -1066,7 +1066,7 @@ class TestAsyncSetClearHardRefresh:
                 return_value=True,
             ),
             patch(
-                "custom_components.lock_code_manager.providers._base.BaseLock._get_managed_slots",
+                "custom_components.lock_code_manager.providers._base.get_managed_slots",
                 return_value={21},
             ),
             patch(
