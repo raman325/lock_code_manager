@@ -21,14 +21,22 @@
 
 ## Providers
 
-**Current:** Akuvox, Matter, Schlage, Z-Wave JS, Virtual (testing)
+**Current:** Akuvox, Matter, Schlage, Z-Wave JS, Zigbee2MQTT (MQTT), Virtual (testing)
 
-**Open PRs:** ZHA (#739), MQTT/Zigbee2MQTT (#740)
+**Open PRs:** ZHA (#739)
 
 **Future:** Nuki, SwitchBot, SmartThings
 
 **Cannot support:** esphome (no API), august/yale/yalexs_ble/yale_smart_alarm
 (library limitations)
+
+### Zigbee2MQTT provider
+
+- **Code slot events** — Map Z2M lock/unlock actions with user identifiers to
+  `async_fire_code_slot_event()`. Currently `supports_code_slot_events = False`.
+- **Narrow broad `except Exception` in `async_get_usercodes`** — The wait_for
+  catch after TimeoutError catches all exceptions. Consider narrowing or
+  documenting why it must remain broad.
 
 ### Matter provider
 
@@ -47,13 +55,13 @@
 
 ## Architecture Considerations
 
-- **Event-driven vs optimistic push updates** — Both Matter and Z-Wave JS need
-  optimistic pushes from set/clear methods. Z-Wave JS needs them to avoid sync
-  loops with stale cache reads. Matter needs them because PINs are write-only
-  (the lock never reports the actual value back). Removing optimistic pushes
-  is not viable for either provider. Event-only updates would leave a latency
-  window where the coordinator has stale data, triggering unnecessary re-sync
-  attempts.
+- **Event-driven vs optimistic push updates** — Matter, Z-Wave JS, and
+  Zigbee2MQTT all need optimistic pushes from set/clear methods. Z-Wave JS
+  needs them to avoid sync loops with stale cache reads. Matter needs them
+  because PINs are write-only. Zigbee2MQTT uses MQTT QoS 0 which has no
+  delivery confirmation. Removing optimistic pushes is not viable for any
+  push-based provider. Event-only updates would leave a latency window where
+  the coordinator has stale data, triggering unnecessary re-sync attempts.
 
 - **Coordinator-owned sync managers** — Move sync manager lifecycle from binary
   sensor entities to coordinator (survives entity recreation during config
@@ -98,6 +106,10 @@
 
 - Unify slot and lock data card designs (prefer slot card pattern).
 - Test visual editor for both cards.
+- **Enhance sync_status display** — The slot card and lock-codes card now show
+  granular sync states (in_sync, out_of_sync, syncing, suspended) with distinct
+  icons and colors. Future work: spinner animation for syncing state, richer
+  suspended state details (e.g., show the repair issue reason).
 
 ## Process
 
