@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "703d33755461",
+  "strategy": "manual-commit",
+  "branch": "refactor/base-lock-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/70/3d33755461/0/metadata.json",
+      "transcript": "/70/3d33755461/0/full.jsonl",
+      "content_hash": "/70/3d33755461/0/content_hash.txt",
+      "prompt": "/70/3d33755461/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 757,
+    "cache_creation_tokens": 2980797,
+    "cache_read_tokens": 158644580,
+    "output_tokens": 164495,
+    "api_call_count": 548
+  }
+}
