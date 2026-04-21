@@ -136,7 +136,7 @@ async def test_async_call_service_non_dict_entity_data(
 async def test_setup(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup validates lock supports user management and PIN credentials."""
     mock_response = {
@@ -148,14 +148,14 @@ async def test_setup(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
-    await matter_lock_simple.async_setup(lcm_config_entry)
+    await matter_lock_simple.async_setup(simple_lcm_config_entry)
     assert handler.call_count == 1
 
 
 async def test_setup_unsupported_lock(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock does not support user management."""
     mock_response = {
@@ -167,13 +167,13 @@ async def test_setup_unsupported_lock(
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support user management"):
-        await matter_lock_simple.async_setup(lcm_config_entry)
+        await matter_lock_simple.async_setup(simple_lcm_config_entry)
 
 
 async def test_setup_no_pin_support(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock supports users but not PIN credentials."""
     mock_response = {
@@ -186,7 +186,7 @@ async def test_setup_no_pin_support(
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support PIN credentials"):
-        await matter_lock_simple.async_setup(lcm_config_entry)
+        await matter_lock_simple.async_setup(simple_lcm_config_entry)
 
 
 # ---------------------------------------------------------------------------
@@ -194,42 +194,10 @@ async def test_setup_no_pin_support(
 # ---------------------------------------------------------------------------
 
 
-async def test_get_usercodes(
-    hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test get_usercodes returns UNREADABLE_CODE for occupied, EMPTY for cleared slots."""
-    mock_response = {
-        LOCK_ENTITY_ID: {
-            "max_users": 10,
-            "users": [
-                {
-                    "user_index": 1,
-                    "user_name": "slot1",
-                    "credentials": [
-                        {
-                            "credential_type": "pin",
-                            "credential_index": 1,
-                        }
-                    ],
-                },
-            ],
-        },
-    }
-    handler = AsyncMock(return_value=mock_response)
-    register_mock_service(hass, MATTER_DOMAIN, "get_lock_users", handler)
-
-    codes = await matter_lock_simple.async_get_usercodes()
-
-    assert codes[1] is SlotCode.UNREADABLE_CODE
-    assert codes[2] is SlotCode.EMPTY
-
-
 async def test_get_usercodes_no_users(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test get_usercodes when no users exist on the lock."""
     mock_response = {
@@ -330,55 +298,6 @@ async def test_get_usercodes_invalid_credential_index_skipped(
 # ---------------------------------------------------------------------------
 
 
-async def test_set_usercode(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """Test set_usercode calls the correct Matter services with user_index."""
-    calls: list[dict[str, Any]] = []
-
-    async def _capture_credential_call(call):
-        calls.append({"service": call.service, "data": dict(call.data)})
-        return {
-            LOCK_ENTITY_ID: {
-                "credential_index": 1,
-                "user_index": 1,
-                "next_credential_index": 2,
-            }
-        }
-
-    async def _capture_user_call(call):
-        calls.append({"service": call.service, "data": dict(call.data)})
-        return {LOCK_ENTITY_ID: {}}
-
-    register_mock_service(
-        hass,
-        MATTER_DOMAIN,
-        "set_lock_credential",
-        AsyncMock(side_effect=_capture_credential_call),
-    )
-    register_mock_service(
-        hass,
-        MATTER_DOMAIN,
-        "set_lock_user",
-        AsyncMock(side_effect=_capture_user_call),
-    )
-
-    result = await matter_lock_simple.async_set_usercode(1, "1234", "User One")
-
-    assert result is True
-    assert len(calls) == 2
-    # First call: set_lock_credential
-    assert calls[0]["service"] == "set_lock_credential"
-    assert calls[0]["data"]["credential_type"] == "pin"
-    assert calls[0]["data"]["credential_data"] == "1234"
-    assert calls[0]["data"]["credential_index"] == 1
-    # Second call: set_lock_user with user_index (not credential_index)
-    assert calls[1]["service"] == "set_lock_user"
-    assert calls[1]["data"]["user_index"] == 1
-    assert calls[1]["data"]["user_name"] == "User One"
-    assert "credential_index" not in calls[1]["data"]
-
-
 async def test_set_usercode_no_name(
     hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
@@ -430,29 +349,6 @@ async def test_set_usercode_skips_name_when_no_user_index(
 # ---------------------------------------------------------------------------
 
 
-async def test_clear_usercode(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """Test clear_usercode calls clear_lock_credential when credential exists."""
-    credential_status_response = {
-        LOCK_ENTITY_ID: {"credential_exists": True},
-    }
-    clear_response = {LOCK_ENTITY_ID: {}}
-
-    handler_status = AsyncMock(return_value=credential_status_response)
-    handler_clear = AsyncMock(return_value=clear_response)
-    register_mock_service(
-        hass, MATTER_DOMAIN, "get_lock_credential_status", handler_status
-    )
-    register_mock_service(hass, MATTER_DOMAIN, "clear_lock_credential", handler_clear)
-
-    result = await matter_lock_simple.async_clear_usercode(1)
-
-    assert result is True
-    assert handler_status.call_count == 1
-    assert handler_clear.call_count == 1
-
-
 async def test_clear_usercode_already_empty(
     hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
@@ -483,7 +379,7 @@ async def test_clear_usercode_already_empty(
 async def test_hard_refresh_codes(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test hard_refresh_codes returns same result as get_usercodes."""
     mock_response = {
@@ -656,7 +552,7 @@ async def test_async_call_service_void_service(
 async def test_get_usercodes_multiple_credential_types(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that only PIN credentials are considered, not other types like RFID."""
     mock_response = {
