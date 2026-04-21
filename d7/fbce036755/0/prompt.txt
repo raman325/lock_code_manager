@@ -1774,3 +1774,35 @@ Added 5 adversarial integration tests to `/Users/raman/projects/lock_code_manage
 - `uv run prek` -- all checks passed</result>
 <usage><total_tokens>86750</total_tokens><tool_uses>50</tool_uses><duration_ms>366911</duration_ms></usage>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ae0044ac14251d1b8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9d662aaa-f935-4906-a164-65e1a04fe236/tasks/ae0044ac14251d1b8.output</output-file>
+<status>completed</status>
+<summary>Agent "Lifecycle and websocket boundary tests" completed</summary>
+<result>All 722 tests pass in 8.45 seconds. No failures.
+
+DONE
+
+Here is a summary of what was written:
+
+**`tests/test_init.py`** - 3 new tests added:
+
+1. **`test_reload_resets_sync_state_cleanly`** - Verifies that unloading and re-setting up a config entry creates a fresh `SlotSyncManager` instance with `_last_set_pin = None`. Confirms the new manager reaches a real sync state (IN_SYNC or OUT_OF_SYNC) after ticks, not stuck in LOADING.
+
+2. **`test_removing_lock_from_config_stops_coordinator_and_sync_managers`** - Removes LOCK_2 from the config via `async_update_entry`. Verifies LOCK_2 is gone from `runtime_data.locks`, its in-sync entities are removed from HA state, and LOCK_1 remains intact with its coordinator.
+
+3. **`test_two_entries_same_lock_suspension_does_not_cross_contaminate`** - Two LCM entries sharing the same lock verify they share the same coordinator. Tests that lock-level suspension blocks OUT_OF_SYNC slots from syncing, and that recovery (via `push_update`) clears the suspension, allowing sync managers to resume.
+
+**`tests/test_websocket.py`** - 2 new tests added:
+
+4. **`test_subscribe_code_slot_receives_live_updates`** - Subscribes to slot 1, changes PIN via `hass.services.async_call("text", "set_value")`, and verifies the websocket fires an event with the updated PIN.
+
+5. **`test_subscribe_code_slot_receives_coordinator_updates`** - Subscribes to slot 1, pushes new coordinator data via `coordinator.push_update({1: "new_code"})`, and verifies the websocket event reflects the new code on the lock.
+
+**No bugs found** - all existing and new tests pass (722 total in 8.45s). The suspension behavior is working as designed: IN_SYNC slots stay IN_SYNC during suspension (nothing to block), while OUT_OF_SYNC slots get blocked until recovery.</result>
+<usage><total_tokens>91470</total_tokens><tool_uses>57</tool_uses><duration_ms>402241</duration_ms></usage>
+</task-notification>
