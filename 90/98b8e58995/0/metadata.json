@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9098b8e58995",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-21T21:52:39.394132Z",
+  "branch": "test/adversarial-integration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3b31f3e1063c",
+  "token_usage": {
+    "input_tokens": 1039,
+    "cache_creation_tokens": 4330164,
+    "cache_read_tokens": 275581139,
+    "output_tokens": 224251,
+    "api_call_count": 750
+  },
+  "session_metrics": {
+    "turn_count": 107
+  }
+}
