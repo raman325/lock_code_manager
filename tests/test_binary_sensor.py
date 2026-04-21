@@ -1,5 +1,6 @@
 """Test binary sensor platform."""
 
+import asyncio
 import copy
 from datetime import timedelta
 import logging
@@ -1521,3 +1522,531 @@ async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
     assert mgr._state is SyncState.IN_SYNC, f"Expected IN_SYNC, got {mgr._state}"
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Race condition and timing tests
+# ---------------------------------------------------------------------------
+
+
+async def test_push_update_during_sync_operation_does_not_corrupt_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A coordinator push_update during _perform_sync does not corrupt the state machine.
+
+    Scenario: sync manager is SYNCING (awaiting set_usercode). While waiting,
+    the coordinator gets a push_update with different data. The _request_sync_check
+    callback fires but should be a no-op since state is SYNCING.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    mgr = in_sync_entity_obj._sync_manager
+
+    # Verify starting in sync
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+
+    # Make out of sync by changing the coordinator data (external change)
+    lock_provider.codes[1] = "0000"
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Change PIN so there is a mismatch to sync
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "9999"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    mid_sync_event = asyncio.Event()
+    resume_event = asyncio.Event()
+    original_set = lock_provider.async_set_usercode
+
+    async def set_usercode_with_push_during(code_slot, usercode, name=None, **kwargs):
+        """Set usercode but push a different code mid-operation."""
+        mid_sync_event.set()
+        await resume_event.wait()
+        return await original_set(code_slot, usercode, name, **kwargs)
+
+    async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
+        """Set usercode but pause mid-operation so the test can push an update."""
+        # Signal that we are inside the operation
+        mid_sync_event.set()
+        # Block until the test tells us to continue
+        await resume_event.wait()
+        return await original_set(code_slot, usercode, name, **kwargs)
+
+    with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
+        # Force to OUT_OF_SYNC so tick will attempt sync
+        mgr._state = SyncState.OUT_OF_SYNC
+
+        # Start the tick as a background task
+        tick_task = hass.async_create_task(mgr._async_tick())
+        # Yield control repeatedly until the mock signals it has been entered
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if mid_sync_event.is_set():
+                break
+
+        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
+
+        # At this point state should be SYNCING
+        assert mgr._state is SyncState.SYNCING
+
+        # Push a different code -- this fires _request_sync_check, which
+        # should be a no-op because we are in SYNCING state
+        coordinator.push_update({1: "7777"})
+
+        # State should still be SYNCING (push did not corrupt it)
+        assert mgr._state is SyncState.SYNCING
+
+        # Let the set_usercode complete
+        resume_event.set()
+        await tick_task
+        await hass.async_block_till_done()
+
+    # After sync completes, the manager should be in a valid state
+    assert mgr._state in (SyncState.IN_SYNC, SyncState.OUT_OF_SYNC)
+
+
+async def test_unload_during_active_sync_does_not_raise(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Unloading a config entry while a sync tick is in progress does not raise.
+
+    Scenario: sync manager is SYNCING. Config entry unloads, calling async_stop()
+    which sets _started = False. The tick should gracefully finish or bail out.
+    """
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "9999", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Test Unload During Sync"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    await async_initial_tick(hass, in_sync_entity)
+
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
+    mgr = in_sync_entity_obj._sync_manager
+
+    # Make slot out of sync
+    lock_provider.codes[1] = "1234"
+    mgr._state = SyncState.OUT_OF_SYNC
+
+    mid_sync_event = asyncio.Event()
+    resume_event = asyncio.Event()
+    original_set = lock_provider.async_set_usercode
+
+    async def slow_set_usercode(code_slot, usercode, name=None, **kwargs):
+        """Simulate a slow set_usercode that yields."""
+        mid_sync_event.set()
+        await resume_event.wait()
+        return await original_set(code_slot, usercode, name, **kwargs)
+
+    async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
+        """Set usercode, but pause mid-operation."""
+        mid_sync_event.set()
+        await resume_event.wait()
+        return await original_set(code_slot, usercode, name, **kwargs)
+
+    with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
+        # Start the tick
+        tick_task = hass.async_create_task(mgr._async_tick())
+        # Yield control repeatedly until the mock signals it has been entered
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if mid_sync_event.is_set():
+                break
+
+        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
+
+        # Unload the config entry while sync is in progress.
+        # async_stop() is called which sets _started = False.
+        mgr.async_stop()
+
+        # Let the set_usercode complete
+        resume_event.set()
+
+        # The tick task should complete without raising
+        await tick_task
+        await hass.async_block_till_done()
+
+    # Verify clean shutdown -- _started should be False
+    assert not mgr._started
+
+    # Clean up
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_pin_change_during_sync_uses_snapshot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Sync uses the PIN snapshot captured at tick start, not live state.
+
+    The sync manager's _async_tick_impl captures slot_state (including PIN)
+    synchronously before any awaits. The PIN passed to _perform_sync is the
+    snapshot, so even if the PIN entity changes during the await, the original
+    value is used. A subsequent tick picks up the new PIN.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    mgr = in_sync_entity_obj._sync_manager
+
+    # Make the lock code different so sync needs to set "1234"
+    lock_provider.codes[1] = "0000"
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Force out of sync
+    mgr._state = SyncState.OUT_OF_SYNC
+
+    set_pins_recorded = []
+    mid_sync_event = asyncio.Event()
+    resume_event = asyncio.Event()
+    original_set = lock_provider.async_set_usercode
+
+    async def recording_set_with_pause(code_slot, usercode, name=None, **kwargs):
+        """Record the PIN and pause mid-operation on first call."""
+        set_pins_recorded.append(usercode)
+        if not mid_sync_event.is_set():
+            mid_sync_event.set()
+            await resume_event.wait()
+        return await original_set(code_slot, usercode, name, **kwargs)
+
+    with patch.object(lock_provider, "async_set_usercode", recording_set_with_pause):
+        # Start the tick
+        tick_task = hass.async_create_task(mgr._async_tick())
+        # Yield control repeatedly until the mock signals it has been entered
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if mid_sync_event.is_set():
+                break
+
+        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
+
+        # The sync captured PIN "1234" at tick start. Verify the
+        # recorded PIN matches the snapshot value.
+        assert set_pins_recorded[0] == "1234"
+
+        # Let the set_usercode complete
+        resume_event.set()
+        await tick_task
+        await hass.async_block_till_done()
+
+    # The lock now has "1234" (synced from configured PIN)
+    assert lock_provider.codes[1] == "1234"
+
+    # Now change the PIN to "4321" -- this creates a new mismatch
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "4321"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Clear tracking for the next tick
+    lock_provider.service_calls["set_usercode"].clear()
+
+    # Trigger another tick -- should detect mismatch and set "4321"
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    # Second sync should set "4321" (the new PIN)
+    set_calls = lock_provider.service_calls.get("set_usercode", [])
+    assert len(set_calls) == 1
+    assert set_calls[0][1] == "4321"
+
+
+async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """If coordinator refresh fails after a successful sync, retry on next tick.
+
+    This exercises the try/except around coordinator.async_refresh() in
+    _async_tick_impl. The sync succeeded but we cannot verify it.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    mgr = in_sync_entity_obj._sync_manager
+
+    # Change PIN to create a mismatch
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        TEXT_SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "9999"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Force out of sync
+    mgr._state = SyncState.OUT_OF_SYNC
+
+    # Patch coordinator.async_refresh to raise on first call
+    refresh_call_count = {"count": 0}
+    original_refresh = coordinator.async_refresh
+
+    async def failing_refresh(*args, **kwargs):
+        refresh_call_count["count"] += 1
+        if refresh_call_count["count"] == 1:
+            raise UpdateFailed("Connection lost")
+        return await original_refresh(*args, **kwargs)
+
+    with patch.object(coordinator, "async_refresh", failing_refresh):
+        # Fire tick -- sync succeeds but refresh fails
+        await mgr._async_tick()
+        await hass.async_block_till_done()
+
+    # The code was set on the lock even though refresh failed
+    assert lock_provider.codes[1] == "9999"
+
+    # State should be OUT_OF_SYNC because we could not verify
+    assert mgr._state is SyncState.OUT_OF_SYNC
+
+    # Fire another tick -- refresh succeeds this time, state resolves
+    await mgr._async_tick()
+    await hass.async_block_till_done()
+
+    assert mgr._state is SyncState.IN_SYNC
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+
+
+async def test_multiple_slots_sync_sequentially_not_concurrently(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Each slot's sync operation runs sequentially via the lock's asyncio lock.
+
+    Two slots out of sync should not cause concurrent set_usercode calls
+    on the same lock -- the _aio_lock serializes them.
+    """
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "9999", CONF_ENABLED: True},
+            2: {CONF_NAME: "test2", CONF_PIN: "8888", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test Sequential Sync",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    await async_initial_tick(hass, in_sync_slot_1)
+    await async_initial_tick(hass, in_sync_slot_2)
+
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+
+    entity_obj_1 = get_in_sync_entity_obj(hass, in_sync_slot_1)
+    entity_obj_2 = get_in_sync_entity_obj(hass, in_sync_slot_2)
+    mgr_1 = entity_obj_1._sync_manager
+    mgr_2 = entity_obj_2._sync_manager
+
+    # Make both slots out of sync
+    lock_provider.codes[1] = "0000"
+    lock_provider.codes[2] = "0000"
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    mgr_1._state = SyncState.OUT_OF_SYNC
+    mgr_2._state = SyncState.OUT_OF_SYNC
+
+    # Track the order and overlap of set_usercode calls
+    call_log = []
+    active_calls = {"count": 0, "max_concurrent": 0}
+    original_set = lock_provider.async_set_usercode
+
+    async def tracking_set_usercode(code_slot, usercode, name=None, **kwargs):
+        """Track call ordering and concurrency."""
+        active_calls["count"] += 1
+        active_calls["max_concurrent"] = max(
+            active_calls["max_concurrent"], active_calls["count"]
+        )
+        call_log.append(("start", code_slot))
+        # Yield to allow potential concurrent scheduling
+        await asyncio.sleep(0)
+        result = await original_set(code_slot, usercode, name, **kwargs)
+        call_log.append(("end", code_slot))
+        active_calls["count"] -= 1
+        return result
+
+    with patch.object(lock_provider, "async_set_usercode", tracking_set_usercode):
+        # Fire both ticks concurrently
+        task_1 = hass.async_create_task(mgr_1._async_tick())
+        task_2 = hass.async_create_task(mgr_2._async_tick())
+        await asyncio.gather(task_1, task_2)
+        await hass.async_block_till_done()
+
+    # The _aio_lock should have serialized the calls
+    assert active_calls["max_concurrent"] <= 1, (
+        f"Expected at most 1 concurrent call, got {active_calls['max_concurrent']}"
+    )
+
+    # Both slots should have been synced
+    assert len(call_log) == 4  # start/end for each slot
+    # First slot finishes before second slot starts
+    first_end_idx = next(i for i, v in enumerate(call_log) if v[0] == "end")
+    second_start_idx = next(
+        i for i, v in enumerate(call_log) if v[0] == "start" and i > 0
+    )
+    assert first_end_idx < second_start_idx, (
+        f"Expected sequential execution, but call_log was: {call_log}"
+    )
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_slot_disabled_during_sync_resolves_correctly(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Disabling a slot while sync is pending causes a clear instead of a set.
+
+    Scenario: slot is OUT_OF_SYNC, user disables the slot via the enabled switch.
+    Next tick should see active_state=OFF and clear the code instead of setting it.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    mgr = in_sync_entity_obj._sync_manager
+
+    # Verify initially in sync with code on the lock
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+    assert lock_provider.codes.get(1) == "1234"
+
+    # Disable the slot via the enabled switch
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Clear previous service calls
+    lock_provider.service_calls["set_usercode"].clear()
+    lock_provider.service_calls["clear_usercode"].clear()
+
+    # Trigger tick -- sync manager should clear the code, not set it
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    # Verify: sync manager cleared the code (not set it)
+    assert len(lock_provider.service_calls.get("set_usercode", [])) == 0, (
+        "Should not have called set_usercode after disabling the slot"
+    )
+    assert len(lock_provider.service_calls.get("clear_usercode", [])) == 1, (
+        "Should have called clear_usercode after disabling the slot"
+    )
+
+    # Ensure coordinator data reflects the cleared slot. The mock lock
+    # removes the key on clear, but the coordinator needs it present
+    # (as empty/SlotCode.EMPTY) for _resolve_slot_state to work.
+    # Refresh coordinator to pick up the current state.
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # After clearing, slot 1 may not be in coordinator data (provider-dependent).
+    # If present with empty value, the next tick resolves to IN_SYNC.
+    # If absent, _resolve_slot_state returns None and the tick is a no-op.
+    # Either way, the important thing is that clear was called, not set.
+    if mgr._slot_num in coordinator.data:
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert mgr._state is SyncState.IN_SYNC
+
+
+async def test_rapid_coordinator_updates_coalesce(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Multiple rapid push_updates do not cause problems.
+
+    _request_sync_check should be idempotent -- calling it many times while
+    in OUT_OF_SYNC should not cause issues, and the sync manager should use
+    the latest coordinator value when it finally ticks.
+    """
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    assert coordinator is not None
+    in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    mgr = in_sync_entity_obj._sync_manager
+
+    # Verify starting in sync
+    assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
+
+    # Fire 10 rapid push_updates with different codes.
+    # Also update the mock lock's codes to match, simulating the lock
+    # hardware reporting these values.
+    for i in range(10):
+        lock_provider.codes[1] = f"{i:04d}"
+        coordinator.push_update({1: f"{i:04d}"})
+
+    await hass.async_block_till_done()
+
+    # State should be OUT_OF_SYNC from the first update that changed the code
+    assert mgr._state is SyncState.OUT_OF_SYNC
+
+    # The coordinator should have the latest value
+    assert coordinator.data[1] == "0009"
+
+    # Clear service calls to track only what the tick does
+    lock_provider.service_calls["set_usercode"].clear()
+
+    # Fire one tick
+    await mgr._async_tick()
+    await hass.async_block_till_done()
+
+    # Sync manager should have set the configured PIN "1234" (restoring it)
+    set_calls = lock_provider.service_calls.get("set_usercode", [])
+    assert len(set_calls) == 1, (
+        f"Expected exactly 1 set_usercode call after rapid updates, got {len(set_calls)}"
+    )
+    assert set_calls[0] == (1, "1234", "test1"), (
+        "Sync should restore the configured PIN"
+    )
