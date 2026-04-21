@@ -147,9 +147,10 @@ class BaseLock:
     parent) and handles it appropriately (e.g., retrying, logging).
 
     Do NOT raise generic exceptions, HomeAssistantError, or the bare
-    LockCodeManagerError directly — always use LockCodeManagerProviderError
-    or a subclass so callers can distinguish provider failures from
-    LCM-internal exceptions.
+    LockCodeManagerError for lock/integration failures — use
+    LockCodeManagerProviderError or a subclass so callers can distinguish
+    provider failures from LCM-internal errors. LockCodeManagerError is
+    reserved for programming errors such as a missing required override.
     """
 
     hass: HomeAssistant = field(repr=False)
@@ -629,6 +630,8 @@ class BaseLock:
         """Return True iff the lock's parent config entry is loaded.
 
         Providers override for integration-specific connection signals.
+        Raises ``LockCodeManagerError`` if ``lock_config_entry`` is None —
+        providers without a config entry must override this method.
         """
         if not self.lock_config_entry:
             raise LockCodeManagerError(
@@ -841,7 +844,7 @@ class BaseLock:
     @final
     @property
     def managed_slots(self) -> set[int]:
-        """Return slot numbers managed by Lock Code Manager for this lock."""
+        """Return slot numbers managed by any Lock Code Manager config entry that includes this lock."""
         return get_managed_slots(self.hass, self.lock.entity_id)
 
     @final
