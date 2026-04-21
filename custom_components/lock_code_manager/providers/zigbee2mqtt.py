@@ -391,7 +391,7 @@ class Zigbee2MQTTLock(BaseLock):
             try:
                 await async_publish(self.hass, get_topic, payload)
             except (HomeAssistantError, OSError) as err:
-                LOGGER.warning(
+                LOGGER.debug(
                     "MQTT publish failed for PIN get %s slot %s: %s",
                     self.lock.entity_id,
                     slot_num,
@@ -404,14 +404,14 @@ class Zigbee2MQTTLock(BaseLock):
             try:
                 result = await asyncio.wait_for(future, timeout=10.0)
             except TimeoutError:
-                LOGGER.warning(
+                LOGGER.debug(
                     "Timeout waiting for PIN code response for %s slot %s",
                     self.lock.entity_id,
                     slot_num,
                 )
                 data[slot_num] = SlotCode.UNREADABLE_CODE
             except Exception as err:
-                LOGGER.warning(
+                LOGGER.debug(
                     "Failed to get PIN for %s slot %s: %s",
                     self.lock.entity_id,
                     slot_num,
