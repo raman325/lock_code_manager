@@ -136,7 +136,7 @@ async def test_async_call_service_non_dict_entity_data(
 async def test_setup(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup validates lock supports user management and PIN credentials."""
     mock_response = {
@@ -148,14 +148,14 @@ async def test_setup(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
-    await matter_lock_simple.async_setup(lcm_config_entry)
+    await matter_lock_simple.async_setup(simple_lcm_config_entry)
     assert handler.call_count == 1
 
 
 async def test_setup_unsupported_lock(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock does not support user management."""
     mock_response = {
@@ -167,13 +167,13 @@ async def test_setup_unsupported_lock(
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support user management"):
-        await matter_lock_simple.async_setup(lcm_config_entry)
+        await matter_lock_simple.async_setup(simple_lcm_config_entry)
 
 
 async def test_setup_no_pin_support(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that setup raises when lock supports users but not PIN credentials."""
     mock_response = {
@@ -186,7 +186,7 @@ async def test_setup_no_pin_support(
     register_mock_service(hass, MATTER_DOMAIN, "get_lock_info", handler)
 
     with pytest.raises(LockCodeManagerError, match="does not support PIN credentials"):
-        await matter_lock_simple.async_setup(lcm_config_entry)
+        await matter_lock_simple.async_setup(simple_lcm_config_entry)
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +197,7 @@ async def test_setup_no_pin_support(
 async def test_get_usercodes(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test get_usercodes returns UNREADABLE_CODE for occupied, EMPTY for cleared slots."""
     mock_response = {
@@ -229,7 +229,7 @@ async def test_get_usercodes(
 async def test_get_usercodes_no_users(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test get_usercodes when no users exist on the lock."""
     mock_response = {
@@ -483,7 +483,7 @@ async def test_clear_usercode_already_empty(
 async def test_hard_refresh_codes(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test hard_refresh_codes returns same result as get_usercodes."""
     mock_response = {
@@ -656,7 +656,7 @@ async def test_async_call_service_void_service(
 async def test_get_usercodes_multiple_credential_types(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
-    lcm_config_entry: MockConfigEntry,
+    simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Test that only PIN credentials are considered, not other types like RFID."""
     mock_response = {
