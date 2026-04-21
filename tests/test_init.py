@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
 )
+from custom_components.lock_code_manager.models import SyncState
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     NumberOfUsesDeprecatedFlow,
@@ -50,6 +51,12 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    SLOT_1_IN_SYNC_ENTITY,
+)
+from .conftest import (
+    async_initial_tick,
+    async_trigger_sync_tick,
+    get_in_sync_entity_obj,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -917,3 +924,191 @@ async def test_unload_cleans_up_repair_issues(
         )
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is None
+
+
+async def test_reload_resets_sync_state_cleanly(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Config entry reload creates fresh sync managers with clean state."""
+    entry = lock_code_manager_config_entry
+
+    # Drive initial sync so _last_set_pin gets populated
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+    # Get the sync manager reference and verify _last_set_pin has a value
+    entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    old_sync_mgr = entity_obj._sync_manager
+    # After sync the _last_set_pin should be set (the initial code was set)
+    # or the slot is already in sync without needing a set. Either way we
+    # capture the reference for identity comparison later.
+    old_mgr_id = id(old_sync_mgr)
+
+    # Unload the config entry
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Re-setup the config entry
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Get new sync manager reference (should be a different object)
+    new_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+    new_sync_mgr = new_entity_obj._sync_manager
+    assert id(new_sync_mgr) != old_mgr_id, (
+        "After reload, sync manager should be a fresh instance"
+    )
+
+    # Fresh instance should have _last_set_pin as None
+    assert new_sync_mgr._last_set_pin is None
+
+    # Drive initial tick and verify the sync manager reaches a real state
+    await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+    assert new_sync_mgr._state in (
+        SyncState.IN_SYNC,
+        SyncState.OUT_OF_SYNC,
+    ), f"Expected IN_SYNC or OUT_OF_SYNC, got {new_sync_mgr._state}"
+
+
+async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Removing a lock from CONF_LOCKS removes it from runtime_data and cleans up entities."""
+    entry = lock_code_manager_config_entry
+    runtime_data = entry.runtime_data
+    ent_reg = er.async_get(hass)
+
+    # Verify both locks have coordinators and are running
+    assert LOCK_1_ENTITY_ID in runtime_data.locks
+    assert LOCK_2_ENTITY_ID in runtime_data.locks
+    for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        lock = runtime_data.locks[lock_entity_id]
+        assert lock.coordinator is not None
+
+    # Verify LOCK_2 has in-sync entities in the entity registry
+    lock_2_in_sync_entities = [
+        entity
+        for entity in er.async_entries_for_config_entry(ent_reg, entry.entry_id)
+        if LOCK_2_ENTITY_ID.split(".")[-1] in entity.unique_id
+        and ATTR_IN_SYNC in entity.unique_id
+    ]
+    assert len(lock_2_in_sync_entities) > 0
+
+    # Update config to remove LOCK_2
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+    hass.config_entries.async_update_entry(entry, options=new_config)
+    await hass.async_block_till_done()
+
+    # Verify LOCK_2 is gone from runtime_data
+    assert LOCK_2_ENTITY_ID not in runtime_data.locks
+
+    # Verify LOCK_2's in-sync entities are removed (state no longer present)
+    for entity in lock_2_in_sync_entities:
+        state = hass.states.get(entity.entity_id)
+        assert state is None, (
+            f"Expected {entity.entity_id} to be removed, but state is {state}"
+        )
+
+    # Verify LOCK_1 is still running with coordinator intact
+    assert LOCK_1_ENTITY_ID in runtime_data.locks
+    lock_1 = runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert lock_1.coordinator is not None
+
+
+async def test_two_entries_same_lock_share_suspension_and_recovery(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Suspension on one entry's slot affects another entry's out-of-sync slots on the same lock.
+
+    Lock-level suspension is by design: when one slot's circuit breaker trips,
+    ALL sync managers on that lock are blocked from syncing. This prevents a
+    misbehaving lock from being hammered by multiple entries. When the coordinator
+    recovers, all entries' sync managers resume.
+    """
+    entry_a = lock_code_manager_config_entry
+
+    # Create entry B managing slot 3 on the same locks
+    config_b = copy.deepcopy(BASE_CONFIG)
+    config_b[CONF_SLOTS] = {
+        3: {CONF_NAME: "entry_b_slot3", CONF_PIN: "0123", CONF_ENABLED: True},
+    }
+    entry_b = MockConfigEntry(
+        domain=DOMAIN, data=config_b, unique_id="Entry B", title="Entry B"
+    )
+    entry_b.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+    # Both entries share the same coordinator for LOCK_1
+    lock_a = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock_b = entry_b.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert lock_a.coordinator is lock_b.coordinator, (
+        "Both entries should share the same coordinator for the same lock"
+    )
+
+    # Get entry B's in-sync entity for slot 3 on lock 1
+    entry_b_in_sync_entity = "binary_sensor.test_1_code_slot_3_in_sync"
+
+    # Ensure slot 3 exists in coordinator data so sync manager can resolve state.
+    # The mock lock only starts with slots 1 and 2, so push slot 3 data.
+    lock_a.coordinator.push_update({3: "0123"})
+    await hass.async_block_till_done()
+
+    # Drive initial ticks for entry B's sync managers to reach IN_SYNC
+    await async_initial_tick(hass, entry_b_in_sync_entity)
+    await async_trigger_sync_tick(hass, entry_b_in_sync_entity)
+
+    entry_b_entity_obj = get_in_sync_entity_obj(hass, entry_b_in_sync_entity)
+    assert entry_b_entity_obj._sync_manager._state == SyncState.IN_SYNC
+
+    # Suspend the coordinator (simulating circuit breaker trip from entry A)
+    lock_a.coordinator.suspend_slot_sync_mgrs()
+    await hass.async_block_till_done()
+
+    # An IN_SYNC slot stays IN_SYNC during suspension (nothing to do), which
+    # is correct behavior: it's already synced, no need to block.
+    assert entry_b_entity_obj._sync_manager._state == SyncState.IN_SYNC
+
+    # Now make entry B's slot out-of-sync by changing the code on the lock
+    # while the coordinator is suspended
+    lock_a.coordinator.push_update({3: "different"})
+    await hass.async_block_till_done()
+
+    # The push_update call above clears the suspension flag (successful
+    # push proves lock is reachable). Re-suspend to test blocking, then
+    # let _request_sync_check detect the mismatch naturally.
+    lock_a.coordinator.suspend_slot_sync_mgrs()
+    await hass.async_block_till_done()
+
+    # The coordinator listener fires _request_sync_check. Since the code
+    # changed ("different" != "0123"), the slot should be OUT_OF_SYNC.
+    # But wait — suspend_slot_sync_mgrs calls async_update_listeners,
+    # which fires _request_sync_check on all managers. For an IN_SYNC
+    # manager with a mismatch, it transitions to OUT_OF_SYNC. Then on
+    # the next tick, the suspension check blocks it into SUSPENDED.
+    await async_trigger_sync_tick(hass, entry_b_in_sync_entity, set_dirty=False)
+    await hass.async_block_till_done()
+    assert entry_b_entity_obj._sync_manager._state == SyncState.SUSPENDED, (
+        "OUT_OF_SYNC slot should be blocked by lock-level suspension"
+    )
+
+    # Recovery: push a successful update to reset backoff and clear suspension
+    lock_a.coordinator.push_update({3: "0123"})
+    await hass.async_block_till_done()
+
+    # After recovery, entry B's sync manager should resume from SUSPENDED
+    # via _request_sync_check detecting the cleared suspension flag
+    assert entry_b_entity_obj._sync_manager._state == SyncState.OUT_OF_SYNC, (
+        f"Entry B's sync manager should have resumed to OUT_OF_SYNC, "
+        f"but state is {entry_b_entity_obj._sync_manager._state}"
+    )
+
+    await hass.config_entries.async_unload(entry_b.entry_id)

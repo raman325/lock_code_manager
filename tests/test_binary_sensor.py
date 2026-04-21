@@ -42,11 +42,15 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     SYNC_ATTEMPT_WINDOW,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
-from custom_components.lock_code_manager.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.exceptions import (
+    DuplicateCodeError,
+    LockCodeManagerError,
+)
 from custom_components.lock_code_manager.models import SyncState
 
 from .common import (
@@ -61,6 +65,7 @@ from .common import (
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_NUMBER_OF_USES_ENTITY,
     SLOT_2_PIN_ENTITY,
+    MockLCMLock,
 )
 from .conftest import (
     async_initial_tick,
@@ -1168,3 +1173,351 @@ async def test_sync_manager_handles_string_slot_num(
 
     assert isinstance(manager._slot_num, int)
     assert manager._slot_num in manager._coordinator.data
+
+
+# ---------------------------------------------------------------------------
+# Adversarial integration tests — exercise real component boundaries
+# ---------------------------------------------------------------------------
+
+
+async def test_coordinator_poll_detects_external_change_and_syncs(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Full round-trip: external code change, coordinator poll, sync manager detects mismatch, sets code."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test External Change Poll",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    await async_initial_tick(hass, in_sync_entity)
+
+    # Verify initial state is in sync
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Should start in sync"
+
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    service_calls = lock_provider.service_calls
+    service_calls.get("set_usercode", []).clear()
+
+    # Simulate external change: someone changed the code on the lock
+    lock_provider.codes[1] = "9999"
+
+    # Trigger a real coordinator refresh (polls the mock lock)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Coordinator data should now reflect the external change
+    assert coordinator.data[1] == "9999"
+
+    # Fire the tick timer to let the sync manager detect the mismatch
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
+    await hass.async_block_till_done()
+
+    # Sync manager should have called set_usercode to restore "1234"
+    assert len(service_calls.get("set_usercode", [])) == 1
+    assert service_calls["set_usercode"][0] == (1, "1234", "test1")
+
+    # The mock lock hardware should now have the correct code
+    assert lock_provider.codes[1] == "1234"
+
+    # Fire another tick for the sync manager to verify it is back in sync
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Should be back in sync after correction"
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_push_update_triggers_sync_state_change_on_binary_sensor(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Push update with changed code triggers coordinator listeners, sync manager updates, entity state changes."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test Push Update",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    await async_initial_tick(hass, in_sync_entity)
+
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Should start in sync"
+
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    service_calls = lock_provider.service_calls
+    service_calls.get("set_usercode", []).clear()
+
+    # Push an update with a wrong code — this simulates a push-based lock
+    # reporting that someone changed the code externally
+    coordinator.push_update({1: "wrong"})
+    await hass.async_block_till_done()
+
+    # The coordinator listener fires _request_sync_check synchronously,
+    # which should transition IN_SYNC -> OUT_OF_SYNC immediately
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_OFF, (
+        "In-sync binary sensor should be off after push update with wrong code"
+    )
+
+    sync_status = state.attributes.get("sync_status")
+    assert sync_status == "out_of_sync", (
+        f"Expected sync_status 'out_of_sync', got '{sync_status}'"
+    )
+
+    # Fire a tick to let the sync manager correct it
+    # Also update the mock lock codes so set_usercode can work
+    lock_provider.codes[1] = "wrong"
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
+    await hass.async_block_till_done()
+
+    # Sync manager should have restored the configured PIN
+    assert len(service_calls.get("set_usercode", [])) == 1
+    assert service_calls["set_usercode"][0] == (1, "1234", "test1")
+    assert lock_provider.codes[1] == "1234"
+
+    # Fire another tick to verify back in sync
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Should be back in sync after tick"
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_suspension_propagates_to_out_of_sync_managers_on_next_tick(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """When one slot suspends the lock, other out-of-sync slots transition to SUSPENDED on next tick."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            2: {CONF_NAME: "test2", CONF_PIN: "5678", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test Suspension Propagation",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    in_sync_slot_1 = "binary_sensor.test_1_code_slot_1_in_sync"
+    in_sync_slot_2 = "binary_sensor.test_1_code_slot_2_in_sync"
+    await async_initial_tick(hass, in_sync_slot_1)
+    await async_initial_tick(hass, in_sync_slot_2)
+
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+
+    entity_obj_1 = get_in_sync_entity_obj(hass, in_sync_slot_1)
+    entity_obj_2 = get_in_sync_entity_obj(hass, in_sync_slot_2)
+
+    mgr_1 = entity_obj_1._sync_manager
+    mgr_2 = entity_obj_2._sync_manager
+
+    # Make slot 1 out of sync by changing the lock code externally
+    lock_provider.codes[1] = "9999"
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Make slot 2's sync fail with an unexpected error
+    with patch.object(
+        lock_provider,
+        "async_internal_set_usercode",
+        AsyncMock(side_effect=ValueError("Unexpected hardware error")),
+    ):
+        # Also make slot 2 out of sync
+        lock_provider.codes[2] = "0000"
+        await coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        # Fire tick — slot 2 tries to sync, hits generic exception, suspends lock
+        async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
+        await hass.async_block_till_done()
+
+    # Verify the lock is suspended
+    assert coordinator.slot_sync_mgrs_suspended is True
+
+    # One of the managers should be SUSPENDED (the one that hit the error)
+    # The other should transition to SUSPENDED on the next tick
+    suspended_count = sum(1 for m in (mgr_1, mgr_2) if m._state is SyncState.SUSPENDED)
+    assert suspended_count >= 1, "At least one manager should be SUSPENDED"
+
+    # Fire another tick so the other slot transitions to SUSPENDED too
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
+    await hass.async_block_till_done()
+
+    # Both managers should now be SUSPENDED
+    assert mgr_1._state is SyncState.SUSPENDED, (
+        f"Expected slot 1 SUSPENDED, got {mgr_1._state}"
+    )
+    assert mgr_2._state is SyncState.SUSPENDED, (
+        f"Expected slot 2 SUSPENDED, got {mgr_2._state}"
+    )
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_drift_check_detects_external_change_and_triggers_sync(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Hard refresh detects out-of-band code change, coordinator updates, sync manager re-syncs."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        unique_id="Test Drift Check",
+        title="Test LCM",
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    await async_initial_tick(hass, in_sync_entity)
+
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Should start in sync"
+
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    service_calls = lock_provider.service_calls
+    service_calls.get("set_usercode", []).clear()
+
+    # Simulate external change (keypad programming)
+    lock_provider.codes[1] = "5555"
+
+    # Call the drift check directly — this is what the periodic timer calls
+    await coordinator._async_drift_check(dt_util.utcnow())
+    await hass.async_block_till_done()
+
+    # Coordinator data should now have the drifted value
+    assert coordinator.data[1] == "5555"
+
+    # Fire tick to let the sync manager detect and correct
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
+    await hass.async_block_till_done()
+
+    # Sync manager should have restored the configured PIN
+    assert len(service_calls.get("set_usercode", [])) == 1
+    assert service_calls["set_usercode"][0] == (1, "1234", "test1")
+    assert lock_provider.codes[1] == "1234"
+
+    # Verify back in sync
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(in_sync_entity)
+    assert state.state == STATE_ON, "Should be in sync after drift correction"
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Sync manager stays in LOADING when code sensor is STATE_UNKNOWN and resolves after first poll."""
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+
+    # Use a mutable container to track call count (avoiding nonlocal)
+    state = {"call_count": 0, "original": MockLCMLock.async_get_usercodes}
+
+    async def failing_then_succeeding_get_usercodes(self_lock):
+        """Fail on first calls, succeed on subsequent calls."""
+        state["call_count"] += 1
+        if state["call_count"] <= 2:
+            raise LockCodeManagerError("Connection failed")
+        return await state["original"](self_lock)
+
+    with patch.object(
+        MockLCMLock,
+        "async_get_usercodes",
+        failing_then_succeeding_get_usercodes,
+    ):
+        config_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=config,
+            unique_id="Test Unknown State",
+            title="Test LCM",
+        )
+        config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+    entity_obj = get_in_sync_entity_obj(hass, in_sync_entity)
+    mgr = entity_obj._sync_manager
+
+    # Sync manager should still be in LOADING since code sensor has no data
+    assert mgr._state is SyncState.LOADING, f"Expected LOADING state, got {mgr._state}"
+
+    # Now let the coordinator succeed on the next poll (patch is no longer active)
+    lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    coordinator = lock_provider.coordinator
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    # Trigger a tick so the sync manager can process the new data
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
+    await hass.async_block_till_done()
+
+    # Sync manager should have transitioned out of LOADING
+    assert mgr._state is not SyncState.LOADING, (
+        f"Expected sync manager to leave LOADING after successful poll, "
+        f"but state is still {mgr._state}"
+    )
+    # Should be IN_SYNC since the lock already has the right code
+    assert mgr._state is SyncState.IN_SYNC, f"Expected IN_SYNC, got {mgr._state}"
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
