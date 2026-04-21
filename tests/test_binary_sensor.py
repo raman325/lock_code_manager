@@ -42,6 +42,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
     SYNC_ATTEMPT_WINDOW,
+    TICK_INTERVAL,
 )
 from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
@@ -1224,7 +1225,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     assert coordinator.data[1] == "9999"
 
     # Fire the tick timer to let the sync manager detect the mismatch
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
     await hass.async_block_till_done()
 
     # Sync manager should have called set_usercode to restore "1234"
@@ -1235,7 +1236,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     assert lock_provider.codes[1] == "1234"
 
     # Fire another tick for the sync manager to verify it is back in sync
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=12))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
     await hass.async_block_till_done()
 
     state = hass.states.get(in_sync_entity)
@@ -1297,7 +1298,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     # Fire a tick to let the sync manager correct it
     # Also update the mock lock codes so set_usercode can work
     lock_provider.codes[1] = "wrong"
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
     await hass.async_block_till_done()
 
     # Sync manager should have restored the configured PIN
@@ -1306,7 +1307,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     assert lock_provider.codes[1] == "1234"
 
     # Fire another tick to verify back in sync
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=12))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
     await hass.async_block_till_done()
 
     state = hass.states.get(in_sync_entity)
@@ -1369,7 +1370,7 @@ async def test_suspension_propagates_to_out_of_sync_managers_on_next_tick(
         await hass.async_block_till_done()
 
         # Fire tick — slot 2 tries to sync, hits generic exception, suspends lock
-        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+        async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
         await hass.async_block_till_done()
 
     # Verify the lock is suspended
@@ -1381,7 +1382,7 @@ async def test_suspension_propagates_to_out_of_sync_managers_on_next_tick(
     assert suspended_count >= 1, "At least one manager should be SUSPENDED"
 
     # Fire another tick so the other slot transitions to SUSPENDED too
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=12))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
     await hass.async_block_till_done()
 
     # Both managers should now be SUSPENDED
@@ -1439,7 +1440,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     assert coordinator.data[1] == "5555"
 
     # Fire tick to let the sync manager detect and correct
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
     await hass.async_block_till_done()
 
     # Sync manager should have restored the configured PIN
@@ -1448,7 +1449,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     assert lock_provider.codes[1] == "1234"
 
     # Verify back in sync
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=12))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
     await hass.async_block_till_done()
 
     state = hass.states.get(in_sync_entity)
@@ -1508,7 +1509,7 @@ async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
     await hass.async_block_till_done()
 
     # Trigger a tick so the sync manager can process the new data
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=6))
+    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
     await hass.async_block_till_done()
 
     # Sync manager should have transitioned out of LOADING

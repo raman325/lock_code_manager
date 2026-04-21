@@ -978,7 +978,7 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Removing a lock from CONF_LOCKS stops its coordinator and sync managers."""
+    """Removing a lock from CONF_LOCKS removes it from runtime_data and cleans up entities."""
     entry = lock_code_manager_config_entry
     runtime_data = entry.runtime_data
     ent_reg = er.async_get(hass)
@@ -1021,7 +1021,7 @@ async def test_removing_lock_from_config_stops_coordinator_and_sync_managers(
     assert lock_1.coordinator is not None
 
 
-async def test_two_entries_same_lock_suspension_does_not_cross_contaminate(
+async def test_two_entries_same_lock_share_suspension_and_recovery(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
@@ -1083,14 +1083,18 @@ async def test_two_entries_same_lock_suspension_does_not_cross_contaminate(
     await hass.async_block_till_done()
 
     # The push_update call above clears the suspension flag (successful
-    # push proves lock is reachable). To test the suspension blocking behavior,
-    # re-suspend and force OUT_OF_SYNC.
+    # push proves lock is reachable). Re-suspend to test blocking, then
+    # let _request_sync_check detect the mismatch naturally.
     lock_a.coordinator.suspend_slot_sync_mgrs()
     await hass.async_block_till_done()
-    entry_b_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
 
-    # Now trigger a tick - the sync should be blocked by suspension
-    await entry_b_entity_obj._sync_manager._async_tick()
+    # The coordinator listener fires _request_sync_check. Since the code
+    # changed ("different" != "0123"), the slot should be OUT_OF_SYNC.
+    # But wait — suspend_slot_sync_mgrs calls async_update_listeners,
+    # which fires _request_sync_check on all managers. For an IN_SYNC
+    # manager with a mismatch, it transitions to OUT_OF_SYNC. Then on
+    # the next tick, the suspension check blocks it into SUSPENDED.
+    await async_trigger_sync_tick(hass, entry_b_in_sync_entity, set_dirty=False)
     await hass.async_block_till_done()
     assert entry_b_entity_obj._sync_manager._state == SyncState.SUSPENDED, (
         "OUT_OF_SYNC slot should be blocked by lock-level suspension"
