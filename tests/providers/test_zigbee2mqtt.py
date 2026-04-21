@@ -18,7 +18,10 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.models import SlotCode
-from custom_components.lock_code_manager.providers.zigbee2mqtt import Zigbee2MQTTLock
+from custom_components.lock_code_manager.providers.zigbee2mqtt import (
+    Zigbee2MQTTLock,
+    _mqtt_payload_pin_has_code_value,
+)
 
 Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
@@ -70,6 +73,12 @@ async def zigbee2mqtt_lock_with_device(hass: HomeAssistant) -> Zigbee2MQTTLock:
     )
 
     return Zigbee2MQTTLock(hass, dev_reg, ent_reg, mqtt_entry, lock_entity)
+
+
+def test_mqtt_payload_pin_has_code_value_rejects_bool() -> None:
+    """Boolean JSON must not count as a PIN payload (truthiness trap)."""
+    assert _mqtt_payload_pin_has_code_value(False) is False
+    assert _mqtt_payload_pin_has_code_value(True) is False
 
 
 def test_zigbee2mqtt_provider_properties_and_no_device_entry_skips_name() -> None:
@@ -971,6 +980,29 @@ class TestAsyncSetClearHardRefresh:
                 mock_pub,
             ),
             pytest.raises(RuntimeError, match="fail"),
+        ):
+            await lock.async_clear_usercode(4)
+
+    async def test_async_clear_usercode_publish_oserror_raises_lock_disconnected(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """Clear path maps MQTT publish failures to LockDisconnected."""
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+        mock_pub = AsyncMock(side_effect=OSError("broker"))
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                mock_pub,
+            ),
+            pytest.raises(LockDisconnected, match="Failed to clear PIN"),
         ):
             await lock.async_clear_usercode(4)
 
