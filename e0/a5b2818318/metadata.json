@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e0a5b2818318",
+  "strategy": "manual-commit",
+  "branch": "test/race-condition-tests",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e0/a5b2818318/0/metadata.json",
+      "transcript": "/e0/a5b2818318/0/full.jsonl",
+      "content_hash": "/e0/a5b2818318/0/content_hash.txt",
+      "prompt": "/e0/a5b2818318/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1049,
+    "cache_creation_tokens": 4332465,
+    "cache_read_tokens": 279640676,
+    "output_tokens": 227375,
+    "api_call_count": 756
+  }
+}
