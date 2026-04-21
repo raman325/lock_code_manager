@@ -18,9 +18,7 @@ from datetime import timedelta
 from typing import Any, Literal
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.exceptions import HomeAssistantError
 
-from ..data import get_managed_slots
 from ..exceptions import LockCodeManagerProviderError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
@@ -111,21 +109,17 @@ class AkuvoxLock(BaseLock):
     async def _async_add_user(self, name: str, pin: str) -> None:
         """Add a new user with the given name and PIN."""
         entity_id = self.lock.entity_id
-        try:
-            await self.hass.services.async_call(
-                AKUVOX_DOMAIN,
-                "add_user",
-                service_data={
-                    "name": name,
-                    "private_pin": pin,
-                    "schedules": _DEFAULT_SCHEDULE_IDS,
-                    "lift_floor_num": _DEFAULT_LIFT_FLOOR_NUM,
-                },
-                target={"entity_id": entity_id},
-                blocking=True,
-            )
-        except HomeAssistantError as err:
-            raise LockDisconnected(f"Failed to add user on {entity_id}: {err}") from err
+        await self.async_call_service(
+            AKUVOX_DOMAIN,
+            "add_user",
+            service_data={
+                "name": name,
+                "private_pin": pin,
+                "schedules": _DEFAULT_SCHEDULE_IDS,
+                "lift_floor_num": _DEFAULT_LIFT_FLOOR_NUM,
+            },
+            target={"entity_id": entity_id},
+        )
 
     async def _async_modify_user(
         self,
@@ -141,38 +135,22 @@ class AkuvoxLock(BaseLock):
             service_data["name"] = name
         if pin is not None:
             service_data["private_pin"] = pin
-        try:
-            await self.hass.services.async_call(
-                AKUVOX_DOMAIN,
-                "modify_user",
-                service_data=service_data,
-                target={"entity_id": entity_id},
-                blocking=True,
-            )
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Failed to modify user {device_user_id} on {entity_id}: {err}"
-            ) from err
+        await self.async_call_service(
+            AKUVOX_DOMAIN,
+            "modify_user",
+            service_data=service_data,
+            target={"entity_id": entity_id},
+        )
 
     async def _async_delete_user(self, device_user_id: str) -> None:
         """Delete a user by their device-internal ID."""
         entity_id = self.lock.entity_id
-        try:
-            await self.hass.services.async_call(
-                AKUVOX_DOMAIN,
-                "delete_user",
-                service_data={"id": device_user_id},
-                target={"entity_id": entity_id},
-                blocking=True,
-            )
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Failed to delete user {device_user_id} on {entity_id}: {err}"
-            ) from err
-
-    def _get_managed_slots(self) -> set[int]:
-        """Return managed slot numbers for this lock."""
-        return get_managed_slots(self.hass, self.lock.entity_id)
+        await self.async_call_service(
+            AKUVOX_DOMAIN,
+            "delete_user",
+            service_data={"id": device_user_id},
+            target={"entity_id": entity_id},
+        )
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by tagging any pre-existing unmanaged users."""
@@ -191,7 +169,7 @@ class AkuvoxLock(BaseLock):
         available managed slot and their names are updated on the device
         to include the ``[LCM:<slot>]`` tag via ``modify_user``.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         if not managed_slots:
             return
 
@@ -258,7 +236,7 @@ class AkuvoxLock(BaseLock):
 
         Only codes whose slot numbers fall within the managed set are returned.
         """
-        managed_slots = self._get_managed_slots()
+        managed_slots = self.managed_slots
         if not managed_slots:
             return {}
 

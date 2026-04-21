@@ -37,9 +37,10 @@ from ..const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
-from ..data import build_slot_unique_id, find_entry_for_lock_slot
+from ..data import build_slot_unique_id, find_entry_for_lock_slot, get_managed_slots
 from ..exceptions import (
     DuplicateCodeError,
+    LockCodeManagerError,
     LockDisconnected,
     ProviderNotImplementedError,
 )
@@ -146,9 +147,10 @@ class BaseLock:
     parent) and handles it appropriately (e.g., retrying, logging).
 
     Do NOT raise generic exceptions, HomeAssistantError, or the bare
-    LockCodeManagerError directly — always use LockCodeManagerProviderError
-    or a subclass so callers can distinguish provider failures from
-    LCM-internal exceptions.
+    LockCodeManagerError for lock/integration failures — use
+    LockCodeManagerProviderError or a subclass so callers can distinguish
+    provider failures from LCM-internal errors. LockCodeManagerError is
+    reserved for programming errors such as a missing required override.
     """
 
     hass: HomeAssistant = field(repr=False)
@@ -424,7 +426,10 @@ class BaseLock:
     @callback
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from push-based value updates."""
-        self.teardown_push_subscription()
+        try:
+            self.teardown_push_subscription()
+        except ProviderNotImplementedError:
+            pass
 
     @callback
     def teardown_push_subscription(self) -> None:
@@ -625,9 +630,15 @@ class BaseLock:
         """Return True iff the lock's parent config entry is loaded.
 
         Providers override for integration-specific connection signals.
+        Raises ``LockCodeManagerError`` if ``lock_config_entry`` is None —
+        providers without a config entry must override this method.
         """
         if not self.lock_config_entry:
-            return False
+            raise LockCodeManagerError(
+                f"Lock {self.lock.entity_id} has no lock_config_entry. "
+                f"Providers without a config entry must override "
+                f"async_is_integration_connected()."
+            )
         return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     @final
@@ -829,6 +840,12 @@ class BaseLock:
             raise LockDisconnected(
                 f"Service call {domain}.{service} failed: {err}"
             ) from err
+
+    @final
+    @property
+    def managed_slots(self) -> set[int]:
+        """Return slot numbers managed by any Lock Code Manager config entry that includes this lock."""
+        return get_managed_slots(self.hass, self.lock.entity_id)
 
     @final
     @callback

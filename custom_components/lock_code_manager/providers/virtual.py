@@ -10,7 +10,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..data import get_managed_slots
 from ..models import SlotCode
 from ._base import BaseLock
 
@@ -41,6 +40,10 @@ class VirtualLock(BaseLock):
         """Return whether this lock supports code slot events."""
         return False
 
+    async def async_is_integration_connected(self) -> bool:
+        """Virtual locks are always connected."""
+        return True
+
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by provider."""
         self._store = Store(
@@ -54,10 +57,6 @@ class VirtualLock(BaseLock):
             await self._store.async_remove()
         else:
             await self._store.async_save(self._data)
-
-    async def async_is_integration_connected(self) -> bool:
-        """Return whether the integration is connected."""
-        return True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """Reload from store and return all codes."""
@@ -102,7 +101,7 @@ class VirtualLock(BaseLock):
         occupied slots are included so callers like the lock reset config
         flow step can detect codes not managed by Lock Code Manager.
         """
-        managed_slots = get_managed_slots(self.hass, self.lock.entity_id)
+        managed_slots = self.managed_slots
         stored_slots = set()
         for k in self._data:
             try:

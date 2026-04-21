@@ -37,7 +37,7 @@ async def virtual_lock(hass: HomeAssistant) -> VirtualLock:
         hass,
         dr.async_get(hass),
         entity_reg,
-        config_entry,
+        None,
         lock_entity,
     )
     await lock.async_setup_internal(config_entry)
@@ -73,7 +73,7 @@ async def virtual_lock_with_slots(hass: HomeAssistant) -> VirtualLock:
         hass,
         dr.async_get(hass),
         entity_reg,
-        config_entry,
+        None,
         lock_entity,
     )
     await lock.async_setup_internal(config_entry)

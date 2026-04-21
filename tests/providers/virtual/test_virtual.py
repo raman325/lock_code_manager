@@ -26,7 +26,7 @@ async def test_door_lock(virtual_lock: VirtualLock):
     assert lock._data["1"] == {"code": "1111", "name": "test"}
 
     # if we unload without removing permanently, the data should be saved
-    config_entry = lock.lock_config_entry
+    config_entry = lock._lcm_config_entry
     assert await lock.async_unload(False) is None
     assert await lock.async_setup_internal(config_entry) is None
     assert lock._data["1"] == {"code": "1111", "name": "test"}
