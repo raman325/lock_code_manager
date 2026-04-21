@@ -56,10 +56,16 @@ entities.
 - Plugin-based architecture for supporting different lock integrations
 - `_base.py`: `BaseLock` abstract class defining the provider interface
 - `zwave_js.py`: Z-Wave JS lock implementation
+- `matter.py`: Matter lock implementation
+- `schlage.py`: Schlage WiFi lock implementation
+- `akuvox.py`: Akuvox intercom/lock implementation
+- `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)
 - `virtual.py`: Virtual lock implementation for testing
 - Each provider implements: `async_get_usercodes()`, `async_set_usercode()`, `async_clear_usercode()`,
   `async_is_integration_connected()`, `async_hard_refresh_codes()`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
+- `BaseLock` provides `managed_slots` property (aggregates slots across all config entries for the lock)
+  and `async_call_service()` helper (wraps HA service calls with `LockDisconnected` error handling)
 
 **Coordinator** (`coordinator.py`)
 
@@ -67,6 +73,9 @@ entities.
 - Each lock instance has its own coordinator
 - Default scan interval: 1 minute (configurable via `usercode_scan_interval` property)
 - Supports push-based updates via `coordinator.push_update()` for providers with `supports_push = True`
+- `slot_sync_mgrs_suspended` property / `suspend_slot_sync_mgrs()`: per-lock suspension flag that
+  stops all sync managers for a lock when the circuit breaker trips or an unexpected error occurs.
+  Cleared automatically on recovery via `_reset_backoff` (successful poll or push update).
 
 **Main Module** (`__init__.py`)
 
@@ -84,6 +93,7 @@ entities.
 ### Entities
 
 - `binary_sensor.py`: PIN active status (enabled + conditions met) and per-lock in-sync status
+  with `sync_status` extra state attribute (`in_sync`, `out_of_sync`, `syncing`, `suspended`)
 - `sensor.py`: Per-lock slot PIN sensors showing current codes on each lock
 - `text.py`: Name and PIN configuration entities
 - `number.py`: Number of uses tracking (decrements on PIN use)
@@ -98,6 +108,26 @@ entities.
 4. Coordinator polls provider's `async_get_usercodes()` to keep state in sync (or receives push updates)
 5. When slot config changes (name, PIN, enabled), entities call provider's `async_set_usercode()` or `async_clear_usercode()`
 6. Provider fires `EVENT_LOCK_STATE_CHANGED` events when locks are operated with PINs
+
+### Sync State Machine (`sync.py`)
+
+`SlotSyncManager` uses a `SyncState` enum with five states:
+
+- **LOADING** → initial, waiting for entity states
+- **IN_SYNC** → lock code matches desired state
+- **OUT_OF_SYNC** → mismatch detected, queued for next tick
+- **SYNCING** → sync operation in progress
+- **SUSPENDED** → circuit breaker tripped or unexpected error, retries paused
+
+Transitions: LOADING → IN_SYNC or OUT_OF_SYNC; IN_SYNC ↔ OUT_OF_SYNC; OUT_OF_SYNC �� SYNCING;
+SYNCING → IN_SYNC, OUT_OF_SYNC (retry), or SUSPENDED; SUSPENDED → OUT_OF_SYNC (on recovery).
+
+Error handling taxonomy:
+
+- `CodeRejectedError`/`DuplicateCodeError` → disable slot (profile-wide, code is bad)
+- `LockDisconnected`/`LockOperationFailed` → retry (OUT_OF_SYNC)
+- Generic `Exception` → suspend lock (per-lock, creates `slot_suspended` repair issue)
+- Circuit breaker (3 attempts in 5 minutes) → suspend lock
 
 ### Key Design Patterns
 
@@ -264,10 +294,12 @@ Provider tests live in dedicated modules mirroring the integration's test patter
 
 ```text
 tests/providers/
+  akuvox/          # conftest.py, test_akuvox.py
   matter/          # conftest.py, helpers.py, fixtures/, test_matter.py
-  zwave_js/        # conftest.py, fixtures/, test_zwave_js.py
   schlage/         # conftest.py, test_schlage.py
-  ...
+  virtual/         # conftest.py, test_virtual.py
+  zwave_js/        # conftest.py, fixtures/, test_zwave_js.py
+  test_zigbee2mqtt.py
   helpers.py       # Shared test mixins (ServiceProviderConnectionTests, etc.)
 ```
 
@@ -279,20 +311,25 @@ tests/providers/
 
 ## Adding Lock Provider Support
 
-1. Create new file in `providers/` (e.g., `zigbee.py`)
+1. Create new file in `providers/` (e.g., `my_provider.py`)
 2. Subclass `BaseLock` from `providers/_base.py`
 3. Implement required abstract methods:
    - `domain` property: return integration domain string
-   - `async_is_integration_connected()`: check if integration is connected
+   - `async_is_integration_connected()`: check if integration is connected. Raises
+     `LockCodeManagerError` by default if `lock_config_entry` is None — providers
+     without a config entry (e.g., virtual) must override.
    - `async_get_usercodes()`: return dict of slot→code mappings
    - `async_set_usercode()`: program a code to a slot
    - `async_clear_usercode()`: remove code from slot
-4. Optionally override `is_device_available()` to return `False` when the physical
+4. Optionally override `async_is_device_available()` to return `False` when the physical
    device is unresponsive (default returns `True`). Operations are gated on both
    integration connectivity and device availability.
-5. Override `setup()` to register event listeners
+5. Override `async_setup()` to register event listeners
 6. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
-7. Add tests in `tests/<provider>/test_provider.py`
+7. Add tests in `tests/providers/<provider>/test_<provider>.py`
+8. Use `self.managed_slots` (property) to get managed slot numbers
+9. Use `self.async_call_service()` for HA service calls — it wraps `HomeAssistantError`
+   as `LockDisconnected` automatically
 
 ### Optional Provider Properties
 
@@ -357,8 +394,8 @@ Commands in `websocket.py` for frontend communication:
 | Command | Purpose |
 | ------- | ------- |
 | `lock_code_manager/get_config_entry_data` | Fetch config entry, entities, locks, and slots |
-| `lock_code_manager/subscribe_code_slot` | Real-time subscription for slot card updates |
-| `lock_code_manager/subscribe_lock_codes` | Real-time subscription for lock codes card |
+| `lock_code_manager/subscribe_code_slot` | Real-time subscription for slot card updates (includes `sync_status` per lock) |
+| `lock_code_manager/subscribe_lock_codes` | Real-time subscription for lock codes card (includes `sync_status` when suspended) |
 | `lock_code_manager/set_lock_usercode` | Set/clear usercode on unmanaged slots |
 | `lock_code_manager/update_slot_condition` | Add/edit/remove slot conditions (entity_id, number_of_uses) |
 
