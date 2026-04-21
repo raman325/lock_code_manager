@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "161a8500f249",
+  "strategy": "manual-commit",
+  "branch": "refactor/base-lock-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/16/1a8500f249/0/metadata.json",
+      "transcript": "/16/1a8500f249/0/full.jsonl",
+      "content_hash": "/16/1a8500f249/0/content_hash.txt",
+      "prompt": "/16/1a8500f249/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 716,
+    "cache_creation_tokens": 2959993,
+    "cache_read_tokens": 144341144,
+    "output_tokens": 158664,
+    "api_call_count": 519
+  }
+}
