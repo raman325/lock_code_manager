@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "75ed392c6606",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-21T17:38:00.078948Z",
+  "branch": "refactor/base-lock-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "11678de950ce",
+  "token_usage": {
+    "input_tokens": 742,
+    "cache_creation_tokens": 2969104,
+    "cache_read_tokens": 153142490,
+    "output_tokens": 162599,
+    "api_call_count": 537
+  },
+  "session_metrics": {
+    "turn_count": 81
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-21T17:37:59.198666Z",
+    "agent_lines": 0,
+    "human_added": 14,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 14,
+    "agent_percentage": 0
+  }
+}

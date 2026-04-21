@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "75ed392c6606",
+  "strategy": "manual-commit",
+  "branch": "refactor/base-lock-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/75/ed392c6606/0/metadata.json",
+      "transcript": "/75/ed392c6606/0/full.jsonl",
+      "content_hash": "/75/ed392c6606/0/content_hash.txt",
+      "prompt": "/75/ed392c6606/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 742,
+    "cache_creation_tokens": 2969104,
+    "cache_read_tokens": 153142490,
+    "output_tokens": 162599,
+    "api_call_count": 537
+  }
+}
