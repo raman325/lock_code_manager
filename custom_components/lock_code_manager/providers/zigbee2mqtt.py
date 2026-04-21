@@ -294,15 +294,7 @@ class Zigbee2MQTTLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Ensure MQTT subscription (normally already done in ``async_setup``).
-
-        The authoritative subscribe happens in ``async_setup`` via ``await``, so the
-        coordinator’s first poll sees incoming MQTT. This path only runs when the
-        subscription is still missing (e.g. reconnect). ``async_subscribe`` is async,
-        so completion is scheduled as a task; failures are logged instead of raising
-        through this synchronous ``@callback`` to avoid unhandled task exceptions on
-        the event loop (see ``_subscribe_or_log``).
-        """
+        """Subscribe via background task when still unsubscribed (e.g. reconnect); primary subscribe is ``await`` in ``async_setup``."""
         if self._unsubscribe is not None:
             return
 
