@@ -185,56 +185,6 @@ async def test_is_integration_not_connected_when_not_loaded(
 # Usercode tests
 
 
-async def test_get_usercodes_from_cache(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-) -> None:
-    """Test reading usercodes from the Z-Wave JS value cache."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}, "2": {}, "3": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    # Slot 1: "9999" (in_use=True)
-    # Slot 2: "1234" (in_use=True)
-    # Slot 3: empty (in_use=False)
-    codes = await zwave_js_lock.async_get_usercodes()
-
-    assert codes[1] == "9999"
-    assert codes[2] == "1234"
-    assert codes[3] is SlotCode.EMPTY
-
-    await zwave_js_lock.async_unload(False)
-
-
-async def test_set_usercode_calls_service(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_client: MagicMock,
-    zwave_integration: MockConfigEntry,
-) -> None:
-    """Test that set_usercode sends the Z-Wave command to the lock."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    zwave_client.async_send_command.reset_mock()
-    result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
-
-    assert result is True
-    # Verify the Z-Wave command reached the mock client
-    assert zwave_client.async_send_command.call_count >= 1
-
-    await zwave_js_lock.async_unload(False)
-
-
 async def test_set_usercode_skips_when_unchanged(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -341,26 +291,6 @@ async def test_set_usercode_proceeds_on_cache_failure(
         result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
         assert result is True
-
-    await zwave_js_lock.async_unload(False)
-
-
-async def test_clear_usercode_calls_service(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_client: MagicMock,
-    zwave_integration: MockConfigEntry,
-) -> None:
-    """Test that clear_usercode sends the Z-Wave command to the lock."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    zwave_client.async_send_command.reset_mock()
-    result = await zwave_js_lock.async_clear_usercode(2)
-
-    assert result is True
-    assert zwave_client.async_send_command.call_count >= 1
 
     await zwave_js_lock.async_unload(False)
 

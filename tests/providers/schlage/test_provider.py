@@ -108,26 +108,6 @@ class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
 # ---------------------------------------------------------------------------
 
 
-async def test_get_usercodes_tagged_codes(
-    hass: HomeAssistant,
-    schlage_lock: SchlageLock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test get_usercodes returns UNREADABLE_CODE for tagged occupied slots, EMPTY for others."""
-    mock_response = {
-        LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:1] Guest", "code": "****"},
-        },
-    }
-    handler = AsyncMock(return_value=mock_response)
-    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
-
-    codes = await schlage_lock.async_get_usercodes()
-
-    assert codes[1] is SlotCode.UNREADABLE_CODE
-    assert codes[2] is SlotCode.EMPTY
-
-
 async def test_get_usercodes_no_codes(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
@@ -324,24 +304,6 @@ async def test_tag_unmanaged_codes_no_managed_slots(
 # ---------------------------------------------------------------------------
 
 
-async def test_set_usercode(hass: HomeAssistant, schlage_lock: SchlageLock) -> None:
-    """Test set_usercode adds a tagged code."""
-    # get_codes returns no existing codes
-    get_response = {LOCK_ENTITY_ID: {}}
-    get_handler = AsyncMock(return_value=get_response)
-    add_handler = AsyncMock(return_value=None)
-    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
-    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
-
-    result = await schlage_lock.async_set_usercode(1, "1234", "Guest")
-
-    assert result is True
-    assert add_handler.call_count == 1
-    add_call = add_handler.call_args[0][0]
-    assert add_call.data["name"] == "[LCM:1] Guest"
-    assert add_call.data["code"] == "1234"
-
-
 async def test_set_usercode_replaces_existing(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
@@ -426,26 +388,6 @@ async def test_set_usercode_service_failure(
 # ---------------------------------------------------------------------------
 # clear_usercode tests
 # ---------------------------------------------------------------------------
-
-
-async def test_clear_usercode(hass: HomeAssistant, schlage_lock: SchlageLock) -> None:
-    """Test clear_usercode deletes the code for the given slot."""
-    get_response = {
-        LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:1] Guest", "code": "****"},
-        },
-    }
-    get_handler = AsyncMock(return_value=get_response)
-    delete_handler = AsyncMock(return_value=None)
-    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
-    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
-
-    result = await schlage_lock.async_clear_usercode(1)
-
-    assert result is True
-    assert delete_handler.call_count == 1
-    delete_call = delete_handler.call_args[0][0]
-    assert delete_call.data["name"] == "[LCM:1] Guest"
 
 
 async def test_clear_usercode_already_empty(

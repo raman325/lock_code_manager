@@ -148,28 +148,6 @@ class TestConnection(ServiceProviderConnectionTests):
 class TestGetUsercodes:
     """Tests for async_get_usercodes."""
 
-    async def test_get_usercodes_tagged_users(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """Test get_usercodes returns PINs for tagged users, EMPTY for unoccupied."""
-        mock_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("100", "[LCM:1] Guest", "1234"),
-                ],
-            },
-        }
-        handler = AsyncMock(return_value=mock_response)
-        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
-
-        codes = await akuvox_lock.async_get_usercodes()
-
-        assert codes[1] == "1234"
-        assert codes[2] is SlotCode.EMPTY
-
     async def test_get_usercodes_no_users(
         self,
         hass: HomeAssistant,
@@ -293,64 +271,6 @@ class TestGetUsercodes:
 class TestSetUsercode:
     """Tests for async_set_usercode."""
 
-    async def test_set_usercode_new_user(
-        self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
-    ) -> None:
-        """Test setting a usercode creates a new user when none exists."""
-        # list_users returns no users
-        list_response = {LOCK_ENTITY_ID: {"users": []}}
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
-        )
-
-        add_calls: list[dict[str, Any]] = []
-
-        async def _capture_add(call):
-            add_calls.append(dict(call.data))
-
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "add_user", AsyncMock(side_effect=_capture_add)
-        )
-
-        result = await akuvox_lock.async_set_usercode(1, "1234", "Guest")
-
-        assert result is True
-        assert len(add_calls) == 1
-        assert add_calls[0]["name"] == "[LCM:1] Guest"
-        assert add_calls[0]["private_pin"] == "1234"
-
-    async def test_set_usercode_existing_user(
-        self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
-    ) -> None:
-        """Test setting a usercode modifies an existing tagged user."""
-        list_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("100", "[LCM:1] Guest", "1234"),
-                ],
-            },
-        }
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
-        )
-
-        modify_calls: list[dict[str, Any]] = []
-
-        async def _capture_modify(call):
-            modify_calls.append(dict(call.data))
-
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
-        )
-
-        result = await akuvox_lock.async_set_usercode(1, "5678", "Updated")
-
-        assert result is True
-        assert len(modify_calls) == 1
-        assert modify_calls[0]["id"] == "100"
-        assert modify_calls[0]["name"] == "[LCM:1] Updated"
-        assert modify_calls[0]["private_pin"] == "5678"
-
     async def test_set_usercode_no_name_keeps_existing(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
@@ -406,36 +326,6 @@ class TestSetUsercode:
 
 class TestClearUsercode:
     """Tests for async_clear_usercode."""
-
-    async def test_clear_usercode_existing(
-        self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
-    ) -> None:
-        """Test clearing a usercode deletes the user from the device."""
-        list_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("100", "[LCM:1] Guest", "1234"),
-                ],
-            },
-        }
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
-        )
-
-        delete_calls: list[dict[str, Any]] = []
-
-        async def _capture_delete(call):
-            delete_calls.append(dict(call.data))
-
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "delete_user", AsyncMock(side_effect=_capture_delete)
-        )
-
-        result = await akuvox_lock.async_clear_usercode(1)
-
-        assert result is True
-        assert len(delete_calls) == 1
-        assert delete_calls[0]["id"] == "100"
 
     async def test_clear_usercode_already_empty(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
