@@ -2881,3 +2881,94 @@ class TestSerializeSlotWithSlotCode:
         """None code should serialize as code=None."""
         result = _serialize_slot(1, None, reveal=False)
         assert result[ATTR_CODE] is None
+
+
+async def test_subscribe_code_slot_receives_live_updates(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """subscribe_code_slot fires events when entity state changes via service call."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe to slot 1
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Receive initial snapshot
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    assert event["event"][CONF_PIN] == "1234"
+
+    # Change the PIN via service call (text.set_value on the PIN entity)
+    await hass.services.async_call(
+        "text",
+        "set_value",
+        {"value": "5555"},
+        target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    # Receive websocket event with updated PIN
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+    assert updated["event"][CONF_PIN] == "5555"
+
+
+async def test_subscribe_code_slot_receives_coordinator_updates(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """subscribe_code_slot fires events when coordinator data changes."""
+    ws_client = await hass_ws_client(hass)
+
+    # Subscribe to slot 1
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"]
+
+    # Receive initial snapshot
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+
+    # Push new coordinator data
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.coordinator.push_update({1: "new_code"})
+    await hass.async_block_till_done()
+
+    # Receive websocket event
+    updated = await ws_client.receive_json()
+    assert updated["type"] == "event"
+
+    # Verify the lock status in the event shows the new code
+    lock_1_data = next(
+        (
+            lock_data
+            for lock_data in updated["event"][CONF_LOCKS]
+            if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+        ),
+        None,
+    )
+    assert lock_1_data is not None
+    assert lock_1_data[ATTR_CODE] == "new_code"
