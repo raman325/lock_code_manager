@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c74e5dbf090e",
+  "strategy": "manual-commit",
+  "branch": "test/provider-e2e-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/akuvox/conftest.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c7/4e5dbf090e/0/metadata.json",
+      "transcript": "/c7/4e5dbf090e/0/full.jsonl",
+      "content_hash": "/c7/4e5dbf090e/0/content_hash.txt",
+      "prompt": "/c7/4e5dbf090e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 956,
+    "cache_creation_tokens": 4285719,
+    "cache_read_tokens": 238351530,
+    "output_tokens": 209976,
+    "api_call_count": 693
+  }
+}
