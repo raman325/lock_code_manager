@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "761c979a4006",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-21T20:25:59.707763Z",
+  "branch": "test/provider-e2e-tests",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/providers/akuvox/test_akuvox.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/schlage/conftest.py",
+    "tests/providers/schlage/test_schlage.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "dc9a8739008b",
+  "token_usage": {
+    "input_tokens": 951,
+    "cache_creation_tokens": 4282765,
+    "cache_read_tokens": 236461244,
+    "output_tokens": 209050,
+    "api_call_count": 690
+  },
+  "session_metrics": {
+    "turn_count": 99
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-21T20:25:58.457157Z",
+    "agent_lines": 0,
+    "human_added": 328,
+    "human_modified": 1231,
+    "human_removed": 0,
+    "total_committed": 328,
+    "agent_percentage": 0
+  }
+}

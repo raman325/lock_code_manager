@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "761c979a4006",
+  "strategy": "manual-commit",
+  "branch": "test/provider-e2e-tests",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/providers/akuvox/test_akuvox.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/schlage/conftest.py",
+    "tests/providers/schlage/test_schlage.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/76/1c979a4006/0/metadata.json",
+      "transcript": "/76/1c979a4006/0/full.jsonl",
+      "content_hash": "/76/1c979a4006/0/content_hash.txt",
+      "prompt": "/76/1c979a4006/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 951,
+    "cache_creation_tokens": 4282765,
+    "cache_read_tokens": 236461244,
+    "output_tokens": 209050,
+    "api_call_count": 690
+  }
+}
