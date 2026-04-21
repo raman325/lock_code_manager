@@ -8,6 +8,7 @@
     "local_akuvox",
     "lovelace",
     "matter",
+    "mqtt",
     "schlage",
     "schedule",
     "template",
