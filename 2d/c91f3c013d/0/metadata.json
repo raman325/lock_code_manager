@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2dc91f3c013d",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-21T17:50:29.012919Z",
+  "branch": "docs/z2m-wiki-link",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "e059b455e41d",
+  "token_usage": {
+    "input_tokens": 788,
+    "cache_creation_tokens": 2993580,
+    "cache_read_tokens": 170392902,
+    "output_tokens": 168915,
+    "api_call_count": 571
+  },
+  "session_metrics": {
+    "turn_count": 87
+  }
+}
