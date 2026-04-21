@@ -294,7 +294,10 @@ class Zigbee2MQTTLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe via background task when still unsubscribed (e.g. reconnect); primary subscribe is ``await`` in ``async_setup``."""
+        """Subscribe via background task when still unsubscribed (e.g. reconnect).
+
+        Primary subscribe is ``await`` in ``async_setup``.
+        """
         if self._unsubscribe is not None:
             return
 
