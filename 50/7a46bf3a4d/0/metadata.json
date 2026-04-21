@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "507a46bf3a4d",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-21T18:20:22.474274Z",
+  "branch": "test/z2m-e2e-tests",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "1791e5acd025",
+  "token_usage": {
+    "input_tokens": 836,
+    "cache_creation_tokens": 3024650,
+    "cache_read_tokens": 192787734,
+    "output_tokens": 180572,
+    "api_call_count": 613
+  },
+  "session_metrics": {
+    "turn_count": 90
+  }
+}
