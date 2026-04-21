@@ -23,7 +23,7 @@ Supported lock integrations:
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | Yes | Yes | Some locks mask PINs |
-| [Zigbee2MQTT][zigbee2mqtt] (MQTT)² | Varies | Yes | No | Same broker as Z2M; PIN-used events not implemented yet; PIN support depends on lock |
+| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | Yes | No | Same broker as Z2M; PIN-used events not implemented yet; PIN support depends on lock |
 | [Matter][wiki-matter] | No | Yes | Yes | PINs write-only per spec |
 | [Schlage WiFi][wiki-schlage] | No | No | No | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | Yes | No | No | Local API, polling-based |
@@ -45,6 +45,7 @@ If you rename the device in HA, keep it aligned with the **friendly name** in Zi
 
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
+[wiki-zigbee2mqtt]: https://github.com/raman325/lock_code_manager/wiki/Zigbee2MQTT-integration
 [wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
 [wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
