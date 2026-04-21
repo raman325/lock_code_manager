@@ -408,7 +408,7 @@ async def test_clear_usercode_optimistic_update(
     Test that clear_usercode performs optimistic coordinator update.
 
     When a clear operation succeeds, the coordinator should be updated immediately
-    with an empty string. This prevents sync loops where the binary sensor reads
+    with SlotCode.EMPTY. This prevents sync loops where the binary sensor reads
     stale cached data showing the old PIN and triggers repeated clear attempts.
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -748,10 +748,10 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
 
     This test verifies behavior when the lock cache contains:
     - Slot 1: Managed by LCM, has real code "9999" -> should be returned
-    - Slot 5: NOT managed by LCM, has masked code "****" -> returns masked value
+    - Slot 5: NOT managed by LCM, has masked code "****" -> returns UNREADABLE_CODE
 
-    Unmanaged slots with masked PINs return the masked value so sync logic
-    knows a PIN exists on the lock, even if we can't resolve the actual value.
+    Unmanaged slots with masked PINs return SlotCode.UNREADABLE_CODE so sync
+    logic knows a PIN exists on the lock, even if we can't read the actual value.
     """
     # Configure LCM to only manage slot 1 (not slot 5)
     lcm_entry = MockConfigEntry(

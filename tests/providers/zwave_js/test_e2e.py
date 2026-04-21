@@ -12,7 +12,10 @@ from zwave_js_server.model.node import Node
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.const import EVENT_LOCK_STATE_CHANGED
+from custom_components.lock_code_manager.const import (
+    ATTR_CODE_SLOT,
+    EVENT_LOCK_STATE_CHANGED,
+)
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
@@ -170,7 +173,7 @@ class TestEvents:
         await hass.async_block_till_done()
 
         assert len(events) == 1
-        assert events[0].data["code_slot"] == 1
+        assert events[0].data[ATTR_CODE_SLOT] == 1
 
     async def test_push_value_update_reaches_coordinator(
         self,
