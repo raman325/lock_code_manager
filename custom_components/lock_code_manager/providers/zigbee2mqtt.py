@@ -319,6 +319,10 @@ class Zigbee2MQTTLock(BaseLock):
             return
 
         async def _subscribe_or_log() -> None:
+            """Run ``_async_ensure_device_subscription`` from the reconnect task path.
+
+            Log errors only; sync ``setup_push_subscription`` cannot raise.
+            """
             try:
                 await self._async_ensure_device_subscription()
             except LockDisconnected as err:
@@ -378,6 +382,8 @@ class Zigbee2MQTTLock(BaseLock):
         # the next. Parallel gathers plus per-slot timeouts used to raise and fail the
         # entire refresh, leaving coordinator.data empty — sync then skips every slot
         # (see SlotSyncManager._resolve_slot_state).
+        # Transient publish/timeout/read failures use UNREADABLE_CODE so sync does not
+        # treat the slot as confirmed-empty and storm reprogramming after MQTT recovery.
         for slot_num in sorted(code_slots):
             future = loop.create_future()
             self._pending_codes[slot_num] = future
@@ -385,33 +391,33 @@ class Zigbee2MQTTLock(BaseLock):
             try:
                 await async_publish(self.hass, get_topic, payload)
             except (HomeAssistantError, OSError) as err:
-                LOGGER.debug(
+                LOGGER.warning(
                     "MQTT publish failed for PIN get %s slot %s: %s",
                     self.lock.entity_id,
                     slot_num,
                     err,
                 )
-                data[slot_num] = SlotCode.EMPTY
+                data[slot_num] = SlotCode.UNREADABLE_CODE
                 self._pending_codes.pop(slot_num, None)
                 continue
 
             try:
                 result = await asyncio.wait_for(future, timeout=10.0)
             except TimeoutError:
-                LOGGER.debug(
+                LOGGER.warning(
                     "Timeout waiting for PIN code response for %s slot %s",
                     self.lock.entity_id,
                     slot_num,
                 )
-                data[slot_num] = SlotCode.EMPTY
+                data[slot_num] = SlotCode.UNREADABLE_CODE
             except Exception as err:
-                LOGGER.debug(
+                LOGGER.warning(
                     "Failed to get PIN for %s slot %s: %s",
                     self.lock.entity_id,
                     slot_num,
                     err,
                 )
-                data[slot_num] = SlotCode.EMPTY
+                data[slot_num] = SlotCode.UNREADABLE_CODE
             else:
                 data[slot_num] = result if result else SlotCode.EMPTY
             finally:

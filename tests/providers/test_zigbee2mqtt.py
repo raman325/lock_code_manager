@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.exceptions import LockDisconnected
@@ -519,12 +520,12 @@ class TestAsyncGetUsercodes:
 
         assert result == {3: "7788"}
 
-    async def test_wait_for_timeout_maps_slot_to_empty(
+    async def test_wait_for_timeout_maps_slot_to_unreadable(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """If no pin_code reply arrives in time, that slot is EMPTY so refresh still succeeds."""
+        """If no pin_code reply arrives in time, that slot is UNREADABLE (transient read failure)."""
         real_wait_for = asyncio.wait_for
 
         async def fast_pin_timeout(
@@ -556,7 +557,37 @@ class TestAsyncGetUsercodes:
         ):
             result = await lock.async_get_usercodes()
 
-        assert result == {11: SlotCode.EMPTY}
+        assert result == {11: SlotCode.UNREADABLE_CODE}
+
+    async def test_publish_failure_maps_slot_to_unreadable(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """MQTT GET publish failure yields UNREADABLE for that slot."""
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+
+        async def boom(*_args: object, **_kwargs: object) -> None:
+            raise HomeAssistantError("broker unavailable")
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.get_managed_slots",
+                return_value={7},
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                side_effect=boom,
+            ),
+        ):
+            result = await lock.async_get_usercodes()
+
+        assert result == {7: SlotCode.UNREADABLE_CODE}
 
     async def test_async_get_usercodes_raises_when_lock_not_connected(
         self,
@@ -985,12 +1016,12 @@ class TestAsyncSetClearHardRefresh:
 
         assert refresh == direct == {12: "ABC"}
 
-    async def test_wait_pin_non_timeout_exception_maps_slot_to_empty(
+    async def test_wait_pin_non_timeout_exception_maps_slot_to_unreadable(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """Unexpected errors during wait_for treat the slot as EMPTY so the coordinator loads."""
+        """Unexpected errors during wait_for map the slot to UNREADABLE so the coordinator loads."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
 
@@ -1017,7 +1048,7 @@ class TestAsyncSetClearHardRefresh:
         ):
             result = await lock.async_get_usercodes()
 
-        assert result == {21: SlotCode.EMPTY}
+        assert result == {21: SlotCode.UNREADABLE_CODE}
 
     async def test_setup_push_subscribe_failure_leaves_unsub_none(
         self,
