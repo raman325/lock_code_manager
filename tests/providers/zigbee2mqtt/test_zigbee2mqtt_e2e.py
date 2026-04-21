@@ -73,13 +73,13 @@ class TestPushUpdateViaMqtt:
         assert call_args[1] == "1111"
         assert call_args[2] == "2222"
 
-    async def test_push_update_triggers_coordinator_refresh(
+    async def test_push_update_calls_coordinator_push_update(
         self,
         hass: HomeAssistant,
         z2m_lock: Zigbee2MQTTLock,
         mqtt_bus: MqttMessageBus,
     ) -> None:
-        """A users payload update flows through to coordinator.push_update."""
+        """MQTT users payload flows through the full path to coordinator.push_update."""
         z2m_lock.coordinator = MagicMock()
 
         mqtt_bus.fire_message(

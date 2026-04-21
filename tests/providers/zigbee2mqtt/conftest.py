@@ -164,7 +164,7 @@ async def z2m_lock(
     mqtt_entry = hass.config_entries.async_entries("mqtt")[0]
 
     lock = Zigbee2MQTTLock(hass, dev_reg, ent_reg, mqtt_entry, lock_entity)
-    # Run async_setup to establish the device topic subscription
+    # Ensure the device topic subscription is established for the fixture
     await lock._async_ensure_device_subscription()
 
     return lock
