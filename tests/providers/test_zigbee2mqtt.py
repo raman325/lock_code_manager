@@ -3,19 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import timedelta
 import json
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
+from homeassistant.components.mqtt.models import ReceiveMessage
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -27,6 +37,416 @@ Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
 Z2M_GET_TOPIC = f"{Z2M_FULL_TOPIC}/get"
 Z2M_SET_TOPIC = f"{Z2M_FULL_TOPIC}/set"
+Z2M_LOCK_ENTITY_ID = "lock.mqtt_test_z2m"
+
+# LCM config: one lock, two slots
+Z2M_LCM_CONFIG = {
+    CONF_LOCKS: [Z2M_LOCK_ENTITY_ID],
+    CONF_SLOTS: {
+        1: {"name": "slot1", "pin": "1234", "enabled": True},
+        2: {"name": "slot2", "pin": "5678", "enabled": True},
+    },
+}
+
+
+@dataclass
+class MqttMessageBus:
+    """Lightweight MQTT message bus for E2E testing.
+
+    Tracks subscriptions and publishes so tests can fire incoming messages
+    and verify outgoing publishes without a real Paho client.
+    """
+
+    subscriptions: dict[str, list[Callable]] = field(default_factory=dict)
+    publishes: list[tuple[str, str]] = field(default_factory=list)
+
+    def subscribe(self, topic: str, callback: Callable) -> Callable[[], None]:
+        """Register a subscription callback and return an unsubscribe handle."""
+        self.subscriptions.setdefault(topic, []).append(callback)
+
+        def unsub() -> None:
+            self.subscriptions.get(topic, []).remove(callback)
+
+        return unsub
+
+    async def publish(
+        self,
+        hass: HomeAssistant,
+        topic: str,
+        payload: str,
+        **kwargs: Any,
+    ) -> None:
+        """Record a published message."""
+        self.publishes.append((topic, payload))
+
+    def fire_message(self, topic: str, payload: dict[str, Any]) -> None:
+        """Simulate an incoming MQTT message on a topic.
+
+        Creates a ReceiveMessage-like object and dispatches to all
+        registered callbacks for the topic.
+        """
+        msg = MagicMock(spec=ReceiveMessage)
+        msg.topic = topic
+        msg.payload = json.dumps(payload).encode()
+        msg.qos = 0
+        msg.retain = False
+        for cb in self.subscriptions.get(topic, []):
+            cb(msg)
+
+
+@pytest.fixture
+def mqtt_bus() -> MqttMessageBus:
+    """Create a fresh MQTT message bus for the test."""
+    return MqttMessageBus()
+
+
+@pytest.fixture
+def mqtt_patches(mqtt_bus: MqttMessageBus):
+    """Patch async_subscribe and async_publish at the HA MQTT component boundary.
+
+    Also patches mqtt_config_entry_enabled to return True so the provider
+    does not bail out during setup.
+    """
+
+    async def fake_subscribe(hass, topic, callback, *args, **kwargs):
+        return mqtt_bus.subscribe(topic, callback)
+
+    async def fake_publish(hass, topic, payload, *args, **kwargs):
+        await mqtt_bus.publish(hass, topic, payload, **kwargs)
+        # Auto-respond to GET requests so the coordinator's initial
+        # refresh doesn't block on 10-second timeouts per slot.
+        if topic.endswith("/get"):
+            try:
+                body = json.loads(payload)
+                slot = body.get("pin_code", {}).get("user")
+                if slot is not None:
+                    device_topic = topic.rsplit("/get", 1)[0]
+                    mqtt_bus.fire_message(
+                        device_topic,
+                        {
+                            "pin_code": {
+                                "user": slot,
+                                "user_enabled": False,
+                                "pin_code": None,
+                            }
+                        },
+                    )
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
+            side_effect=fake_subscribe,
+        ),
+        patch(
+            "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+            side_effect=fake_publish,
+        ),
+        patch(
+            "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+            return_value=True,
+        ),
+    ):
+        yield
+
+
+@pytest.fixture
+async def mqtt_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
+    """Create an MQTT config entry, Z2M device, and lock entity.
+
+    Sets the MQTT config entry to LOADED state so the provider's
+    async_is_integration_connected check passes.
+    """
+    mqtt_entry = MockConfigEntry(domain="mqtt")
+    mqtt_entry.add_to_hass(hass)
+    mqtt_entry._async_set_state(hass, ConfigEntryState.LOADED, None)
+
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    device = dev_reg.async_get_or_create(
+        config_entry_id=mqtt_entry.entry_id,
+        connections=set(),
+        identifiers={("mqtt", "zigbee2mqtt_0xc0ffee")},
+        name=Z2M_TOPIC_NAME,
+    )
+
+    lock_entity = ent_reg.async_get_or_create(
+        "lock",
+        "mqtt",
+        "test_z2m",
+        config_entry=mqtt_entry,
+        device_id=device.id,
+    )
+
+    hass.states.async_set(lock_entity.entity_id, "locked")
+
+    return lock_entity
+
+
+@pytest.fixture
+async def lcm_config_entry(
+    hass: HomeAssistant,
+    mqtt_lock_entity: er.RegistryEntry,
+    mqtt_patches,
+) -> MockConfigEntry:
+    """Set up a full LCM config entry managing the Z2M lock.
+
+    This goes through the real async_setup_entry path: LCM discovers the
+    lock entity is from the mqtt platform, instantiates Zigbee2MQTTLock,
+    creates the coordinator, entities, and sync managers.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN, data=Z2M_LCM_CONFIG, unique_id="test_z2m_e2e"
+    )
+    lcm_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield lcm_entry
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+def get_z2m_lock(hass: HomeAssistant, lcm_entry: MockConfigEntry) -> Zigbee2MQTTLock:
+    """Extract the Zigbee2MQTTLock from a loaded LCM config entry."""
+    lock = lcm_entry.runtime_data.locks.get(Z2M_LOCK_ENTITY_ID)
+    assert lock is not None, f"Lock {Z2M_LOCK_ENTITY_ID} not found in runtime data"
+    assert isinstance(lock, Zigbee2MQTTLock)
+    return lock
+
+
+@pytest.fixture
+def z2m_lock(hass, lcm_config_entry):
+    """Extract the Z2M lock from the LCM config entry."""
+    return get_z2m_lock(hass, lcm_config_entry)
+
+
+# ---------------------------------------------------------------------------
+# E2E tests — full LCM config entry lifecycle with MQTT message bus
+# ---------------------------------------------------------------------------
+
+
+class TestFullSetupLifecycle:
+    """Verify LCM correctly discovers and sets up the Z2M provider."""
+
+    async def test_provider_discovered_as_zigbee2mqtt(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry,
+    ) -> None:
+        """Verify LCM discovers the MQTT lock and creates a Zigbee2MQTTLock."""
+        lock = lcm_config_entry.runtime_data.locks.get(Z2M_LOCK_ENTITY_ID)
+        assert lock is not None
+        assert isinstance(lock, Zigbee2MQTTLock)
+
+    async def test_coordinator_created(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+    ) -> None:
+        """The coordinator is created and attached to the provider."""
+        assert z2m_lock.coordinator is not None
+
+    async def test_mqtt_subscription_established(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """The provider subscribes to the Z2M device topic during setup."""
+        assert Z2M_FULL_TOPIC in mqtt_bus.subscriptions
+        assert len(mqtt_bus.subscriptions[Z2M_FULL_TOPIC]) > 0
+
+
+class TestPushUpdatesViaMqtt:
+    """Verify MQTT messages flow through to the coordinator."""
+
+    async def test_users_payload_updates_coordinator(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """Firing a users payload on the device topic updates coordinator data."""
+        mqtt_bus.fire_message(
+            Z2M_FULL_TOPIC,
+            {"users": {"1": {"status": "enabled", "pin_code": "1234"}}},
+        )
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+
+        assert z2m_lock.coordinator.data.get(1) == "1234"
+
+    async def test_multiple_slots_in_single_message(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """Multiple user slots in one MQTT message all reach the coordinator."""
+        mqtt_bus.fire_message(
+            Z2M_FULL_TOPIC,
+            {
+                "users": {
+                    "1": {"status": "enabled", "pin_code": "1111"},
+                    "2": {"status": "enabled", "pin_code": "2222"},
+                    "3": {"status": "disabled"},
+                }
+            },
+        )
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+
+        assert z2m_lock.coordinator.data.get(1) == "1111"
+        assert z2m_lock.coordinator.data.get(2) == "2222"
+        assert z2m_lock.coordinator.data.get(3) is SlotCode.EMPTY
+
+    async def test_disabled_slot_maps_to_empty(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """A disabled user slot is reported as SlotCode.EMPTY."""
+        mqtt_bus.fire_message(
+            Z2M_FULL_TOPIC,
+            {"users": {"5": {"status": "disabled"}}},
+        )
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+
+        assert z2m_lock.coordinator.data.get(5) is SlotCode.EMPTY
+
+
+class TestSetAndClearUsercodes:
+    """Verify set/clear operations publish correct MQTT payloads."""
+
+    async def test_set_usercode_publishes_correct_payload(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """async_set_usercode publishes the correct SET payload."""
+        await z2m_lock.async_set_usercode(1, "9999", "TestUser")
+
+        assert any(topic == Z2M_SET_TOPIC for topic, _ in mqtt_bus.publishes)
+        set_publishes = [
+            json.loads(p) for t, p in mqtt_bus.publishes if t == Z2M_SET_TOPIC
+        ]
+        assert any(
+            pub.get("pin_code", {}).get("user") == 1
+            and pub.get("pin_code", {}).get("pin_code") == "9999"
+            and pub.get("pin_code", {}).get("user_enabled") is True
+            for pub in set_publishes
+        )
+
+    async def test_set_usercode_optimistic_update(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """After set, the coordinator has the optimistic value."""
+        await z2m_lock.async_set_usercode(1, "9999")
+
+        assert z2m_lock.coordinator.data.get(1) == "9999"
+
+    async def test_clear_usercode_publishes_disable_payload(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """async_clear_usercode publishes user_enabled=false."""
+        await z2m_lock.async_clear_usercode(1)
+
+        set_publishes = [
+            json.loads(p) for t, p in mqtt_bus.publishes if t == Z2M_SET_TOPIC
+        ]
+        assert any(
+            pub.get("pin_code", {}).get("user") == 1
+            and pub.get("pin_code", {}).get("user_enabled") is False
+            for pub in set_publishes
+        )
+
+    async def test_clear_usercode_optimistic_update(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """After clear, the coordinator has SlotCode.EMPTY."""
+        await z2m_lock.async_clear_usercode(1)
+
+        assert z2m_lock.coordinator.data.get(1) is SlotCode.EMPTY
+
+
+class TestGetUsercodes:
+    """Verify the full GET request/response cycle."""
+
+    async def test_get_usercodes_publishes_get_requests(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """async_get_usercodes publishes GET requests for all managed slots.
+
+        The auto-responder in the fixture responds with empty slots,
+        so the result should contain EMPTY for each slot.
+        """
+        result = await z2m_lock.async_get_usercodes()
+
+        get_publishes = [
+            json.loads(p) for t, p in mqtt_bus.publishes if t == Z2M_GET_TOPIC
+        ]
+        requested_slots = {pub["pin_code"]["user"] for pub in get_publishes}
+        assert 1 in requested_slots
+        assert 2 in requested_slots
+
+        # Auto-responder returns user_enabled=False, so slots are EMPTY
+        assert result[1] is SlotCode.EMPTY
+        assert result[2] is SlotCode.EMPTY
+
+    async def test_get_usercodes_with_responses(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_bus: MqttMessageBus,
+    ) -> None:
+        """GET requests that receive MQTT responses return the PIN values."""
+        original_publish = mqtt_bus.publish
+
+        async def publish_and_respond(hass, topic, payload, **kwargs):
+            await original_publish(hass, topic, payload, **kwargs)
+            if topic == Z2M_GET_TOPIC:
+                body = json.loads(payload)
+                slot = body["pin_code"]["user"]
+                mqtt_bus.fire_message(
+                    Z2M_FULL_TOPIC,
+                    {
+                        "pin_code": {
+                            "user": slot,
+                            "user_enabled": True,
+                            "pin_code": f"PIN{slot}",
+                        }
+                    },
+                )
+
+        mqtt_bus.publish = publish_and_respond
+
+        result = await z2m_lock.async_get_usercodes()
+
+        assert result[1] == "PIN1"
+        assert result[2] == "PIN2"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — edge cases, error paths, pure function tests
+# ---------------------------------------------------------------------------
 
 
 def _minimal_lock() -> Zigbee2MQTTLock:
@@ -223,16 +643,6 @@ def test_users_enabled_without_pin_key_skips_push() -> None:
     lock.coordinator.push_update.assert_not_called()
 
 
-def test_users_enabled_with_pin_updates() -> None:
-    """When pin_code is present, coordinator receives the value."""
-    lock = _minimal_lock()
-    lock.coordinator = MagicMock()
-    lock._process_z2m_device_payload(
-        {"users": {"5": {"status": "enabled", "pin_code": "4242"}}}
-    )
-    lock.coordinator.push_update.assert_called_once_with({5: "4242"})
-
-
 def test_users_enabled_with_numeric_zero_pin_updates() -> None:
     """Numeric zero is a valid digit; it must not be treated as a missing PIN."""
     lock = _minimal_lock()
@@ -250,14 +660,6 @@ def test_users_enabled_pin_null_clears_slot() -> None:
     lock._process_z2m_device_payload(
         {"users": {"5": {"status": "enabled", "pin_code": None}}}
     )
-    lock.coordinator.push_update.assert_called_once_with({5: SlotCode.EMPTY})
-
-
-def test_non_enabled_user_is_empty() -> None:
-    """Disabled or non-enabled statuses clear coordinator slot."""
-    lock = _minimal_lock()
-    lock.coordinator = MagicMock()
-    lock._process_z2m_device_payload({"users": {"5": {"status": "disabled"}}})
     lock.coordinator.push_update.assert_called_once_with({5: SlotCode.EMPTY})
 
 
@@ -330,67 +732,6 @@ async def test_mqtt_payload_invalid_json_ignored(
 class TestPushSubscription:
     """MQTT push subscription lifecycle for Zigbee2MQTTLock."""
 
-    async def test_subscribes_to_z2m_device_topic(
-        self,
-        hass: HomeAssistant,
-        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
-    ) -> None:
-        """setup_push_subscription registers async_subscribe on base_topic/friendly_name."""
-        lock = zigbee2mqtt_lock_with_device
-        lock.coordinator = MagicMock()
-
-        with (
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-                return_value=True,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
-                new_callable=AsyncMock,
-            ) as mock_async_subscribe,
-        ):
-            mock_async_subscribe.return_value = lambda: None
-
-            lock.setup_push_subscription()
-            await hass.async_block_till_done()
-
-            mock_async_subscribe.assert_called_once()
-            assert mock_async_subscribe.call_args[0][1] == Z2M_FULL_TOPIC
-
-    async def test_mqtt_payload_delivers_push_update_on_event_loop(
-        self,
-        hass: HomeAssistant,
-        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
-    ) -> None:
-        """Incoming MQTT JSON schedules payload handling and coordinator.push_update."""
-        lock = zigbee2mqtt_lock_with_device
-        lock.coordinator = MagicMock()
-
-        with (
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-                return_value=True,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_subscribe",
-                new_callable=AsyncMock,
-            ) as mock_async_subscribe,
-        ):
-            mock_async_subscribe.return_value = lambda: None
-
-            lock.setup_push_subscription()
-            await hass.async_block_till_done()
-
-            msg_callback = mock_async_subscribe.call_args[0][2]
-            payload = {"users": {"7": {"status": "enabled", "pin_code": "9090"}}}
-            msg = SimpleNamespace(payload=json.dumps(payload).encode())
-
-            msg_callback(msg)
-            await hass.async_block_till_done()
-            await hass.async_block_till_done()
-
-            lock.coordinator.push_update.assert_called_once_with({7: "9090"})
-
     async def test_setup_push_idempotent(
         self,
         hass: HomeAssistant,
@@ -433,101 +774,6 @@ class TestPushSubscription:
 
 class TestAsyncGetUsercodes:
     """Request/response path for async_get_usercodes via MQTT get + pin_code futures."""
-
-    async def test_publishes_get_payload_for_each_managed_slot(
-        self,
-        hass: HomeAssistant,
-        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
-    ) -> None:
-        """Each managed slot triggers async_publish on the device get topic."""
-        lock = zigbee2mqtt_lock_with_device
-        hass.states.async_set(lock.lock.entity_id, "locked")
-
-        publishes: list[tuple[str, str]] = []
-
-        async def fake_publish(
-            hass_inner: HomeAssistant, topic: str, payload: str, **kwargs: object
-        ) -> None:
-            publishes.append((topic, payload))
-            body = json.loads(payload)
-            slot = body["pin_code"]["user"]
-            lock._process_z2m_device_payload(
-                {
-                    "pin_code": {
-                        "user": slot,
-                        "user_enabled": True,
-                        "pin_code": f"PIN{slot}",
-                    }
-                }
-            )
-
-        managed = {4, 8}
-
-        with (
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-                return_value=True,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
-                return_value=managed,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                side_effect=fake_publish,
-            ),
-        ):
-            result = await lock.async_get_usercodes()
-
-        assert len(publishes) == 2
-        assert all(t == Z2M_GET_TOPIC for t, _ in publishes)
-        published_slots = {
-            json.loads(payload)["pin_code"]["user"] for _, payload in publishes
-        }
-        assert published_slots == managed
-        assert result == {4: "PIN4", 8: "PIN8"}
-
-    async def test_pin_code_get_response_maps_slot_value(
-        self,
-        hass: HomeAssistant,
-        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
-    ) -> None:
-        """MQTT pin_code dict on the device topic resolves the pending future."""
-        lock = zigbee2mqtt_lock_with_device
-        hass.states.async_set(lock.lock.entity_id, "locked")
-
-        async def fake_publish(
-            hass_inner: HomeAssistant, topic: str, payload: str, **kwargs: object
-        ) -> None:
-            body = json.loads(payload)
-            assert body == {"pin_code": {"user": 3}}
-            lock._process_z2m_device_payload(
-                {
-                    "pin_code": {
-                        "user": 3,
-                        "user_enabled": True,
-                        "pin_code": "7788",
-                    }
-                }
-            )
-
-        with (
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-                return_value=True,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers._base.get_managed_slots",
-                return_value={3},
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                side_effect=fake_publish,
-            ),
-        ):
-            result = await lock.async_get_usercodes()
-
-        assert result == {3: "7788"}
 
     async def test_wait_for_timeout_maps_slot_to_unreadable(
         self,
@@ -859,34 +1105,6 @@ class TestAsyncSetClearHardRefresh:
         ):
             await lock.async_clear_usercode(6)
 
-    async def test_async_set_usercode_publishes_set_topic_and_push_update(
-        self,
-        hass: HomeAssistant,
-        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
-    ) -> None:
-        """Successful set publishes JSON and updates coordinator."""
-        lock = zigbee2mqtt_lock_with_device
-        hass.states.async_set(lock.lock.entity_id, "locked")
-        lock.coordinator = MagicMock()
-        mock_pub = AsyncMock()
-        with (
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-                return_value=True,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                mock_pub,
-            ),
-        ):
-            assert await lock.async_set_usercode(6, "4455") is True
-
-        mock_pub.assert_called_once()
-        assert mock_pub.call_args[0][1] == Z2M_SET_TOPIC
-        body = json.loads(mock_pub.call_args[0][2])
-        assert body["pin_code"]["pin_code"] == "4455"
-        lock.coordinator.push_update.assert_called_once_with({6: "4455"})
-
     async def test_async_set_usercode_without_coordinator_still_true(
         self,
         hass: HomeAssistant,
@@ -931,34 +1149,6 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="Failed to set PIN"),
         ):
             await lock.async_set_usercode(1, "1111")
-
-    async def test_async_clear_usercode_publishes_clear_payload(
-        self,
-        hass: HomeAssistant,
-        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
-    ) -> None:
-        """Clear publishes user_disabled payload and EMPTY on coordinator."""
-        lock = zigbee2mqtt_lock_with_device
-        hass.states.async_set(lock.lock.entity_id, "locked")
-        lock.coordinator = MagicMock()
-        mock_pub = AsyncMock()
-        with (
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
-                return_value=True,
-            ),
-            patch(
-                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
-                mock_pub,
-            ),
-        ):
-            assert await lock.async_clear_usercode(8) is True
-
-        mock_pub.assert_called_once()
-        body = json.loads(mock_pub.call_args[0][2])
-        assert body["pin_code"]["user_enabled"] is False
-        assert body["pin_code"]["pin_code"] is None
-        lock.coordinator.push_update.assert_called_once_with({8: SlotCode.EMPTY})
 
     async def test_async_clear_usercode_publish_failure_raises(
         self,
