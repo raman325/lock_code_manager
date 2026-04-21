@@ -17,8 +17,16 @@ from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
 
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+)
+from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -138,6 +146,8 @@ def mock_zwave_client_fixture(
             """Return the command response."""
             if message["command"] == "node.has_device_config_changed":
                 return {"changed": False}
+            if message["command"] == "endpoint.invoke_cc_api":
+                return {"response": None}
             return {"result": {"success": True, "status": 255}}
 
         client.async_send_command = AsyncMock(
@@ -221,3 +231,66 @@ async def lock_entity_fixture(
     lock_entries = [e for e in entries if e.domain == "lock"]
     assert len(lock_entries) == 1, f"Expected 1 lock entity, found {len(lock_entries)}"
     return lock_entries[0]
+
+
+# ---------------------------------------------------------------------------
+# E2E fixtures — set up a full LCM config entry on top of the Z-Wave JS
+# integration so the provider is discovered and initialised through the real
+# async_setup_entry path.
+# ---------------------------------------------------------------------------
+
+# LCM config: one Z-Wave JS lock, two slots
+ZWAVE_JS_LCM_CONFIG_SLOTS = {
+    1: {CONF_NAME: "slot1", CONF_PIN: "9999", CONF_ENABLED: True},
+    2: {CONF_NAME: "slot2", CONF_PIN: "1234", CONF_ENABLED: True},
+}
+
+
+@pytest.fixture
+async def lcm_config_entry(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+) -> MockConfigEntry:
+    """Set up a full LCM config entry managing the Z-Wave JS lock.
+
+    This goes through the real async_setup_entry path: LCM discovers the
+    lock entity is from the zwave_js platform and instantiates ZWaveJSLock.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
+        },
+        unique_id="test_zwave_js_e2e",
+    )
+    lcm_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+    await hass.async_block_till_done()
+
+    yield lcm_entry
+
+    await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+def get_zwave_lock(
+    hass: HomeAssistant,
+    lcm_entry: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+) -> ZWaveJSLock:
+    """Extract the ZWaveJSLock from a loaded LCM config entry."""
+    lock = lcm_entry.runtime_data.locks.get(lock_entity.entity_id)
+    assert lock is not None, f"Lock {lock_entity.entity_id} not found in runtime data"
+    assert isinstance(lock, ZWaveJSLock)
+    return lock
+
+
+@pytest.fixture
+def e2e_zwave_lock(
+    hass: HomeAssistant,
+    lcm_config_entry: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+) -> ZWaveJSLock:
+    """Extract the ZWaveJSLock from the LCM config entry."""
+    return get_zwave_lock(hass, lcm_config_entry, lock_entity)
