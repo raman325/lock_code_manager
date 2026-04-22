@@ -238,9 +238,16 @@ class SlotSyncManager:
         """Ensure all dependent entities exist with valid states.
 
         The name entity (CONF_NAME) is optional — STATE_UNKNOWN is its
-        normal state when no name is configured, so we only block on
-        STATE_UNAVAILABLE for it.
+        normal state when no name is configured.
+
+        When the slot is inactive (active entity is OFF), PIN and code
+        sensor entities are allowed to be STATE_UNKNOWN since the sync
+        manager only needs to know the slot is off to proceed (clear or
+        confirm already cleared). This prevents disabled slots from
+        being stuck in LOADING forever.
         """
+        # Collect all states in a single pass
+        states: dict[str, str | None] = {}
         for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
             if key not in self._entity_id_map:
                 return False
@@ -248,11 +255,21 @@ class SlotSyncManager:
             if state is None or state == STATE_UNAVAILABLE:
                 _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
-            # Name is optional — STATE_UNKNOWN is valid (no name configured).
-            # All other entities must have a definite state.
-            if key != CONF_NAME and state == STATE_UNKNOWN:
+            states[key] = state
+
+        # Active entity must always have a definite state
+        if states[ATTR_ACTIVE] == STATE_UNKNOWN:
+            _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, ATTR_ACTIVE)
+            return False
+
+        # Name is always optional (STATE_UNKNOWN = no name configured)
+        # PIN and code sensor can be unknown when the slot is inactive
+        slot_inactive = states[ATTR_ACTIVE] == STATE_OFF
+        for key in (CONF_PIN, ATTR_CODE):
+            if states[key] == STATE_UNKNOWN and not slot_inactive:
                 _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
+
         return True
 
     def _resolve_slot_state(self) -> SlotState | None:
