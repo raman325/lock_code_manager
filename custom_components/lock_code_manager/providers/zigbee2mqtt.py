@@ -28,6 +28,27 @@ from .const import LOGGER
 # Default Zigbee2MQTT base topic
 DEFAULT_BASE_TOPIC = "zigbee2mqtt"
 
+# Zigbee2MQTT action values for lock/unlock events triggered by PIN entry.
+# These come from the DoorLock cluster's OperatingEventNotification and
+# ProgrammingEventNotification via zigbee-herdsman-converters.
+_Z2M_LOCK_ACTIONS_LOCKED = frozenset(
+    {
+        "lock",
+        "keypad_lock",
+        "manual_lock",
+        "rf_lock",
+    }
+)
+_Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
+    {
+        "unlock",
+        "keypad_unlock",
+        "manual_unlock",
+        "rf_unlock",
+    }
+)
+_Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
+
 
 def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     """Return True when MQTT exposes a usable PIN value (including numeric zero).
@@ -67,8 +88,8 @@ class Zigbee2MQTTLock(BaseLock):
 
     @property
     def supports_code_slot_events(self) -> bool:
-        """Return False until Z2M lock/unlock actions map to ``async_fire_code_slot_event``."""
-        return False
+        """Return whether this lock supports code slot events."""
+        return True
 
     @property
     def usercode_scan_interval(self) -> timedelta:
@@ -162,14 +183,39 @@ class Zigbee2MQTTLock(BaseLock):
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
         """Apply device-topic JSON on the Home Assistant event loop."""
+        action = payload.get("action")
+
+        # Handle lock/unlock actions with user identification (keypad PIN usage)
+        if action in _Z2M_LOCK_ACTIONS:
+            action_user = payload.get("action_user")
+            if action_user is not None:
+                try:
+                    code_slot = int(action_user)
+                except (ValueError, TypeError):
+                    LOGGER.debug(
+                        "Ignoring %s with non-numeric action_user %r for %s",
+                        action,
+                        action_user,
+                        self.lock.entity_id,
+                    )
+                    return
+                to_locked = action in _Z2M_LOCK_ACTIONS_LOCKED
+                self.async_fire_code_slot_event(
+                    code_slot=code_slot,
+                    to_locked=to_locked,
+                    action_text=action,
+                    source_data=payload,
+                )
+            return
+
         # Handle pin_code added / deleted (Z2M action events, not the users object)
-        if payload.get("action") in ("pin_code_added", "pin_code_deleted"):
+        if action in ("pin_code_added", "pin_code_deleted"):
             action_user = payload.get("action_user")
             if action_user is not None:
                 LOGGER.debug(
                     "Lock %s received %s for user %s",
                     self.lock.entity_id,
-                    payload.get("action"),
+                    action,
                     action_user,
                 )
                 if self.coordinator:
@@ -423,7 +469,11 @@ class Zigbee2MQTTLock(BaseLock):
                     slot_num,
                 )
                 data[slot_num] = SlotCode.UNREADABLE_CODE
-            except Exception as err:
+            except Exception as err:  # noqa: BLE001
+                # Broad catch is intentional: the future is resolved by the MQTT
+                # callback, and any exception from resolution (InvalidStateError,
+                # data processing errors) should not crash the entire refresh.
+                # CancelledError is BaseException in Python 3.9+ and propagates.
                 LOGGER.warning(
                     "Unexpected error getting PIN for %s slot %s: %s",
                     self.lock.entity_id,

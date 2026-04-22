@@ -30,14 +30,6 @@
 **Cannot support:** esphome (no API), august/yale/yalexs_ble/yale_smart_alarm
 (library limitations)
 
-### Zigbee2MQTT provider
-
-- **Code slot events** — Map Z2M lock/unlock actions with user identifiers to
-  `async_fire_code_slot_event()`. Currently `supports_code_slot_events = False`.
-- **Narrow broad `except Exception` in `async_get_usercodes`** — The wait_for
-  catch after TimeoutError catches all exceptions. Consider narrowing or
-  documenting why it must remain broad.
-
 ### Matter provider
 
 - **Direct Matter client commands** — Replace HA service calls
