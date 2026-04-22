@@ -477,6 +477,68 @@ class MatterLock(BaseLock):
             for slot in all_slots
         }
 
+    async def _set_credential_with_duplicate_handling(
+        self,
+        code_slot: int,
+        usercode: str,
+        source: Literal["sync", "direct"],
+    ) -> int | None:
+        """Set a credential, handling duplicate status.
+
+        For sync operations, clears the slot and retries on duplicate (handles
+        the restart case where _last_set_pin is lost). For direct operations,
+        raises DuplicateCodeError immediately.
+
+        Returns the user_index from the set response.
+        """
+        try:
+            return await self._set_lock_credential(code_slot, usercode)
+        except LockDisconnected as err:
+            if not _is_duplicate_error(err):
+                raise
+            if source != "sync":
+                raise DuplicateCodeError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
+
+        # Sync duplicate: clear and retry
+        LOGGER.debug(
+            "Lock %s: duplicate on slot %s, clearing and retrying",
+            self.lock.entity_id,
+            code_slot,
+        )
+        await self._clear_lock_credential(code_slot)
+
+        try:
+            return await self._set_lock_credential(code_slot, usercode)
+        except LockDisconnected as retry_err:
+            if _is_duplicate_error(retry_err):
+                raise DuplicateCodeError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from retry_err
+            raise
+
+    async def _set_user_name(self, user_index: int, name: str, code_slot: int) -> None:
+        """Set the user name for a credential slot, logging on failure."""
+        try:
+            await self._async_call_service(
+                "set_lock_user",
+                {
+                    "entity_id": self.lock.entity_id,
+                    "user_index": user_index,
+                    "user_name": name,
+                },
+            )
+        except LockCodeManagerProviderError:
+            LOGGER.warning(
+                "Lock %s: credential set on slot %s but failed to set user name '%s'",
+                self.lock.entity_id,
+                code_slot,
+                name,
+            )
+
     async def async_set_usercode(
         self,
         code_slot: int,
@@ -487,64 +549,16 @@ class MatterLock(BaseLock):
         """Set a usercode on a code slot.
 
         Returns True unconditionally because Matter does not reveal whether
-        the credential value actually changed. Pushes SlotCode.UNREADABLE_CODE to the
-        coordinator immediately — the LockUserChange event will confirm.
-
-        If the lock returns a "duplicate" status during sync (source="sync"),
-        the credential is cleared on that slot and the set is retried. This
-        handles the common case where _last_set_pin is lost after a Home
-        Assistant restart and the lock rejects a re-set of the same PIN. If
-        the retry also returns "duplicate", the PIN truly exists on a different
-        slot and DuplicateCodeError is raised.
-
-        For direct (user-initiated) calls, a duplicate immediately raises
-        DuplicateCodeError without clearing, since the slot may hold a
-        different user's credential that should not be silently removed.
+        the credential value actually changed. Pushes SlotCode.UNREADABLE_CODE
+        to the coordinator immediately — the LockUserChange event will confirm.
         """
-        user_index: int | None = None
-        try:
-            user_index = await self._set_lock_credential(code_slot, usercode)
-        except LockDisconnected as err:
-            if not _is_duplicate_error(err):
-                raise
-            if source != "sync":
-                raise DuplicateCodeError(
-                    code_slot=code_slot,
-                    lock_entity_id=self.lock.entity_id,
-                ) from err
-            LOGGER.debug(
-                "Lock %s: duplicate on slot %s, clearing and retrying",
-                self.lock.entity_id,
-                code_slot,
-            )
-            try:
-                await self._clear_lock_credential(code_slot)
-                user_index = await self._set_lock_credential(code_slot, usercode)
-            except LockDisconnected as retry_err:
-                if _is_duplicate_error(retry_err):
-                    raise DuplicateCodeError(
-                        code_slot=code_slot,
-                        lock_entity_id=self.lock.entity_id,
-                    ) from retry_err
-                raise
+        user_index = await self._set_credential_with_duplicate_handling(
+            code_slot, usercode, source
+        )
+
         if name is not None and user_index is not None:
-            try:
-                await self._async_call_service(
-                    "set_lock_user",
-                    {
-                        "entity_id": self.lock.entity_id,
-                        "user_index": user_index,
-                        "user_name": name,
-                    },
-                )
-            except LockCodeManagerProviderError:
-                LOGGER.warning(
-                    "Lock %s: credential set on slot %s but failed to set "
-                    "user name '%s'",
-                    self.lock.entity_id,
-                    code_slot,
-                    name,
-                )
+            await self._set_user_name(user_index, name, code_slot)
+
         # Optimistic update: service call succeeded, push occupancy state
         # immediately. The LockUserChange event will confirm later.
         if self.coordinator:
