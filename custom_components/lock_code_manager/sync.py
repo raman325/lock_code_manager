@@ -235,12 +235,22 @@ class SlotSyncManager:
         return not missing
 
     def _ensure_entities_ready(self) -> bool:
-        """Ensure all dependent entities exist with valid states."""
+        """Ensure all dependent entities exist with valid states.
+
+        The name entity (CONF_NAME) is optional — STATE_UNKNOWN is its
+        normal state when no name is configured, so we only block on
+        STATE_UNAVAILABLE for it.
+        """
         for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
             if key not in self._entity_id_map:
                 return False
             state = self._get_entity_state(key)
-            if state is None or state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            if state is None or state == STATE_UNAVAILABLE:
+                _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
+                return False
+            # Name is optional — STATE_UNKNOWN is valid (no name configured).
+            # All other entities must have a definite state.
+            if key != CONF_NAME and state == STATE_UNKNOWN:
                 _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
         return True
