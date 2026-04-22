@@ -1,6 +1,6 @@
 """Matter lock provider.
 
-Handles PIN credential management via Matter lock services.
+Handles PIN credential management via Matter lock helpers.
 PINs are write-only: occupied slots report SlotCode.UNREADABLE_CODE, cleared slots report
 SlotCode.EMPTY. Subscribes to DoorLock cluster events via the push framework for
 code slot tracking (LockOperation) and occupancy updates (LockUserChange).
@@ -19,11 +19,21 @@ from homeassistant.components.matter.helpers import (
     get_matter,
     get_node_from_device_entry,
 )
+from homeassistant.components.matter.lock_helpers import (
+    SetCredentialFailedError,
+    clear_lock_credential,
+    get_lock_credential_status,
+    get_lock_info,
+    get_lock_users,
+    set_lock_credential,
+    set_lock_user,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import SupportsResponse, callback
+from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from ..exceptions import (
+    CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -31,22 +41,6 @@ from ..exceptions import (
 from ..models import SlotCode
 from ._base import BaseLock
 from .const import LOGGER
-
-MATTER_DOMAIN = "matter"
-
-
-def _is_duplicate_error(err: Exception) -> bool:
-    """Check whether a Matter service error indicates a duplicate credential.
-
-    Inspects the original cause's translation_placeholders for a typed status
-    check (HA 2026.3+), falling back to string matching for older versions.
-    """
-    cause = err.__cause__ or err
-    placeholders = getattr(cause, "translation_placeholders", None)
-    if isinstance(placeholders, dict) and placeholders.get("status") == "duplicate":
-        return True
-    return "duplicate" in str(err).lower()
-
 
 # DoorLock cluster ID (0x0101 = 257)
 _DOOR_LOCK_CLUSTER_ID = 257
@@ -75,7 +69,7 @@ class MatterLock(BaseLock):
     @property
     def domain(self) -> str:
         """Return integration domain."""
-        return MATTER_DOMAIN
+        return "matter"
 
     @property
     def supports_push(self) -> bool:
@@ -139,63 +133,29 @@ class MatterLock(BaseLock):
             )
             return None
 
-    async def _async_call_service(
-        self,
-        service: str,
-        service_data: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Call a Matter service and return the per-entity dict.
-
-        Auto-detects whether the service supports responses. Void services
-        (SupportsResponse.NONE) are called without return_response and return
-        an empty dict. Services that support responses are validated for the
-        expected per-entity structure.
-
-        Raises LockDisconnected on service failure or
-        LockCodeManagerProviderError on malformed response.
-        """
-        entity_id = self.lock.entity_id
-        resp_support = self.hass.services.supports_response(MATTER_DOMAIN, service)
-        return_response = resp_support != SupportsResponse.NONE
-        try:
-            result = await self.hass.services.async_call(
-                MATTER_DOMAIN,
-                service,
-                service_data,
-                blocking=True,
-                return_response=return_response,
-            )
-        except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
-                f"Matter service {MATTER_DOMAIN}.{service} rejected input for "
-                f"{entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
+    def _require_client_and_node(self) -> tuple[Any, Any]:
+        """Get client and node, raising LockDisconnected if unavailable."""
+        client = self._get_matter_client()
+        node = self._get_matter_node()
+        if not client or not node:
             raise LockDisconnected(
-                f"Matter service {MATTER_DOMAIN}.{service} failed for "
-                f"{entity_id}: {err}"
-            ) from err
-        if not return_response:
-            return {}
-        if not isinstance(result, dict) or entity_id not in result:
-            raise LockCodeManagerProviderError(
-                f"Matter service {MATTER_DOMAIN}.{service} returned no data for "
-                f"{entity_id}"
+                f"Matter client or node unavailable for {self.lock.entity_id}"
             )
-        entity_data = result[entity_id]
-        if not isinstance(entity_data, dict):
-            raise LockCodeManagerProviderError(
-                f"Matter service {MATTER_DOMAIN}.{service} returned non-dict data "
-                f"for {entity_id}: {type(entity_data).__name__}"
-            )
-        return entity_data
+        return client, node
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Validate the lock supports Matter user management."""
-        lock_info = await self._async_call_service(
-            "get_lock_info",
-            {"entity_id": self.lock.entity_id},
-        )
+        client, node = self._require_client_and_node()
+        try:
+            lock_info = await get_lock_info(client, node)
+        except ServiceValidationError as err:
+            raise LockCodeManagerProviderError(
+                f"Matter get_lock_info rejected input for {self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter get_lock_info failed for {self.lock.entity_id}: {err}"
+            ) from err
         if not lock_info.get("supports_user_management"):
             raise LockCodeManagerProviderError(
                 f"Matter lock {self.lock.entity_id} does not support user management"
@@ -213,11 +173,9 @@ class MatterLock(BaseLock):
     async def async_is_device_available(self) -> bool:
         """Return whether the Matter lock device is available for commands."""
         try:
-            await self._async_call_service(
-                "get_lock_info",
-                {"entity_id": self.lock.entity_id},
-            )
-        except LockCodeManagerProviderError as err:
+            client, node = self._require_client_and_node()
+            await get_lock_info(client, node)
+        except (LockCodeManagerProviderError, HomeAssistantError) as err:
             LOGGER.debug(
                 "Lock %s: availability check failed: %s",
                 self.lock.entity_id,
@@ -399,28 +357,57 @@ class MatterLock(BaseLock):
     # -- Credential helpers --------------------------------------------------
 
     async def _set_lock_credential(self, code_slot: int, usercode: str) -> int | None:
-        """Send set_lock_credential to the lock and return the user_index."""
-        result = await self._async_call_service(
-            "set_lock_credential",
-            {
-                "entity_id": self.lock.entity_id,
-                "credential_type": "pin",
-                "credential_data": usercode,
-                "credential_index": code_slot,
-            },
-        )
+        """Send set_lock_credential to the lock and return the user_index.
+
+        Raises SetCredentialFailedError on lock rejection,
+        LockCodeManagerProviderError on invalid input,
+        LockDisconnected on communication failure.
+        """
+        client, node = self._require_client_and_node()
+        try:
+            result = await set_lock_credential(
+                client,
+                node,
+                credential_type="pin",
+                credential_data=usercode,
+                credential_index=code_slot,
+            )
+        except SetCredentialFailedError:
+            raise
+        except ServiceValidationError as err:
+            raise LockCodeManagerProviderError(
+                f"Matter set_lock_credential rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
+            ) from err
         return result.get("user_index")
 
     async def _clear_lock_credential(self, code_slot: int) -> None:
-        """Send clear_lock_credential to the lock."""
-        await self._async_call_service(
-            "clear_lock_credential",
-            {
-                "entity_id": self.lock.entity_id,
-                "credential_type": "pin",
-                "credential_index": code_slot,
-            },
-        )
+        """Send clear_lock_credential to the lock.
+
+        Raises LockCodeManagerProviderError on invalid input,
+        LockDisconnected on communication failure.
+        """
+        client, node = self._require_client_and_node()
+        try:
+            await clear_lock_credential(
+                client,
+                node,
+                credential_type="pin",
+                credential_index=code_slot,
+            )
+        except ServiceValidationError as err:
+            raise LockCodeManagerProviderError(
+                f"Matter clear_lock_credential rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter clear_lock_credential failed for {self.lock.entity_id}: {err}"
+            ) from err
 
     # -- Usercode CRUD -------------------------------------------------------
 
@@ -433,11 +420,19 @@ class MatterLock(BaseLock):
         step can detect codes not managed by Lock Code Manager.
         """
         managed_slots = self.managed_slots
+        client, node = self._require_client_and_node()
 
-        lock_data = await self._async_call_service(
-            "get_lock_users",
-            {"entity_id": self.lock.entity_id},
-        )
+        try:
+            lock_data = await get_lock_users(client, node)
+        except ServiceValidationError as err:
+            raise LockCodeManagerProviderError(
+                f"Matter get_lock_users rejected input for {self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
+            ) from err
+
         users = lock_data.get("users")
         if not isinstance(users, list):
             raise LockCodeManagerProviderError(
@@ -493,9 +488,14 @@ class MatterLock(BaseLock):
         """
         try:
             return await self._set_lock_credential(code_slot, usercode)
-        except LockDisconnected as err:
-            if not _is_duplicate_error(err):
-                raise
+        except SetCredentialFailedError as err:
+            status = (err.translation_placeholders or {}).get("status", "")
+            if status != "duplicate":
+                raise CodeRejectedError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=str(err),
+                ) from err
             if source != "sync":
                 raise DuplicateCodeError(
                     code_slot=code_slot,
@@ -512,26 +512,30 @@ class MatterLock(BaseLock):
 
         try:
             return await self._set_lock_credential(code_slot, usercode)
-        except LockDisconnected as retry_err:
-            if _is_duplicate_error(retry_err):
+        except SetCredentialFailedError as retry_err:
+            status = (retry_err.translation_placeholders or {}).get("status", "")
+            if status == "duplicate":
                 raise DuplicateCodeError(
                     code_slot=code_slot,
                     lock_entity_id=self.lock.entity_id,
                 ) from retry_err
-            raise
+            raise CodeRejectedError(
+                code_slot=code_slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=str(retry_err),
+            ) from retry_err
 
     async def _set_user_name(self, user_index: int, name: str, code_slot: int) -> None:
         """Set the user name for a credential slot, logging on failure."""
+        client, node = self._require_client_and_node()
         try:
-            await self._async_call_service(
-                "set_lock_user",
-                {
-                    "entity_id": self.lock.entity_id,
-                    "user_index": user_index,
-                    "user_name": name,
-                },
+            await set_lock_user(
+                client,
+                node,
+                user_index=user_index,
+                user_name=name,
             )
-        except LockCodeManagerProviderError:
+        except HomeAssistantError:
             LOGGER.warning(
                 "Lock %s: credential set on slot %s but failed to set user name '%s'",
                 self.lock.entity_id,
@@ -559,7 +563,7 @@ class MatterLock(BaseLock):
         if name is not None and user_index is not None:
             await self._set_user_name(user_index, name, code_slot)
 
-        # Optimistic update: service call succeeded, push occupancy state
+        # Optimistic update: call succeeded, push occupancy state
         # immediately. The LockUserChange event will confirm later.
         if self.coordinator:
             self.coordinator.push_update({code_slot: SlotCode.UNREADABLE_CODE})
@@ -571,14 +575,25 @@ class MatterLock(BaseLock):
         Returns True if a credential was cleared, False if the slot was already
         empty. Pushes SlotCode.EMPTY to the coordinator immediately on success.
         """
-        lock_data = await self._async_call_service(
-            "get_lock_credential_status",
-            {
-                "entity_id": self.lock.entity_id,
-                "credential_type": "pin",
-                "credential_index": code_slot,
-            },
-        )
+        client, node = self._require_client_and_node()
+        try:
+            lock_data = await get_lock_credential_status(
+                client,
+                node,
+                credential_type="pin",
+                credential_index=code_slot,
+            )
+        except ServiceValidationError as err:
+            raise LockCodeManagerProviderError(
+                f"Matter get_lock_credential_status rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter get_lock_credential_status failed for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+
         if not lock_data.get("credential_exists"):
             return False
 

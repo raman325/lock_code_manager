@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -10,11 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.models import SlotCode
-from custom_components.lock_code_manager.providers.matter import (
-    MATTER_DOMAIN,
-    MatterLock,
-)
-from tests.providers.helpers import register_mock_service
+from custom_components.lock_code_manager.providers.matter import MatterLock
+
+# Module path where lock_helpers functions are imported in the provider
+_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 
 
 class TestFullSetupLifecycle:
@@ -41,45 +40,76 @@ class TestFullSetupLifecycle:
 
 
 class TestSetAndClearUsercodes:
-    """Verify set/clear operations call the correct Matter services."""
+    """Verify set/clear operations call the correct Matter helpers."""
 
     async def test_set_usercode(
         self,
         hass: HomeAssistant,
         e2e_matter_lock: MatterLock,
-        matter_mock_services: dict[str, AsyncMock],
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """Set a code via the provider and verify the Matter service was called."""
-        matter_mock_services["set_lock_credential"].reset_mock()
-        result = await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
+        """Set a code via the provider and verify the Matter helper was called."""
+        matter_mock_helpers["set_lock_credential"].reset_mock()
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                matter_mock_helpers["set_lock_credential"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_user",
+                matter_mock_helpers["set_lock_user"],
+            ),
+        ):
+            result = await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
         assert result is True
-        assert matter_mock_services["set_lock_credential"].call_count >= 1
+        assert matter_mock_helpers["set_lock_credential"].call_count >= 1
 
     async def test_clear_usercode(
         self,
         hass: HomeAssistant,
         e2e_matter_lock: MatterLock,
-        matter_mock_services: dict[str, AsyncMock],
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """Clear a code via the provider and verify the Matter service was called."""
-        matter_mock_services["clear_lock_credential"].reset_mock()
-        result = await e2e_matter_lock.async_clear_usercode(2)
+        """Clear a code via the provider and verify the Matter helper was called."""
+        matter_mock_helpers["clear_lock_credential"].reset_mock()
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                matter_mock_helpers["get_lock_credential_status"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.clear_lock_credential",
+                matter_mock_helpers["clear_lock_credential"],
+            ),
+        ):
+            result = await e2e_matter_lock.async_clear_usercode(2)
 
         assert result is True
-        assert matter_mock_services["clear_lock_credential"].call_count >= 1
+        assert matter_mock_helpers["clear_lock_credential"].call_count >= 1
 
     async def test_set_usercode_optimistic_update(
         self,
         hass: HomeAssistant,
         e2e_matter_lock: MatterLock,
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
         """After set, the coordinator has the optimistic UNREADABLE_CODE value.
 
         Matter PINs are write-only so optimistic updates use UNREADABLE_CODE
         instead of the actual PIN value.
         """
-        await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                matter_mock_helpers["set_lock_credential"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_user",
+                matter_mock_helpers["set_lock_user"],
+            ),
+        ):
+            await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
         assert e2e_matter_lock.coordinator.data.get(4) is SlotCode.UNREADABLE_CODE
 
@@ -87,9 +117,20 @@ class TestSetAndClearUsercodes:
         self,
         hass: HomeAssistant,
         e2e_matter_lock: MatterLock,
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
         """After clear, the coordinator has SlotCode.EMPTY."""
-        await e2e_matter_lock.async_clear_usercode(2)
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                matter_mock_helpers["get_lock_credential_status"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.clear_lock_credential",
+                matter_mock_helpers["clear_lock_credential"],
+            ),
+        ):
+            await e2e_matter_lock.async_clear_usercode(2)
 
         assert e2e_matter_lock.coordinator.data.get(2) is SlotCode.EMPTY
 
@@ -102,7 +143,7 @@ class TestGetUsercodes:
         hass: HomeAssistant,
         e2e_matter_lock: MatterLock,
         lock_entity: er.RegistryEntry,
-        matter_mock_services: dict[str, AsyncMock],
+        matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
         """Get usercodes returns slot occupancy from Matter.
 
@@ -110,35 +151,26 @@ class TestGetUsercodes:
         be EMPTY. When the mock reports a user with a PIN credential on
         slot 1, that slot should become UNREADABLE_CODE.
         """
-        entity_id = lock_entity.entity_id
-
         # Override the get_lock_users mock to report an occupied slot
-        matter_mock_services["get_lock_users"] = AsyncMock(
+        mock_get_lock_users = AsyncMock(
             return_value={
-                entity_id: {
-                    "max_users": 10,
-                    "users": [
-                        {
-                            "user_index": 1,
-                            "credentials": [
-                                {
-                                    "type": "pin",
-                                    "index": 1,
-                                }
-                            ],
-                        },
-                    ],
-                },
+                "max_users": 10,
+                "users": [
+                    {
+                        "user_index": 1,
+                        "credentials": [
+                            {
+                                "type": "pin",
+                                "index": 1,
+                            }
+                        ],
+                    },
+                ],
             }
         )
-        register_mock_service(
-            hass,
-            MATTER_DOMAIN,
-            "get_lock_users",
-            matter_mock_services["get_lock_users"],
-        )
 
-        codes = await e2e_matter_lock.async_get_usercodes()
+        with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
+            codes = await e2e_matter_lock.async_get_usercodes()
 
         assert codes[1] is SlotCode.UNREADABLE_CODE
         assert codes[2] is SlotCode.EMPTY
