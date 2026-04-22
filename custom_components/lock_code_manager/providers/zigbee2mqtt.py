@@ -191,7 +191,7 @@ class Zigbee2MQTTLock(BaseLock):
             if action_user is not None:
                 try:
                     code_slot = int(action_user)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     LOGGER.debug(
                         "Ignoring %s with non-numeric action_user %r for %s",
                         action,
@@ -231,7 +231,7 @@ class Zigbee2MQTTLock(BaseLock):
             for user_id_str, user_info in users_data.items():
                 try:
                     user_id = int(user_id_str)
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     LOGGER.warning(
                         "Skipping non-numeric Zigbee2MQTT user key %r for %s",
                         user_id_str,
@@ -287,7 +287,7 @@ class Zigbee2MQTTLock(BaseLock):
 
             try:
                 user_id = int(user_id)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 LOGGER.warning(
                     "Ignoring pin_code payload with non-numeric user for %s",
                     self.lock.entity_id,
