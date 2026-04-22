@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a1f11b1ac9a0",
+  "strategy": "manual-commit",
+  "branch": "feat/matter-direct-client-commands",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "AGENTS.md",
+    "tests/providers/zigbee2mqtt/conftest.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a1/f11b1ac9a0/0/metadata.json",
+      "transcript": "/a1/f11b1ac9a0/0/full.jsonl",
+      "content_hash": "/a1/f11b1ac9a0/0/content_hash.txt",
+      "prompt": "/a1/f11b1ac9a0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1261,
+    "cache_creation_tokens": 5801169,
+    "cache_read_tokens": 419920370,
+    "output_tokens": 266235,
+    "api_call_count": 950
+  }
+}
