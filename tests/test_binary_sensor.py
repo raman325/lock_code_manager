@@ -1570,17 +1570,9 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
     resume_event = asyncio.Event()
     original_set = lock_provider.async_set_usercode
 
-    async def set_usercode_with_push_during(code_slot, usercode, name=None, **kwargs):
-        """Set usercode but push a different code mid-operation."""
-        mid_sync_event.set()
-        await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
-
     async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
         """Set usercode but pause mid-operation so the test can push an update."""
-        # Signal that we are inside the operation
         mid_sync_event.set()
-        # Block until the test tells us to continue
         await resume_event.wait()
         return await original_set(code_slot, usercode, name, **kwargs)
 
@@ -1590,13 +1582,8 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
 
         # Start the tick as a background task
         tick_task = hass.async_create_task(mgr._async_tick())
-        # Yield control repeatedly until the mock signals it has been entered
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if mid_sync_event.is_set():
-                break
-
-        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
+        # Wait deterministically until the mock signals it has been entered
+        await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
         # At this point state should be SYNCING
         assert mgr._state is SyncState.SYNCING
@@ -1617,11 +1604,11 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
     assert mgr._state in (SyncState.IN_SYNC, SyncState.OUT_OF_SYNC)
 
 
-async def test_unload_during_active_sync_does_not_raise(
+async def test_sync_manager_stop_during_active_sync_does_not_raise(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Unloading a config entry while a sync tick is in progress does not raise.
+    """Stopping the sync manager while a sync tick is in progress does not raise.
 
     Scenario: sync manager is SYNCING. Config entry unloads, calling async_stop()
     which sets _started = False. The tick should gracefully finish or bail out.
@@ -1655,12 +1642,6 @@ async def test_unload_during_active_sync_does_not_raise(
     resume_event = asyncio.Event()
     original_set = lock_provider.async_set_usercode
 
-    async def slow_set_usercode(code_slot, usercode, name=None, **kwargs):
-        """Simulate a slow set_usercode that yields."""
-        mid_sync_event.set()
-        await resume_event.wait()
-        return await original_set(code_slot, usercode, name, **kwargs)
-
     async def set_usercode_with_pause(code_slot, usercode, name=None, **kwargs):
         """Set usercode, but pause mid-operation."""
         mid_sync_event.set()
@@ -1670,16 +1651,10 @@ async def test_unload_during_active_sync_does_not_raise(
     with patch.object(lock_provider, "async_set_usercode", set_usercode_with_pause):
         # Start the tick
         tick_task = hass.async_create_task(mgr._async_tick())
-        # Yield control repeatedly until the mock signals it has been entered
-        for _ in range(20):
-            await asyncio.sleep(0)
-            if mid_sync_event.is_set():
-                break
+        # Wait deterministically until the mock signals it has been entered
+        await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
-        assert mid_sync_event.is_set(), "Mock set_usercode was never entered"
-
-        # Unload the config entry while sync is in progress.
-        # async_stop() is called which sets _started = False.
+        # Stop the sync manager while sync is in progress (sets _started = False)
         mgr.async_stop()
 
         # Let the set_usercode complete
