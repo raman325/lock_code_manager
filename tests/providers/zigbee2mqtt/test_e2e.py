@@ -14,9 +14,9 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
 from .conftest import (
     Z2M_FULL_TOPIC,
     Z2M_GET_TOPIC,
-    Z2M_LOCK_ENTITY_ID,
     Z2M_SET_TOPIC,
     MqttMessageBus,
+    get_z2m_lock,
 )
 
 
@@ -29,8 +29,7 @@ class TestFullSetupLifecycle:
         lcm_config_entry,
     ) -> None:
         """Verify LCM discovers the MQTT lock and creates a Zigbee2MQTTLock."""
-        lock = lcm_config_entry.runtime_data.locks.get(Z2M_LOCK_ENTITY_ID)
-        assert lock is not None
+        lock = get_z2m_lock(lcm_config_entry)
         assert isinstance(lock, Zigbee2MQTTLock)
 
     async def test_coordinator_created(

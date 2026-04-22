@@ -246,12 +246,12 @@ async def test_get_usercodes_unmanaged_occupied_slots(
                         {
                             "credentials": [
                                 {
-                                    "credential_type": "pin",
-                                    "credential_index": 5,
+                                    "type": "pin",
+                                    "index": 5,
                                 },
                                 {
-                                    "credential_type": "pin",
-                                    "credential_index": 8,
+                                    "type": "pin",
+                                    "index": 8,
                                 },
                             ]
                         }
@@ -279,8 +279,8 @@ async def test_get_usercodes_invalid_credential_index_skipped(
                     "users": [
                         {
                             "credentials": [
-                                {"credential_type": "pin", "credential_index": "bad"},
-                                {"credential_type": "pin", "credential_index": 3},
+                                {"type": "pin", "index": "bad"},
+                                {"type": "pin", "index": 3},
                             ]
                         }
                     ]
@@ -389,7 +389,7 @@ async def test_hard_refresh_codes(
                 {
                     "user_index": 1,
                     "credentials": [
-                        {"credential_type": "pin", "credential_index": 2},
+                        {"type": "pin", "index": 2},
                     ],
                 }
             ],
@@ -562,8 +562,8 @@ async def test_get_usercodes_multiple_credential_types(
                 {
                     "user_index": 1,
                     "credentials": [
-                        {"credential_type": "rfid", "credential_index": 1},
-                        {"credential_type": "pin", "credential_index": 2},
+                        {"type": "rfid", "index": 1},
+                        {"type": "pin", "index": 2},
                     ],
                 },
             ],

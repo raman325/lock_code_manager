@@ -122,8 +122,8 @@ class TestGetUsercodes:
                             "user_index": 1,
                             "credentials": [
                                 {
-                                    "credential_type": "pin",
-                                    "credential_index": 1,
+                                    "type": "pin",
+                                    "index": 1,
                                 }
                             ],
                         },

@@ -34,6 +34,20 @@ from .const import LOGGER
 
 MATTER_DOMAIN = "matter"
 
+
+def _is_duplicate_error(err: Exception) -> bool:
+    """Check whether a Matter service error indicates a duplicate credential.
+
+    Inspects the original cause's translation_placeholders for a typed status
+    check (HA 2026.3+), falling back to string matching for older versions.
+    """
+    cause = err.__cause__ or err
+    placeholders = getattr(cause, "translation_placeholders", None)
+    if isinstance(placeholders, dict) and placeholders.get("status") == "duplicate":
+        return True
+    return "duplicate" in str(err).lower()
+
+
 # DoorLock cluster ID (0x0101 = 257)
 _DOOR_LOCK_CLUSTER_ID = 257
 
@@ -348,7 +362,7 @@ class MatterLock(BaseLock):
             return
         try:
             code_slot = int(raw_index)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             LOGGER.warning(
                 "Lock %s: LockUserChange has non-integer dataIndex %r, ignoring",
                 self.lock.entity_id,
@@ -435,14 +449,14 @@ class MatterLock(BaseLock):
         occupied_slots: set[int] = set()
         for user in users:
             for credential in user.get("credentials", []):
-                if credential.get("credential_type") != "pin":
+                if credential.get("type") != "pin":
                     continue
-                cred_index = credential.get("credential_index")
+                cred_index = credential.get("index")
                 if cred_index is None:
                     continue
                 try:
                     occupied_slots.add(int(cred_index))
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     LOGGER.warning(
                         "Lock %s: skipping credential with invalid index %r",
                         self.lock.entity_id,
@@ -491,7 +505,7 @@ class MatterLock(BaseLock):
         try:
             user_index = await self._set_lock_credential(code_slot, usercode)
         except LockDisconnected as err:
-            if "duplicate" not in str(err).lower():
+            if not _is_duplicate_error(err):
                 raise
             if source != "sync":
                 raise DuplicateCodeError(
@@ -507,7 +521,7 @@ class MatterLock(BaseLock):
                 await self._clear_lock_credential(code_slot)
                 user_index = await self._set_lock_credential(code_slot, usercode)
             except LockDisconnected as retry_err:
-                if "duplicate" in str(retry_err).lower():
+                if _is_duplicate_error(retry_err):
                     raise DuplicateCodeError(
                         code_slot=code_slot,
                         lock_entity_id=self.lock.entity_id,
