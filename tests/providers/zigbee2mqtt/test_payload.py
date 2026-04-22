@@ -142,3 +142,84 @@ async def test_mqtt_payload_invalid_json_ignored(
         await hass.async_block_till_done()
 
     lock.coordinator.push_update.assert_not_called()
+
+
+def test_keypad_unlock_action_fires_code_slot_event() -> None:
+    """keypad_unlock with action_user fires async_fire_code_slot_event."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": 3})
+
+    lock.async_fire_code_slot_event.assert_called_once_with(
+        code_slot=3,
+        to_locked=False,
+        action_text="keypad_unlock",
+        source_data={"action": "keypad_unlock", "action_user": 3},
+    )
+
+
+def test_keypad_lock_action_fires_code_slot_event() -> None:
+    """keypad_lock with action_user fires event with to_locked=True."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": 1})
+
+    lock.async_fire_code_slot_event.assert_called_once_with(
+        code_slot=1,
+        to_locked=True,
+        action_text="keypad_lock",
+        source_data={"action": "keypad_lock", "action_user": 1},
+    )
+
+
+def test_lock_action_without_action_user_does_not_fire_event() -> None:
+    """Lock action without action_user is ignored (manual key turn, no PIN)."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "manual_lock"})
+
+    lock.async_fire_code_slot_event.assert_not_called()
+
+
+def test_lock_action_with_non_numeric_user_is_ignored() -> None:
+    """Lock action with non-numeric action_user is ignored."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": "bad"})
+
+    lock.async_fire_code_slot_event.assert_not_called()
+
+
+def test_rf_unlock_action_fires_event() -> None:
+    """rf_unlock with action_user fires event."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "rf_unlock", "action_user": 5})
+
+    lock.async_fire_code_slot_event.assert_called_once_with(
+        code_slot=5,
+        to_locked=False,
+        action_text="rf_unlock",
+        source_data={"action": "rf_unlock", "action_user": 5},
+    )
+
+
+def test_unknown_action_does_not_fire_event() -> None:
+    """An unrecognized action value is ignored entirely."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "something_else", "action_user": 1})
+
+    lock.async_fire_code_slot_event.assert_not_called()
