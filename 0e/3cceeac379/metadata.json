@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "0e3cceeac379",
+  "strategy": "manual-commit",
+  "branch": "ci/dependabot-grouping",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/0e/3cceeac379/0/metadata.json",
+      "transcript": "/0e/3cceeac379/0/full.jsonl",
+      "content_hash": "/0e/3cceeac379/0/content_hash.txt",
+      "prompt": "/0e/3cceeac379/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1586,
+    "cache_creation_tokens": 12943333,
+    "cache_read_tokens": 626715663,
+    "output_tokens": 321507,
+    "api_call_count": 1199
+  }
+}
