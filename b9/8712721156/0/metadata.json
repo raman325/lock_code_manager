@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "b98712721156",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-22T03:35:33.216788Z",
+  "branch": "fix/z2m-copilot-review",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "tests/providers/zigbee2mqtt/test_payload.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "1f8d566cc23b",
+  "token_usage": {
+    "input_tokens": 1132,
+    "cache_creation_tokens": 5746071,
+    "cache_read_tokens": 326493761,
+    "output_tokens": 243650,
+    "api_call_count": 825
+  },
+  "session_metrics": {
+    "turn_count": 113
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-22T03:35:31.839188Z",
+    "agent_lines": 0,
+    "human_added": 53,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 53,
+    "agent_percentage": 0
+  }
+}

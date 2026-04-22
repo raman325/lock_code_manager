@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "b98712721156",
+  "strategy": "manual-commit",
+  "branch": "fix/z2m-copilot-review",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "tests/providers/zigbee2mqtt/test_payload.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b9/8712721156/0/metadata.json",
+      "transcript": "/b9/8712721156/0/full.jsonl",
+      "content_hash": "/b9/8712721156/0/content_hash.txt",
+      "prompt": "/b9/8712721156/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1132,
+    "cache_creation_tokens": 5746071,
+    "cache_read_tokens": 326493761,
+    "output_tokens": 243650,
+    "api_call_count": 825
+  }
+}
