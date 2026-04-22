@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7a2f0aa69bbd",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-22T03:25:30.809044Z",
+  "branch": "feat/z2m-code-slot-events",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "9e61cba3150e",
+  "token_usage": {
+    "input_tokens": 1108,
+    "cache_creation_tokens": 5731944,
+    "cache_read_tokens": 312215692,
+    "output_tokens": 239458,
+    "api_call_count": 805
+  },
+  "session_metrics": {
+    "turn_count": 112
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-22T03:25:29.478874Z",
+    "agent_lines": 0,
+    "human_added": 123,
+    "human_modified": 13,
+    "human_removed": 0,
+    "total_committed": 123,
+    "agent_percentage": 0
+  }
+}

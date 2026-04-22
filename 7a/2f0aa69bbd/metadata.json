@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7a2f0aa69bbd",
+  "strategy": "manual-commit",
+  "branch": "feat/z2m-code-slot-events",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7a/2f0aa69bbd/0/metadata.json",
+      "transcript": "/7a/2f0aa69bbd/0/full.jsonl",
+      "content_hash": "/7a/2f0aa69bbd/0/content_hash.txt",
+      "prompt": "/7a/2f0aa69bbd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1108,
+    "cache_creation_tokens": 5731944,
+    "cache_read_tokens": 312215692,
+    "output_tokens": 239458,
+    "api_call_count": 805
+  }
+}
