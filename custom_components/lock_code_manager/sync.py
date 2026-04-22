@@ -246,6 +246,8 @@ class SlotSyncManager:
         confirm already cleared). This prevents disabled slots from
         being stuck in LOADING forever.
         """
+        # Collect all states in a single pass
+        states: dict[str, str | None] = {}
         for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
             if key not in self._entity_id_map:
                 return False
@@ -253,23 +255,21 @@ class SlotSyncManager:
             if state is None or state == STATE_UNAVAILABLE:
                 _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
                 return False
+            states[key] = state
 
-        active_state = self._get_entity_state(ATTR_ACTIVE)
+        # Active entity must always have a definite state
+        if states[ATTR_ACTIVE] == STATE_UNKNOWN:
+            _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, ATTR_ACTIVE)
+            return False
 
-        for key in (CONF_PIN, CONF_NAME, ATTR_ACTIVE, ATTR_CODE):
-            state = self._get_entity_state(key)
-            if state == STATE_UNKNOWN:
-                # Name is always optional
-                if key == CONF_NAME:
-                    continue
-                # Active entity must always have a definite state
-                if key == ATTR_ACTIVE:
-                    _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
-                    return False
-                # PIN and code sensor can be unknown when slot is inactive
-                if active_state != STATE_OFF:
-                    _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
-                    return False
+        # Name is always optional (STATE_UNKNOWN = no name configured)
+        # PIN and code sensor can be unknown when the slot is inactive
+        slot_inactive = states[ATTR_ACTIVE] == STATE_OFF
+        for key in (CONF_PIN, ATTR_CODE):
+            if states[key] == STATE_UNKNOWN and not slot_inactive:
+                _LOGGER.debug("%s: Waiting for %s state", self._log_prefix, key)
+                return False
+
         return True
 
     def _resolve_slot_state(self) -> SlotState | None:

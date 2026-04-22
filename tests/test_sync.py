@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from homeassistant.const import STATE_OFF, STATE_ON
+from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -25,7 +25,7 @@ from custom_components.lock_code_manager.exceptions import (
 from custom_components.lock_code_manager.models import SlotCode, SyncState
 from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
-from .common import SLOT_1_IN_SYNC_ENTITY
+from .common import SLOT_1_ACTIVE_ENTITY, SLOT_1_IN_SYNC_ENTITY, SLOT_1_PIN_ENTITY
 from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
 
 
@@ -425,6 +425,28 @@ class TestSyncStateMachine:
         manager._coordinator.data[1] = SlotCode.EMPTY
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.OUT_OF_SYNC
+
+    async def test_disabled_slot_with_unknown_pin_exits_loading(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Disabled slot with unknown PIN/code transitions out of LOADING."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.LOADING
+
+        # Simulate disabled slot: active=off, PIN unknown
+        hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_OFF)
+        hass.states.async_set(SLOT_1_PIN_ENTITY, STATE_UNKNOWN)
+        # Coordinator has slot as EMPTY (no code on lock)
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # Should transition to IN_SYNC (slot off, code empty = in sync)
+        assert manager._state is SyncState.IN_SYNC
 
     async def test_loading_to_synced(
         self,
