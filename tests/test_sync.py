@@ -448,6 +448,42 @@ class TestSyncStateMachine:
         # Should transition to IN_SYNC (slot off, code empty = in sync)
         assert manager._state is SyncState.IN_SYNC
 
+    async def test_active_unknown_stays_in_loading(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Slot stays in LOADING when active entity is STATE_UNKNOWN."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.LOADING
+
+        hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_UNKNOWN)
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.LOADING
+
+    async def test_enabled_slot_with_unknown_pin_stays_in_loading(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Enabled slot with unknown PIN stays in LOADING (needs PIN to sync)."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.LOADING
+
+        # Active=on but PIN unknown — can't sync without knowing what PIN to set
+        hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_ON)
+        hass.states.async_set(SLOT_1_PIN_ENTITY, STATE_UNKNOWN)
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.LOADING
+
     async def test_loading_to_synced(
         self,
         hass: HomeAssistant,
