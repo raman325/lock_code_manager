@@ -6,6 +6,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.models import SlotCode
@@ -221,5 +223,56 @@ def test_unknown_action_does_not_fire_event() -> None:
     lock.async_fire_code_slot_event = MagicMock()
 
     lock._process_z2m_device_payload({"action": "something_else", "action_user": 1})
+
+    lock.async_fire_code_slot_event.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_locked"),
+    [
+        ("lock", True),
+        ("unlock", False),
+        ("manual_lock", True),
+        ("manual_unlock", False),
+        ("rf_lock", True),
+    ],
+)
+def test_all_lock_actions_fire_event_with_correct_to_locked(
+    action: str, expected_locked: bool
+) -> None:
+    """All supported lock/unlock actions fire events with correct to_locked."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": action, "action_user": 2})
+
+    lock.async_fire_code_slot_event.assert_called_once()
+    call_kwargs = lock.async_fire_code_slot_event.call_args[1]
+    assert call_kwargs["to_locked"] is expected_locked
+    assert call_kwargs["code_slot"] == 2
+    assert call_kwargs["action_text"] == action
+
+
+def test_non_string_action_is_ignored() -> None:
+    """Non-string action values (e.g., list, dict) do not raise TypeError."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": ["lock"], "action_user": 1})
+    lock._process_z2m_device_payload({"action": 123, "action_user": 1})
+
+    lock.async_fire_code_slot_event.assert_not_called()
+
+
+def test_boolean_action_user_is_ignored() -> None:
+    """Boolean action_user (True/False) is not treated as a valid slot ID."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": True})
+    lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": False})
 
     lock.async_fire_code_slot_event.assert_not_called()

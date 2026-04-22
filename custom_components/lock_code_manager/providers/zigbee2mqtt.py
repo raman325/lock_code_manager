@@ -186,9 +186,9 @@ class Zigbee2MQTTLock(BaseLock):
         action = payload.get("action")
 
         # Handle lock/unlock actions with user identification (keypad PIN usage)
-        if action in _Z2M_LOCK_ACTIONS:
+        if isinstance(action, str) and action in _Z2M_LOCK_ACTIONS:
             action_user = payload.get("action_user")
-            if action_user is not None:
+            if action_user is not None and not isinstance(action_user, bool):
                 try:
                     code_slot = int(action_user)
                 except (ValueError, TypeError):
@@ -473,7 +473,7 @@ class Zigbee2MQTTLock(BaseLock):
                 # Broad catch is intentional: the future is resolved by the MQTT
                 # callback, and any exception from resolution (InvalidStateError,
                 # data processing errors) should not crash the entire refresh.
-                # CancelledError is BaseException in Python 3.9+ and propagates.
+                # CancelledError is BaseException in Python 3.11+ and propagates.
                 LOGGER.warning(
                     "Unexpected error getting PIN for %s slot %s: %s",
                     self.lock.entity_id,
