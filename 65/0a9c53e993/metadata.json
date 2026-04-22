@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "650a9c53e993",
+  "strategy": "manual-commit",
+  "branch": "fix/disabled-slot-loading",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/65/0a9c53e993/0/metadata.json",
+      "transcript": "/65/0a9c53e993/0/full.jsonl",
+      "content_hash": "/65/0a9c53e993/0/content_hash.txt",
+      "prompt": "/65/0a9c53e993/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1545,
+    "cache_creation_tokens": 11996321,
+    "cache_read_tokens": 598531424,
+    "output_tokens": 315748,
+    "api_call_count": 1168
+  }
+}

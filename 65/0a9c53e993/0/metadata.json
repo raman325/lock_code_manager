@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "650a9c53e993",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-22T19:57:28.58709Z",
+  "branch": "fix/disabled-slot-loading",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3e46e7685ab5",
+  "token_usage": {
+    "input_tokens": 1545,
+    "cache_creation_tokens": 11996321,
+    "cache_read_tokens": 598531424,
+    "output_tokens": 315748,
+    "api_call_count": 1168
+  },
+  "session_metrics": {
+    "turn_count": 139
+  }
+}
