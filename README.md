@@ -22,12 +22,12 @@ Supported lock integrations:
 
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
-| [Z-Wave][wiki-zwave] | Varies | Yes | Yes | Some locks mask PINs |
-| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | Yes | No | Same broker as Z2M; PIN-used events not implemented yet; PIN support depends on lock |
-| [Matter][wiki-matter] | No | Yes | Yes | PINs write-only per spec |
-| [Schlage WiFi][wiki-schlage] | No | No | No | Cloud-based, PINs masked |
-| [Akuvox][wiki-akuvox]¹ | Yes | No | No | Local API, polling-based |
-| [Virtual][wiki-virtual]¹ | Yes | No | No | For testing only |
+| [Z-Wave][wiki-zwave] | Varies | ✅ | ✅ | Some locks mask PINs |
+| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock |
+| [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec |
+| [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
+| [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
+| [Virtual][wiki-virtual]¹ | ✅ | ❌ | ❌ | For testing only |
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
@@ -35,8 +35,7 @@ Supported lock integrations:
 ² **Zigbee2MQTT (MQTT)** — Pair the lock in [Zigbee2MQTT][zigbee2mqtt] with PIN/user-code support for your firmware.
 The **Code Events** column refers to PIN-used automations from Lock Code Manager’s event entity
 (which slots were used to lock/unlock).
-Zigbee2MQTT publishes device JSON and actions, but this provider does not yet map Z2M lock/unlock payloads to those
-events — the table correctly shows **No**.
+Zigbee2MQTT lock/unlock actions with user identification are mapped to code slot events for PIN-used automations.
 Configure Home Assistant’s **MQTT** integration on the **same broker** Zigbee2MQTT uses.
 The default Zigbee2MQTT base topic `zigbee2mqtt` matches what Lock Code Manager expects unless you customize topics
 (`{base_topic}/{friendly_name}/set|get`).
