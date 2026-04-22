@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "776bd12f256e",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-22T04:19:46.979319Z",
+  "branch": "feat/matter-direct-client-commands",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "fb32849f18e6",
+  "token_usage": {
+    "input_tokens": 1314,
+    "cache_creation_tokens": 5823324,
+    "cache_read_tokens": 448907349,
+    "output_tokens": 279750,
+    "api_call_count": 987
+  },
+  "session_metrics": {
+    "turn_count": 122
+  }
+}
