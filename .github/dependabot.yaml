@@ -26,7 +26,9 @@ updates:
       homeassistant:
         patterns:
           - "homeassistant"
+          - "pytest"
           - "pytest-homeassistant-custom-component"
+          - "zeroconf"
   - package-ecosystem: npm
     directory: "/" # Location of package manifests
     schedule:
