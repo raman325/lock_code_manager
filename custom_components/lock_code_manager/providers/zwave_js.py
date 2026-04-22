@@ -153,7 +153,7 @@ class ZWaveJSLock(BaseLock):
         """Return whether a code slot is in use."""
         try:
             return get_usercode(self.node, code_slot)[ATTR_IN_USE]
-        except (KeyError, ValueError):
+        except KeyError, ValueError:
             return None
 
     def _slot_expects_pin(self, code_slot: int) -> bool:

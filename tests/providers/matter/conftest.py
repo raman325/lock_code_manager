@@ -23,11 +23,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.providers.matter import (
-    MATTER_DOMAIN,
-    MatterLock,
-)
-from tests.providers.helpers import register_mock_service
+from custom_components.lock_code_manager.providers.matter import MatterLock
 
 from .helpers import create_node_from_fixture, setup_matter_integration_with_node
 
@@ -35,6 +31,9 @@ MOCK_FABRIC_ID = 12341234
 MOCK_COMPR_FABRIC_ID = 1234
 
 SIMPLE_LOCK_ENTITY_ID = "lock.matter_test_matter_lock"
+
+# Module path where lock_helpers functions are imported in the provider
+_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 
 
 @pytest.fixture(name="matter_client")
@@ -100,7 +99,7 @@ async def matter_lock(hass: HomeAssistant, matter_node: MatterNode) -> MatterLoc
 @pytest.fixture
 async def matter_config_entry(hass: HomeAssistant) -> MockConfigEntry:
     """Create a standalone Matter config entry (for tests that don't need the full integration)."""
-    entry = MockConfigEntry(domain=MATTER_DOMAIN)
+    entry = MockConfigEntry(domain="matter")
     entry.add_to_hass(hass)
     entry._async_set_state(hass, entry.state, None)
     return entry
@@ -180,62 +179,47 @@ async def lock_entity(hass: HomeAssistant, matter_node: MatterNode) -> er.Regist
 
 
 @pytest.fixture
-def matter_mock_services(
-    hass: HomeAssistant,
-    lock_entity: er.RegistryEntry,
-) -> dict[str, AsyncMock]:
-    """Register mock Matter services needed for the full LCM setup path.
+def matter_mock_helpers() -> dict[str, AsyncMock]:
+    """Provide mock lock_helpers functions and patch them into the provider module.
 
-    Returns a dict of service name to handler so E2E tests can inspect
+    Returns a dict of helper name to AsyncMock so E2E tests can inspect
     call counts or swap side effects.
     """
-    entity_id = lock_entity.entity_id
-    handlers: dict[str, AsyncMock] = {}
+    helpers: dict[str, AsyncMock] = {}
 
     # get_lock_info: called by MatterLock.async_setup() and availability checks
-    handlers["get_lock_info"] = AsyncMock(
+    helpers["get_lock_info"] = AsyncMock(
         return_value={
-            entity_id: {
-                "supports_user_management": True,
-                "supported_credential_types": ["pin"],
-            },
+            "supports_user_management": True,
+            "supported_credential_types": ["pin"],
         }
     )
 
     # get_lock_users: called by async_get_usercodes (coordinator refresh)
-    handlers["get_lock_users"] = AsyncMock(
+    helpers["get_lock_users"] = AsyncMock(
         return_value={
-            entity_id: {
-                "max_users": 10,
-                "users": [],
-            },
+            "max_users": 10,
+            "users": [],
         }
     )
 
     # set_lock_credential: called by async_set_usercode
-    handlers["set_lock_credential"] = AsyncMock(
-        return_value={entity_id: {"credential_index": 1, "user_index": 1}},
+    helpers["set_lock_credential"] = AsyncMock(
+        return_value={"credential_index": 1, "user_index": 1},
     )
 
     # set_lock_user: called by async_set_usercode when a name is provided
-    handlers["set_lock_user"] = AsyncMock(
-        return_value={entity_id: {}},
-    )
+    helpers["set_lock_user"] = AsyncMock(return_value={})
 
     # get_lock_credential_status: called by async_clear_usercode
-    handlers["get_lock_credential_status"] = AsyncMock(
-        return_value={entity_id: {"credential_exists": True}},
+    helpers["get_lock_credential_status"] = AsyncMock(
+        return_value={"credential_exists": True}
     )
 
     # clear_lock_credential: called by async_clear_usercode
-    handlers["clear_lock_credential"] = AsyncMock(
-        return_value={entity_id: {}},
-    )
+    helpers["clear_lock_credential"] = AsyncMock(return_value={})
 
-    for service_name, handler in handlers.items():
-        register_mock_service(hass, MATTER_DOMAIN, service_name, handler)
-
-    return handlers
+    return helpers
 
 
 @pytest.fixture
@@ -243,12 +227,13 @@ async def lcm_config_entry(
     hass: HomeAssistant,
     matter_node: MatterNode,
     lock_entity: er.RegistryEntry,
-    matter_mock_services: dict[str, AsyncMock],
+    matter_mock_helpers: dict[str, AsyncMock],
 ) -> MockConfigEntry:
     """Set up a full LCM config entry managing the Matter lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the matter platform and instantiates MatterLock.
+    The lock_helpers functions are patched at the provider module level.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -259,12 +244,37 @@ async def lcm_config_entry(
         unique_id="test_matter_e2e",
     )
     lcm_entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(lcm_entry.entry_id)
-    await hass.async_block_till_done()
+    with (
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_info", matter_mock_helpers["get_lock_info"]
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            matter_mock_helpers["get_lock_users"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.set_lock_credential",
+            matter_mock_helpers["set_lock_credential"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.set_lock_user",
+            matter_mock_helpers["set_lock_user"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_credential_status",
+            matter_mock_helpers["get_lock_credential_status"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.clear_lock_credential",
+            matter_mock_helpers["clear_lock_credential"],
+        ),
+    ):
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
 
-    yield lcm_entry
+        yield lcm_entry
 
-    await hass.config_entries.async_unload(lcm_entry.entry_id)
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
 def get_matter_lock(

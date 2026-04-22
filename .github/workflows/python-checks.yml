@@ -8,9 +8,10 @@ on:
 
 env:
   # Target Python version for coverage and static analysis
-  TARGET_PYTHON: "3.13"
+  TARGET_PYTHON: "3.14"
   # Additional Python versions to test (JSON array, can be empty: '[]')
-  OTHER_PYTHON_VERSIONS: '["3.14"]'
+  # Python 3.15 blocked on pyo3-ffi support (Rust Python bindings)
+  OTHER_PYTHON_VERSIONS: '[]'
 
 jobs:
   setup:

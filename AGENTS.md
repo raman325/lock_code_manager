@@ -216,7 +216,7 @@ See `TODO.md` for implementation details.
 scripts/setup
 ```
 
-Creates Python 3.13 venv, installs dependencies with uv, sets up git hooks
+Creates Python 3.14 venv, installs dependencies with uv, sets up git hooks
 (preferring `prek` with fallback to uv-managed `pre-commit`), and installs
 Node dependencies.
 

@@ -106,7 +106,7 @@ class VirtualLock(BaseLock):
         for k in self._data:
             try:
                 stored_slots.add(int(k))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 _LOGGER.warning(
                     "Virtual lock %s: skipping stored slot with invalid key %r",
                     self.lock.entity_id,

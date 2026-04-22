@@ -30,16 +30,7 @@ Z2M_TOPIC_NAME = "TestLockZ2M"
 Z2M_FULL_TOPIC = f"zigbee2mqtt/{Z2M_TOPIC_NAME}"
 Z2M_GET_TOPIC = f"{Z2M_FULL_TOPIC}/get"
 Z2M_SET_TOPIC = f"{Z2M_FULL_TOPIC}/set"
-Z2M_LOCK_ENTITY_ID = "lock.mqtt_test_z2m"
-
-# LCM config: one lock, two slots
-Z2M_LCM_CONFIG = {
-    CONF_LOCKS: [Z2M_LOCK_ENTITY_ID],
-    CONF_SLOTS: {
-        1: {"name": "slot1", "pin": "1234", "enabled": True},
-        2: {"name": "slot2", "pin": "5678", "enabled": True},
-    },
-}
+Z2M_LOCK_UNIQUE_ID = "test_z2m"
 
 
 @dataclass
@@ -142,7 +133,7 @@ def mqtt_patches(mqtt_bus: MqttMessageBus):
                             }
                         },
                     )
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 pass
 
     with (
@@ -208,9 +199,15 @@ async def lcm_config_entry(
     lock entity is from the mqtt platform, instantiates Zigbee2MQTTLock,
     creates the coordinator, entities, and sync managers.
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN, data=Z2M_LCM_CONFIG, unique_id="test_z2m_e2e"
-    )
+    entity_id = mqtt_lock_entity.entity_id
+    config = {
+        CONF_LOCKS: [entity_id],
+        CONF_SLOTS: {
+            1: {"name": "slot1", "pin": "1234", "enabled": True},
+            2: {"name": "slot2", "pin": "5678", "enabled": True},
+        },
+    }
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="test_z2m_e2e")
     lcm_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(lcm_entry.entry_id)
     await hass.async_block_till_done()
@@ -220,10 +217,11 @@ async def lcm_config_entry(
     await hass.config_entries.async_unload(lcm_entry.entry_id)
 
 
-def get_z2m_lock(hass: HomeAssistant, lcm_entry: MockConfigEntry) -> Zigbee2MQTTLock:
+def get_z2m_lock(lcm_entry: MockConfigEntry) -> Zigbee2MQTTLock:
     """Extract the Zigbee2MQTTLock from a loaded LCM config entry."""
-    lock = lcm_entry.runtime_data.locks.get(Z2M_LOCK_ENTITY_ID)
-    assert lock is not None, f"Lock {Z2M_LOCK_ENTITY_ID} not found in runtime data"
+    locks = lcm_entry.runtime_data.locks
+    assert len(locks) == 1, f"Expected 1 lock, found {len(locks)}"
+    lock = next(iter(locks.values()))
     assert isinstance(lock, Zigbee2MQTTLock)
     return lock
 
@@ -231,7 +229,7 @@ def get_z2m_lock(hass: HomeAssistant, lcm_entry: MockConfigEntry) -> Zigbee2MQTT
 @pytest.fixture
 def z2m_lock(hass, lcm_config_entry):
     """Extract the Z2M lock from the LCM config entry."""
-    return get_z2m_lock(hass, lcm_config_entry)
+    return get_z2m_lock(lcm_config_entry)
 
 
 @pytest.fixture
