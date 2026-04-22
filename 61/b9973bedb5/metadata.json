@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "61b9973bedb5",
+  "strategy": "manual-commit",
+  "branch": "test/race-condition-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_binary_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/61/b9973bedb5/0/metadata.json",
+      "transcript": "/61/b9973bedb5/0/full.jsonl",
+      "content_hash": "/61/b9973bedb5/0/content_hash.txt",
+      "prompt": "/61/b9973bedb5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1066,
+    "cache_creation_tokens": 5024920,
+    "cache_read_tokens": 287847510,
+    "output_tokens": 230723,
+    "api_call_count": 769
+  }
+}
