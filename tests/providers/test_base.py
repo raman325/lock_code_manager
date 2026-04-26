@@ -383,6 +383,33 @@ async def test_async_call_service_propagates_non_ha_exceptions(
     hass.services.async_remove("test_domain", "buggy_service")
 
 
+async def test_async_call_service_wraps_os_error_as_lock_disconnected(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Test that async_call_service wraps OSError (e.g. ReadTimeout) as LockDisconnected.
+
+    Integrations that don't wrap network errors in HomeAssistantError raise raw
+    OSError subclasses (TimeoutError, ConnectionError).  These are transient and
+    should be routed through the retry/backoff path, not treated as programming
+    errors.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    async def timeout_service(call):
+        raise TimeoutError("Read timed out")
+
+    hass.services.async_register("test_domain", "timeout_service", timeout_service)
+
+    with pytest.raises(
+        LockDisconnected, match="Service call test_domain.timeout_service failed"
+    ):
+        await lock_provider.async_call_service("test_domain", "timeout_service", {})
+
+    hass.services.async_remove("test_domain", "timeout_service")
+
+
 async def test_set_usercode_refreshes_coordinator_on_change(
     hass: HomeAssistant,
     mock_lock_config_entry,
