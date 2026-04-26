@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e3a77ed6db14",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-26T17:05:54.99163Z",
+  "branch": "fix/schlage-sync-loop",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "96536560b1ae",
+  "token_usage": {
+    "input_tokens": 1683,
+    "cache_creation_tokens": 16861267,
+    "cache_read_tokens": 662953538,
+    "output_tokens": 336955,
+    "api_call_count": 1276
+  },
+  "session_metrics": {
+    "turn_count": 151
+  }
+}
