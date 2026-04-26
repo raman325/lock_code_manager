@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e5ef38dbac33",
+  "strategy": "manual-commit",
+  "branch": "fix/schlage-sync-loop",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e5/ef38dbac33/0/metadata.json",
+      "transcript": "/e5/ef38dbac33/0/full.jsonl",
+      "content_hash": "/e5/ef38dbac33/0/content_hash.txt",
+      "prompt": "/e5/ef38dbac33/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1666,
+    "cache_creation_tokens": 16809101,
+    "cache_read_tokens": 662074518,
+    "output_tokens": 334236,
+    "api_call_count": 1261
+  }
+}
