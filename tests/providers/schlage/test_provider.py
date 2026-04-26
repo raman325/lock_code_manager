@@ -372,6 +372,48 @@ async def test_set_usercode_preserves_existing_name(
     assert call_order == ["delete", "add"]
 
 
+async def test_set_usercode_already_exists_treated_as_success(
+    hass: HomeAssistant, schlage_lock: SchlageLock
+) -> None:
+    """Test that 'already exists' on add_code is treated as success.
+
+    Schlage's cloud API has eventual consistency: a delete may not propagate
+    before the add, causing 'already exists'.  Since PINs are write-only,
+    we can't verify the value but the code IS on the lock.
+    """
+    get_response = {LOCK_ENTITY_ID: {}}
+    get_handler = AsyncMock(return_value=get_response)
+    add_handler = AsyncMock(
+        side_effect=HomeAssistantError(
+            'A PIN code with the name "[LCM:1] Guest" already exists on the lock'
+        )
+    )
+    delete_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
+
+    result = await schlage_lock.async_set_usercode(1, "1234", "Guest")
+
+    assert result is True
+
+
+async def test_set_usercode_non_exists_error_still_raises(
+    hass: HomeAssistant, schlage_lock: SchlageLock
+) -> None:
+    """Test that add_code errors other than 'already exists' still raise."""
+    get_response = {LOCK_ENTITY_ID: {}}
+    get_handler = AsyncMock(return_value=get_response)
+    add_handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
+    delete_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
+
+    with pytest.raises(LockDisconnected, match="connection lost"):
+        await schlage_lock.async_set_usercode(1, "1234")
+
+
 async def test_set_usercode_service_failure(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
