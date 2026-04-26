@@ -830,10 +830,12 @@ class BaseLock:
                 blocking=blocking,
                 return_response=return_response,
             )
-        except HomeAssistantError as err:
-            # ServiceValidationError is a subclass of HomeAssistantError so
-            # it's covered here. CancelledError and programming bugs (TypeError,
-            # KeyError) deliberately propagate.
+        except (HomeAssistantError, OSError) as err:
+            # HomeAssistantError covers ServiceValidationError and HA-wrapped
+            # failures. OSError covers transient network errors (ReadTimeout,
+            # ConnectionError) from integrations that don't wrap them in
+            # HomeAssistantError. CancelledError and programming bugs
+            # (TypeError, KeyError) deliberately propagate.
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )

@@ -315,25 +315,25 @@ class SchlageLock(BaseLock):
         effective_name = name or existing_friendly_name
         tagged_name = _make_tagged_name(code_slot, effective_name)
 
-        if existing_full_name and existing_full_name == tagged_name:
-            # Same name (PIN-only update): Schlage rejects add_code with a
-            # duplicate name, so delete the old code first then re-add.
+        if existing_full_name:
+            # Code exists: delete first, then re-add. Schlage rejects add_code
+            # with a duplicate name, so we always delete-then-add for existing codes.
             await self._async_delete_code(existing_full_name)
+
+        try:
             await self._async_add_code(tagged_name, usercode)
-        elif existing_full_name:
-            # Different name: add new first (safe, different name) then delete old.
-            await self._async_add_code(tagged_name, usercode)
-            try:
-                await self._async_delete_code(existing_full_name)
-            except LockDisconnected:
-                LOGGER.warning(
-                    "Lock %s: code set on slot %s but failed to remove old entry '%s'",
-                    self.lock.entity_id,
-                    code_slot,
-                    existing_full_name,
-                )
-        else:
-            # No existing code: just add.
+        except LockDisconnected as err:
+            if "already exists" not in str(err).lower():
+                raise
+            # Schlage API eventual consistency: get_codes didn't return the code
+            # but add_code says it already exists. Fall back to delete-then-add.
+            LOGGER.debug(
+                "Lock %s: code '%s' already exists (eventual consistency), "
+                "deleting and re-adding",
+                self.lock.entity_id,
+                tagged_name,
+            )
+            await self._async_delete_code(tagged_name)
             await self._async_add_code(tagged_name, usercode)
 
         LOGGER.debug(
