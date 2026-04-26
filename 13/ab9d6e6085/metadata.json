@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "13ab9d6e6085",
+  "strategy": "manual-commit",
+  "branch": "feat/zha-provider-v2",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/__init__.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/13/ab9d6e6085/0/metadata.json",
+      "transcript": "/13/ab9d6e6085/0/full.jsonl",
+      "content_hash": "/13/ab9d6e6085/0/content_hash.txt",
+      "prompt": "/13/ab9d6e6085/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1828,
+    "cache_creation_tokens": 17071583,
+    "cache_read_tokens": 680673488,
+    "output_tokens": 390868,
+    "api_call_count": 1410
+  }
+}
