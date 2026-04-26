@@ -327,9 +327,10 @@ async def test_set_usercode_replaces_existing(
     add_call = add_handler.call_args[0][0]
     assert add_call.data["name"] == "[LCM:1] New Name"
     assert add_call.data["code"] == "5678"
-    # old code deleted
-    delete_call = delete_handler.call_args[0][0]
-    assert delete_call.data["name"] == "[LCM:1] Old Name"
+    # Both old name and new tagged name deleted (eventual consistency guard)
+    assert delete_handler.call_count == 2
+    deleted_names = {call[0][0].data["name"] for call in delete_handler.call_args_list}
+    assert deleted_names == {"[LCM:1] Old Name", "[LCM:1] New Name"}
 
 
 async def test_set_usercode_preserves_existing_name(
@@ -360,7 +361,7 @@ async def test_set_usercode_preserves_existing_name(
     result = await schlage_lock.async_set_usercode(1, "9999")
 
     assert result is True
-    # Old code deleted first, then new code added with same tagged name
+    # Name unchanged so existing_full_name == tagged_name, deduplicated to 1 delete
     assert delete_handler.call_count == 1
     delete_call = delete_handler.call_args[0][0]
     assert delete_call.data["name"] == "[LCM:1] Guest"
