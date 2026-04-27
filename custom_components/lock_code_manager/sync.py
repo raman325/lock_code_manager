@@ -5,7 +5,7 @@ code) and drives set/clear operations to reconcile. Uses a state machine
 (SyncState enum) with periodic tick for retries and per-lock suspension on
 repeated failures.
 
-Tick interval: 5 seconds (TICK_INTERVAL)
+Tick interval: 2 seconds (TICK_INTERVAL)
 Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WINDOW)
 """
 
