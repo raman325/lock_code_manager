@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "b83ab1ec3a94",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-27T21:33:50.742784Z",
+  "branch": "feat/zha-provider-v2",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "3a5a4472dfff",
+  "token_usage": {
+    "input_tokens": 2077,
+    "cache_creation_tokens": 18762261,
+    "cache_read_tokens": 722388472,
+    "output_tokens": 430508,
+    "api_call_count": 1590
+  },
+  "session_metrics": {
+    "turn_count": 181
+  }
+}
