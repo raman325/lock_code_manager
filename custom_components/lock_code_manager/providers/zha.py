@@ -21,6 +21,7 @@ from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.components.zha.helpers import (
     get_zha_gateway_proxy as _get_zha_gateway_proxy,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
 from ..exceptions import LockDisconnected
@@ -109,6 +110,25 @@ class ZHALock(BaseLock):
     def connection_check_interval(self) -> timedelta | None:
         """Return interval for connection checks."""
         return timedelta(seconds=30)
+
+    # -- Setup ---------------------------------------------------------------
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """Detect programming event support before coordinator creation.
+
+        The coordinator reads ``hard_refresh_interval`` during init, so we
+        must know whether the lock supports programming events before that.
+        """
+        await super().async_setup(config_entry)
+        self._supports_programming_events = (
+            await self._async_check_programming_event_support()
+        )
+        if not self._supports_programming_events:
+            _LOGGER.info(
+                "Lock %s: programming event notifications not supported, "
+                "enabling drift detection (1 hour interval)",
+                self.lock.entity_id,
+            )
 
     # -- Cluster access ------------------------------------------------------
 
@@ -214,12 +234,12 @@ class ZHALock(BaseLock):
                 raise
             except Exception:
                 _LOGGER.debug(
-                    "Lock %s: failed to read slot %s, assuming empty",
+                    "Lock %s: failed to read slot %s, marking unreadable",
                     self.lock.entity_id,
                     slot_num,
                     exc_info=True,
                 )
-                data[slot_num] = SlotCode.EMPTY
+                data[slot_num] = SlotCode.UNREADABLE_CODE
         return data
 
     async def async_set_usercode(
@@ -304,12 +324,6 @@ class ZHALock(BaseLock):
         if not cluster:
             raise LockDisconnected(
                 "DoorLock cluster not available for push subscription"
-            )
-
-        if self._supports_programming_events is None:
-            self.hass.async_create_task(
-                self._async_detect_programming_support(),
-                f"Detect programming event support for {self.lock.entity_id}",
             )
 
         cluster.add_listener(self)
@@ -426,18 +440,6 @@ class ZHALock(BaseLock):
 
     # -- Programming event support detection ---------------------------------
 
-    async def _async_detect_programming_support(self) -> None:
-        """Detect programming event support and update the property."""
-        self._supports_programming_events = (
-            await self._async_check_programming_event_support()
-        )
-        if not self._supports_programming_events:
-            _LOGGER.info(
-                "Lock %s: programming event notifications not supported, "
-                "enabling drift detection (1 hour interval)",
-                self.lock.entity_id,
-            )
-
     async def _async_check_programming_event_support(self) -> bool:
         """Check if the lock supports programming event notifications.
 
@@ -453,27 +455,36 @@ class ZHALock(BaseLock):
             DoorLock.AttributeDefs.rf_programming_event_mask,
             DoorLock.AttributeDefs.rfid_programming_event_mask,
         )
+
+        try:
+            result = await cluster.read_attributes(
+                [attr.id for attr in mask_attrs],
+                allow_cache=False,
+                only_cache=False,
+            )
+        except Exception:
+            _LOGGER.debug(
+                "Lock %s: could not read programming event mask attributes",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+            return False
+
+        values = result[0] if isinstance(result, tuple) else result
+
         for attr in mask_attrs:
-            try:
-                if hasattr(cluster, "get"):
-                    value = cluster.get(attr.name)
-                    if value is not None and value != 0:
-                        _LOGGER.debug(
-                            "Lock %s: supports programming events (%s [0x%04x]=0x%04x)",
-                            self.lock.entity_id,
-                            attr.name,
-                            attr.id,
-                            value,
-                        )
-                        return True
-            except Exception:
+            value = None
+            if isinstance(values, dict):
+                value = values.get(attr.id, values.get(attr.name))
+            if value is not None and value != 0:
                 _LOGGER.debug(
-                    "Lock %s: could not read %s [0x%04x]",
+                    "Lock %s: supports programming events (%s [0x%04x]=0x%04x)",
                     self.lock.entity_id,
                     attr.name,
                     attr.id,
-                    exc_info=True,
+                    value,
                 )
+                return True
 
         _LOGGER.debug(
             "Lock %s: no programming event mask attributes found, "

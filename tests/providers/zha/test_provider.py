@@ -222,12 +222,8 @@ async def test_programming_event_support_with_mask(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
 
-    def mock_get(attr_name):
-        if attr_name == "keypad_programming_event_mask":
-            return 0x0001
-        return None
-
-    cluster.get = mock_get
+    mask_attr = DoorLock.AttributeDefs.keypad_programming_event_mask
+    cluster.read_attributes = AsyncMock(return_value=({mask_attr.id: 0x0001}, {}))
 
     result = await zha_lock._async_check_programming_event_support()
     assert result is True
@@ -240,7 +236,7 @@ async def test_programming_event_support_without_mask(
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
 
-    cluster.get = lambda attr_name: None
+    cluster.read_attributes = AsyncMock(return_value=({}, {}))
 
     result = await zha_lock._async_check_programming_event_support()
     assert result is False
@@ -495,18 +491,18 @@ async def test_teardown_push_when_not_subscribed(
 # ---------------------------------------------------------------------------
 
 
-async def test_detect_programming_support_logs_fallback(
-    hass: HomeAssistant, zha_lock: ZHALock, caplog
+async def test_async_setup_detects_programming_support(
+    hass: HomeAssistant, zha_lock: ZHALock, simple_lcm_config_entry: MockConfigEntry
 ) -> None:
-    """Test _async_detect_programming_support sets flag and logs when unsupported."""
+    """Test async_setup detects programming event support before coordinator."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
-    cluster.get = lambda attr_name: None
+    cluster.read_attributes = AsyncMock(return_value=({}, {}))
 
-    await zha_lock._async_detect_programming_support()
+    await zha_lock.async_setup(simple_lcm_config_entry)
 
     assert zha_lock._supports_programming_events is False
-    assert "drift detection" in caplog.text
+    assert zha_lock.hard_refresh_interval == timedelta(hours=1)
 
 
 async def test_check_programming_support_no_cluster(
@@ -517,17 +513,14 @@ async def test_check_programming_support_no_cluster(
         assert await zha_lock._async_check_programming_event_support() is False
 
 
-async def test_check_programming_support_exception_in_get(
+async def test_check_programming_support_read_failure(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
-    """Test programming support check handles exceptions reading attributes."""
+    """Test programming support check handles read_attributes failure."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
 
-    def exploding_get(attr_name):
-        raise RuntimeError("read failed")
-
-    cluster.get = exploding_get
+    cluster.read_attributes = AsyncMock(side_effect=RuntimeError("read failed"))
 
     result = await zha_lock._async_check_programming_event_support()
     assert result is False
@@ -543,15 +536,15 @@ async def test_get_usercodes_slot_read_failure(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test get_usercodes returns EMPTY for slots that fail to read."""
+    """Test get_usercodes returns UNREADABLE_CODE for slots that fail to read."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(side_effect=RuntimeError("zigpy timeout"))
 
     codes = await zha_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] is SlotCode.UNREADABLE_CODE
+    assert codes[2] is SlotCode.UNREADABLE_CODE
 
 
 async def test_get_usercodes_no_managed_slots(
