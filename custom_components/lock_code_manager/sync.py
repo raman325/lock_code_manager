@@ -330,6 +330,14 @@ class SlotSyncManager:
             if lock_code is SlotCode.UNREADABLE_CODE:
                 return slot_state.pin_state == self._last_set_pin
             if lock_code is SlotCode.EMPTY:
+                # If we recently set a PIN on this slot and it matches the
+                # configured PIN, trust the set — the provider may not have
+                # caught up yet (eventual consistency, e.g. Schlage cloud API).
+                if (
+                    self._last_set_pin is not None
+                    and slot_state.pin_state == self._last_set_pin
+                ):
+                    return True
                 return False  # need to set
             return slot_state.pin_state == lock_code
         # active_state == STATE_OFF: slot should be cleared

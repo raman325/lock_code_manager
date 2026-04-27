@@ -325,7 +325,23 @@ class SchlageLock(BaseLock):
             except LockDisconnected:
                 pass  # code may not exist — that's fine
 
-        await self._async_add_code(tagged_name, usercode)
+        try:
+            await self._async_add_code(tagged_name, usercode)
+        except LockDisconnected as err:
+            # Schlage's cloud API has eventual consistency: a delete may not
+            # propagate before the add, causing "already exists".  Since PINs
+            # are write-only we can't verify the value, but the code IS on the
+            # lock — treat it as success so _last_set_pin gets recorded and the
+            # sync manager doesn't loop.
+            if "already exists" not in str(err).lower():
+                raise
+
+            LOGGER.debug(
+                "Lock %s: code for slot %s already exists on lock "
+                "(eventual consistency), treating as successful set",
+                self.lock.entity_id,
+                code_slot,
+            )
 
         LOGGER.debug(
             "Lock %s: set usercode on slot %s",

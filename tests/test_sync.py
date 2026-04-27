@@ -114,6 +114,26 @@ class TestCalculateInSync:
                 id="active-empty-code",
             ),
             pytest.param(
+                "1234",
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": SlotCode.EMPTY,
+                },
+                True,
+                id="active-empty-code-matching-last-set",
+            ),
+            pytest.param(
+                "5678",
+                {
+                    "active": STATE_ON,
+                    "pin": "1234",
+                    "coordinator_code": SlotCode.EMPTY,
+                },
+                False,
+                id="active-empty-code-mismatched-last-set",
+            ),
+            pytest.param(
                 None,
                 {
                     "active": STATE_ON,
