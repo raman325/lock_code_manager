@@ -114,11 +114,16 @@ class ZHALock(BaseLock):
     # -- Setup ---------------------------------------------------------------
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Detect programming event support before coordinator creation.
+        """Initialize provider state and detect programming event support.
 
-        The coordinator reads ``hard_refresh_interval`` during init, so we
-        must know whether the lock supports programming events before that.
+        Called on initial setup AND on integration reconnect, so we clear
+        cached cluster references (which may be stale after a ZHA reload)
+        and re-detect programming event support.  The coordinator reads
+        ``hard_refresh_interval`` during init, so detection must complete
+        before coordinator creation.
         """
+        self._door_lock_cluster = None
+        self._endpoint_id = None
         await super().async_setup(config_entry)
         self._supports_programming_events = (
             await self._async_check_programming_event_support()
@@ -266,6 +271,8 @@ class ZHALock(BaseLock):
             )
             if hasattr(result, "status") and result.status != 0:
                 raise LockDisconnected(f"set_pin_code failed: status {result.status}")
+            if self.coordinator:
+                self.coordinator.push_update({code_slot: usercode})
             return True
         except LockDisconnected:
             raise
@@ -285,6 +292,8 @@ class ZHALock(BaseLock):
             )
             if hasattr(result, "status") and result.status != 0:
                 raise LockDisconnected(f"clear_pin_code failed: status {result.status}")
+            if self.coordinator:
+                self.coordinator.push_update({code_slot: SlotCode.EMPTY})
             return True
         except LockDisconnected:
             raise

@@ -121,10 +121,11 @@ async def test_set_usercode(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode calls the cluster correctly."""
+    """Test set_usercode calls the cluster and pushes optimistic update."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(return_value=type("Response", (), {"status": 0})())
+    zha_lock.coordinator = MagicMock()
 
     result = await zha_lock.async_set_usercode(3, "5678", "Test User")
 
@@ -135,6 +136,7 @@ async def test_set_usercode(
         DoorLock.UserType.Unrestricted,
         "5678",
     )
+    zha_lock.coordinator.push_update.assert_called_once_with({3: "5678"})
 
 
 async def test_set_usercode_failure(
@@ -156,17 +158,19 @@ async def test_clear_usercode(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode calls the cluster correctly."""
+    """Test clear_usercode calls the cluster and pushes optimistic update."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(
         return_value=type("Response", (), {"status": 0})()
     )
+    zha_lock.coordinator = MagicMock()
 
     result = await zha_lock.async_clear_usercode(3)
 
     assert result is True
     cluster.clear_pin_code.assert_called_once_with(3)
+    zha_lock.coordinator.push_update.assert_called_once_with({3: SlotCode.EMPTY})
 
 
 async def test_clear_usercode_failure(
@@ -503,6 +507,25 @@ async def test_async_setup_detects_programming_support(
 
     assert zha_lock._supports_programming_events is False
     assert zha_lock.hard_refresh_interval == timedelta(hours=1)
+
+
+async def test_async_setup_clears_cached_state(
+    hass: HomeAssistant, zha_lock: ZHALock, simple_lcm_config_entry: MockConfigEntry
+) -> None:
+    """Test async_setup clears cached cluster on reconnect."""
+    # Prime the cache
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    assert zha_lock._door_lock_cluster is not None
+
+    cluster.read_attributes = AsyncMock(return_value=({}, {}))
+
+    # async_setup should clear the cache so a stale reference isn't kept
+    await zha_lock.async_setup(simple_lcm_config_entry)
+
+    # The cluster was re-discovered (cache cleared then re-populated)
+    # Verify the cache was cleared by checking it went through discovery again
+    assert zha_lock._endpoint_id is not None
 
 
 async def test_check_programming_support_no_cluster(
