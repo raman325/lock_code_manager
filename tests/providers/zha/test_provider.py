@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -14,7 +14,9 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.exceptions import LockDisconnected
 from custom_components.lock_code_manager.models import SlotCode
-from custom_components.lock_code_manager.providers.zha import ZHALock
+from custom_components.lock_code_manager.providers.zha import (
+    ZHALock,
+)
 
 # ---------------------------------------------------------------------------
 # Property tests
@@ -242,3 +244,347 @@ async def test_programming_event_support_without_mask(
 
     result = await zha_lock._async_check_programming_event_support()
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Connection failure paths
+# ---------------------------------------------------------------------------
+
+
+async def test_is_integration_connected_no_gateway(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test connection returns False when gateway is unavailable."""
+    with patch.object(zha_lock, "_get_gateway", return_value=None):
+        assert await zha_lock.async_is_integration_connected() is False
+
+
+async def test_is_integration_connected_no_entity_ref(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test connection returns False when entity reference not found."""
+    gateway = MagicMock()
+    gateway.get_entity_reference.return_value = None
+    with patch.object(zha_lock, "_get_gateway", return_value=gateway):
+        assert await zha_lock.async_is_integration_connected() is False
+
+
+async def test_is_integration_connected_no_device_proxy(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test connection returns False when device proxy is missing."""
+    entity_ref = MagicMock()
+    entity_ref.entity_data.device_proxy = None
+    gateway = MagicMock()
+    gateway.get_entity_reference.return_value = entity_ref
+    with patch.object(zha_lock, "_get_gateway", return_value=gateway):
+        assert await zha_lock.async_is_integration_connected() is False
+
+
+# ---------------------------------------------------------------------------
+# Cluster access failure paths
+# ---------------------------------------------------------------------------
+
+
+async def test_get_door_lock_cluster_no_gateway(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster lookup returns None when gateway unavailable."""
+    zha_lock._door_lock_cluster = None
+    with patch.object(zha_lock, "_get_gateway", return_value=None):
+        assert zha_lock._get_door_lock_cluster() is None
+
+
+async def test_get_door_lock_cluster_no_entity_ref(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster lookup returns None when entity ref not found."""
+    zha_lock._door_lock_cluster = None
+    gateway = MagicMock()
+    gateway.get_entity_reference.return_value = None
+    with patch.object(zha_lock, "_get_gateway", return_value=gateway):
+        assert zha_lock._get_door_lock_cluster() is None
+
+
+async def test_get_connected_cluster_raises_when_no_cluster(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test _get_connected_cluster raises LockDisconnected without cluster."""
+    with patch.object(zha_lock, "_get_door_lock_cluster", return_value=None):
+        with pytest.raises(LockDisconnected, match="cluster not available"):
+            await zha_lock._get_connected_cluster()
+
+
+async def test_get_connected_cluster_raises_when_disconnected(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test _get_connected_cluster raises LockDisconnected when not connected."""
+    with patch.object(zha_lock, "async_is_integration_connected", return_value=False):
+        with pytest.raises(LockDisconnected, match="not connected"):
+            await zha_lock._get_connected_cluster()
+
+
+async def test_get_gateway_handles_exceptions(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test _get_gateway returns None on KeyError/ValueError."""
+    with patch(
+        "custom_components.lock_code_manager.providers.zha._get_zha_gateway_proxy",
+        side_effect=KeyError("not loaded"),
+    ):
+        assert zha_lock._get_gateway() is None
+
+
+# ---------------------------------------------------------------------------
+# Parse PIN response edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_parse_pin_response_bytes() -> None:
+    """Test parsing PIN response with bytes code."""
+    result = type(
+        "Response",
+        (),
+        {"user_status": DoorLock.UserStatus.Enabled, "code": b"1234"},
+    )()
+    status, pin = ZHALock._parse_pin_response(result)
+    assert status == DoorLock.UserStatus.Enabled
+    assert pin == "1234"
+
+
+def test_parse_pin_response_list_format() -> None:
+    """Test parsing PIN response in list format."""
+    result = [0, DoorLock.UserStatus.Enabled, 0, "5678"]
+    status, pin = ZHALock._parse_pin_response(result)
+    assert status == DoorLock.UserStatus.Enabled
+    assert pin == "5678"
+
+
+def test_parse_pin_response_list_bytes() -> None:
+    """Test parsing list-format response with bytes PIN."""
+    result = [0, DoorLock.UserStatus.Enabled, 0, b"5678"]
+    status, pin = ZHALock._parse_pin_response(result)
+    assert status == DoorLock.UserStatus.Enabled
+    assert pin == "5678"
+
+
+def test_parse_pin_response_unknown_format() -> None:
+    """Test parsing unknown response format returns Available/empty."""
+    status, pin = ZHALock._parse_pin_response("unexpected")
+    assert status == DoorLock.UserStatus.Available
+    assert pin == ""
+
+
+# ---------------------------------------------------------------------------
+# Cluster command / event handling
+# ---------------------------------------------------------------------------
+
+
+async def test_cluster_command_programming_event(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster_command dispatches programming events."""
+    zha_lock.coordinator = MagicMock()
+    zha_lock.coordinator.async_request_refresh = AsyncMock()
+
+    args = type("Args", (), {"program_event_code": 1, "user_id": 2})()
+    cmd_id = DoorLock.ClientCommandDefs.programming_event_notification.id
+    zha_lock.cluster_command(0, cmd_id, args)
+    await hass.async_block_till_done()
+
+    zha_lock.coordinator.async_request_refresh.assert_called_once()
+
+
+async def test_cluster_command_operation_event(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test cluster_command dispatches operation events and fires code slot event."""
+    with patch.object(zha_lock, "async_fire_code_slot_event") as mock_fire:
+        args = type(
+            "Args",
+            (),
+            {
+                "operation_event_source": DoorLock.OperationEventSource.Keypad,
+                "operation_event_code": DoorLock.OperationEvent.Unlock,
+                "user_id": 3,
+            },
+        )()
+        cmd_id = DoorLock.ClientCommandDefs.operation_event_notification.id
+        zha_lock.cluster_command(0, cmd_id, args)
+
+        mock_fire.assert_called_once_with(
+            code_slot=3,
+            to_locked=False,
+            action_text="Keypad unlock operation",
+            source_data={
+                "source": DoorLock.OperationEventSource.Keypad,
+                "event_code": DoorLock.OperationEvent.Unlock,
+                "user_id": 3,
+            },
+        )
+
+
+async def test_operation_event_zero_user_id(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test operation event with user_id=0 passes code_slot=None."""
+    with patch.object(zha_lock, "async_fire_code_slot_event") as mock_fire:
+        args = type(
+            "Args",
+            (),
+            {
+                "operation_event_source": DoorLock.OperationEventSource.Manual,
+                "operation_event_code": DoorLock.OperationEvent.Lock,
+                "user_id": 0,
+            },
+        )()
+        cmd_id = DoorLock.ClientCommandDefs.operation_event_notification.id
+        zha_lock.cluster_command(0, cmd_id, args)
+
+        mock_fire.assert_called_once()
+        assert mock_fire.call_args.kwargs["code_slot"] is None
+        assert mock_fire.call_args.kwargs["to_locked"] is True
+
+
+async def test_cluster_command_unknown_ignored(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test unknown command IDs are silently ignored."""
+    zha_lock.cluster_command(0, 999, None)
+
+
+async def test_programming_event_unparseable(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test programming event with unparseable args is handled gracefully."""
+    zha_lock._handle_programming_event(None)
+
+
+async def test_operation_event_unparseable(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test operation event with unparseable args is handled gracefully."""
+    zha_lock._handle_operation_event(None)
+
+
+# ---------------------------------------------------------------------------
+# Push subscription edge cases
+# ---------------------------------------------------------------------------
+
+
+async def test_setup_push_no_cluster_raises(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test setup_push_subscription raises when cluster unavailable."""
+    with patch.object(zha_lock, "_get_door_lock_cluster", return_value=None):
+        with pytest.raises(LockDisconnected, match="not available"):
+            zha_lock.setup_push_subscription()
+
+
+async def test_teardown_push_when_not_subscribed(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test teardown when not subscribed is a no-op."""
+    assert zha_lock._cluster_listener_unsub is None
+    zha_lock.teardown_push_subscription()
+    assert zha_lock._cluster_listener_unsub is None
+
+
+# ---------------------------------------------------------------------------
+# Detect programming support
+# ---------------------------------------------------------------------------
+
+
+async def test_detect_programming_support_logs_fallback(
+    hass: HomeAssistant, zha_lock: ZHALock, caplog
+) -> None:
+    """Test _async_detect_programming_support sets flag and logs when unsupported."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get = lambda attr_name: None
+
+    await zha_lock._async_detect_programming_support()
+
+    assert zha_lock._supports_programming_events is False
+    assert "drift detection" in caplog.text
+
+
+async def test_check_programming_support_no_cluster(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test programming support check returns False without cluster."""
+    with patch.object(zha_lock, "_get_door_lock_cluster", return_value=None):
+        assert await zha_lock._async_check_programming_event_support() is False
+
+
+async def test_check_programming_support_exception_in_get(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test programming support check handles exceptions reading attributes."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    def exploding_get(attr_name):
+        raise RuntimeError("read failed")
+
+    cluster.get = exploding_get
+
+    result = await zha_lock._async_check_programming_event_support()
+    assert result is False
+
+
+# ---------------------------------------------------------------------------
+# get_usercodes error handling
+# ---------------------------------------------------------------------------
+
+
+async def test_get_usercodes_slot_read_failure(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test get_usercodes returns EMPTY for slots that fail to read."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.get_pin_code = AsyncMock(side_effect=RuntimeError("zigpy timeout"))
+
+    codes = await zha_lock.async_get_usercodes()
+
+    assert codes[1] is SlotCode.EMPTY
+    assert codes[2] is SlotCode.EMPTY
+
+
+async def test_get_usercodes_no_managed_slots(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """Test get_usercodes returns empty dict with no managed slots."""
+    codes = await zha_lock.async_get_usercodes()
+    assert codes == {}
+
+
+async def test_set_usercode_generic_exception(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test set_usercode wraps generic exceptions as LockDisconnected."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.set_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
+
+    with pytest.raises(LockDisconnected, match="Failed to set PIN"):
+        await zha_lock.async_set_usercode(1, "1234")
+
+
+async def test_clear_usercode_generic_exception(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test clear_usercode wraps generic exceptions as LockDisconnected."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.clear_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
+
+    with pytest.raises(LockDisconnected, match="Failed to clear PIN"):
+        await zha_lock.async_clear_usercode(1)
