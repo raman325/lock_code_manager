@@ -17,17 +17,21 @@ from .data import build_slot_unique_id
 _LOGGER = logging.getLogger(__name__)
 
 
-def mask_pin(pin: str | None, lock_entity_id: str, instance_id: str) -> str:
+def mask_pin(
+    pin: str | None,
+    slot_num: int | str,
+    instance_id: str,
+) -> str:
     """Return a deterministic masked representation of a PIN for logging.
 
-    Uses CRC32 salted with the HA instance ID and lock entity ID so the
-    same PIN on the same lock always produces the same 8-char hex token.
-    Different locks or HA instances produce different tokens, preventing
-    cross-correlation.
+    Uses CRC32 salted with the HA instance ID and slot number so the same
+    PIN on the same slot always produces the same 8-char hex token regardless
+    of which lock or config entry it belongs to.  Different slots or HA
+    instances produce different tokens.
     """
     if not pin:
         return "<empty>"
-    salt = f"{instance_id}:{lock_entity_id}:{pin}"
+    salt = f"{instance_id}:{slot_num}:{pin}"
     return f"pin#{zlib.crc32(salt.encode()) & 0xFFFFFFFF:08x}"
 
 
