@@ -3303,3 +3303,7 @@ What's next:
     Learn more at https://docs.docker.com/go/debug-cli/
 [60639 ms] postCreateCommand from devcontainer.json failed with exit code 1. Skipping any further user-provided commands.
 Done. Press any key to close the terminal.
+
+---
+
+symlinks
