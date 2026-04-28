@@ -52,22 +52,31 @@ if ! python3 -c "import aiousbwatcher" 2>/dev/null; then
     pip install aiousbwatcher
 fi
 
-# Install git hooks. Clean up Codespaces-managed hooks first — it sets
-# core.hooksPath and installs its own pre-commit hook, both of which
-# interfere with prek/pre-commit.
+# Install git hooks. Skip if already installed (the script is idempotent
+# and runs on both postCreate and postStart).
 git config --unset-all core.hooksPath 2>/dev/null || true
-rm -f .git/hooks/pre-commit .git/hooks/pre-commit.legacy
-if command -v prek &> /dev/null; then
-    prek install
+if [ -f .git/hooks/pre-commit ] && grep -q -e prek -e pre-commit .git/hooks/pre-commit 2>/dev/null; then
+    # Our hook is already in place — clean up any legacy file and move on
+    rm -f .git/hooks/pre-commit.legacy
 else
-    if ! command -v pre-commit &> /dev/null; then
-        pip install pre-commit
+    # Remove Codespaces-managed hook before installing ours
+    rm -f .git/hooks/pre-commit .git/hooks/pre-commit.legacy
+    if command -v prek &> /dev/null; then
+        prek install
+    else
+        if ! command -v pre-commit &> /dev/null; then
+            pip install pre-commit
+        fi
+        pre-commit install
     fi
-    pre-commit install
 fi
 
-# Frontend dependencies (corepack enable avoids interactive yarn download prompts)
-corepack enable 2>/dev/null || true
+# Frontend dependencies — pre-download yarn via corepack to avoid
+# interactive "Do you want to continue?" prompts
+if command -v corepack &> /dev/null; then
+    corepack enable
+    corepack prepare yarn@stable --activate 2>/dev/null || true
+fi
 yarn install
 
 # Setup .ha directory with config and custom components
