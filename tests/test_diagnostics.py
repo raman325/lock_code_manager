@@ -13,6 +13,9 @@ from custom_components.lock_code_manager.diagnostics import (
 
 from .common import LOCK_1_ENTITY_ID
 
+# SlotCode sentinel values as they appear after _mask_code
+_SENTINEL_VALUES = {"empty", "unreadable_code", None}
+
 
 async def test_config_entry_diagnostics(
     hass: HomeAssistant,
@@ -38,7 +41,7 @@ async def test_config_entry_diagnostics(
 
     # PINs should be masked (not raw values)
     for code in lock_diag["coordinator"]["data"].values():
-        if code and code not in ("empty", "EMPTY", "UNREADABLE_CODE"):
+        if code not in _SENTINEL_VALUES:
             assert code.startswith("pin#")
 
     # Should have slot data
@@ -49,7 +52,7 @@ async def test_config_entry_diagnostics(
     assert "entities" in slot_diag
 
     # Configured PINs should also be masked
-    if slot_diag["pin"]:
+    if slot_diag["pin"] not in _SENTINEL_VALUES:
         assert slot_diag["pin"].startswith("pin#")
 
 
@@ -62,7 +65,6 @@ async def test_device_diagnostics_slot_device(
     dev_reg = dr.async_get(hass)
     entry_id = lock_code_manager_config_entry.entry_id
 
-    # Find the slot 1 device
     slot_device = dev_reg.async_get_device(identifiers={(DOMAIN, f"{entry_id}|1")})
     assert slot_device is not None
 
@@ -81,22 +83,32 @@ async def test_device_diagnostics_lock_device(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ) -> None:
-    """Test device diagnostics for a lock device."""
-    # Find the lock device — look through all LCM locks
+    """Test device diagnostics for a lock device.
+
+    The test mock may not create a device_entry for the lock. If that's the
+    case, verify the fallback to config entry diagnostics instead.
+    """
     all_locks = hass.data.get(DOMAIN, {}).get("locks", {})
     lock = all_locks.get(LOCK_1_ENTITY_ID)
+    assert lock is not None
 
-    if lock and lock.device_entry:
+    if lock.device_entry:
         result = await async_get_device_diagnostics(
             hass, lock_code_manager_config_entry, lock.device_entry
         )
-
         assert result["entity_id"] == LOCK_1_ENTITY_ID
         assert "coordinator" in result
     else:
-        # If no device entry (test mock may not create one), fall back to
-        # config entry diagnostics
-        pass
+        # No device entry — device diagnostics falls through to config entry
+        dev_reg = dr.async_get(hass)
+        entry_id = lock_code_manager_config_entry.entry_id
+        ce_device = dev_reg.async_get_device(identifiers={(DOMAIN, entry_id)})
+        assert ce_device is not None
+        result = await async_get_device_diagnostics(
+            hass, lock_code_manager_config_entry, ce_device
+        )
+        assert "locks" in result
+        assert LOCK_1_ENTITY_ID in result["locks"]
 
 
 async def test_device_diagnostics_config_entry_device(
@@ -108,7 +120,6 @@ async def test_device_diagnostics_config_entry_device(
     dev_reg = dr.async_get(hass)
     entry_id = lock_code_manager_config_entry.entry_id
 
-    # The config entry device
     ce_device = dev_reg.async_get_device(identifiers={(DOMAIN, entry_id)})
     assert ce_device is not None
 
@@ -131,15 +142,30 @@ async def test_mask_code_values(
         hass, lock_code_manager_config_entry
     )
 
-    # Collect all PIN-like values
     for lock_diag in result["locks"].values():
         for code in lock_diag["coordinator"]["data"].values():
-            if code and code not in ("empty", "EMPTY", "UNREADABLE_CODE"):
-                # Must be masked
+            if code not in _SENTINEL_VALUES:
                 assert code.startswith("pin#"), f"Unmasked PIN in diagnostics: {code}"
 
     for slot_diag in result["slots"].values():
-        if slot_diag["pin"]:
+        if slot_diag["pin"] not in _SENTINEL_VALUES:
             assert slot_diag["pin"].startswith("pin#"), (
                 f"Unmasked configured PIN: {slot_diag['pin']}"
             )
+
+
+async def test_sensitive_entities_redacted(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Test that PIN and code entity states are redacted in diagnostics."""
+    result = await async_get_config_entry_diagnostics(
+        hass, lock_code_manager_config_entry
+    )
+
+    for slot_diag in result["slots"].values():
+        for entity in slot_diag.get("entities", []):
+            if "|pin" in entity["entity_id"] or "|code" in entity["entity_id"]:
+                assert entity["state"] == "**REDACTED**"
+                assert entity["attributes"] == {}

@@ -17,7 +17,7 @@ from .util import mask_pin
 
 def _get_instance_id(hass: HomeAssistant) -> str:
     """Return the HA instance UUID for PIN masking."""
-    return hass.data.get("core.uuid", "unknown")
+    return hass.data.get(DOMAIN, {}).get("instance_id", "")
 
 
 def _mask_code(
@@ -33,26 +33,54 @@ def _mask_code(
     return mask_pin(code, slot_num, instance_id)
 
 
+_SENSITIVE_UNIQUE_ID_MARKERS = ("|pin", "|code")
+
+
+def _is_sensitive(entry: er.RegistryEntry) -> bool:
+    """Return True if the entity may expose a PIN or code in its state."""
+    uid = entry.unique_id or ""
+    return entry.platform == DOMAIN and any(
+        m in uid for m in _SENSITIVE_UNIQUE_ID_MARKERS
+    )
+
+
 def _entity_states_for_device(
     hass: HomeAssistant,
     ent_reg: er.EntityRegistry,
     device_id: str,
 ) -> list[dict[str, Any]]:
-    """Return entity states for all entities on a device."""
-    return [
-        {
-            "entity_id": entry.entity_id,
-            "friendly_name": (
-                state.attributes.get("friendly_name")
-                if (state := hass.states.get(entry.entity_id))
-                else entry.original_name
-            ),
-            "platform": entry.platform,
-            "state": state.state if state else "unavailable",
-            "attributes": dict(state.attributes) if state else {},
-        }
-        for entry in er.async_entries_for_device(ent_reg, device_id)
-    ]
+    """Return entity states for all entities on a device.
+
+    Sensitive entities (PIN text, code sensor) have their state and
+    attributes redacted to avoid leaking PINs in diagnostics output.
+    """
+    entities: list[dict[str, Any]] = []
+    for entry in er.async_entries_for_device(ent_reg, device_id):
+        state = hass.states.get(entry.entity_id)
+        friendly_name = (
+            state.attributes.get("friendly_name") if state else entry.original_name
+        )
+        if _is_sensitive(entry):
+            entities.append(
+                {
+                    "entity_id": entry.entity_id,
+                    "friendly_name": friendly_name,
+                    "platform": entry.platform,
+                    "state": "**REDACTED**",
+                    "attributes": {},
+                }
+            )
+        else:
+            entities.append(
+                {
+                    "entity_id": entry.entity_id,
+                    "friendly_name": friendly_name,
+                    "platform": entry.platform,
+                    "state": state.state if state else "unavailable",
+                    "attributes": dict(state.attributes) if state else {},
+                }
+            )
+    return entities
 
 
 def _lock_diagnostic(
@@ -186,7 +214,11 @@ async def async_get_device_diagnostics(
     for identifier in device.identifiers:
         if identifier[0] == DOMAIN and "|" in str(identifier[1]):
             parts = str(identifier[1]).split("|", 1)
-            if len(parts) == 2 and parts[1].isdigit():
+            if (
+                len(parts) == 2
+                and parts[0] == config_entry.entry_id
+                and parts[1].isdigit()
+            ):
                 slot_num = int(parts[1])
                 return _slot_diagnostic(
                     hass,
