@@ -266,20 +266,20 @@ class _ExistingCodesFlowMixin:
             )
         )
 
-    async def _clear_existing_slot(self, slot_num: int) -> None:
-        """Clear a slot on every lock that has a non-empty code in it."""
-        for lock_entity_id, codes in self._all_codes.items():
-            if codes.get(slot_num, SlotCode.EMPTY) == SlotCode.EMPTY:
-                continue
-            lock_instance = self._lock_instances.get(lock_entity_id)
-            if not lock_instance:
-                _LOGGER.warning(
-                    "No lock instance for %s; cannot clear slot %s",
-                    lock_entity_id,
-                    slot_num,
-                )
-                self._clear_done += 1
-                continue
+    async def _clear_all_pending_slots(self) -> None:
+        """Clear every slot in ``_slots_to_clear`` and reset state."""
+        # Build the work list: (lock_instance, lock_entity_id, slot_num)
+        work = [
+            (lock_instance, lock_entity_id, slot_num)
+            for slot_num in self._slots_to_clear
+            for lock_entity_id, codes in self._all_codes.items()
+            if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
+            and (lock_instance := self._lock_instances.get(lock_entity_id))
+        ]
+        self._clear_done = 0
+        self._clear_total = len(work)
+
+        for lock_instance, lock_entity_id, slot_num in work:
             try:
                 await lock_instance.async_internal_clear_usercode(
                     slot_num, source="direct"
@@ -293,17 +293,6 @@ class _ExistingCodesFlowMixin:
                 )
             self._clear_done += 1
 
-    async def _clear_all_pending_slots(self) -> None:
-        """Clear every slot in ``_slots_to_clear`` and reset state."""
-        self._clear_done = 0
-        self._clear_total = sum(
-            1
-            for slot_num in self._slots_to_clear
-            for codes in self._all_codes.values()
-            if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
-        )
-        for slot_num in self._slots_to_clear:
-            await self._clear_existing_slot(slot_num)
         self._slots_to_clear = []
         self._all_codes = {}
         self._lock_instances = {}
