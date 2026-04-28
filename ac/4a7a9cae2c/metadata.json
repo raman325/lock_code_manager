@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ac4a7a9cae2c",
+  "strategy": "manual-commit",
+  "branch": "feat/device-diagnostics",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ac/4a7a9cae2c/0/metadata.json",
+      "transcript": "/ac/4a7a9cae2c/0/full.jsonl",
+      "content_hash": "/ac/4a7a9cae2c/0/content_hash.txt",
+      "prompt": "/ac/4a7a9cae2c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2324,
+    "cache_creation_tokens": 19479132,
+    "cache_read_tokens": 788645532,
+    "output_tokens": 481871,
+    "api_call_count": 1779
+  }
+}
