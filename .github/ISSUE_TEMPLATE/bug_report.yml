@@ -92,9 +92,18 @@ body:
         Alternatively, upload a log file here. You can download the full log
         from Settings → System → Logs → Download full log.
   - type: upload
-    id: diagnostics
+    id: lcm-diagnostics
     attributes:
-      label: Device diagnostics (upload)
+      label: Lock Code Manager diagnostics (upload)
+      description: >
+        Download diagnostics for your Lock Code Manager config entry from
+        Settings → Devices & Services → Lock Code Manager → ⋮ →
+        Download diagnostics, then upload the JSON file here. This includes
+        coordinator data, sync state, and entity states with PINs masked.
+  - type: upload
+    id: lock-diagnostics
+    attributes:
+      label: Lock integration diagnostics (upload)
       description: >
         Download diagnostics for your lock device from
         Settings → Devices & Services → [your lock integration] → [lock device]
@@ -104,9 +113,9 @@ body:
   - type: textarea
     id: diagnostics-paste
     attributes:
-      label: Device diagnostics (paste)
+      label: Diagnostics (paste)
       description: >
-        Alternatively, paste the diagnostics JSON here. This field is
+        Alternatively, paste either diagnostics JSON here. This field is
         automatically formatted as JSON.
       render: json
   - type: markdown
