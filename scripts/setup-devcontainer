@@ -70,10 +70,14 @@ yarn install
 # Setup .ha directory with config and custom components
 mkdir -p "${PWD}/.ha/custom_components"
 
-# Copy dev config files (makes .ha self-contained)
+# Copy dev config files (makes .ha self-contained).
+# Remove stale symlinks first (left over from older setup scripts that
+# used symlinks instead of copies).
 for yaml_file in "${PWD}"/dev/*.yaml; do
     if [ -f "$yaml_file" ]; then
-        cp "$yaml_file" "${PWD}/.ha/"
+        dest="${PWD}/.ha/$(basename "$yaml_file")"
+        [ -L "$dest" ] && rm "$dest"
+        cp "$yaml_file" "$dest"
     fi
 done
 
