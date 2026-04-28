@@ -12,6 +12,7 @@
         }
     },
     "containerEnv": {
+        "COREPACK_ENABLE_AUTO_PIN": "0",
         "DEVCONTAINER": "1"
     },
     "postCreateCommand": "scripts/setup-devcontainer",
