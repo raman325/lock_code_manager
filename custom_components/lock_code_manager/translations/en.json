@@ -7,7 +7,7 @@
       "unknown": "An unexpected error occurred during setup."
     },
     "progress": {
-      "clearing_codes": "Clearing existing codes ({cleared}/{total})..."
+      "clearing_codes": "Clearing existing codes ({cleared}/{total}). Each operation may take up to 30 seconds depending on the lock."
     },
     "error": {
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
@@ -136,7 +136,7 @@
       "unknown": "An unexpected error occurred while updating options."
     },
     "progress": {
-      "clearing_codes": "Clearing existing codes ({cleared}/{total})..."
+      "clearing_codes": "Clearing existing codes ({cleared}/{total}). Each operation may take up to 30 seconds depending on the lock."
     },
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
