@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+# Lightweight bootstrap for container restarts (postStartCommand).
+# Only syncs dependencies — hook installation and first-time setup
+# are handled by scripts/setup-devcontainer (postCreateCommand).
+
+set -e
+cd "$(dirname "$0")/.."
+
+export DEVCONTAINER=1
+
+# Sync Python deps (fast no-op if already up to date)
+uv pip install -r requirements_dev.txt
+
+# Sync frontend deps
+if command -v corepack &> /dev/null; then
+    corepack enable 2>/dev/null || true
+fi
+yarn install

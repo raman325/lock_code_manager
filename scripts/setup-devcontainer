@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 
-# Script setup
+# Setup script for the devcontainer environment.
+# Runs on both postCreateCommand and postStartCommand so it must be
+# idempotent — safe to run multiple times without side effects.
+
 set -e
 cd "$(dirname "$0")/.."
 
@@ -41,40 +44,36 @@ ensure_link() {
     ln -s "$target" "$link"
 }
 
-# Install dependencies into the container's system Python environment.
-if command -v dpkg >/dev/null 2>&1; then
-    if ! dpkg -s libudev-dev >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y libudev-dev
-    fi
+# Install Python dependencies into the venv
+uv pip install -r requirements_dev.txt
+
+# Ensure aiousbwatcher is available (pyo3 wheel may not be pre-built)
+if ! python3 -c "import aiousbwatcher" 2>/dev/null; then
+    pip install aiousbwatcher
 fi
 
-python3 -m pip install --upgrade uv
-uv pip install --system -r requirements_dev.txt
+# Install git hooks via prek (clean up Codespaces-managed hooks first)
+git config --unset-all core.hooksPath 2>/dev/null || true
+rm -f .git/hooks/pre-commit .git/hooks/pre-commit.legacy
+prek install
 
-if ! python3 - <<'PY'
-try:
-    import aiousbwatcher  # noqa: F401
-except ImportError:
-    raise SystemExit(1)
-PY
-then
-    python3 -m pip install aiousbwatcher==1.1.1
-fi
-
-if command -v prek &> /dev/null; then
-  prek install
-else
-  if ! command -v pre-commit &> /dev/null; then
-    python3 -m pip install pre-commit
-  fi
-  pre-commit install
+# Frontend dependencies
+if command -v corepack &> /dev/null; then
+    corepack enable 2>/dev/null || true
 fi
 yarn install
 
-# Setup directories for HA and linking
-ensure_link "${PWD}/dev/configuration.yaml" "${PWD}/.ha/configuration.yaml"
-ensure_link "${PWD}/dev/virtual.yaml" "${PWD}/.ha/virtual.yaml"
+# Setup .ha directory with config and custom components
+mkdir -p "${PWD}/.ha/custom_components"
+
+# Symlink dev config files into .ha so edits in dev/ are reflected immediately
+for yaml_file in "${PWD}"/dev/*.yaml; do
+    if [ -f "$yaml_file" ]; then
+        ensure_link "$yaml_file" "${PWD}/.ha/$(basename "$yaml_file")"
+    fi
+done
+
+# Link the component being developed — changes are reflected immediately
 ensure_link "${PWD}/custom_components/lock_code_manager" "${PWD}/.ha/custom_components/lock_code_manager"
 
 # Download and extract Virtual component if not already present
@@ -82,8 +81,10 @@ if [[ ! -d "${PWD}/.ha/custom_components/virtual" ]]; then
     virtual_tag="$(get_virtual_release_tag)"
     curl -L -o virtual.zip "https://github.com/twrecked/hass-virtual/archive/refs/tags/${virtual_tag}.zip"
     unzip -j virtual.zip "*/custom_components/virtual/*" -d "${PWD}/.ha/custom_components/virtual/"
-
     rm virtual.zip
 fi
 
-hass --config "${PWD}/.ha" --script ensure_config
+# Validate HA config on first run
+if [ ! -f "${PWD}/.ha/.storage/core.config" ]; then
+    hass --config "${PWD}/.ha" --script ensure_config
+fi

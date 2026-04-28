@@ -53,16 +53,12 @@ fi
 pip install --upgrade uv
 uv pip install -r requirements_dev.txt
 
-# Install git hooks. Prefer prek (fast Rust-based replacement).
-# If prek is unavailable, use a uv-managed pre-commit pinned to Python 3.13
-# instead of whatever pre-commit binary may already be on PATH (a Homebrew
-# install linked against Python 3.14 fails on macOS).
-if command -v prek &> /dev/null; then
-  prek install
-else
-  uv tool install --force --python 3.13 pre-commit
-  pre-commit install
+# Install git hooks via prek (fast Rust-based pre-commit replacement).
+# Install prek if not available: https://github.com/j178/prek
+if ! command -v prek &> /dev/null; then
+  cargo install prek 2>/dev/null || uv tool install prek
 fi
+prek install --overwrite
 yarn install
 
 # Setup directories for HA and linking

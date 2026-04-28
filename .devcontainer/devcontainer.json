@@ -1,21 +1,22 @@
 {
     "name": "lock_code_manager Dev",
-    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
     "forwardPorts": [8123],
     "features": {
+        "ghcr.io/devcontainers/features/github-cli:1": {},
         "ghcr.io/devcontainers/features/node:1": {
             "version": "lts"
-        },
-        "ghcr.io/devcontainers/features/python:1": {
-            "version": "3.13",
-            "installTools": false
         }
     },
     "containerEnv": {
-        "DEVCONTAINER": "1",
-        "PIP_BREAK_SYSTEM_PACKAGES": "1"
+        "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+        "DEVCONTAINER": "1"
     },
     "postCreateCommand": "scripts/setup-devcontainer",
+    "postStartCommand": "scripts/bootstrap-devcontainer",
     "customizations": {
         "vscode": {
             "extensions": [
@@ -29,7 +30,10 @@
                 "rvest.vs-code-prettier-eslint",
                 "visualstudioexptteam.vscodeintellicode",
                 "GitHub.vscode-pull-request-github"
-            ]
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/home/vscode/.local/ha-venv/bin/python"
+            }
         }
     }
 }
