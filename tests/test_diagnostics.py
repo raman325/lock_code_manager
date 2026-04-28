@@ -164,8 +164,18 @@ async def test_sensitive_entities_redacted(
         hass, lock_code_manager_config_entry
     )
 
+    # Collect all entities across all diagnostic sections
+    all_entities = []
     for slot_diag in result["slots"].values():
-        for entity in slot_diag.get("entities", []):
-            if "|pin" in entity["entity_id"] or "|code" in entity["entity_id"]:
-                assert entity["state"] == "**REDACTED**"
-                assert entity["attributes"] == {}
+        all_entities.extend(slot_diag.get("entities", []))
+    for lock_diag in result["locks"].values():
+        all_entities.extend(lock_diag.get("entities", []))
+
+    # _is_sensitive checks unique_id for |pin and |code markers, which
+    # results in **REDACTED** state. Verify at least one entity is redacted.
+    redacted = [e for e in all_entities if e["state"] == "**REDACTED**"]
+    assert len(redacted) > 0, "Expected at least one redacted entity"
+
+    for entity in redacted:
+        assert entity["attributes"] == {}
+        assert entity["platform"] == DOMAIN
