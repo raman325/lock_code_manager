@@ -6,6 +6,9 @@
       "locks_updated": "The locks for your config entry have been updated.",
       "unknown": "An unexpected error occurred during setup."
     },
+    "progress": {
+      "clearing_codes": "Clearing existing codes from {slots} slot(s) across {locks} lock(s). This may take a moment..."
+    },
     "error": {
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",
@@ -131,6 +134,9 @@
     "abort": {
       "existing_codes_cancelled": "Update cancelled. Existing codes were not modified.",
       "unknown": "An unexpected error occurred while updating options."
+    },
+    "progress": {
+      "clearing_codes": "Clearing existing codes from {slots} slot(s) across {locks} lock(s). This may take a moment..."
     },
     "error": {
       "invalid_config": "Slots configuration is invalid. For more information, check the logs and the docs.",

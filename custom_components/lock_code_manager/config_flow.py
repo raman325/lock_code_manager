@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from functools import partial
 import logging
@@ -240,6 +241,7 @@ class _ExistingCodesFlowMixin:
     _lock_instances: dict[str, Any]
     _slots_to_clear: list[int]
     _next_step: Callable[[], Awaitable[dict[str, Any]]] | None
+    _clear_task: asyncio.Task[None] | None
 
     def _init_existing_codes_state(self) -> None:
         """Initialize mixin state. Call from the inheriting flow's __init__."""
@@ -247,6 +249,7 @@ class _ExistingCodesFlowMixin:
         self._lock_instances = {}
         self._slots_to_clear = []
         self._next_step = None
+        self._clear_task = None
 
     def _slots_with_existing_codes(self, slot_nums: Iterable[int]) -> list[int]:
         """Return sorted slot numbers that have a non-empty code on any lock."""
@@ -295,8 +298,7 @@ class _ExistingCodesFlowMixin:
     async def _clear_then_create_entry(
         self, *, title: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Clear pending slots, then create the entry."""
-        await self._clear_all_pending_slots()
+        """Create the entry after slots have been cleared by the progress step."""
         return self.async_create_entry(  # type: ignore[attr-defined]
             title=title, data=data
         )
@@ -316,7 +318,44 @@ class _ExistingCodesFlowMixin:
     async def async_step_existing_codes_clear(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """User confirmed clearing. Run the next step."""
+        """User confirmed clearing. Show progress while clearing codes."""
+        if self._next_step is None:
+            return self.async_abort(reason="unknown")  # type: ignore[attr-defined]
+
+        if self._clear_task is None:
+            self._clear_task = self.hass.async_create_task(  # type: ignore[attr-defined]
+                self._clear_all_pending_slots(),
+                "Lock Code Manager: clear existing codes",
+            )
+
+        if not self._clear_task.done():
+            num_locks = sum(
+                1
+                for codes in self._all_codes.values()
+                if any(
+                    codes.get(s, SlotCode.EMPTY) != SlotCode.EMPTY
+                    for s in self._slots_to_clear
+                )
+            )
+            return self.async_show_progress(  # type: ignore[attr-defined]
+                step_id="existing_codes_clear",
+                progress_action="clearing_codes",
+                description_placeholders={
+                    "slots": str(len(self._slots_to_clear)),
+                    "locks": str(num_locks),
+                },
+                progress_task=self._clear_task,
+            )
+
+        self._clear_task = None
+        return self.async_show_progress_done(  # type: ignore[attr-defined]
+            next_step_id="existing_codes_done",
+        )
+
+    async def async_step_existing_codes_done(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Proceed to the next step after clearing finishes."""
         if self._next_step is None:
             return self.async_abort(reason="unknown")  # type: ignore[attr-defined]
         return await self._next_step()

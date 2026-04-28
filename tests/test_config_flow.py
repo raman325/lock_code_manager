@@ -348,7 +348,9 @@ async def test_ui_existing_codes_confirm_clear(hass: HomeAssistant):
     assert result["step_id"] == "existing_codes_confirm"
     assert result["description_placeholders"]["slots"] == "1"
 
-    # Confirm clearing — should proceed to slot config
+    # Confirm clearing — progress task completes instantly with mocks,
+    # so the flow advances directly through progress -> done -> code_slot.
+    # Codes are cleared during the progress step, before slot configuration.
     result = await hass.config_entries.flow.async_configure(
         flow_id, {"next_step_id": "existing_codes_clear"}
     )
@@ -356,6 +358,7 @@ async def test_ui_existing_codes_confirm_clear(hass: HomeAssistant):
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
     assert result["description_placeholders"]["slot_num"] == 1
+    mock_clear.assert_called_once_with(1, source="direct")
 
     # Configure slot 1
     result = await hass.config_entries.flow.async_configure(
@@ -363,15 +366,13 @@ async def test_ui_existing_codes_confirm_clear(hass: HomeAssistant):
     )
 
     assert result["step_id"] == "code_slot"
-    mock_clear.assert_not_called()
 
-    # Configure slot 2 -> create entry and clear deferred
+    # Configure slot 2 -> create entry (clearing already done)
     result = await hass.config_entries.flow.async_configure(
         flow_id, {CONF_ENABLED: True, CONF_PIN: "5678"}
     )
 
     assert result["type"] == "create_entry"
-    mock_clear.assert_called_once_with(1, source="direct")
 
 
 async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
