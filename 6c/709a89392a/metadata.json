@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6c709a89392a",
+  "strategy": "manual-commit",
+  "branch": "feat/device-diagnostics",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/709a89392a/0/metadata.json",
+      "transcript": "/6c/709a89392a/0/full.jsonl",
+      "content_hash": "/6c/709a89392a/0/content_hash.txt",
+      "prompt": "/6c/709a89392a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2302,
+    "cache_creation_tokens": 19464468,
+    "cache_read_tokens": 781311525,
+    "output_tokens": 476223,
+    "api_call_count": 1761
+  }
+}
