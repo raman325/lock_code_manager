@@ -242,6 +242,8 @@ class _ExistingCodesFlowMixin:
     _slots_to_clear: list[int]
     _next_step: Callable[[], Awaitable[dict[str, Any]]] | None
     _clear_task: asyncio.Task[None] | None
+    _clear_total: int
+    _clear_done: int
 
     def _init_existing_codes_state(self) -> None:
         """Initialize mixin state. Call from the inheriting flow's __init__."""
@@ -250,6 +252,8 @@ class _ExistingCodesFlowMixin:
         self._slots_to_clear = []
         self._next_step = None
         self._clear_task = None
+        self._clear_total = 0
+        self._clear_done = 0
 
     def _slots_with_existing_codes(self, slot_nums: Iterable[int]) -> list[int]:
         """Return sorted slot numbers that have a non-empty code on any lock."""
@@ -274,6 +278,7 @@ class _ExistingCodesFlowMixin:
                     lock_entity_id,
                     slot_num,
                 )
+                self._clear_done += 1
                 continue
             try:
                 await lock_instance.async_internal_clear_usercode(
@@ -286,6 +291,7 @@ class _ExistingCodesFlowMixin:
                     lock_entity_id,
                     exc_info=True,
                 )
+            self._clear_done += 1
 
     async def _clear_all_pending_slots(self) -> None:
         """Clear every slot in ``_slots_to_clear`` and reset state."""
@@ -323,6 +329,14 @@ class _ExistingCodesFlowMixin:
             return self.async_abort(reason="unknown")  # type: ignore[attr-defined]
 
         if self._clear_task is None:
+            # Count total individual clear operations (slot × lock pairs)
+            self._clear_total = sum(
+                1
+                for slot_num in self._slots_to_clear
+                for codes in self._all_codes.values()
+                if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
+            )
+            self._clear_done = 0
             self._clear_task = self.hass.async_create_task(  # type: ignore[attr-defined]
                 self._clear_all_pending_slots(),
                 "Lock Code Manager: clear existing codes",
@@ -333,8 +347,8 @@ class _ExistingCodesFlowMixin:
                 step_id="existing_codes_clear",
                 progress_action="clearing_codes",
                 description_placeholders={
-                    "slots": str(len(self._slots_to_clear)),
-                    "locks": str(len(self._lock_instances)),
+                    "cleared": str(self._clear_done),
+                    "total": str(self._clear_total),
                 },
                 progress_task=self._clear_task,
             )
