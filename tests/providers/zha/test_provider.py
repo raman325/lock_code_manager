@@ -12,7 +12,10 @@ from zigpy.zcl.clusters.closures import DoorLock
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    CodeRejectedError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
@@ -144,12 +147,12 @@ async def test_set_usercode_failure(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode raises LockDisconnected on failure."""
+    """Test set_usercode raises CodeRejectedError on non-zero status."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(return_value=type("Response", (), {"status": 1})())
 
-    with pytest.raises(LockDisconnected, match="set_pin_code failed"):
+    with pytest.raises(CodeRejectedError, match="set_pin_code rejected"):
         await zha_lock.async_set_usercode(3, "5678")
 
 
@@ -178,14 +181,14 @@ async def test_clear_usercode_failure(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode raises LockDisconnected on failure."""
+    """Test clear_usercode raises CodeRejectedError on non-zero status."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(
         return_value=type("Response", (), {"status": 1})()
     )
 
-    with pytest.raises(LockDisconnected, match="clear_pin_code failed"):
+    with pytest.raises(CodeRejectedError, match="clear_pin_code rejected"):
         await zha_lock.async_clear_usercode(3)
 
 

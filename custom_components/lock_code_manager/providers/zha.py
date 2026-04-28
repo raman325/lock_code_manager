@@ -24,7 +24,7 @@ from homeassistant.components.zha.helpers import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
-from ..exceptions import LockDisconnected
+from ..exceptions import CodeRejectedError, LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
 
@@ -122,6 +122,7 @@ class ZHALock(BaseLock):
         ``hard_refresh_interval`` during init, so detection must complete
         before coordinator creation.
         """
+        self.teardown_push_subscription()
         self._door_lock_cluster = None
         self._endpoint_id = None
         await super().async_setup(config_entry)
@@ -193,7 +194,14 @@ class ZHALock(BaseLock):
         """Return the ZHA gateway proxy, or None if unavailable."""
         try:
             return _get_zha_gateway_proxy(self.hass)
-        except KeyError, ValueError:
+        except KeyError:
+            return None
+        except ValueError:
+            _LOGGER.warning(
+                "Lock %s: unexpected ValueError getting ZHA gateway",
+                self.lock.entity_id,
+                exc_info=True,
+            )
             return None
 
     # -- Connection ----------------------------------------------------------
@@ -270,11 +278,15 @@ class ZHALock(BaseLock):
                 result,
             )
             if hasattr(result, "status") and result.status != 0:
-                raise LockDisconnected(f"set_pin_code failed: status {result.status}")
+                raise CodeRejectedError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=f"set_pin_code rejected: status {result.status}",
+                )
             if self.coordinator:
                 self.coordinator.push_update({code_slot: usercode})
             return True
-        except LockDisconnected:
+        except CodeRejectedError, LockDisconnected:
             raise
         except Exception as err:
             raise LockDisconnected(f"Failed to set PIN: {err}") from err
@@ -291,11 +303,15 @@ class ZHALock(BaseLock):
                 result,
             )
             if hasattr(result, "status") and result.status != 0:
-                raise LockDisconnected(f"clear_pin_code failed: status {result.status}")
+                raise CodeRejectedError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=f"clear_pin_code rejected: status {result.status}",
+                )
             if self.coordinator:
                 self.coordinator.push_update({code_slot: SlotCode.EMPTY})
             return True
-        except LockDisconnected:
+        except CodeRejectedError, LockDisconnected:
             raise
         except Exception as err:
             raise LockDisconnected(f"Failed to clear PIN: {err}") from err
@@ -380,11 +396,18 @@ class ZHALock(BaseLock):
             )
             user_id = args.user_id if hasattr(args, "user_id") else args[2]
         except AttributeError, IndexError, TypeError:
-            _LOGGER.debug(
-                "Lock %s: could not parse programming event: %s",
+            _LOGGER.warning(
+                "Lock %s: could not parse programming event, "
+                "triggering refresh as safety net: %s",
                 self.lock.entity_id,
                 args,
             )
+            # Refresh anyway — we know something changed on the lock
+            if self.coordinator:
+                self.hass.async_create_task(
+                    self.coordinator.async_request_refresh(),
+                    f"Refresh {self.lock.entity_id} after unparseable programming event",
+                )
             return
 
         _LOGGER.debug(
@@ -417,7 +440,7 @@ class ZHALock(BaseLock):
             )
             user_id = args.user_id if hasattr(args, "user_id") else args[2]
         except AttributeError, IndexError, TypeError:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Lock %s: could not parse operation event: %s",
                 self.lock.entity_id,
                 args,
