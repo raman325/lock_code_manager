@@ -30,9 +30,10 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/vscode/.claude/local/bin:$PATH"
 
-# Rust (needed for pyo3-ffi build deps and prek)
+# Rust (needed for pyo3-ffi build deps) + prek (pre-commit replacement)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/vscode/.cargo/bin:$PATH"
+RUN cargo install prek
 
 WORKDIR /workspaces
 

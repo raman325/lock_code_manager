@@ -55,9 +55,6 @@ fi
 # Install git hooks via prek (clean up Codespaces-managed hooks first)
 git config --unset-all core.hooksPath 2>/dev/null || true
 rm -f .git/hooks/pre-commit .git/hooks/pre-commit.legacy
-if ! command -v prek &> /dev/null; then
-    cargo install prek
-fi
 prek install
 
 # Frontend dependencies
