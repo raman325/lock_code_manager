@@ -16,7 +16,7 @@
         "DEVCONTAINER": "1"
     },
     "postCreateCommand": "scripts/setup-devcontainer",
-    "postStartCommand": "scripts/setup-devcontainer",
+    "postStartCommand": "scripts/bootstrap-devcontainer",
     "customizations": {
         "vscode": {
             "extensions": [
