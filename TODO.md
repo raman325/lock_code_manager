@@ -21,23 +21,15 @@
 
 ## Providers
 
-**Current:** Akuvox, Matter, Schlage, Z-Wave JS, Zigbee2MQTT (MQTT), Virtual (testing)
+**Current:** Akuvox, Matter, Schlage, Z-Wave JS, ZHA, Zigbee2MQTT (MQTT), Virtual (testing)
 
-**Open PRs:** ZHA (#739)
-
-**Future:** Nuki, SwitchBot, SmartThings
+**Future:** Nuki, SimpliSafe (has `async_get_pins()` in simplipy — full
+read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
 
 **Cannot support:** esphome (no API), august/yale/yalexs_ble/yale_smart_alarm
-(library limitations)
+(library limitations), ISY994 (pyisy has no code read support)
 
 ### Matter provider
-
-- **Direct Matter client commands** — Replace HA service calls
-  (`matter.set_lock_credential`, etc.) with direct `MatterClient.send_device_command()`
-  calls to get structured response objects (e.g., `SetCredentialResponse.status`
-  with `DlStatus.kDuplicate`). Currently duplicate detection relies on string
-  matching the error message. Direct commands would give typed status codes for
-  duplicate, occupied, resource exhausted, etc.
 
 - **Known Aqara U300 limitations** (discovered during live testing 2026-04-18):
   - User names with spaces rejected (500 error from `set_lock_user`)
@@ -78,20 +70,26 @@
   a callback boundary. Same broader "typed slot_num everywhere" theme as
   the EntryConfig migration; resolved by the SlotConfig TypedDict work
   above plus typed callback signatures.
-- **Websocket optimization** — Add optional `include_entities`/`include_locks`
-  flags to `get_config_entry_data` command.
 - **Entity registry change detection** — Warn if LCM entity IDs change (reload
   required).
-- **Provider diagnostics** — Add `get_diagnostic_data()` to `BaseLock` for
-  provider-specific diagnostic information.
+- **Device diagnostics** — Implement `async_get_config_entry_diagnostics` and
+  `async_get_device_diagnostics` for troubleshooting. Data per device level:
+  - **Config entry device**: all locks (coordinator data, provider state, push
+    status), all slots (sync manager state, circuit breaker), all entities with
+    states. The superset — redundant with lock/slot but gives the full picture.
+  - **Lock device**: coordinator data for that lock's slots, sync manager states,
+    push subscription status, provider-specific state, entities on this device
+    with states.
+  - **Slot device**: configured slot state, sync manager state, coordinator code
+    for that slot, entities on this device with states.
+  - PINs redacted via `mask_pin` (deterministic CRC32 hash, not generic
+    `**REDACTED**`) so support can correlate duplicate PINs across slots.
 
 ## Testing
 
-- **Live Matter lock testing** — Remaining scenarios not yet validated
-  (2026-04-18):
-  - PIN change while in sync (re-sync via clear-then-set)
+- **Live testing** — Remaining scenarios not yet validated on any lock:
   - Multiple config entries sharing the same lock (conflict detection)
-  - Hard refresh drift detection (verify 1-hour poll catches changes)
+  - Hard refresh drift detection (verify poll catches out-of-band changes)
   - Config flow re-add (picks up existing codes on lock)
 
 ## Frontend
