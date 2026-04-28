@@ -329,20 +329,12 @@ class _ExistingCodesFlowMixin:
             )
 
         if not self._clear_task.done():
-            num_locks = sum(
-                1
-                for codes in self._all_codes.values()
-                if any(
-                    codes.get(s, SlotCode.EMPTY) != SlotCode.EMPTY
-                    for s in self._slots_to_clear
-                )
-            )
             return self.async_show_progress(  # type: ignore[attr-defined]
                 step_id="existing_codes_clear",
                 progress_action="clearing_codes",
                 description_placeholders={
                     "slots": str(len(self._slots_to_clear)),
-                    "locks": str(num_locks),
+                    "locks": str(len(self._lock_instances)),
                 },
                 progress_task=self._clear_task,
             )
