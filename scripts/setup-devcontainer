@@ -52,7 +52,9 @@ if ! python3 -c "import aiousbwatcher" 2>/dev/null; then
     pip install aiousbwatcher
 fi
 
-# Install git hooks
+# Install git hooks (unset core.hooksPath first — Codespaces sets it and
+# both prek and pre-commit refuse to install alongside it)
+git config --unset-all core.hooksPath 2>/dev/null || true
 if command -v prek &> /dev/null; then
     prek install
 else
