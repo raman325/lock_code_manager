@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ccb7e44e9e79",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-28T17:02:19.316499Z",
+  "branch": "fix/config-flow-clear-progress",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "2ce3a42e13f4",
+  "token_usage": {
+    "input_tokens": 2594,
+    "cache_creation_tokens": 21076178,
+    "cache_read_tokens": 886158327,
+    "output_tokens": 524096,
+    "api_call_count": 1982
+  },
+  "session_metrics": {
+    "turn_count": 237
+  }
+}
