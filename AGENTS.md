@@ -256,6 +256,13 @@ yarn build                     # Build frontend strategy module
 yarn watch                     # Watch mode for development
 ```
 
+**Important:** After modifying any TypeScript files in `ts/`, the JavaScript
+bundle must be rebuilt before testing in the browser. Use `yarn watch` during
+development for automatic rebuilds, or run `yarn build` manually. The compiled
+output is `custom_components/lock_code_manager/www/lock-code-manager-strategy.js`.
+If you test with stale JavaScript, the Lovelace strategy will fail with:
+`Timeout waiting for strategy element ll-strategy-dashboard-lock-code-manager to be registered`
+
 ## Code Style
 
 - Python: Ruff for linting/formatting (line length: 88)
