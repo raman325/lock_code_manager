@@ -72,18 +72,6 @@ read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
   above plus typed callback signatures.
 - **Entity registry change detection** — Warn if LCM entity IDs change (reload
   required).
-- **Device diagnostics** — Implement `async_get_config_entry_diagnostics` and
-  `async_get_device_diagnostics` for troubleshooting. Data per device level:
-  - **Config entry device**: all locks (coordinator data, provider state, push
-    status), all slots (sync manager state, circuit breaker), all entities with
-    states. The superset — redundant with lock/slot but gives the full picture.
-  - **Lock device**: coordinator data for that lock's slots, sync manager states,
-    push subscription status, provider-specific state, entities on this device
-    with states.
-  - **Slot device**: configured slot state, sync manager state, coordinator code
-    for that slot, entities on this device with states.
-  - PINs redacted via `mask_pin` (deterministic CRC32 hash, not generic
-    `**REDACTED**`) so support can correlate duplicate PINs across slots.
 
 ## Testing
 
