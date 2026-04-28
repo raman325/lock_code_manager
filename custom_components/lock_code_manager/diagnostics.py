@@ -42,10 +42,13 @@ def _entity_states_for_device(
     return [
         {
             "entity_id": entry.entity_id,
+            "friendly_name": (
+                state.attributes.get("friendly_name")
+                if (state := hass.states.get(entry.entity_id))
+                else entry.original_name
+            ),
             "platform": entry.platform,
-            "state": state.state
-            if (state := hass.states.get(entry.entity_id))
-            else "unavailable",
+            "state": state.state if state else "unavailable",
             "attributes": dict(state.attributes) if state else {},
         }
         for entry in er.async_entries_for_device(ent_reg, device_id)
