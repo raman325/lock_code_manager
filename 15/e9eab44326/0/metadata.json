@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "15e9eab44326",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-28T02:34:56.958051Z",
+  "branch": "feat/device-diagnostics",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "e44ba9ead7f9",
+  "token_usage": {
+    "input_tokens": 2256,
+    "cache_creation_tokens": 19441140,
+    "cache_read_tokens": 766555902,
+    "output_tokens": 466740,
+    "api_call_count": 1723
+  },
+  "session_metrics": {
+    "turn_count": 202
+  }
+}
