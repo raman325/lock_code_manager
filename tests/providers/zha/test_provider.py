@@ -531,6 +531,25 @@ async def test_async_setup_clears_cached_state(
     assert zha_lock._endpoint_id is not None
 
 
+async def test_async_setup_is_idempotent(
+    hass: HomeAssistant, zha_lock: ZHALock, simple_lcm_config_entry: MockConfigEntry
+) -> None:
+    """Test calling async_setup twice does not accumulate cluster listeners."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.read_attributes = AsyncMock(return_value=({}, {}))
+
+    await zha_lock.async_setup(simple_lcm_config_entry)
+    zha_lock.setup_push_subscription()
+    assert zha_lock._cluster_listener_unsub is not None
+
+    # Simulate ZHA reload — async_setup tears down and re-initializes
+    await zha_lock.async_setup(simple_lcm_config_entry)
+
+    # Listener torn down by async_setup's teardown call
+    assert zha_lock._cluster_listener_unsub is None
+
+
 async def test_check_programming_support_no_cluster(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
