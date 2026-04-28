@@ -2646,3 +2646,7 @@ the slot device is actually the slot for the entire config entry in our device m
 ---
 
 I think the config entry device includes the slot device and lock device data. It's redundant but it gives the right structure depending on what data is needed. I also think we should use our custom log redaction mechanism for PIN redaction if it's not user configurable (I don't think it is)
+
+---
+
+yes and we should include all entities for each device and their states
