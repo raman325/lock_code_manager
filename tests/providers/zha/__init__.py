@@ -1,0 +1,1 @@
+"""ZHA provider tests."""

@@ -7,6 +7,7 @@ from .akuvox import AkuvoxLock
 from .matter import MatterLock
 from .schlage import SchlageLock
 from .virtual import VirtualLock
+from .zha import ZHALock
 from .zigbee2mqtt import Zigbee2MQTTLock
 from .zwave_js import ZWaveJSLock
 
@@ -16,5 +17,6 @@ INTEGRATIONS_CLASS_MAP: dict[str, type[BaseLock]] = {
     "mqtt": Zigbee2MQTTLock,
     "schlage": SchlageLock,
     "virtual": VirtualLock,
+    "zha": ZHALock,
     "zwave_js": ZWaveJSLock,
 }
