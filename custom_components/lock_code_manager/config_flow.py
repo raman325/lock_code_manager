@@ -295,6 +295,13 @@ class _ExistingCodesFlowMixin:
 
     async def _clear_all_pending_slots(self) -> None:
         """Clear every slot in ``_slots_to_clear`` and reset state."""
+        self._clear_done = 0
+        self._clear_total = sum(
+            1
+            for slot_num in self._slots_to_clear
+            for codes in self._all_codes.values()
+            if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
+        )
         for slot_num in self._slots_to_clear:
             await self._clear_existing_slot(slot_num)
         self._slots_to_clear = []
@@ -329,14 +336,6 @@ class _ExistingCodesFlowMixin:
             return self.async_abort(reason="unknown")  # type: ignore[attr-defined]
 
         if self._clear_task is None:
-            # Count total individual clear operations (slot × lock pairs)
-            self._clear_total = sum(
-                1
-                for slot_num in self._slots_to_clear
-                for codes in self._all_codes.values()
-                if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
-            )
-            self._clear_done = 0
             self._clear_task = self.hass.async_create_task(  # type: ignore[attr-defined]
                 self._clear_all_pending_slots(),
                 "Lock Code Manager: clear existing codes",
