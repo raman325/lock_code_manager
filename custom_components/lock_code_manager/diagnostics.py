@@ -21,7 +21,7 @@ def _get_instance_id(hass: HomeAssistant) -> str:
 
 
 def _mask_code(
-    code: str | SlotCode | None, lock_entity_id: str, instance_id: str
+    code: str | SlotCode | None, slot_num: int | str, instance_id: str
 ) -> str | None:
     """Mask a PIN code for diagnostics output."""
     if code is None:
@@ -30,7 +30,7 @@ def _mask_code(
         return code.value
     if not code:
         return "empty"
-    return mask_pin(code, lock_entity_id, instance_id)
+    return mask_pin(code, slot_num, instance_id)
 
 
 def _entity_states_for_device(
@@ -65,7 +65,7 @@ def _lock_diagnostic(
     coordinator = lock.coordinator
     coordinator_data = (
         {
-            str(slot): _mask_code(code, lock.lock.entity_id, instance_id)
+            str(slot): _mask_code(code, slot, instance_id)
             for slot, code in coordinator.data.items()
         }
         if coordinator and coordinator.data
@@ -110,7 +110,7 @@ def _slot_diagnostic(
     slot_config = entry_config.slot(slot_num)
 
     raw_pin = slot_config.get("pin")
-    masked_pin = mask_pin(raw_pin, "configured", instance_id) if raw_pin else None
+    masked_pin = mask_pin(raw_pin, slot_num, instance_id) if raw_pin else None
 
     result: dict[str, Any] = {
         "slot_num": slot_num,
@@ -123,7 +123,7 @@ def _slot_diagnostic(
         lock_id: (
             {
                 "coordinator_code": _mask_code(
-                    lock.coordinator.data.get(slot_num), lock_id, instance_id
+                    lock.coordinator.data.get(slot_num), slot_num, instance_id
                 )
             }
             if lock.coordinator and lock.coordinator.data

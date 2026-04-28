@@ -273,11 +273,11 @@ class BaseLock:
         """Return a human-readable name for this lock."""
         return self.lock.name or self.lock.original_name or self.lock.entity_id
 
-    def mask_pin(self, pin: str | None) -> str:
+    def mask_pin(self, pin: str | None, code_slot: int | str = 0) -> str:
         """Return a masked representation of a PIN for logging."""
         return mask_pin(
             pin,
-            self.lock.entity_id,
+            code_slot,
             self.hass.data.get(DOMAIN, {}).get("instance_id", ""),
         )
 
@@ -719,7 +719,7 @@ class BaseLock:
             "Setting usercode on %s slot %s (pin=%s, source=%s)",
             self.lock.entity_id,
             code_slot,
-            self.mask_pin(usercode),
+            self.mask_pin(usercode, code_slot),
             source,
         )
 
