@@ -34,9 +34,6 @@ ENV PATH="/home/vscode/.claude/local/bin:$PATH"
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/home/vscode/.cargo/bin:$PATH"
 
-# Enable corepack so yarn runs without interactive prompts
-RUN corepack enable
-
 WORKDIR /workspaces
 
 ENV SHELL=/bin/bash

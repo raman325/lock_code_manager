@@ -66,7 +66,8 @@ else
     pre-commit install
 fi
 
-# Frontend dependencies
+# Frontend dependencies (corepack enable avoids interactive yarn download prompts)
+corepack enable 2>/dev/null || true
 yarn install
 
 # Setup .ha directory with config and custom components
