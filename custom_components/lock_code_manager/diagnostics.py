@@ -60,12 +60,14 @@ def _lock_diagnostic(
 ) -> dict[str, Any]:
     """Build diagnostic data for a single lock."""
     coordinator = lock.coordinator
-    coordinator_data: dict[str, str | None] = {}
-    if coordinator and coordinator.data:
-        coordinator_data = {
+    coordinator_data = (
+        {
             str(slot): _mask_code(code, lock.lock.entity_id, instance_id)
             for slot, code in coordinator.data.items()
         }
+        if coordinator and coordinator.data
+        else {}
+    )
 
     result: dict[str, Any] = {
         "entity_id": lock.lock.entity_id,
@@ -114,18 +116,19 @@ def _slot_diagnostic(
         "name": slot_config.get("name"),
     }
 
-    # Per-lock coordinator code for this slot
-    per_lock: dict[str, dict[str, Any]] = {}
-    for lock_id, lock in locks.items():
-        if not entry_config.has_lock(lock_id):
-            continue
-        lock_slot: dict[str, Any] = {}
-        if lock.coordinator and lock.coordinator.data:
-            lock_slot["coordinator_code"] = _mask_code(
-                lock.coordinator.data.get(slot_num), lock_id, instance_id
-            )
-        per_lock[lock_id] = lock_slot
-    result["locks"] = per_lock
+    result["locks"] = {
+        lock_id: (
+            {
+                "coordinator_code": _mask_code(
+                    lock.coordinator.data.get(slot_num), lock_id, instance_id
+                )
+            }
+            if lock.coordinator and lock.coordinator.data
+            else {}
+        )
+        for lock_id, lock in locks.items()
+        if entry_config.has_lock(lock_id)
+    }
 
     # Find the slot device and its entities
     slot_identifier = (DOMAIN, f"{config_entry.entry_id}|{slot_num}")
@@ -146,27 +149,23 @@ async def async_get_config_entry_diagnostics(
     entry_config = get_entry_config(config_entry)
     all_locks: dict[str, BaseLock] = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
 
-    # Locks managed by this config entry
-    locks_diag = {}
-    for lock_id, lock in all_locks.items():
-        if entry_config.has_lock(lock_id):
-            locks_diag[lock_id] = _lock_diagnostic(hass, lock, instance_id, ent_reg)
-
-    # Slots managed by this config entry
-    slots_diag = {}
-    for slot_num in entry_config.slots:
-        slots_diag[str(slot_num)] = _slot_diagnostic(
-            hass, config_entry, slot_num, all_locks, instance_id, ent_reg, dev_reg
-        )
-
     return {
         "config_entry": {
             "entry_id": config_entry.entry_id,
             "title": config_entry.title,
             "state": config_entry.state.value,
         },
-        "locks": locks_diag,
-        "slots": slots_diag,
+        "locks": {
+            lock_id: _lock_diagnostic(hass, lock, instance_id, ent_reg)
+            for lock_id, lock in all_locks.items()
+            if entry_config.has_lock(lock_id)
+        },
+        "slots": {
+            str(slot_num): _slot_diagnostic(
+                hass, config_entry, slot_num, all_locks, instance_id, ent_reg, dev_reg
+            )
+            for slot_num in entry_config.slots
+        },
     }
 
 
