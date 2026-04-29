@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "71a3caa2fa70",
+  "strategy": "manual-commit",
+  "branch": "fix/syntax-error-websocket",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/71/a3caa2fa70/0/metadata.json",
+      "transcript": "/71/a3caa2fa70/0/full.jsonl",
+      "content_hash": "/71/a3caa2fa70/0/content_hash.txt",
+      "prompt": "/71/a3caa2fa70/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2821,
+    "cache_creation_tokens": 21740967,
+    "cache_read_tokens": 1005449884,
+    "output_tokens": 566245,
+    "api_call_count": 2181
+  }
+}
