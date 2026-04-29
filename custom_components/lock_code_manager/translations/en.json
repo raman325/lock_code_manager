@@ -34,10 +34,10 @@
       },
       "existing_codes_confirm": {
         "title": "Existing Codes Detected",
-        "description": "Existing codes were detected on the following slots: {slots}\n\nProceeding will clear these codes from the lock(s). Cancel if you want to back out.",
+        "description": "Existing codes were found on the following lock slots:\n\n{details}\n\nThese codes will be overwritten when the sync manager reconciles the configured state. Continue to proceed or cancel to back out.",
         "menu_options": {
-          "existing_codes_clear": "Clear existing codes and continue",
-          "existing_codes_cancel": "Cancel setup"
+          "existing_codes_continue": "Continue",
+          "existing_codes_cancel": "Cancel"
         }
       },
       "reauth": {
@@ -147,10 +147,10 @@
       },
       "existing_codes_confirm": {
         "title": "Existing Codes Detected",
-        "description": "Existing codes were detected on newly-added slot(s): {slots}\n\nProceeding will clear these codes from the lock(s). Cancel to back out without saving any changes.",
+        "description": "Existing codes were found on newly-added lock slots:\n\n{details}\n\nThese codes will be overwritten when the sync manager reconciles the configured state. Continue to proceed or cancel to back out without saving.",
         "menu_options": {
-          "existing_codes_clear": "Clear existing codes and continue",
-          "existing_codes_cancel": "Cancel update"
+          "existing_codes_continue": "Continue",
+          "existing_codes_cancel": "Cancel"
         }
       }
     }
