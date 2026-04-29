@@ -166,7 +166,7 @@ def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
     ):
         try:
             return int(float(state.state))
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return None
     return None
 
