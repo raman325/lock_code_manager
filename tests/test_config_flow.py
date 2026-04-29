@@ -343,22 +343,21 @@ async def test_ui_existing_codes_confirm_clear(hass: HomeAssistant):
         flow_id, {CONF_NUM_SLOTS: 2, CONF_START_SLOT: 1}
     )
 
-    # Should show the confirmation menu
+    # Should show the confirmation menu with lock/slot details
     assert result["type"] == "menu"
     assert result["step_id"] == "existing_codes_confirm"
-    assert result["description_placeholders"]["slots"] == "1"
+    assert LOCK_1_ENTITY_ID in result["description_placeholders"]["details"]
+    assert "slot 1" in result["description_placeholders"]["details"]
 
-    # Confirm clearing — progress task completes instantly with mocks,
-    # so the flow advances directly through progress -> done -> code_slot.
-    # Codes are cleared during the progress step, before slot configuration.
+    # User acknowledges — no clearing happens, just proceeds to slot config
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "existing_codes_clear"}
+        flow_id, {"next_step_id": "existing_codes_continue"}
     )
 
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
     assert result["description_placeholders"]["slot_num"] == 1
-    mock_clear.assert_called_once_with(1, source="direct")
+    mock_clear.assert_not_called()
 
     # Configure slot 1
     result = await hass.config_entries.flow.async_configure(
@@ -367,12 +366,13 @@ async def test_ui_existing_codes_confirm_clear(hass: HomeAssistant):
 
     assert result["step_id"] == "code_slot"
 
-    # Configure slot 2 -> create entry (clearing already done)
+    # Configure slot 2 -> create entry (sync manager handles reconciliation)
     result = await hass.config_entries.flow.async_configure(
         flow_id, {CONF_ENABLED: True, CONF_PIN: "5678"}
     )
 
     assert result["type"] == "create_entry"
+    mock_clear.assert_not_called()
 
 
 async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
@@ -437,16 +437,16 @@ async def test_yaml_existing_codes_confirm_clear(hass: HomeAssistant):
 
     assert result["type"] == "menu"
     assert result["step_id"] == "existing_codes_confirm"
-    assert result["description_placeholders"]["slots"] == "1"
+    assert "slot 1" in result["description_placeholders"]["details"]
 
     # Confirm clearing -> create entry and clear
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "existing_codes_clear"}
+        flow_id, {"next_step_id": "existing_codes_continue"}
     )
 
     assert result["type"] == "create_entry"
     assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
-    mock_clear.assert_called_once_with(1, source="direct")
+    mock_clear.assert_not_called()
 
 
 async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
@@ -551,7 +551,8 @@ async def test_ui_existing_codes_confirm_lists_multiple_slots(hass: HomeAssistan
     assert result["type"] == "menu"
     assert result["step_id"] == "existing_codes_confirm"
     # Slots are sorted in the placeholder
-    assert result["description_placeholders"]["slots"] == "1, 3"
+    assert "slot 1" in result["description_placeholders"]["details"]
+    assert "slot 3" in result["description_placeholders"]["details"]
 
 
 # --- _async_get_all_codes tests ---
@@ -832,26 +833,26 @@ async def test_clear_existing_slot_handles_failures(hass: HomeAssistant):
     # Confirm step shown because slot 1 has existing codes
     assert result["step_id"] == "existing_codes_confirm"
     result = await hass.config_entries.flow.async_configure(
-        flow_id, {"next_step_id": "existing_codes_clear"}
+        flow_id, {"next_step_id": "existing_codes_continue"}
     )
 
     assert result["type"] == "create_entry"
     # OK lock cleared, failing lock attempted (exception swallowed),
     # no_instance skipped, empty_slot skipped (no code to clear),
     # different_slot not touched (slot 1 not present)
-    mock_clear_ok.assert_called_once_with(1, source="direct")
-    mock_clear_fail.assert_called_once_with(1, source="direct")
+    mock_clear_ok.assert_not_called()
+    mock_clear_fail.assert_not_called()
     instances["lock.empty_slot"].async_internal_clear_usercode.assert_not_called()
     instances["lock.different_slot"].async_internal_clear_usercode.assert_not_called()
 
 
-async def test_existing_codes_clear_without_next_step_aborts(hass: HomeAssistant):
-    """Defensive: clear step aborts if _next_step was never assigned."""
+async def test_existing_codes_continue_without_next_step_aborts(hass: HomeAssistant):
+    """Defensive: continue step aborts if _next_step was never assigned."""
     handler = LockCodeManagerFlowHandler()
     handler.hass = hass
     # _init_existing_codes_state ran in __init__; _next_step is None
 
-    result = await handler.async_step_existing_codes_clear()
+    result = await handler.async_step_existing_codes_continue()
 
     assert result["type"] == "abort"
     assert result["reason"] == "unknown"
@@ -960,16 +961,16 @@ async def test_options_flow_added_pair_with_existing_code_confirm_clear(
 
     assert result["type"] == "menu"
     assert result["step_id"] == "existing_codes_confirm"
-    assert result["description_placeholders"]["slots"] == "2"
+    assert "slot 2" in result["description_placeholders"]["details"]
 
     # Confirm -> entry is updated AND only the newly-added slot (2) is cleared.
     # The pre-existing managed slot 1 must NOT be cleared even though it has a
     # non-empty code in _all_codes — we scoped to added pairs only.
     result = await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": "existing_codes_clear"}
+        flow_id, {"next_step_id": "existing_codes_continue"}
     )
     assert result["type"] == "create_entry"
-    mock_clear.assert_called_once_with(2, source="direct")
+    mock_clear.assert_not_called()
 
 
 async def test_options_flow_added_lock_with_existing_code_confirm_clear(
@@ -1001,13 +1002,13 @@ async def test_options_flow_added_lock_with_existing_code_confirm_clear(
         )
 
     assert result["step_id"] == "existing_codes_confirm"
-    assert result["description_placeholders"]["slots"] == "1"
+    assert "slot 1" in result["description_placeholders"]["details"]
 
     result = await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": "existing_codes_clear"}
+        flow_id, {"next_step_id": "existing_codes_continue"}
     )
     assert result["type"] == "create_entry"
-    mock_clear.assert_called_once_with(1, source="direct")
+    mock_clear.assert_not_called()
 
 
 async def test_options_flow_existing_codes_cancel_aborts(hass: HomeAssistant):
