@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e57e4b74516d",
+  "strategy": "manual-commit",
+  "branch": "fix/config-flow-clear-progress",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e5/7e4b74516d/0/metadata.json",
+      "transcript": "/e5/7e4b74516d/0/full.jsonl",
+      "content_hash": "/e5/7e4b74516d/0/content_hash.txt",
+      "prompt": "/e5/7e4b74516d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2714,
+    "cache_creation_tokens": 21686250,
+    "cache_read_tokens": 942130116,
+    "output_tokens": 546935,
+    "api_call_count": 2080
+  }
+}
