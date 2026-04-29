@@ -320,9 +320,6 @@ async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
 
 async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
     """UI path: existing codes detected -> confirm -> continue -> create entry."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
     existing = {LOCK_1_ENTITY_ID: {1: "1234"}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
@@ -356,7 +353,6 @@ async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
     assert result["type"] == "form"
     assert result["step_id"] == "code_slot"
     assert result["description_placeholders"]["slot_num"] == 1
-    mock_clear.assert_not_called()
 
     # Configure slot 1
     result = await hass.config_entries.flow.async_configure(
@@ -371,14 +367,10 @@ async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
     )
 
     assert result["type"] == "create_entry"
-    mock_clear.assert_not_called()
 
 
 async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
     """UI path: existing codes detected -> confirm -> cancel -> abort."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
     existing = {LOCK_1_ENTITY_ID: {1: "1234"}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
@@ -404,14 +396,10 @@ async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
 
     assert result["type"] == "abort"
     assert result["reason"] == "existing_codes_cancelled"
-    mock_clear.assert_not_called()
 
 
 async def test_yaml_existing_codes_confirm_continue(hass: HomeAssistant):
     """YAML path: existing codes detected -> confirm -> continue -> create entry."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
     existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
@@ -443,14 +431,10 @@ async def test_yaml_existing_codes_confirm_continue(hass: HomeAssistant):
 
     assert result["type"] == "create_entry"
     assert result["data"][CONF_SLOTS][1][CONF_PIN] == "1234"
-    mock_clear.assert_not_called()
 
 
 async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
     """YAML path: existing codes detected -> confirm -> cancel -> abort."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
     existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
@@ -477,7 +461,6 @@ async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
 
     assert result["type"] == "abort"
     assert result["reason"] == "existing_codes_cancelled"
-    mock_clear.assert_not_called()
 
 
 async def test_ui_no_existing_codes_skips_confirm(hass: HomeAssistant):
@@ -525,9 +508,6 @@ async def test_yaml_no_existing_codes_skips_confirm(hass: HomeAssistant):
 
 async def test_ui_existing_codes_confirm_lists_multiple_slots(hass: HomeAssistant):
     """Confirm step shows all slots with existing codes, sorted."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = AsyncMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
     existing = {LOCK_1_ENTITY_ID: {3: "1234", 1: "5678"}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
@@ -766,13 +746,6 @@ async def test_async_get_all_codes_missing_lock_config_entry(hass: HomeAssistant
 
 async def test_existing_codes_detected_across_multiple_locks(hass: HomeAssistant):
     """Test that existing codes are detected across multiple locks without clearing."""
-    mock_clear_ok = AsyncMock(return_value=True)
-    mock_clear_fail = AsyncMock(side_effect=RuntimeError("clear failed"))
-    mock_lock_ok = MagicMock()
-    mock_lock_ok.async_internal_clear_usercode = mock_clear_ok
-    mock_lock_fail = MagicMock()
-    mock_lock_fail.async_internal_clear_usercode = mock_clear_fail
-
     # Locks: one without an instance (skipped), one OK, one that fails,
     # one whose slot 1 is reported as EMPTY (must not be cleared), and one
     # that doesn't have slot 1 at all (must not be cleared)
@@ -805,8 +778,6 @@ async def test_existing_codes_detected_across_multiple_locks(hass: HomeAssistant
 
     # No clearing happens — sync manager handles reconciliation
     assert result["type"] == "create_entry"
-    mock_clear_ok.assert_not_called()
-    mock_clear_fail.assert_not_called()
 
 
 async def test_existing_codes_continue_without_next_step_aborts(hass: HomeAssistant):
@@ -896,10 +867,6 @@ async def test_options_flow_added_pair_with_existing_code_confirm(
     hass: HomeAssistant,
 ):
     """New (lock, slot) added and lock has code there -> confirm -> persist."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock = MagicMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
-
     flow_id, _ = await _start_options_flow(hass)
 
     # Adding slot 2; lock already has "9999" in slot 2 (and our managed "1234"
@@ -930,17 +897,12 @@ async def test_options_flow_added_pair_with_existing_code_confirm(
         flow_id, {"next_step_id": "existing_codes_continue"}
     )
     assert result["type"] == "create_entry"
-    mock_clear.assert_not_called()
 
 
 async def test_options_flow_added_lock_with_existing_code_confirm(
     hass: HomeAssistant,
 ):
     """A NEW lock (with codes in already-managed slot) triggers the confirm step."""
-    mock_clear = AsyncMock(return_value=True)
-    mock_lock_2 = MagicMock()
-    mock_lock_2.async_internal_clear_usercode = mock_clear
-
     flow_id, _ = await _start_options_flow(hass)
 
     # Add LOCK_2 to the entry. Slot 1 was already managed for LOCK_1, but
@@ -965,15 +927,10 @@ async def test_options_flow_added_lock_with_existing_code_confirm(
         flow_id, {"next_step_id": "existing_codes_continue"}
     )
     assert result["type"] == "create_entry"
-    mock_clear.assert_not_called()
 
 
 async def test_options_flow_existing_codes_cancel_aborts(hass: HomeAssistant):
     """Cancel from the confirm step aborts and does not change anything."""
-    mock_clear = AsyncMock()
-    mock_lock = MagicMock()
-    mock_lock.async_internal_clear_usercode = mock_clear
-
     flow_id, _ = await _start_options_flow(hass)
 
     with patch(
@@ -999,7 +956,6 @@ async def test_options_flow_existing_codes_cancel_aborts(hass: HomeAssistant):
 
     assert result["type"] == "abort"
     assert result["reason"] == "existing_codes_cancelled"
-    mock_clear.assert_not_called()
 
 
 async def test_options_flow_added_pair_empty_code_persists(hass: HomeAssistant):

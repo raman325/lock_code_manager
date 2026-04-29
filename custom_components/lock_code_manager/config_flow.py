@@ -590,7 +590,7 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
     async def _maybe_confirm_then_persist(
         self, user_input: dict[str, Any]
     ) -> dict[str, Any]:
-        """Scan added (lock, slot) pairs for codes; confirm clear if any.
+        """Scan added (lock, slot) pairs for codes; show confirmation if any exist.
 
         Compares the submitted (lock, slot) pairs against the entry's
         current configuration. If any newly-added pair has a non-empty
