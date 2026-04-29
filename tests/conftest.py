@@ -199,7 +199,8 @@ def mock_calendars_fixture(
 
 
 def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):
-    """Get the in-sync entity object for a given entity ID.
+    """
+    Get the in-sync entity object for a given entity ID.
 
     Returns the entity object from the entity component registry.
     """
@@ -212,7 +213,8 @@ def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):
 async def async_trigger_sync_tick(
     hass: HomeAssistant, entity_id: str, set_dirty: bool = True
 ) -> None:
-    """Manually trigger a sync tick for an in-sync entity.
+    """
+    Manually trigger a sync tick for an in-sync entity.
 
     Encapsulates the pattern of forcing an entity into a tickable state and
     triggering an immediate tick, useful for testing tick-based sync behavior
@@ -229,7 +231,8 @@ async def async_trigger_sync_tick(
 
 
 async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
-    """Trigger initial tick for entity setup.
+    """
+    Trigger initial tick for entity setup.
 
     During entity setup, the initial tick in async_start may fail if dependent
     entities (active, code sensor) are not yet registered. This helper triggers
@@ -245,7 +248,8 @@ async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
 async def async_trigger_sync_tick_for_manager(
     hass: HomeAssistant, sync_manager, set_dirty: bool = True
 ) -> None:
-    """Manually trigger a sync tick for a sync manager object.
+    """
+    Manually trigger a sync tick for a sync manager object.
 
     Useful when you already have the entity object or need to trigger
     ticks on multiple managers in a loop.

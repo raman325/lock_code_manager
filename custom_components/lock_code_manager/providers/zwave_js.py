@@ -1,4 +1,5 @@
-"""Z-Wave JS lock provider.
+"""
+Z-Wave JS lock provider.
 
 Handles push updates, duplicate code detection, and rate-limited set/clear operations.
 See ARCHITECTURE.md for the provider's role in the data flow.
@@ -355,7 +356,8 @@ class ZWaveJSLock(BaseLock):
         self._listeners.clear()
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Set up lock by provider.
+        """
+        Set up lock by provider.
 
         Idempotent: clears existing listeners before re-registering.
         """
@@ -382,7 +384,7 @@ class ZWaveJSLock(BaseLock):
         """Return whether the Z-Wave node is available for commands."""
         try:
             return self.node.status != NodeStatus.DEAD
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             _LOGGER.debug(
                 "Lock %s: failed to check device availability: %s",
                 self.lock.entity_id,
@@ -420,7 +422,7 @@ class ZWaveJSLock(BaseLock):
                         code_slot,
                     )
                     return False
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         self._set_in_progress_code_slot = code_slot
@@ -470,7 +472,7 @@ class ZWaveJSLock(BaseLock):
                     code_slot,
                 )
                 return False
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         service_data = {

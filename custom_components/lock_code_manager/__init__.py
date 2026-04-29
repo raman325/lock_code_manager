@@ -140,7 +140,8 @@ async def async_migrate_entry(
 
 @callback
 def _async_notify_lovelace_dashboards(hass: HomeAssistant) -> None:
-    """Fire lovelace_updated for each registered dashboard.
+    """
+    Fire lovelace_updated for each registered dashboard.
 
     This triggers the "Configuration changed" toast in the Home Assistant
     frontend, prompting users to refresh the dashboard so the strategy

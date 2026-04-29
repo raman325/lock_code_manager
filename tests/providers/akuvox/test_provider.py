@@ -395,7 +395,8 @@ class TestListUsersErrors:
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that a non-dict service response raises LockDisconnected.
+        """
+        Test that a non-dict service response raises LockDisconnected.
 
         Home Assistant's service layer rejects non-dict return values when
         return_response=True, so the service call itself raises HomeAssistantError

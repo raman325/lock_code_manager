@@ -215,12 +215,11 @@ async def test_reauth(hass: HomeAssistant, lock_code_manager_config_entry):
     """Test reauth."""
     assert (
         len(
-            [
-                flow
-                for flow in lock_code_manager_config_entry.async_get_active_flows(
+            list(
+                lock_code_manager_config_entry.async_get_active_flows(
                     hass, {SOURCE_REAUTH}
                 )
-            ]
+            )
         )
         == 1
     )
@@ -1026,7 +1025,8 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Suspension on one entry's slot affects another entry's out-of-sync slots on the same lock.
+    """
+    Suspension on one entry's slot affects another entry's out-of-sync slots on the same lock.
 
     Lock-level suspension is by design: when one slot's circuit breaker trips,
     ALL sync managers on that lock are blocked from syncing. This prevents a

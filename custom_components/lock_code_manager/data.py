@@ -17,7 +17,8 @@ _EMPTY_SLOTS: Mapping[int, Mapping[str, Any]] = MappingProxyType({})
 
 @dataclass(frozen=True, slots=True)
 class EntryConfig:
-    """Typed, normalized view of an LCM entry's configuration.
+    """
+    Typed, normalized view of an LCM entry's configuration.
 
     Slot keys are normalized to ``int`` at construction (the on-disk
     JSON representation uses ``str``; voluptuous-validated user input
@@ -37,7 +38,8 @@ class EntryConfig:
 
     @classmethod
     def empty(cls) -> EntryConfig:
-        """Return a config representing an entry with no locks or slots.
+        """
+        Return a config representing an entry with no locks or slots.
 
         Used as the initial value for ``runtime_data.config`` before the
         entry's data has been read.
@@ -46,7 +48,8 @@ class EntryConfig:
 
     @classmethod
     def from_entry(cls, entry: ConfigEntry) -> EntryConfig:
-        """Build EntryConfig from a config entry, options-preferred.
+        """
+        Build EntryConfig from a config entry, options-preferred.
 
         Uses options-preferred precedence: during options-flow updates
         the new config is in ``options`` while ``data`` still holds the
@@ -65,7 +68,8 @@ class EntryConfig:
 
     @classmethod
     def from_mapping(cls, mapping: Mapping[str, Any]) -> EntryConfig:
-        """Build EntryConfig from a raw config mapping (data, options, or input).
+        """
+        Build EntryConfig from a raw config mapping (data, options, or input).
 
         Slot keys are normalized to ``int`` regardless of source. Inner
         slot config dicts are wrapped in ``MappingProxyType`` so the
@@ -85,7 +89,8 @@ class EntryConfig:
         return lock_entity_id in self.locks
 
     def has_slot(self, slot_num: int | str) -> bool:
-        """Return True if this entry manages the given slot number.
+        """
+        Return True if this entry manages the given slot number.
 
         Accepts ``int`` or ``str`` to absorb the slot-key type variance
         in the codebase (entities created during the listener may carry
@@ -95,7 +100,8 @@ class EntryConfig:
         return int(slot_num) in self.slots
 
     def slot(self, slot_num: int | str) -> Mapping[str, Any]:
-        """Return the slot config dict, or an empty mapping if absent.
+        """
+        Return the slot config dict, or an empty mapping if absent.
 
         Like :meth:`has_slot`, accepts ``int`` or ``str`` so callers
         don't need to cast at every read site.
@@ -103,7 +109,8 @@ class EntryConfig:
         return self.slots.get(int(slot_num), {})
 
     def __sub__(self, other: EntryConfig) -> EntryConfigDiff:
-        """Return the diff from ``self`` (old) to ``other`` (new).
+        """
+        Return the diff from ``self`` (old) to ``other`` (new).
 
         Sugar for ``EntryConfigDiff(old=self, new=other)``. Reads as
         ``old_config - new_config`` — note this is a *delta* (both adds
@@ -122,7 +129,8 @@ class EntryConfig:
     def with_slot_field_set(
         self, slot_num: int | str, key: str, value: Any
     ) -> EntryConfig:
-        """Return a new EntryConfig with one slot's field set to ``value``.
+        """
+        Return a new EntryConfig with one slot's field set to ``value``.
 
         Creates the slot if it doesn't already exist. Used by writer
         paths (entity field updates, condition entity set service) to
@@ -142,7 +150,8 @@ class EntryConfig:
         )
 
     def with_slot_field_removed(self, slot_num: int | str, key: str) -> EntryConfig:
-        """Return a new EntryConfig with one slot's field removed.
+        """
+        Return a new EntryConfig with one slot's field removed.
 
         No-op (returns ``self``) if the slot or key is already absent.
         """
@@ -161,7 +170,8 @@ class EntryConfig:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a plain mutable dict suitable for ``async_update_entry``.
+        """
+        Return a plain mutable dict suitable for ``async_update_entry``.
 
         Only includes the keys EntryConfig knows about (CONF_LOCKS and
         CONF_SLOTS). Inner slot dicts are plain ``dict`` (not
@@ -179,7 +189,8 @@ class EntryConfig:
 
 
 def get_entry_config(entry: ConfigEntry) -> EntryConfig:
-    """Return the EntryConfig view of ``entry``.
+    """
+    Return the EntryConfig view of ``entry``.
 
     Prefers the cached instance on ``entry.runtime_data.config`` (set by
     the listener during setup and on every update) and falls back to
@@ -207,7 +218,8 @@ def get_managed_slots(hass: HomeAssistant, lock_entity_id: str) -> set[int]:
 def find_entry_for_lock_slot(
     hass: HomeAssistant, lock_entity_id: str, code_slot: int | str
 ) -> ConfigEntry | None:
-    """Find the config entry that manages a specific lock + slot combination.
+    """
+    Find the config entry that manages a specific lock + slot combination.
 
     Returns None if no entry manages this lock/slot. There can be at most one
     due to the config entry uniqueness constraint.
@@ -225,7 +237,8 @@ def find_entry_for_lock_slot(
 
 @dataclass(frozen=True, slots=True)
 class EntryConfigDiff:
-    """Diff between two LCM entry configurations.
+    """
+    Diff between two LCM entry configurations.
 
     Constructed directly from the two configs being compared:
 
@@ -339,7 +352,8 @@ def build_slot_unique_id(
     key: str,
     lock_entity_id: str | None = None,
 ) -> str:
-    """Build the unique ID for a slot entity.
+    """
+    Build the unique ID for a slot entity.
 
     Standard: {entry_id}|{slot_num}|{key}
     Per-lock:  {entry_id}|{slot_num}|{key}|{lock_entity_id}

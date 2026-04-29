@@ -22,7 +22,8 @@ class AcknowledgeRepairFlow(RepairsFlow):
 
 
 class NumberOfUsesDeprecatedFlow(RepairsFlow):
-    """Handler for the number_of_uses deprecation repair.
+    """
+    Handler for the number_of_uses deprecation repair.
 
     When the user confirms, strips number_of_uses from all slot configs
     in the config entry.

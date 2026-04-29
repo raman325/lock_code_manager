@@ -49,7 +49,8 @@ def _entity_states_for_device(
     ent_reg: er.EntityRegistry,
     device_id: str,
 ) -> list[dict[str, Any]]:
-    """Return entity states for all entities on a device.
+    """
+    Return entity states for all entities on a device.
 
     Sensitive entities (PIN text, code sensor) have their state and
     attributes redacted to avoid leaking PINs in diagnostics output.

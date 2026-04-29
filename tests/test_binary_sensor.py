@@ -1009,7 +1009,8 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that stale sync attempts outside the window do not trigger the circuit breaker.
+    """
+    Test that stale sync attempts outside the window do not trigger the circuit breaker.
 
     When the attempt window expires, _record_sync_attempt resets the counter,
     preventing stale counts from triggering the breaker on a new sync cycle.
@@ -1534,7 +1535,8 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """A coordinator push_update during _perform_sync does not corrupt the state machine.
+    """
+    A coordinator push_update during _perform_sync does not corrupt the state machine.
 
     Scenario: sync manager is SYNCING (awaiting set_usercode). While waiting,
     the coordinator gets a push_update with different data. The _request_sync_check
@@ -1608,7 +1610,8 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Stopping the sync manager while a sync tick is in progress does not raise.
+    """
+    Stopping the sync manager while a sync tick is in progress does not raise.
 
     Scenario: sync manager is SYNCING. Config entry unloads, calling async_stop()
     which sets _started = False. The tick should gracefully finish or bail out.
@@ -1676,7 +1679,8 @@ async def test_pin_change_during_sync_uses_snapshot(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Sync uses the PIN snapshot captured at tick start, not live state.
+    """
+    Sync uses the PIN snapshot captured at tick start, not live state.
 
     The sync manager's _async_tick_impl captures slot_state (including PIN)
     synchronously before any awaits. The PIN passed to _perform_sync is the
@@ -1762,7 +1766,8 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """If coordinator refresh fails after a successful sync, retry on next tick.
+    """
+    If coordinator refresh fails after a successful sync, retry on next tick.
 
     This exercises the try/except around coordinator.async_refresh() in
     _async_tick_impl. The sync succeeded but we cannot verify it.
@@ -1821,7 +1826,8 @@ async def test_multiple_slots_sync_sequentially_not_concurrently(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """Each slot's sync operation runs sequentially via the lock's asyncio lock.
+    """
+    Each slot's sync operation runs sequentially via the lock's asyncio lock.
 
     Two slots out of sync should not cause concurrent set_usercode calls
     on the same lock -- the _aio_lock serializes them.
@@ -1916,7 +1922,8 @@ async def test_slot_disabled_during_sync_resolves_correctly(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Disabling a slot while sync is pending causes a clear instead of a set.
+    """
+    Disabling a slot while sync is pending causes a clear instead of a set.
 
     Scenario: slot is OUT_OF_SYNC, user disables the slot via the enabled switch.
     Next tick should see active_state=OFF and clear the code instead of setting it.
@@ -1978,7 +1985,8 @@ async def test_rapid_coordinator_updates_coalesce(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Multiple rapid push_updates do not cause problems.
+    """
+    Multiple rapid push_updates do not cause problems.
 
     _request_sync_check should be idempotent -- calling it many times while
     in OUT_OF_SYNC should not cause issues, and the sync manager should use

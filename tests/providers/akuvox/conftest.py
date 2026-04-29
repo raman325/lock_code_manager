@@ -133,7 +133,8 @@ AKUVOX_LCM_CONFIG_SLOTS = {
 
 @pytest.fixture
 async def akuvox_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
-    """Create an Akuvox config entry (LOADED), device, and lock entity.
+    """
+    Create an Akuvox config entry (LOADED), device, and lock entity.
 
     Sets the config entry to LOADED state so the provider's
     async_is_integration_connected check passes.
@@ -170,7 +171,8 @@ def akuvox_mock_services(
     hass: HomeAssistant,
     akuvox_lock_entity: er.RegistryEntry,
 ) -> dict[str, AsyncMock]:
-    """Register mock Akuvox services needed for the full LCM setup path.
+    """
+    Register mock Akuvox services needed for the full LCM setup path.
 
     Returns a dict of service name to handler so E2E tests can inspect
     call counts or swap side effects.
@@ -206,7 +208,8 @@ async def e2e_lcm_config_entry(
     akuvox_lock_entity: er.RegistryEntry,
     akuvox_mock_services: dict[str, AsyncMock],
 ) -> AsyncGenerator[MockConfigEntry]:
-    """Set up a full LCM config entry managing the Akuvox lock.
+    """
+    Set up a full LCM config entry managing the Akuvox lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the local_akuvox platform and instantiates AkuvoxLock.

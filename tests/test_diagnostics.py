@@ -83,7 +83,8 @@ async def test_device_diagnostics_lock_device(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ) -> None:
-    """Test device diagnostics for a lock device.
+    """
+    Test device diagnostics for a lock device.
 
     The test mock may not create a device_entry for the lock. If that's the
     case, verify the fallback to config entry diagnostics instead.

@@ -1,4 +1,5 @@
-"""Typed callback registry for entity lifecycle management.
+"""
+Typed callback registry for entity lifecycle management.
 
 Platforms register entity-creation callbacks; entities register
 their own removal callbacks.
@@ -63,7 +64,8 @@ UnregisterFunc = Callable[[], None]
 
 @dataclass
 class EntityCallbackRegistry:
-    """Registry of entity lifecycle callbacks.
+    """
+    Registry of entity lifecycle callbacks.
 
     Entity Types:
         Standard: Entities created once per slot (e.g., enabled switch, name/PIN
@@ -260,7 +262,8 @@ class EntityCallbackRegistry:
 
     @callback
     def invoke_lock_removed_handlers(self, lock_entity_id: str) -> None:
-        """Invoke lock-removed callbacks.
+        """
+        Invoke lock-removed callbacks.
 
         Iterates a snapshot of the handler list because handlers may
         unregister themselves (or other handlers) during invocation.

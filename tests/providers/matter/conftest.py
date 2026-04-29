@@ -128,7 +128,8 @@ async def matter_lock_simple(
 
 @pytest.fixture
 async def simple_lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create a Lock Code Manager config entry that manages slots 1 and 2.
+    """
+    Create a Lock Code Manager config entry that manages slots 1 and 2.
 
     This is a lightweight entry for unit tests that don't need the full LCM
     setup path. It only adds slot configuration data so that managed_slots
@@ -180,7 +181,8 @@ async def lock_entity(hass: HomeAssistant, matter_node: MatterNode) -> er.Regist
 
 @pytest.fixture
 def matter_mock_helpers() -> dict[str, AsyncMock]:
-    """Provide mock lock_helpers functions and patch them into the provider module.
+    """
+    Provide mock lock_helpers functions and patch them into the provider module.
 
     Returns a dict of helper name to AsyncMock so E2E tests can inspect
     call counts or swap side effects.
@@ -229,7 +231,8 @@ async def lcm_config_entry(
     lock_entity: er.RegistryEntry,
     matter_mock_helpers: dict[str, AsyncMock],
 ) -> MockConfigEntry:
-    """Set up a full LCM config entry managing the Matter lock.
+    """
+    Set up a full LCM config entry managing the Matter lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the matter platform and instantiates MatterLock.

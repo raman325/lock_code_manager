@@ -35,7 +35,8 @@ Z2M_LOCK_UNIQUE_ID = "test_z2m"
 
 @dataclass
 class MqttMessageBus:
-    """Lightweight MQTT message bus for E2E testing.
+    """
+    Lightweight MQTT message bus for E2E testing.
 
     Tracks subscriptions and publishes so tests can fire incoming messages
     and verify outgoing publishes without a real Paho client.
@@ -64,7 +65,8 @@ class MqttMessageBus:
         self.publishes.append((topic, payload))
 
     def fire_message(self, topic: str, payload: dict[str, Any]) -> None:
-        """Simulate an incoming MQTT message on a topic.
+        """
+        Simulate an incoming MQTT message on a topic.
 
         Creates a ReceiveMessage-like object and dispatches to all
         registered callbacks for the topic.
@@ -104,7 +106,8 @@ def mqtt_bus() -> MqttMessageBus:
 
 @pytest.fixture
 def mqtt_patches(mqtt_bus: MqttMessageBus):
-    """Patch async_subscribe and async_publish at the HA MQTT component boundary.
+    """
+    Patch async_subscribe and async_publish at the HA MQTT component boundary.
 
     Also patches mqtt_config_entry_enabled to return True so the provider
     does not bail out during setup.
@@ -155,7 +158,8 @@ def mqtt_patches(mqtt_bus: MqttMessageBus):
 
 @pytest.fixture
 async def mqtt_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
-    """Create an MQTT config entry, Z2M device, and lock entity.
+    """
+    Create an MQTT config entry, Z2M device, and lock entity.
 
     Sets the MQTT config entry to LOADED state so the provider's
     async_is_integration_connected check passes.
@@ -193,7 +197,8 @@ async def lcm_config_entry(
     mqtt_lock_entity: er.RegistryEntry,
     mqtt_patches,
 ) -> MockConfigEntry:
-    """Set up a full LCM config entry managing the Z2M lock.
+    """
+    Set up a full LCM config entry managing the Z2M lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the mqtt platform, instantiates Zigbee2MQTTLock,

@@ -123,7 +123,8 @@ class TestGetUsercodes:
         hass: HomeAssistant,
         e2e_zwave_lock: ZWaveJSLock,
     ) -> None:
-        """Get usercodes returns the fixture's cached codes.
+        """
+        Get usercodes returns the fixture's cached codes.
 
         The node fixture has slot 1="9999" (in_use), slot 2="1234" (in_use),
         and slot 3=empty (not in_use).
@@ -144,7 +145,8 @@ class TestEvents:
         e2e_zwave_lock: ZWaveJSLock,
         lock_schlage_be469: Node,
     ) -> None:
-        """Fire a Z-Wave notification event and verify LCM processes it.
+        """
+        Fire a Z-Wave notification event and verify LCM processes it.
 
         A keypad lock notification (type 6, event 5) should be handled by the
         provider's event listener. We verify the listener is active by checking

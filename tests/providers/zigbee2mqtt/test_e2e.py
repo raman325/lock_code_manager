@@ -184,7 +184,8 @@ class TestGetUsercodes:
         z2m_lock,
         mqtt_bus: MqttMessageBus,
     ) -> None:
-        """async_get_usercodes publishes GET requests for all managed slots.
+        """
+        async_get_usercodes publishes GET requests for all managed slots.
 
         The auto-responder in the fixture responds with empty slots,
         so the result should contain EMPTY for each slot.

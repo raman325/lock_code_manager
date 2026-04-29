@@ -37,14 +37,13 @@ async def zwave_js_lock_fixture(
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
 
-    lock = ZWaveJSLock(
+    return ZWaveJSLock(
         hass=hass,
         dev_reg=dev_reg,
         ent_reg=ent_reg,
         lock_config_entry=zwave_integration,
         lock=lock_entity,
     )
-    return lock
 
 
 @pytest.fixture(autouse=True)
@@ -275,7 +274,8 @@ async def test_set_usercode_proceeds_on_cache_failure(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that set_usercode proceeds when the cache lookup raises.
+    """
+    Test that set_usercode proceeds when the cache lookup raises.
 
     A stale or missing cache entry must not block the set operation —
     the bare-except in the cache short-circuit guards against this.
@@ -318,7 +318,8 @@ async def test_clear_usercode_proceeds_on_cache_failure(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
 ) -> None:
-    """Test that clear_usercode proceeds when the cache lookup raises.
+    """
+    Test that clear_usercode proceeds when the cache lookup raises.
 
     Mirrors test_set_usercode_proceeds_on_cache_failure for the clear path.
     """
@@ -512,7 +513,8 @@ async def test_v1_set_usercode_poll_failure_raises_lock_disconnected(
     zwave_integration: MockConfigEntry,
     mock_get_usercode_from_node,
 ) -> None:
-    """Test that a V1 set poll failure raises LockDisconnected.
+    """
+    Test that a V1 set poll failure raises LockDisconnected.
 
     When get_usercode_from_node raises after a V1 set operation, the error
     should be wrapped as LockDisconnected so it routes into the retry path
@@ -542,7 +544,8 @@ async def test_v1_clear_usercode_poll_failure_raises_lock_disconnected(
     zwave_integration: MockConfigEntry,
     mock_get_usercode_from_node,
 ) -> None:
-    """Test that a V1 clear poll failure raises LockDisconnected.
+    """
+    Test that a V1 clear poll failure raises LockDisconnected.
 
     When get_usercode_from_node raises after a V1 clear operation, the error
     should be wrapped as LockDisconnected so it routes into the retry path
@@ -572,7 +575,8 @@ async def test_v1_set_usercode_poll_non_zwave_error_propagates(
     zwave_integration: MockConfigEntry,
     mock_get_usercode_from_node,
 ) -> None:
-    """Non-Z-Wave errors from V1 post-set poll propagate uncaught.
+    """
+    Non-Z-Wave errors from V1 post-set poll propagate uncaught.
 
     Only FailedZWaveCommand is wrapped as LockDisconnected. Other
     exceptions (programming errors) should propagate so the sync

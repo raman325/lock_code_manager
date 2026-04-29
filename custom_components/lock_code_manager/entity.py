@@ -222,8 +222,8 @@ class BaseLockCodeManagerEntity(Entity):
         ):
             return
 
-        if (from_state and STATE_UNAVAILABLE != from_state.state) and (
-            to_state and STATE_UNAVAILABLE != to_state.state
+        if (from_state and from_state.state != STATE_UNAVAILABLE) and (
+            to_state and to_state.state != STATE_UNAVAILABLE
         ):
             return
 

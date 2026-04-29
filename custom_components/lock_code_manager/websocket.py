@@ -126,9 +126,16 @@ def _get_text_state(hass: HomeAssistant, entity_id: str | None) -> str | None:
     """Get text state from an entity, returning None if unavailable."""
     if not entity_id:
         return None
-    if state := hass.states.get(entity_id):
-        if state.state and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            return state.state
+    if (
+        (state := hass.states.get(entity_id))
+        and state.state
+        and state.state
+        not in (
+            STATE_UNKNOWN,
+            STATE_UNAVAILABLE,
+        )
+    ):
+        return state.state
     return None
 
 
@@ -148,12 +155,19 @@ def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
     """Get integer state from a number entity, returning None if unavailable."""
     if not entity_id:
         return None
-    if state := hass.states.get(entity_id):
-        if state.state and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            try:
-                return int(float(state.state))
-            except ValueError, TypeError:
-                return None
+    if (
+        (state := hass.states.get(entity_id))
+        and state.state
+        and state.state
+        not in (
+            STATE_UNKNOWN,
+            STATE_UNAVAILABLE,
+        )
+    ):
+        try:
+            return int(float(state.state))
+        except ValueError, TypeError:
+            return None
     return None
 
 
@@ -470,9 +484,10 @@ def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list
 def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
     """Get the friendly name for a lock, using state attributes as primary source."""
     # Prefer the friendly_name from state (what HA displays in the UI)
-    if state := hass.states.get(lock.lock.entity_id):
-        if friendly_name := state.attributes.get(ATTR_FRIENDLY_NAME):
-            return friendly_name
+    if (state := hass.states.get(lock.lock.entity_id)) and (
+        friendly_name := state.attributes.get(ATTR_FRIENDLY_NAME)
+    ):
+        return friendly_name
     # Fall back to entity registry name/original_name
     return lock.display_name
 
@@ -732,11 +747,12 @@ def _get_last_used_info(
         return None, None
     last_used = event_state.state
     last_used_lock_name: str | None = None
-    if last_used_lock_id := event_state.attributes.get("event_type"):
-        if lock_state := hass.states.get(last_used_lock_id):
-            last_used_lock_name = lock_state.attributes.get(
-                ATTR_FRIENDLY_NAME, last_used_lock_id
-            )
+    if (last_used_lock_id := event_state.attributes.get("event_type")) and (
+        lock_state := hass.states.get(last_used_lock_id)
+    ):
+        last_used_lock_name = lock_state.attributes.get(
+            ATTR_FRIENDLY_NAME, last_used_lock_id
+        )
     return last_used, last_used_lock_name
 
 
@@ -842,7 +858,7 @@ async def _get_next_calendar_event(
 
         return next_event_data if next_event_data else None
 
-    except Exception:  # noqa: BLE001 - Catch-all: calendar fetch is best-effort
+    except Exception:
         _LOGGER.debug("Failed to fetch next calendar event for %s", calendar_entity_id)
         return None
 
@@ -929,17 +945,18 @@ def _serialize_slot_card_data(
     # Conditions
     if number_of_uses is not None:
         result[CONF_CONDITIONS][CONF_NUMBER_OF_USES] = number_of_uses
-    if condition_entity_id:
-        # Include condition entity data (handles both calendar and non-calendar entities)
-        if condition_data := _get_condition_entity_data(hass, condition_entity_id):
-            result[CONF_CONDITIONS][ATTR_CONDITION_ENTITY] = condition_data
-            # Add next calendar event if available (for inactive calendar conditions)
-            if (
-                calendar_next_event
-                and condition_data.get(ATTR_CONDITION_ENTITY_DOMAIN) == CALENDAR_DOMAIN
-                and condition_data.get(ATTR_CONDITION_ENTITY_STATE) != STATE_ON
-            ):
-                condition_data[ATTR_CALENDAR_NEXT] = calendar_next_event
+    # Include condition entity data (handles both calendar and non-calendar entities)
+    if condition_entity_id and (
+        condition_data := _get_condition_entity_data(hass, condition_entity_id)
+    ):
+        result[CONF_CONDITIONS][ATTR_CONDITION_ENTITY] = condition_data
+        # Add next calendar event if available (for inactive calendar conditions)
+        if (
+            calendar_next_event
+            and condition_data.get(ATTR_CONDITION_ENTITY_DOMAIN) == CALENDAR_DOMAIN
+            and condition_data.get(ATTR_CONDITION_ENTITY_STATE) != STATE_ON
+        ):
+            condition_data[ATTR_CALENDAR_NEXT] = calendar_next_event
 
     return result
 
@@ -1124,7 +1141,8 @@ async def ws_set_usercode(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Set a usercode on a lock slot.
+    """
+    Set a usercode on a lock slot.
 
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
@@ -1136,7 +1154,7 @@ async def ws_set_usercode(
         connection.send_result(msg["id"], {"success": True})
     except ServiceValidationError as err:
         connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
-    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
+    except Exception as err:
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_UNKNOWN_ERROR,
@@ -1157,7 +1175,8 @@ async def ws_clear_usercode(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Clear a usercode from a lock slot.
+    """
+    Clear a usercode from a lock slot.
 
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
@@ -1167,7 +1186,7 @@ async def ws_clear_usercode(
         connection.send_result(msg["id"], {"success": True})
     except ServiceValidationError as err:
         connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
-    except Exception as err:  # noqa: BLE001 - WS handler must catch all to send error response
+    except Exception as err:
         connection.send_error(
             msg["id"],
             websocket_api.const.ERR_UNKNOWN_ERROR,
@@ -1192,7 +1211,8 @@ async def ws_set_slot_condition(
     msg: dict[str, Any],
     config_entry: ConfigEntry,
 ) -> None:
-    """Set a condition entity for a slot.
+    """
+    Set a condition entity for a slot.
 
     The condition entity must exist in hass.states and must not belong to an
     excluded platform (for example, the scheduler integration).

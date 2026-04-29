@@ -1,4 +1,5 @@
-"""ZHA (Zigbee Home Automation) lock provider.
+"""
+ZHA (Zigbee Home Automation) lock provider.
 
 Communicates with Zigbee locks via the zigpy DoorLock cluster through ZHA.
 Supports push updates via cluster listeners for operation events (lock/unlock
@@ -63,7 +64,8 @@ OPERATION_SOURCE_NAMES: dict[int, str] = {
 
 @dataclass(repr=False, eq=False)
 class ZHALock(BaseLock):
-    """ZHA lock provider.
+    """
+    ZHA lock provider.
 
     Push updates come from zigpy cluster listeners:
     - ``programming_event_notification`` (0x21): PIN added/deleted/changed
@@ -87,7 +89,8 @@ class ZHALock(BaseLock):
 
     @property
     def supports_push(self) -> bool:
-        """Return whether this lock supports push-based updates.
+        """
+        Return whether this lock supports push-based updates.
 
         Always True — we subscribe to cluster events for operation
         notifications (lock/unlock with user ID).  Programming event support
@@ -97,7 +100,8 @@ class ZHALock(BaseLock):
 
     @property
     def hard_refresh_interval(self) -> timedelta | None:
-        """Return interval for drift detection.
+        """
+        Return interval for drift detection.
 
         One hour if the lock lacks programming event notifications, otherwise
         None (push handles code changes).
@@ -114,7 +118,8 @@ class ZHALock(BaseLock):
     # -- Setup ---------------------------------------------------------------
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Initialize provider state and detect programming event support.
+        """
+        Initialize provider state and detect programming event support.
 
         Called on initial setup AND on integration reconnect, so we clear
         cached cluster references (which may be stale after a ZHA reload)
@@ -384,7 +389,8 @@ class ZHALock(BaseLock):
             self._handle_operation_event(args)
 
     def _handle_programming_event(self, args: Any) -> None:
-        """Handle programming event (PIN added/deleted/changed).
+        """
+        Handle programming event (PIN added/deleted/changed).
 
         Triggers a coordinator refresh to pick up the new code state.
         """
@@ -423,7 +429,8 @@ class ZHALock(BaseLock):
             )
 
     def _handle_operation_event(self, args: Any) -> None:
-        """Handle operation event (lock/unlock with user ID).
+        """
+        Handle operation event (lock/unlock with user ID).
 
         Fires a code slot event so automations can react to lock usage.
         """
@@ -473,7 +480,8 @@ class ZHALock(BaseLock):
     # -- Programming event support detection ---------------------------------
 
     async def _async_check_programming_event_support(self) -> bool:
-        """Check if the lock supports programming event notifications.
+        """
+        Check if the lock supports programming event notifications.
 
         Reads event mask attributes to determine if the lock will send
         programming_event_notification when codes change.

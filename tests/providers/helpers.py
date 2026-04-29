@@ -1,4 +1,5 @@
-"""Shared test mixins and helpers for service-based lock providers.
+"""
+Shared test mixins and helpers for service-based lock providers.
 
 Service-based providers (Matter, Schlage, Akuvox) communicate with their
 respective integrations via Home Assistant services. They share common
@@ -36,7 +37,8 @@ def register_mock_service(
     service_name: str,
     handler: AsyncMock,
 ) -> None:
-    """Register a mock service that supports responses.
+    """
+    Register a mock service that supports responses.
 
     Replaces the per-provider _register_<provider>_service helpers that were
     identical except for the domain string.
@@ -54,7 +56,8 @@ def register_mock_service(
 
 
 class ServiceProviderConnectionTests:
-    """Shared connection tests for service-based providers.
+    """
+    Shared connection tests for service-based providers.
 
     Service-based providers (Matter, Schlage, Akuvox) all use the same pattern
     for async_is_integration_connected: check that the lock's config entry exists
@@ -103,7 +106,8 @@ class ServiceProviderConnectionTests:
 
 
 class ServiceProviderDeviceAvailabilityTests:
-    """Shared device availability tests for providers that use service calls.
+    """
+    Shared device availability tests for providers that use service calls.
 
     Subclasses must define a class attribute:
         availability_service: str - the service name used to check availability

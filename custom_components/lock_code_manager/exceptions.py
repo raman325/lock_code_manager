@@ -15,7 +15,8 @@ class LockCodeManagerError(HomeAssistantError):
 
 
 class LockCodeManagerProviderError(LockCodeManagerError):
-    """Base class for exceptions raised by lock providers.
+    """
+    Base class for exceptions raised by lock providers.
 
     Subclasses cover real provider-side failures: communication problems
     (``LockDisconnected``), the lock rejecting a code (``CodeRejectedError``,
@@ -84,7 +85,8 @@ class LockDisconnected(LockCodeManagerProviderError):
 
 
 class LockOperationFailed(LockCodeManagerProviderError):
-    """Raised when the lock is reachable but the operation failed.
+    """
+    Raised when the lock is reachable but the operation failed.
 
     This covers cases like the lock not supporting a requested operation
     or the provider rejecting the command for a lock-side reason. Unlike

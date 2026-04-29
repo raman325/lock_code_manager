@@ -783,7 +783,8 @@ async def test_lock_offline_issue_persists_across_shutdown(
     poll_lock: MockLCMLock,
     hass: HomeAssistant,
 ) -> None:
-    """Test that lock_offline repair issue persists across coordinator shutdown.
+    """
+    Test that lock_offline repair issue persists across coordinator shutdown.
 
     The issue is persistent and only cleaned up on entry unload or recovery.
     """

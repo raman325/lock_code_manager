@@ -85,7 +85,8 @@ def test_diff_no_changes() -> None:
 
 
 def test_diff_str_keys_match_int_keys() -> None:
-    """Stored data has str slot keys; voluptuous output has int.
+    """
+    Stored data has str slot keys; voluptuous output has int.
 
     EntryConfig.from_mapping normalizes keys to int up front, so by the
     time the diff is computed both sides are int-keyed and ``"1"`` /
@@ -121,7 +122,8 @@ def test_diff_slot_dicts_always_int_keyed() -> None:
 
 
 def test_diff_pair_added_for_new_lock_with_existing_slot() -> None:
-    """A new lock with a slot already managed elsewhere is a NEW pair.
+    """
+    A new lock with a slot already managed elsewhere is a NEW pair.
 
     This is the key options-flow case: user has lock.a managing slot 1,
     then adds lock.b — (lock.b, 1) is a brand-new pair to scan, even
@@ -165,7 +167,8 @@ def test_subtraction_operator_is_diff_sugar() -> None:
 
 
 def test_subtraction_with_non_entry_config_raises_type_error() -> None:
-    """``cfg - non_config`` returns NotImplemented -> Python raises TypeError.
+    """
+    ``cfg - non_config`` returns NotImplemented -> Python raises TypeError.
 
     Without the isinstance guard, the operator would succeed and the
     error would surface deep inside EntryConfigDiff.__post_init__ as
@@ -184,7 +187,8 @@ def test_subtraction_with_non_entry_config_raises_type_error() -> None:
 
 
 def test_diff_is_deeply_immutable() -> None:
-    """EntryConfigDiff fields are immutable containers — safe as cached state.
+    """
+    EntryConfigDiff fields are immutable containers — safe as cached state.
 
     The dataclass is frozen (attribute reassignment blocked) AND the
     contained dicts/sets/lists are immutable variants
@@ -228,7 +232,8 @@ def test_diff_is_deeply_immutable() -> None:
 
 
 def test_diff_snapshots_inner_slot_dicts() -> None:
-    """Mutating the source slot config after diff is built doesn't leak in.
+    """
+    Mutating the source slot config after diff is built doesn't leak in.
 
     The defensive ``dict(v)`` copy inside __post_init__ snapshots slot
     configs at construction time — later mutations to the original
@@ -259,7 +264,8 @@ def test_entry_config_empty() -> None:
 
 
 def test_entry_config_from_mapping_normalizes_str_slot_keys_to_int() -> None:
-    """from_mapping normalizes str slot keys (JSON storage) to int.
+    """
+    from_mapping normalizes str slot keys (JSON storage) to int.
 
     The whole point of EntryConfig: every consumer sees int keys
     regardless of how the config was loaded.
@@ -268,11 +274,12 @@ def test_entry_config_from_mapping_normalizes_str_slot_keys_to_int() -> None:
         {CONF_LOCKS: ["lock.a"], CONF_SLOTS: {"1": _slot(), "2": _slot()}}
     )
     assert set(config.slots.keys()) == {1, 2}
-    assert all(isinstance(k, int) for k in config.slots.keys())
+    assert all(isinstance(k, int) for k in config.slots)
 
 
 def test_entry_config_accessors_absorb_str_or_int_slot_num() -> None:
-    """has_slot / slot accept either type and normalize internally.
+    """
+    has_slot / slot accept either type and normalize internally.
 
     Lets callers stop carrying ``int(slot_num)`` casts at every read
     site. The internal storage is still ``int``-keyed; the accessors
@@ -340,7 +347,8 @@ def test_entry_config_is_deeply_immutable() -> None:
 
 
 def test_get_entry_config_uses_runtime_data_when_present() -> None:
-    """get_entry_config returns the cached EntryConfig from runtime_data.
+    """
+    get_entry_config returns the cached EntryConfig from runtime_data.
 
     No fresh construction — same instance is returned, allowing the
     listener's cache to act as a true singleton view of the entry.
@@ -364,7 +372,8 @@ def test_get_entry_config_uses_runtime_data_when_present() -> None:
 
 
 def test_get_entry_config_falls_back_when_no_runtime_data() -> None:
-    """get_entry_config builds fresh from raw data if runtime_data is absent.
+    """
+    get_entry_config builds fresh from raw data if runtime_data is absent.
 
     Covers iteration over hass.config_entries.async_entries(DOMAIN) which
     may yield entries not yet loaded.
@@ -382,7 +391,8 @@ def test_get_entry_config_falls_back_when_no_runtime_data() -> None:
 
 
 def test_get_entry_config_falls_back_when_runtime_data_lacks_config() -> None:
-    """If runtime_data exists but doesn't have a .config attr, fall back.
+    """
+    If runtime_data exists but doesn't have a .config attr, fall back.
 
     Defends against the brief window during async_setup_entry before
     runtime_data.config is initialized.
@@ -475,7 +485,8 @@ def test_with_slot_field_removed_is_noop_when_absent() -> None:
 
 
 def test_to_dict_round_trips_through_from_mapping() -> None:
-    """to_dict → from_mapping reconstructs an equivalent EntryConfig.
+    """
+    to_dict → from_mapping reconstructs an equivalent EntryConfig.
 
     Guards the write path used by entity._update_config_entry and the
     helpers write functions: they build a new EntryConfig, call
@@ -496,7 +507,8 @@ def test_to_dict_round_trips_through_from_mapping() -> None:
 
 
 def test_to_dict_produces_plain_mutable_dicts() -> None:
-    """to_dict output is plain dict (not MappingProxyType).
+    """
+    to_dict output is plain dict (not MappingProxyType).
 
     HA's async_update_entry expects a plain dict it can serialize; the
     read-only wrappers EntryConfig uses internally would break that.

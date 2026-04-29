@@ -1,4 +1,5 @@
-"""Abstract base for lock providers.
+"""
+Abstract base for lock providers.
 
 Handles rate limiting, connection checking, and coordinator refresh after operations.
 See ARCHITECTURE.md for the provider interface contract.
@@ -8,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -189,7 +191,8 @@ class BaseLock:
         pre_execute: Callable[[], None] | None = None,
         **kwargs: Any,
     ) -> Any:
-        """Execute operation with connection check, serialization, and delay.
+        """
+        Execute operation with connection check, serialization, and delay.
 
         pre_execute runs inside the lock before the operation, for checks
         that must be atomic with the operation (e.g., duplicate detection).
@@ -379,7 +382,8 @@ class BaseLock:
     @final
     @callback
     def subscribe_push_updates(self) -> None:
-        """Subscribe to push-based value updates.
+        """
+        Subscribe to push-based value updates.
 
         Idempotent: safe to call when already subscribed (delegates to
         ``setup_push_subscription`` which must be idempotent).
@@ -398,7 +402,7 @@ class BaseLock:
                 self.lock.entity_id,
                 err,
             )
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             LOGGER.warning(
                 "Lock %s: push subscription failed unexpectedly: %s",
                 self.lock.entity_id,
@@ -407,7 +411,8 @@ class BaseLock:
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe to push-based value updates.
+        """
+        Subscribe to push-based value updates.
 
         Override in subclasses that support push. Raise on failure;
         the caller will log and retry on the next reconnect event.
@@ -426,14 +431,13 @@ class BaseLock:
     @callback
     def unsubscribe_push_updates(self) -> None:
         """Unsubscribe from push-based value updates."""
-        try:
+        with contextlib.suppress(ProviderNotImplementedError):
             self.teardown_push_subscription()
-        except ProviderNotImplementedError:
-            pass
 
     @callback
     def teardown_push_subscription(self) -> None:
-        """Unsubscribe from push-based value updates.
+        """
+        Unsubscribe from push-based value updates.
 
         Override in subclasses that support push.
         Implementations MUST be idempotent (no-op if already unsubscribed).
@@ -473,7 +477,8 @@ class BaseLock:
             self._setup_complete.set()
 
     async def _async_on_integration_loaded(self) -> None:
-        """Handle provider integration LOADED transition.
+        """
+        Handle provider integration LOADED transition.
 
         Re-runs ``async_setup`` to re-initialize provider state (e.g.
         re-register event listeners after an integration reload), then
@@ -566,7 +571,8 @@ class BaseLock:
                 self.subscribe_push_updates()
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Set up lock by provider.
+        """
+        Set up lock by provider.
 
         Default is a no-op; providers override for provider-specific setup
         (e.g. registering event listeners, validating capabilities).
@@ -627,7 +633,8 @@ class BaseLock:
         )
 
     async def async_is_integration_connected(self) -> bool:
-        """Return True iff the lock's parent config entry is loaded.
+        """
+        Return True iff the lock's parent config entry is loaded.
 
         Providers override for integration-specific connection signals.
         Raises ``LockCodeManagerError`` if ``lock_config_entry`` is None —
@@ -692,7 +699,8 @@ class BaseLock:
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """Set a usercode on a code slot.
+        """
+        Set a usercode on a code slot.
 
         Returns True if the value was changed, False if already set to this
         value. If the provider cannot determine whether a change occurred,
@@ -724,7 +732,8 @@ class BaseLock:
         )
 
         def _pre_execute_checks() -> None:
-            """Run pre-execution checks atomically inside the operation lock.
+            """
+            Run pre-execution checks atomically inside the operation lock.
 
             Checks for duplicate PINs (from coordinator data) and for codes
             previously rejected by the lock firmware (from event 15).
@@ -758,7 +767,8 @@ class BaseLock:
             await self.coordinator.async_request_refresh()
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
-        """Clear a usercode on a code slot.
+        """
+        Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
         If the provider cannot determine whether a change occurred, return
@@ -798,7 +808,8 @@ class BaseLock:
 
     @final
     async def async_internal_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Rate-limited wrapper around async_get_usercodes().
+        """
+        Rate-limited wrapper around async_get_usercodes().
 
         Slot keys are int; values are usercode strings or SlotCode sentinels.
         """
@@ -814,7 +825,8 @@ class BaseLock:
         blocking: bool = True,
         return_response: bool = False,
     ) -> dict[str, Any] | None:
-        """Call a hass service and re-raise failures as LockDisconnected.
+        """
+        Call a hass service and re-raise failures as LockDisconnected.
 
         When ``return_response=True``, returns the service response (as a
         dict) so callers don't have to write their own service-call wrapper
