@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "5c509851666e",
+  "strategy": "manual-commit",
+  "branch": "chore/expand-ruff-rules",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "scripts/setup"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5c/509851666e/0/metadata.json",
+      "transcript": "/5c/509851666e/0/full.jsonl",
+      "content_hash": "/5c/509851666e/0/content_hash.txt",
+      "prompt": "/5c/509851666e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2845,
+    "cache_creation_tokens": 22402439,
+    "cache_read_tokens": 1015340694,
+    "output_tokens": 569192,
+    "api_call_count": 2197
+  }
+}
