@@ -837,9 +837,8 @@ async def test_clear_existing_slot_handles_failures(hass: HomeAssistant):
     )
 
     assert result["type"] == "create_entry"
-    # OK lock cleared, failing lock attempted (exception swallowed),
-    # no_instance skipped, empty_slot skipped (no code to clear),
-    # different_slot not touched (slot 1 not present)
+    # Existing codes are detected, but continuing the flow does not attempt
+    # to clear any slots for any lock instances.
     mock_clear_ok.assert_not_called()
     mock_clear_fail.assert_not_called()
     instances["lock.empty_slot"].async_internal_clear_usercode.assert_not_called()
