@@ -1,0 +1,57 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e1bbe8ae1a24",
+  "session_id": "9d662aaa-f935-4906-a164-65e1a04fe236",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-29T04:21:48.594603Z",
+  "branch": "chore/expand-ruff-rules",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/diagnostics.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/util.py",
+    "pyproject.toml",
+    "tests/providers/helpers.py",
+    "tests/providers/matter/conftest.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/schlage/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/zigbee2mqtt/conftest.py",
+    "tests/providers/zigbee2mqtt/test_e2e.py",
+    "tests/providers/zwave_js/test_e2e.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_diagnostics.py",
+    "tests/test_init.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "9df6a5fcdb94",
+  "token_usage": {
+    "input_tokens": 2821,
+    "cache_creation_tokens": 21740967,
+    "cache_read_tokens": 1005449884,
+    "output_tokens": 566245,
+    "api_call_count": 2181
+  },
+  "session_metrics": {
+    "turn_count": 252
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-29T04:21:45.697822Z",
+    "agent_lines": 0,
+    "human_added": 362,
+    "human_modified": 150,
+    "human_removed": 0,
+    "total_committed": 362,
+    "agent_percentage": 0
+  }
+}

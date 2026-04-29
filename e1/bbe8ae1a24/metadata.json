@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e1bbe8ae1a24",
+  "strategy": "manual-commit",
+  "branch": "chore/expand-ruff-rules",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/diagnostics.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/util.py",
+    "pyproject.toml",
+    "tests/providers/helpers.py",
+    "tests/providers/matter/conftest.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/schlage/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/zigbee2mqtt/conftest.py",
+    "tests/providers/zigbee2mqtt/test_e2e.py",
+    "tests/providers/zwave_js/test_e2e.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_diagnostics.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/bbe8ae1a24/0/metadata.json",
+      "transcript": "/e1/bbe8ae1a24/0/full.jsonl",
+      "content_hash": "/e1/bbe8ae1a24/0/content_hash.txt",
+      "prompt": "/e1/bbe8ae1a24/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2821,
+    "cache_creation_tokens": 21740967,
+    "cache_read_tokens": 1005449884,
+    "output_tokens": 566245,
+    "api_call_count": 2181
+  }
+}
