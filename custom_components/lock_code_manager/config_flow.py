@@ -269,7 +269,7 @@ class _ExistingCodesFlowMixin:
     async def _clear_all_pending_slots(self) -> None:
         """Clear every slot in ``_slots_to_clear`` and reset state."""
         # Build the work list: (lock_instance, lock_entity_id, slot_num)
-        work = [
+        lock_slots_to_clear = [
             (lock_instance, lock_entity_id, slot_num)
             for slot_num in self._slots_to_clear
             for lock_entity_id, codes in self._all_codes.items()
@@ -277,9 +277,9 @@ class _ExistingCodesFlowMixin:
             and (lock_instance := self._lock_instances.get(lock_entity_id))
         ]
         self._clear_done = 0
-        self._clear_total = len(work)
+        self._clear_total = len(lock_slots_to_clear)
 
-        for lock_instance, lock_entity_id, slot_num in work:
+        for lock_instance, lock_entity_id, slot_num in lock_slots_to_clear:
             try:
                 await lock_instance.async_internal_clear_usercode(
                     slot_num, source="direct"
