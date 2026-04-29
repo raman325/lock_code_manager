@@ -1,4 +1,5 @@
-"""Matter lock provider.
+"""
+Matter lock provider.
 
 Handles PIN credential management via Matter lock helpers.
 PINs are write-only: occupied slots report SlotCode.UNREADABLE_CODE, cleared slots report
@@ -73,7 +74,8 @@ class MatterLock(BaseLock):
 
     @property
     def supports_push(self) -> bool:
-        """Return whether this lock supports push-based updates.
+        """
+        Return whether this lock supports push-based updates.
 
         Matter locks push occupancy changes via LockUserChange events.
         PINs are still write-only (values are never pushed), but slot
@@ -88,7 +90,8 @@ class MatterLock(BaseLock):
 
     @property
     def hard_refresh_interval(self) -> timedelta | None:
-        """Return interval between hard refreshes for drift detection.
+        """
+        Return interval between hard refreshes for drift detection.
 
         Matter locks support push events for local changes, but API-initiated
         changes bypass push notifications. Periodic hard refresh catches drift
@@ -97,7 +100,8 @@ class MatterLock(BaseLock):
         return timedelta(hours=1)
 
     def _get_matter_node(self) -> Any | None:
-        """Get the MatterNode for this lock from the Matter integration.
+        """
+        Get the MatterNode for this lock from the Matter integration.
 
         Uses the Matter integration's helper to resolve the node from the
         device entry, which correctly handles the device identifier format.
@@ -107,7 +111,7 @@ class MatterLock(BaseLock):
             return None
         try:
             return get_node_from_device_entry(self.hass, self.device_entry)
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             LOGGER.debug(
                 "Failed to resolve Matter node for %s: %s",
                 self.lock.entity_id,
@@ -125,7 +129,7 @@ class MatterLock(BaseLock):
         """Get the MatterClient via the Matter integration helper."""
         try:
             return get_matter(self.hass).matter_client
-        except Exception as err:  # noqa: BLE001
+        except Exception as err:
             LOGGER.debug(
                 "Failed to get Matter client for %s: %s",
                 self.lock.entity_id,
@@ -188,7 +192,8 @@ class MatterLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe to Matter DoorLock cluster events.
+        """
+        Subscribe to Matter DoorLock cluster events.
 
         Handles two event types:
         - LockOperation (event 2): fires code slot events when a PIN is used
@@ -246,7 +251,8 @@ class MatterLock(BaseLock):
 
     @callback
     def _handle_lock_operation(self, node_event: Any) -> None:
-        """Handle LockOperation events (event ID 2).
+        """
+        Handle LockOperation events (event ID 2).
 
         Fires a code slot event when a PIN credential is used to lock/unlock.
         Only PIN credentials (credentialType=1) trigger the event — other
@@ -300,7 +306,8 @@ class MatterLock(BaseLock):
 
     @callback
     def _handle_lock_user_change(self, node_event: Any) -> None:
-        """Handle LockUserChange events (event ID 4).
+        """
+        Handle LockUserChange events (event ID 4).
 
         Pushes occupancy updates to the coordinator when a PIN credential is
         added, modified, or cleared. This provides real-time change detection
@@ -357,7 +364,8 @@ class MatterLock(BaseLock):
     # -- Credential helpers --------------------------------------------------
 
     async def _set_lock_credential(self, code_slot: int, usercode: str) -> int | None:
-        """Send set_lock_credential to the lock and return the user_index.
+        """
+        Send set_lock_credential to the lock and return the user_index.
 
         Raises SetCredentialFailedError on lock rejection,
         LockCodeManagerProviderError on invalid input,
@@ -386,7 +394,8 @@ class MatterLock(BaseLock):
         return result.get("user_index")
 
     async def _clear_lock_credential(self, code_slot: int) -> None:
-        """Send clear_lock_credential to the lock.
+        """
+        Send clear_lock_credential to the lock.
 
         Raises LockCodeManagerProviderError on invalid input,
         LockDisconnected on communication failure.
@@ -412,7 +421,8 @@ class MatterLock(BaseLock):
     # -- Usercode CRUD -------------------------------------------------------
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes.
+        """
+        Get dictionary of code slots and usercodes.
 
         Returns all occupied PIN credential slots as SlotCode.UNREADABLE_CODE (PINs are
         write-only) and managed empty slots as SlotCode.EMPTY. Unmanaged
@@ -478,7 +488,8 @@ class MatterLock(BaseLock):
         usercode: str,
         source: Literal["sync", "direct"],
     ) -> int | None:
-        """Set a credential, handling duplicate status.
+        """
+        Set a credential, handling duplicate status.
 
         For sync operations, clears the slot and retries on duplicate (handles
         the restart case where _last_set_pin is lost). For direct operations,
@@ -550,7 +561,8 @@ class MatterLock(BaseLock):
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """Set a usercode on a code slot.
+        """
+        Set a usercode on a code slot.
 
         Returns True unconditionally because Matter does not reveal whether
         the credential value actually changed. Pushes SlotCode.UNREADABLE_CODE
@@ -570,7 +582,8 @@ class MatterLock(BaseLock):
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
-        """Clear a usercode on a code slot.
+        """
+        Clear a usercode on a code slot.
 
         Returns True if a credential was cleared, False if the slot was already
         empty. Pushes SlotCode.EMPTY to the coordinator immediately on success.
@@ -605,7 +618,8 @@ class MatterLock(BaseLock):
         return True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """Perform hard refresh and return all codes.
+        """
+        Perform hard refresh and return all codes.
 
         Matter has no cache to invalidate, so this is identical to async_get_usercodes.
         """

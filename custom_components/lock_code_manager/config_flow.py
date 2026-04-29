@@ -122,7 +122,8 @@ def _async_build_lock_instance(
     ent_reg: er.EntityRegistry,
     lock_entity_id: str,
 ) -> Any:
-    """Build a temporary lock provider instance for ``lock_entity_id``.
+    """
+    Build a temporary lock provider instance for ``lock_entity_id``.
 
     Performs setup-time checks (entity in registry, supported platform,
     parent config entry exists) and instantiates the provider class.
@@ -161,7 +162,8 @@ async def _async_get_all_codes(
     ent_reg: er.EntityRegistry,
     lock_entity_ids: list[str],
 ) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
-    """Query locks for all usercodes.
+    """
+    Query locks for all usercodes.
 
     Returns ``(codes_by_lock, lock_instances_by_lock)`` where ``codes_by_lock``
     maps each lock entity ID to its slot/code dict (``SlotCode.EMPTY`` for
@@ -201,7 +203,7 @@ async def _async_get_all_codes(
                 err,
             )
             continue
-        except Exception:  # noqa: BLE001
+        except Exception:
             # Last-resort catch: this runs in the user-facing config flow.
             # Any provider exception (including programmer error in a
             # third-party provider) must degrade to "no codes shown" rather
@@ -276,7 +278,7 @@ class _ExistingCodesFlowMixin:
                 await lock_instance.async_internal_clear_usercode(
                     slot_num, source="direct"
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 _LOGGER.warning(
                     "Failed to clear slot %s on %s",
                     slot_num,
@@ -630,7 +632,8 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
     async def _maybe_confirm_then_persist(
         self, user_input: dict[str, Any]
     ) -> dict[str, Any]:
-        """Scan added (lock, slot) pairs for codes; confirm clear if any.
+        """
+        Scan added (lock, slot) pairs for codes; confirm clear if any.
 
         Compares the submitted (lock, slot) pairs against the entry's
         current configuration. If any newly-added pair has a non-empty

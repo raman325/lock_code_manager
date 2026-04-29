@@ -88,7 +88,8 @@ def _make_duplicate_code_event(node_id: int, user_id: int | None = None) -> Zwav
 
 @pytest.fixture(autouse=True)
 def mock_get_usercode_from_node():
-    """Mock get_usercode_from_node for all tests.
+    """
+    Mock get_usercode_from_node for all tests.
 
     V1 set/clear calls get_usercode_from_node to poll the slot from the device.
     In tests, the node doesn't have a real Z-Wave JS server connection, so we
@@ -123,7 +124,8 @@ async def zwave_js_lock_fixture(
 
 @pytest.fixture
 def mock_zwave_usercodes(zwave_client: MagicMock):
-    """Mock Z-Wave JS usercode functions with mutable state.
+    """
+    Mock Z-Wave JS usercode functions with mutable state.
 
     Both ``get_usercodes`` and ``get_usercode`` read from a shared mutable
     ``codes`` dict.  The client's ``async_send_command`` is wrapped so that
@@ -1158,7 +1160,8 @@ async def test_internal_set_usercode_raises_duplicate_for_rejected_slot(
     lock_schlage_be469: Node,
     mock_zwave_usercodes: tuple[MagicMock, MagicMock, dict[int, dict]],
 ) -> None:
-    """Test async_internal_set_usercode raises DuplicateCodeError for rejected slots.
+    """
+    Test async_internal_set_usercode raises DuplicateCodeError for rejected slots.
 
     When a slot is in _rejected_code_slots (marked by event 15), the next call to
     async_internal_set_usercode should raise DuplicateCodeError without calling the

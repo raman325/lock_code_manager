@@ -1,4 +1,5 @@
-"""Data model types for lock_code_manager.
+"""
+Data model types for lock_code_manager.
 
 Canonical home for dataclasses, type aliases, enums, and structured data types
 used across the integration.
@@ -22,7 +23,8 @@ if TYPE_CHECKING:
 
 
 class SyncState(StrEnum):
-    """State machine for slot sync reconciliation.
+    """
+    State machine for slot sync reconciliation.
 
     LOADING: initial state, waiting for entity states to resolve.
     IN_SYNC: desired state matches actual state on the lock.
@@ -40,7 +42,8 @@ class SyncState(StrEnum):
 
 
 class SlotCode(StrEnum):
-    """Sentinel values for slot codes in coordinator data.
+    """
+    Sentinel values for slot codes in coordinator data.
 
     Used alongside str values: a readable code is a plain string,
     while EMPTY and UNREADABLE_CODE represent non-string slot states.

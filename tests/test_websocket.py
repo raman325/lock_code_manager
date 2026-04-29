@@ -1,6 +1,7 @@
 """Test websockets."""
 
 import asyncio
+import contextlib
 from datetime import datetime
 import logging
 from unittest.mock import AsyncMock, patch
@@ -1038,10 +1039,8 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
                 if result["pin"] == "9999":
                     return
 
-    try:
+    with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(_wait_for_pin(), timeout=3.0)
-    except TimeoutError:
-        pass
 
     assert result["pin"] == "9999"
 
@@ -1052,7 +1051,8 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that clearing a PIN via service call is reflected in the subscription.
+    """
+    Test that clearing a PIN via service call is reflected in the subscription.
 
     The integration rejects clearing a PIN on an enabled slot, so we must
     disable the slot first before clearing.
@@ -1107,10 +1107,8 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
                 if result["pin"] is None:
                     return
 
-    try:
+    with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(_wait_for_cleared_pin(), timeout=3.0)
-    except TimeoutError:
-        pass
 
     assert result["pin"] is None
 
@@ -1254,7 +1252,8 @@ async def test_set_slot_condition_reflects_in_subscribe_code_slot(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that updating a slot condition is visible in a new subscription.
+    """
+    Test that updating a slot condition is visible in a new subscription.
 
     The subscribe_code_slot handler resolves tracked entities at subscription
     time, so a condition added after subscribing requires a new subscription
@@ -2427,7 +2426,8 @@ async def test_subscribe_lock_codes_entity_tracking_refreshes_on_update(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that subscribe_lock_codes re-subscribes when tracked entity set changes.
+    """
+    Test that subscribe_lock_codes re-subscribes when tracked entity set changes.
 
     Verifies the _refresh_lock_state_tracking path where new entities appear
     after the subscription was established (for example, during initial config
@@ -2491,7 +2491,8 @@ async def test_subscribe_lock_codes_tracking_refresh_noop_when_unchanged(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that _refresh_lock_state_tracking is a no-op when entity set is unchanged.
+    """
+    Test that _refresh_lock_state_tracking is a no-op when entity set is unchanged.
 
     When the tracked entity set has not changed between updates, the refresh
     should return early without re-subscribing. This verifies the early-return
@@ -2539,7 +2540,8 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that subscribe_code_slot re-subscribes when tracked entity set changes.
+    """
+    Test that subscribe_code_slot re-subscribes when tracked entity set changes.
 
     Verifies the _refresh_state_tracking path in subscribe_code_slot where
     new entities appear after the subscription was established.
@@ -2610,7 +2612,8 @@ async def test_subscribe_code_slot_calendar_condition_state_change(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that calendar condition entity state changes trigger async calendar fetch.
+    """
+    Test that calendar condition entity state changes trigger async calendar fetch.
 
     When a calendar entity that is the condition entity for a slot changes state,
     the _on_state_change handler should call _async_send_update_with_calendar
@@ -2677,7 +2680,8 @@ async def test_subscribe_code_slot_condition_entity_tracked_after_addition(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that a newly added condition entity gets tracked after refresh.
+    """
+    Test that a newly added condition entity gets tracked after refresh.
 
     Subscribe to slot 1 (no condition), then simulate adding a condition
     entity via _resolve_entity_ids returning it on subsequent calls.
@@ -2739,7 +2743,8 @@ async def test_subscribe_lock_codes_unsub_all_with_empty_state_ref(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that _unsub_all handles empty unsub_state_ref gracefully.
+    """
+    Test that _unsub_all handles empty unsub_state_ref gracefully.
 
     When no entities were tracked (empty unsub_state_ref), unsubscribing
     should not raise an error. This exercises the `if unsub_state_ref:` guard.
@@ -2779,7 +2784,8 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that _unsub_all in subscribe_code_slot handles empty unsub_state_ref.
+    """
+    Test that _unsub_all in subscribe_code_slot handles empty unsub_state_ref.
 
     When no entities were tracked (empty unsub_state_ref), unsubscribing
     should not raise an error. This exercises the `if unsub_state_ref:` guard.

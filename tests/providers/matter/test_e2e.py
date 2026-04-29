@@ -94,7 +94,8 @@ class TestSetAndClearUsercodes:
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """After set, the coordinator has the optimistic UNREADABLE_CODE value.
+        """
+        After set, the coordinator has the optimistic UNREADABLE_CODE value.
 
         Matter PINs are write-only so optimistic updates use UNREADABLE_CODE
         instead of the actual PIN value.
@@ -145,7 +146,8 @@ class TestGetUsercodes:
         lock_entity: er.RegistryEntry,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """Get usercodes returns slot occupancy from Matter.
+        """
+        Get usercodes returns slot occupancy from Matter.
 
         After initial setup with empty users, both managed slots should
         be EMPTY. When the mock reports a user with a PIN credential on

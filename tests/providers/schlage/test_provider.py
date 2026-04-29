@@ -336,7 +336,8 @@ async def test_set_usercode_replaces_existing(
 async def test_set_usercode_preserves_existing_name(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test set_usercode preserves the existing friendly name when no name is provided.
+    """
+    Test set_usercode preserves the existing friendly name when no name is provided.
 
     When the name does not change (PIN-only update), the old code must be deleted
     first because Schlage rejects add_code with a duplicate name.
@@ -375,7 +376,8 @@ async def test_set_usercode_preserves_existing_name(
 async def test_set_usercode_already_exists_treated_as_success(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test that 'already exists' on add_code is treated as success.
+    """
+    Test that 'already exists' on add_code is treated as success.
 
     Schlage's cloud API has eventual consistency: a delete may not propagate
     before the add, causing 'already exists'.  Since PINs are write-only,

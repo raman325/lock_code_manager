@@ -240,12 +240,9 @@ async def test_config_flow_reauth(
         hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
     )
     await hass.async_block_till_done()
-    flows = [
-        flow
-        for flow in lock_code_manager_config_entry.async_get_active_flows(
-            hass, {SOURCE_REAUTH}
-        )
-    ]
+    flows = list(
+        lock_code_manager_config_entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    )
     assert len(flows) == 1
     [result] = flows
 
@@ -593,7 +590,8 @@ async def test_async_get_all_codes_exception(hass: HomeAssistant):
 async def test_async_get_all_codes_provider_failure_logs_warning(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ):
-    """Provider raising LockCodeManagerProviderError logs WARNING (not DEBUG).
+    """
+    Provider raising LockCodeManagerProviderError logs WARNING (not DEBUG).
 
     Distinguishes a real failure (LockDisconnected, a provider error) from
     the expected setup-time skip cases (missing entity / unsupported
@@ -640,7 +638,8 @@ async def test_async_get_all_codes_provider_failure_logs_warning(
 async def test_async_get_all_codes_bare_base_error_logs_warning(
     hass: HomeAssistant, caplog: pytest.LogCaptureFixture
 ):
-    """Defensive: a provider raising the bare base LockCodeManagerError still warns.
+    """
+    Defensive: a provider raising the bare base LockCodeManagerError still warns.
 
     All in-tree providers raise LockCodeManagerProviderError, but a third-party
     or not-yet-migrated provider could raise the bare base. We catch and warn
@@ -687,7 +686,8 @@ async def test_async_get_all_codes_bare_base_error_logs_warning(
 
 
 async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
-    """Test _async_get_all_codes returns every slot the lock reports.
+    """
+    Test _async_get_all_codes returns every slot the lock reports.
 
     Filtering empty slots is the caller's responsibility, so this function
     must not drop them.
@@ -865,7 +865,8 @@ async def _start_options_flow(
     locks: list[str] | None = None,
     slots: dict[int, dict] | None = None,
 ) -> tuple[str, MockConfigEntry]:
-    """Create an options flow and return (flow_id, entry).
+    """
+    Create an options flow and return (flow_id, entry).
 
     Mirrors the existing config-flow test helpers: keeps the entry creation
     and options-flow init in one place so the individual tests stay focused

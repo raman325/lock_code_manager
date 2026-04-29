@@ -94,7 +94,8 @@ class TestSetAndClearUsercodes:
         schlage_lock_entity: er.RegistryEntry,
         schlage_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """After a coordinator refresh, data reflects the lock state.
+        """
+        After a coordinator refresh, data reflects the lock state.
 
         Schlage is not a push provider, so the coordinator reads state
         from the lock via get_codes. When the mock reports a tagged code
@@ -150,7 +151,8 @@ class TestGetUsercodes:
         schlage_lock_entity: er.RegistryEntry,
         schlage_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """Get usercodes returns slot occupancy from Schlage.
+        """
+        Get usercodes returns slot occupancy from Schlage.
 
         After initial setup with empty codes, both managed slots should
         be EMPTY. When the mock reports a tagged code on slot 1, that

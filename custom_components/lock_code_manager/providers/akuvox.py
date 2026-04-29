@@ -1,4 +1,5 @@
-"""Local Akuvox lock provider.
+"""
+Local Akuvox lock provider.
 
 Akuvox door controllers manage access codes as *users* identified by an
 internal device ID, not by numeric slot numbers. This provider bridges
@@ -51,7 +52,8 @@ def _is_local_user(user: dict[str, Any]) -> bool:
 
 @dataclass(repr=False, eq=False)
 class AkuvoxLock(BaseLock):
-    """Local Akuvox lock provider implementation.
+    """
+    Local Akuvox lock provider implementation.
 
     Users on Akuvox controllers are identified by a device-internal ID
     and a name, not by slot numbers. This provider assigns virtual slot
@@ -77,7 +79,8 @@ class AkuvoxLock(BaseLock):
         return timedelta(minutes=2)
 
     async def _async_list_users(self) -> list[dict[str, Any]]:
-        """Call ``local_akuvox.list_users`` and return the user list.
+        """
+        Call ``local_akuvox.list_users`` and return the user list.
 
         Returns a list of user dicts with keys: id, name, user_id,
         private_pin, card_code, schedule_relay, lift_floor_num, etc.
@@ -163,7 +166,8 @@ class AkuvoxLock(BaseLock):
         return await self.async_get_usercodes()
 
     async def _async_tag_unmanaged_users(self) -> None:
-        """Discover untagged local users and tag them with a slot number.
+        """
+        Discover untagged local users and tag them with a slot number.
 
         Untagged local users that have a PIN are assigned to the next
         available managed slot and their names are updated on the device
@@ -227,7 +231,8 @@ class AkuvoxLock(BaseLock):
             )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes.
+        """
+        Get dictionary of code slots and usercodes.
 
         Users already bearing a ``[LCM:<slot>]`` tag in their name are
         mapped to the embedded slot number. Only reads and classifies;
@@ -243,9 +248,7 @@ class AkuvoxLock(BaseLock):
         users = await self._async_list_users()
 
         # Start with all managed slots empty
-        result: dict[int, str | SlotCode] = {
-            slot: SlotCode.EMPTY for slot in managed_slots
-        }
+        result: dict[int, str | SlotCode] = dict.fromkeys(managed_slots, SlotCode.EMPTY)
 
         for user in users:
             if not _is_local_user(user):
@@ -272,7 +275,8 @@ class AkuvoxLock(BaseLock):
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """Set user code on a virtual slot.
+        """
+        Set user code on a virtual slot.
 
         If a user already exists for the given slot, the PIN (and
         optionally the name) is updated via ``modify_user``. Otherwise
@@ -313,7 +317,8 @@ class AkuvoxLock(BaseLock):
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
-        """Clear user code from a virtual slot by deleting the user.
+        """
+        Clear user code from a virtual slot by deleting the user.
 
         Returns True if a user was deleted, False if the slot was already empty.
         """

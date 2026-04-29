@@ -1,4 +1,5 @@
-"""Schlage WiFi lock provider.
+"""
+Schlage WiFi lock provider.
 
 Schlage locks manage access codes by name rather than numeric slot numbers.
 This provider bridges that gap by tagging code names with a slot prefix
@@ -17,6 +18,7 @@ SlotCode.UNREADABLE_CODE and cleared slots report SlotCode.EMPTY.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Literal
@@ -34,7 +36,8 @@ SCHLAGE_DOMAIN = "schlage"
 
 @dataclass(repr=False, eq=False)
 class SchlageLock(BaseLock):
-    """Schlage WiFi lock provider implementation.
+    """
+    Schlage WiFi lock provider implementation.
 
     Codes on Schlage locks are identified by friendly name, not by slot
     number.  This provider assigns virtual slot numbers by embedding a
@@ -61,7 +64,8 @@ class SchlageLock(BaseLock):
         return timedelta(minutes=5)
 
     async def _async_get_codes(self) -> dict[str, dict[str, str]]:
-        """Call ``schlage.get_codes`` and return the response dict.
+        """
+        Call ``schlage.get_codes`` and return the response dict.
 
         Returns a dict mapping access-code IDs to ``{"name": ..., "code": ...}``.
         """
@@ -125,7 +129,8 @@ class SchlageLock(BaseLock):
         await self._async_tag_unmanaged_codes()
 
     async def _async_tag_unmanaged_codes(self) -> None:
-        """Tag unmanaged codes on the lock with Lock Code Manager slot numbers.
+        """
+        Tag unmanaged codes on the lock with Lock Code Manager slot numbers.
 
         Discovers untagged codes and assigns them to the next available managed
         slot by renaming (add tagged, delete original).
@@ -231,7 +236,8 @@ class SchlageLock(BaseLock):
             )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes.
+        """
+        Get dictionary of code slots and usercodes.
 
         Schlage PINs are write-only (returned as masked values), so occupied
         slots return SlotCode.UNREADABLE_CODE and cleared slots return SlotCode.EMPTY.
@@ -292,7 +298,8 @@ class SchlageLock(BaseLock):
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """Set user code on a virtual slot.
+        """
+        Set user code on a virtual slot.
 
         If a code already exists for the given slot it is replaced.
         Returns True unconditionally because Schlage PINs are write-only
@@ -320,10 +327,9 @@ class SchlageLock(BaseLock):
         # API means get_codes may not reflect a recently-added code.
         names_to_delete = {n for n in (existing_full_name, tagged_name) if n}
         for code_name in names_to_delete:
-            try:
+            # code may not exist — that's fine
+            with contextlib.suppress(LockDisconnected):
                 await self._async_delete_code(code_name)
-            except LockDisconnected:
-                pass  # code may not exist — that's fine
 
         try:
             await self._async_add_code(tagged_name, usercode)
@@ -351,7 +357,8 @@ class SchlageLock(BaseLock):
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
-        """Clear user code from a virtual slot.
+        """
+        Clear user code from a virtual slot.
 
         Returns True if a code was deleted, False if the slot was already empty.
         """
@@ -381,7 +388,8 @@ class SchlageLock(BaseLock):
         return True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """Perform hard refresh and return all codes.
+        """
+        Perform hard refresh and return all codes.
 
         Schlage has no cache to invalidate; re-tags unmanaged codes and then
         reads the current state.

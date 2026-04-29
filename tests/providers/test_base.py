@@ -364,7 +364,8 @@ async def test_async_call_service_propagates_non_ha_exceptions(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Non-HomeAssistantError exceptions must propagate, not become LockDisconnected.
+    """
+    Non-HomeAssistantError exceptions must propagate, not become LockDisconnected.
 
     Wrapping programming errors (TypeError) or shutdown signals
     (asyncio.CancelledError) as LockDisconnected would trigger false
@@ -388,7 +389,8 @@ async def test_async_call_service_wraps_os_error_as_lock_disconnected(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_call_service wraps OSError (e.g. ReadTimeout) as LockDisconnected.
+    """
+    Test that async_call_service wraps OSError (e.g. ReadTimeout) as LockDisconnected.
 
     Integrations that don't wrap network errors in HomeAssistantError raise raw
     OSError subclasses (TimeoutError, ConnectionError).  These are transient and

@@ -65,7 +65,8 @@ async def schlage_lock(
 
 @pytest.fixture
 async def simple_lcm_config_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Create a Lock Code Manager config entry that manages slots 1 and 2.
+    """
+    Create a Lock Code Manager config entry that manages slots 1 and 2.
 
     This is a lightweight entry for unit tests that don't need the full LCM
     setup path. It only adds slot configuration data so that managed_slots
@@ -116,7 +117,8 @@ def provider_lock_class() -> type[SchlageLock]:
 
 @pytest.fixture
 async def schlage_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
-    """Create a Schlage config entry (LOADED state) and lock entity.
+    """
+    Create a Schlage config entry (LOADED state) and lock entity.
 
     The lock entity is registered under the "schlage" platform so that
     LCM's INTEGRATIONS_CLASS_MAP lookup finds it as a SchlageLock.
@@ -142,7 +144,8 @@ def schlage_mock_services(
     hass: HomeAssistant,
     schlage_lock_entity: er.RegistryEntry,
 ) -> dict[str, AsyncMock]:
-    """Register mock Schlage services needed for the full LCM setup path.
+    """
+    Register mock Schlage services needed for the full LCM setup path.
 
     Returns a dict of service name to handler so E2E tests can inspect
     call counts or swap side effects.
@@ -171,7 +174,8 @@ async def lcm_config_entry(
     schlage_lock_entity: er.RegistryEntry,
     schlage_mock_services: dict[str, AsyncMock],
 ) -> MockConfigEntry:
-    """Set up a full LCM config entry managing the Schlage lock.
+    """
+    Set up a full LCM config entry managing the Schlage lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the schlage platform and instantiates SchlageLock.

@@ -1,4 +1,5 @@
-"""Manages the slot->code mapping for a single lock.
+"""
+Manages the slot->code mapping for a single lock.
 
 Stores ALL slots (managed and unmanaged). See ARCHITECTURE.md for the full data flow.
 """
@@ -167,7 +168,8 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         return self._slot_sync_mgrs_suspended
 
     def suspend_slot_sync_mgrs(self) -> None:
-        """Suspend slot sync managers for this lock.
+        """
+        Suspend slot sync managers for this lock.
 
         Called by any SlotSyncManager that hits a circuit breaker or
         unexpected error. All sync managers for this lock will see the

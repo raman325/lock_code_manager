@@ -51,7 +51,8 @@ _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
 
 def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
-    """Return True when MQTT exposes a usable PIN value (including numeric zero).
+    """
+    Return True when MQTT exposes a usable PIN value (including numeric zero).
 
     Plain truthiness is unsafe: ``0`` is a valid digit and must not be treated as
     absent. Boolean JSON values are ignored because they are not PIN payloads.
@@ -93,7 +94,8 @@ class Zigbee2MQTTLock(BaseLock):
 
     @property
     def usercode_scan_interval(self) -> timedelta:
-        """Return scan interval for usercodes.
+        """
+        Return scan interval for usercodes.
 
         With push updates, we only need polling as a fallback.
         """
@@ -114,7 +116,8 @@ class Zigbee2MQTTLock(BaseLock):
         await self._async_ensure_device_subscription()
 
     def _get_friendly_name(self) -> str | None:
-        """Get the Zigbee2MQTT friendly name for this device.
+        """
+        Get the Zigbee2MQTT friendly name for this device.
 
         Reads ``device_registry`` name on each call so renames stay aligned with the
         Zigbee2MQTT friendly name (cached value alone would go stale).
@@ -176,9 +179,7 @@ class Zigbee2MQTTLock(BaseLock):
     async def async_is_device_available(self) -> bool:
         """Return whether the lock entity reports an operational state."""
         state = self.hass.states.get(self.lock.entity_id)
-        if state is None or state.state == "unavailable":
-            return False
-        return True
+        return not (state is None or state.state == "unavailable")
 
     @callback
     def _process_z2m_device_payload(self, payload: dict[str, Any]) -> None:
@@ -353,7 +354,8 @@ class Zigbee2MQTTLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe via background task when still unsubscribed (e.g. reconnect).
+        """
+        Subscribe via background task when still unsubscribed (e.g. reconnect).
 
         Primary subscribe is ``await`` in ``async_setup``.
         """
@@ -378,7 +380,8 @@ class Zigbee2MQTTLock(BaseLock):
             return
 
         async def _subscribe_or_log() -> None:
-            """Run ``_async_ensure_device_subscription`` from the reconnect task path.
+            """
+            Run ``_async_ensure_device_subscription`` from the reconnect task path.
 
             Log errors only; sync ``setup_push_subscription`` cannot raise.
             """
@@ -469,7 +472,7 @@ class Zigbee2MQTTLock(BaseLock):
                     slot_num,
                 )
                 data[slot_num] = SlotCode.UNREADABLE_CODE
-            except Exception as err:  # noqa: BLE001
+            except Exception as err:
                 # Broad catch is intentional: the future is resolved by the MQTT
                 # callback, and any exception from resolution (InvalidStateError,
                 # data processing errors) should not crash the entire refresh.

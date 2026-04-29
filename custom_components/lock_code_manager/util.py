@@ -22,7 +22,8 @@ def mask_pin(
     slot_num: int | str,
     instance_id: str,
 ) -> str:
-    """Return a deterministic masked representation of a PIN for logging.
+    """
+    Return a deterministic masked representation of a PIN for logging.
 
     Uses CRC32 salted with the HA instance ID and slot number so the same
     PIN on the same slot always produces the same 8-char hex token regardless
@@ -45,7 +46,8 @@ async def async_disable_slot(
     lock_name: str | None = None,
     lock_entity_id: str | None = None,
 ) -> bool:
-    """Disable a slot via the enabled switch and optionally create a repair issue.
+    """
+    Disable a slot via the enabled switch and optionally create a repair issue.
 
     Returns True if the switch was found and turned off, False otherwise.
     When reason is provided, a repair issue is created so the user can

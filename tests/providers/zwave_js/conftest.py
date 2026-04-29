@@ -33,7 +33,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 def load_json_fixture(filename: str) -> dict[str, Any]:
     """Load a fixture JSON file."""
-    with open(FIXTURES_DIR / filename, encoding="utf-8") as f:
+    with (FIXTURES_DIR / filename).open(encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -252,7 +252,8 @@ async def lcm_config_entry(
     zwave_integration: MockConfigEntry,
     lock_entity: er.RegistryEntry,
 ) -> MockConfigEntry:
-    """Set up a full LCM config entry managing the Z-Wave JS lock.
+    """
+    Set up a full LCM config entry managing the Z-Wave JS lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the zwave_js platform and instantiates ZWaveJSLock.

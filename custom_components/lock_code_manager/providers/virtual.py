@@ -95,7 +95,8 @@ class VirtualLock(BaseLock):
         return True
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Get dictionary of code slots and usercodes.
+        """
+        Get dictionary of code slots and usercodes.
 
         Returns all slots with data plus managed empty slots. Unmanaged
         occupied slots are included so callers like the lock reset config

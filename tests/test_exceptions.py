@@ -166,7 +166,8 @@ def test_lock_disconnected_inherits_from_provider_error():
 
 
 def test_entity_not_found_is_not_a_provider_error(hass: HomeAssistant):
-    """EntityNotFoundError is LCM-internal, NOT a provider error.
+    """
+    EntityNotFoundError is LCM-internal, NOT a provider error.
 
     This split lets callers catch only real provider failures via
     ``except LockCodeManagerProviderError`` without also swallowing

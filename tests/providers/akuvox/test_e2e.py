@@ -125,7 +125,8 @@ class TestGetUsercodes:
         akuvox_lock_entity: er.RegistryEntry,
         akuvox_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """Get usercodes returns mapped slot data from Akuvox.
+        """
+        Get usercodes returns mapped slot data from Akuvox.
 
         After initial setup with empty users, both managed slots should
         be EMPTY. When the mock reports a tagged user with a PIN on

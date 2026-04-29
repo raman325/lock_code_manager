@@ -1,4 +1,5 @@
-"""Slot sync manager — owns desired vs actual reconciliation.
+"""
+Slot sync manager — owns desired vs actual reconciliation.
 
 Compares entity states (active, PIN, name) against coordinator data (actual lock
 code) and drives set/clear operations to reconcile. Uses a state machine
@@ -66,7 +67,8 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SlotState:
-    """Snapshot of entity states for a slot on a specific lock.
+    """
+    Snapshot of entity states for a slot on a specific lock.
 
     Used by SlotSyncManager to compare desired (entity) vs actual
     (coordinator) state. Includes raw HA state strings (rather than
@@ -83,7 +85,8 @@ class SlotState:
 
 
 class SlotSyncManager:
-    """Manage sync state for a single lock x slot combination.
+    """
+    Manage sync state for a single lock x slot combination.
 
     Compares desired state (from entity states: active, PIN) against actual
     state (from coordinator data) and drives set/clear operations to reconcile.
@@ -235,7 +238,8 @@ class SlotSyncManager:
         return not missing
 
     def _ensure_entities_ready(self) -> bool:
-        """Ensure all dependent entities exist with valid states.
+        """
+        Ensure all dependent entities exist with valid states.
 
         The name entity (CONF_NAME) is optional — STATE_UNKNOWN is its
         normal state when no name is configured.
@@ -273,7 +277,8 @@ class SlotSyncManager:
         return True
 
     def _resolve_slot_state(self) -> SlotState | None:
-        """Resolve slot state from current entity and coordinator data.
+        """
+        Resolve slot state from current entity and coordinator data.
 
         All state reads are sync (hass.states.get) with no awaits between them,
         ensuring atomicity on Home Assistant's single-threaded event loop.
@@ -311,7 +316,8 @@ class SlotSyncManager:
     # -- Sync calculation ----------------------------------------------------
 
     def calculate_in_sync(self, slot_state: SlotState) -> bool:
-        """Calculate whether slot should be in sync.
+        """
+        Calculate whether slot should be in sync.
 
         Active (state=ON): PIN should match code on lock.
         Inactive (state=OFF): Code on lock should be empty.
@@ -333,12 +339,10 @@ class SlotSyncManager:
                 # If we recently set a PIN on this slot and it matches the
                 # configured PIN, trust the set — the provider may not have
                 # caught up yet (eventual consistency, e.g. Schlage cloud API).
-                if (
+                return (
                     self._last_set_pin is not None
                     and slot_state.pin_state == self._last_set_pin
-                ):
-                    return True
-                return False  # need to set
+                )
             return slot_state.pin_state == lock_code
         # active_state == STATE_OFF: slot should be cleared
         # The "" check covers the fallback path where coordinator_code is None
@@ -349,7 +353,8 @@ class SlotSyncManager:
     # -- Sync execution ------------------------------------------------------
 
     async def _perform_sync(self, slot_state: SlotState) -> None:
-        """Execute sync operation (set or clear usercode).
+        """
+        Execute sync operation (set or clear usercode).
 
         Raises CodeRejectedError, LockDisconnected, or propagates any exception.
         Error handling is done by the caller (_async_tick).
@@ -441,7 +446,8 @@ class SlotSyncManager:
         self._sync_attempt_first = None
 
     def _record_sync_attempt(self) -> None:
-        """Record a sync attempt toward circuit breaker counter.
+        """
+        Record a sync attempt toward circuit breaker counter.
 
         Called for set operations. Successful clear operations and transient
         LockDisconnected errors are not tracked since they represent
@@ -475,7 +481,8 @@ class SlotSyncManager:
 
     @callback
     def _request_sync_check(self, *_args: Any) -> None:
-        """Request a sync check on the next tick.
+        """
+        Request a sync check on the next tick.
 
         Transitions IN_SYNC -> OUT_OF_SYNC if calculate_in_sync returns False
         (also resets circuit breaker since the sync target changed).
@@ -497,7 +504,8 @@ class SlotSyncManager:
     def _request_sync_check_if_relevant(
         self, event: Event[EventStateChangedData]
     ) -> None:
-        """Request sync check only if the state change is for a tracked entity.
+        """
+        Request sync check only if the state change is for a tracked entity.
 
         Used by the catch-all state tracking fallback to avoid unnecessary
         checks on every HA state change. Falls back to always-checking if
@@ -523,7 +531,8 @@ class SlotSyncManager:
         await self._async_tick_impl()
 
     async def _async_tick_impl(self) -> None:
-        """Core tick logic — called from _async_tick for LOADING and OUT_OF_SYNC states.
+        """
+        Core tick logic — called from _async_tick for LOADING and OUT_OF_SYNC states.
 
         This is the single authoritative place for all sync state mutations:
         circuit breaker tracking, sync operations, and ``_last_set_pin``
@@ -669,7 +678,7 @@ class SlotSyncManager:
             if not self._lock.supports_push:
                 try:
                     await self._coordinator.async_refresh()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     _LOGGER.exception(
                         "%s: Coordinator refresh failed after sync operation. "
                         "Sync may have succeeded but verification failed. "
@@ -719,7 +728,8 @@ class SlotSyncManager:
 
     @callback
     def _try_upgrade_state_tracking(self) -> None:
-        """Upgrade catch-all state tracking to targeted if entities are now available.
+        """
+        Upgrade catch-all state tracking to targeted if entities are now available.
 
         Called at the start of each tick (outside any callback), so it is safe
         to modify subscriptions here without timing issues.
@@ -742,7 +752,8 @@ class SlotSyncManager:
 
     @callback
     def _setup_state_tracking(self) -> None:
-        """Set up state change tracking for dependent entities.
+        """
+        Set up state change tracking for dependent entities.
 
         If all entity IDs are available, tracks only those specific entities.
         Otherwise, tracks all state changes via a catch-all subscription that

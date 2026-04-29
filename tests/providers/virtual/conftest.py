@@ -93,7 +93,8 @@ async def virtual_lock_with_slots(hass: HomeAssistant) -> VirtualLock:
 
 @pytest.fixture
 async def virtual_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
-    """Create a virtual config entry and lock entity.
+    """
+    Create a virtual config entry and lock entity.
 
     The lock entity is registered under the "virtual" platform so that
     LCM's INTEGRATIONS_CLASS_MAP lookup finds it as a VirtualLock.
@@ -119,7 +120,8 @@ async def lcm_config_entry(
     hass: HomeAssistant,
     virtual_lock_entity: er.RegistryEntry,
 ) -> MockConfigEntry:
-    """Set up a full LCM config entry managing the virtual lock.
+    """
+    Set up a full LCM config entry managing the virtual lock.
 
     This goes through the real async_setup_entry path: LCM discovers the
     lock entity is from the virtual platform and instantiates VirtualLock.

@@ -97,7 +97,8 @@ class MockLCMLock(BaseLock):
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
-        """Set a usercode on a code slot.
+        """
+        Set a usercode on a code slot.
 
         Returns True if the value was changed, False if already set.
         """
@@ -108,7 +109,8 @@ class MockLCMLock(BaseLock):
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
-        """Clear a usercode on a code slot.
+        """
+        Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
         """

@@ -186,11 +186,9 @@ async def test_setup_unsupported_lock(
         ),
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
+        pytest.raises(LockCodeManagerError, match="does not support user management"),
     ):
-        with pytest.raises(
-            LockCodeManagerError, match="does not support user management"
-        ):
-            await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        await matter_lock_simple.async_setup(simple_lcm_config_entry)
 
 
 async def test_setup_no_pin_support(
@@ -211,11 +209,9 @@ async def test_setup_no_pin_support(
         ),
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
+        pytest.raises(LockCodeManagerError, match="does not support PIN credentials"),
     ):
-        with pytest.raises(
-            LockCodeManagerError, match="does not support PIN credentials"
-        ):
-            await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        await matter_lock_simple.async_setup(simple_lcm_config_entry)
 
 
 # ---------------------------------------------------------------------------
@@ -695,11 +691,9 @@ async def test_get_usercodes_invalid_users_type(
         ),
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
+        pytest.raises(LockCodeManagerProviderError, match="unexpected 'users' value"),
     ):
-        with pytest.raises(
-            LockCodeManagerProviderError, match="unexpected 'users' value"
-        ):
-            await matter_lock_simple.async_get_usercodes()
+        await matter_lock_simple.async_get_usercodes()
 
 
 async def test_set_credential_failed_non_duplicate_on_retry_raises_code_rejected(

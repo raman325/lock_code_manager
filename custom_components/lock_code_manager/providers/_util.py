@@ -1,4 +1,5 @@
-"""Shared helpers for provider implementations.
+"""
+Shared helpers for provider implementations.
 
 Provider-internal utilities that don't belong in the integration-wide
 ``util.py``. Currently: slot-tagging used by providers whose lock APIs
@@ -22,7 +23,8 @@ def make_tagged_name(slot_num: int, name: str | None = None) -> str:
 
 
 def parse_tag(name: str) -> tuple[int | None, str]:
-    """Parse a Lock Code Manager slot tag from a code name.
+    """
+    Parse a Lock Code Manager slot tag from a code name.
 
     Returns ``(slot_num, friendly_name)`` when a tag is present, or
     ``(None, original_name)`` when no tag is found.
