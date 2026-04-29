@@ -161,18 +161,15 @@ async def _async_get_all_codes(
     dev_reg: dr.DeviceRegistry,
     ent_reg: er.EntityRegistry,
     lock_entity_ids: list[str],
-) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
+) -> dict[str, dict[int, str | SlotCode]]:
     """
     Query locks for all usercodes.
 
-    Returns ``(codes_by_lock, lock_instances_by_lock)`` where ``codes_by_lock``
-    maps each lock entity ID to its slot/code dict (``SlotCode.EMPTY`` for
-    empty slots) and ``lock_instances_by_lock`` retains the provider
-    instances so the caller can reuse them when clearing slots. Locks that
-    fail to query are skipped with logging.
+    Returns ``codes_by_lock`` mapping each lock entity ID to its slot/code
+    dict (``SlotCode.EMPTY`` for empty slots).  Locks that fail to query are
+    skipped with logging.
     """
     result: dict[str, dict[int, str | SlotCode]] = {}
-    lock_instances: dict[str, Any] = {}
     # Query sequentially to avoid flooding networks (e.g. Z-Wave, Matter)
     # with simultaneous requests across multiple locks
     for lock_entity_id in lock_entity_ids:
@@ -182,12 +179,8 @@ async def _async_get_all_codes(
             )
             usercodes = await lock_instance.async_internal_get_usercodes()
         except _LockQuerySkipped:
-            # Already logged by _async_build_lock_instance with the
-            # appropriate level for the specific skip reason
             continue
         except LockCodeManagerProviderError as err:
-            # Real provider failure (e.g. LockDisconnected) — surface it
-            # so users can see why a lock's codes weren't checked
             _LOGGER.warning(
                 "Failed to get usercodes from %s: %s",
                 lock_entity_id,
@@ -195,8 +188,6 @@ async def _async_get_all_codes(
             )
             continue
         except LockCodeManagerError as err:
-            # Defensive fallback for third-party providers that raise the
-            # bare base class instead of LockCodeManagerProviderError.
             _LOGGER.warning(
                 "Failed to get usercodes from %s: %s",
                 lock_entity_id,
@@ -204,10 +195,6 @@ async def _async_get_all_codes(
             )
             continue
         except Exception:
-            # Last-resort catch: this runs in the user-facing config flow.
-            # Any provider exception (including programmer error in a
-            # third-party provider) must degrade to "no codes shown" rather
-            # than aborting the flow.
             _LOGGER.warning(
                 "Failed to get usercodes from %s; this lock's codes will not be shown",
                 lock_entity_id,
@@ -217,88 +204,65 @@ async def _async_get_all_codes(
 
         if usercodes:
             result[lock_entity_id] = usercodes
-            lock_instances[lock_entity_id] = lock_instance
-    return result, lock_instances
+    return result
 
 
 def _scope_codes_to_pairs(
     all_codes: dict[str, dict[int, str | SlotCode]],
-    lock_instances: dict[str, Any],
     pairs: Iterable[tuple[str, int]],
-) -> tuple[dict[str, dict[int, str | SlotCode]], dict[str, Any]]:
+) -> dict[str, dict[int, str | SlotCode]]:
     """Filter raw query results to only the ``(lock, slot)`` pairs given."""
     scoped_codes: dict[str, dict[int, str | SlotCode]] = {}
     for lock, slot in pairs:
         if (code := all_codes.get(lock, {}).get(slot)) is not None:
             scoped_codes.setdefault(lock, {})[slot] = code
-    scoped_instances = {lock: lock_instances[lock] for lock in scoped_codes}
-    return scoped_codes, scoped_instances
+    return scoped_codes
 
 
 class _ExistingCodesFlowMixin:
-    """Mixin providing existing-codes detection, confirm UI, and clearing for config/options flows."""
+    """
+    Mixin providing existing-codes detection and confirmation for config/options flows.
+
+    When slots already have codes on the lock, this mixin shows a confirmation
+    dialog listing which locks/slots are affected.  Clearing is NOT done here —
+    the sync manager handles reconciliation when the config entry loads.
+    """
 
     _all_codes: dict[str, dict[int, str | SlotCode]]
-    _lock_instances: dict[str, Any]
-    _slots_to_clear: list[int]
+    _occupied_lock_slots: list[tuple[str, int]]
     _next_step: Callable[[], Awaitable[dict[str, Any]]] | None
 
     def _init_existing_codes_state(self) -> None:
         """Initialize mixin state. Call from the inheriting flow's __init__."""
         self._all_codes = {}
-        self._lock_instances = {}
-        self._slots_to_clear = []
+        self._occupied_lock_slots = []
         self._next_step = None
 
-    def _slots_with_existing_codes(self, slot_nums: Iterable[int]) -> list[int]:
-        """Return sorted slot numbers that have a non-empty code on any lock."""
+    def _find_occupied_lock_slots(
+        self, slot_nums: Iterable[int]
+    ) -> list[tuple[str, int]]:
+        """Return (lock_entity_id, slot_num) pairs that have non-empty codes."""
         return sorted(
-            slot_num
+            (lock_entity_id, slot_num)
             for slot_num in slot_nums
-            if any(
-                codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
-                for codes in self._all_codes.values()
-            )
+            for lock_entity_id, codes in self._all_codes.items()
+            if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
         )
 
-    async def _clear_existing_slot(self, slot_num: int) -> None:
-        """Clear a slot on every lock that has a non-empty code in it."""
-        for lock_entity_id, codes in self._all_codes.items():
-            if codes.get(slot_num, SlotCode.EMPTY) == SlotCode.EMPTY:
-                continue
-            lock_instance = self._lock_instances.get(lock_entity_id)
-            if not lock_instance:
-                _LOGGER.warning(
-                    "No lock instance for %s; cannot clear slot %s",
-                    lock_entity_id,
-                    slot_num,
-                )
-                continue
-            try:
-                await lock_instance.async_internal_clear_usercode(
-                    slot_num, source="direct"
-                )
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to clear slot %s on %s",
-                    slot_num,
-                    lock_entity_id,
-                    exc_info=True,
-                )
+    @staticmethod
+    def _format_occupied_slots(
+        occupied: list[tuple[str, int]],
+    ) -> str:
+        """Format occupied lock/slot pairs for display in the confirmation dialog."""
+        return "\n".join(
+            f"- {lock_entity_id}: slot {slot_num}"
+            for lock_entity_id, slot_num in occupied
+        )
 
-    async def _clear_all_pending_slots(self) -> None:
-        """Clear every slot in ``_slots_to_clear`` and reset state."""
-        for slot_num in self._slots_to_clear:
-            await self._clear_existing_slot(slot_num)
-        self._slots_to_clear = []
-        self._all_codes = {}
-        self._lock_instances = {}
-
-    async def _clear_then_create_entry(
+    async def _create_entry(
         self, *, title: str, data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Clear pending slots, then create the entry."""
-        await self._clear_all_pending_slots()
+        """Create the config entry."""
         return self.async_create_entry(  # type: ignore[attr-defined]
             title=title, data=data
         )
@@ -306,19 +270,19 @@ class _ExistingCodesFlowMixin:
     async def async_step_existing_codes_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """Confirm clearing of existing codes before proceeding."""
+        """Confirm that existing codes will be overwritten by the sync manager."""
         return self.async_show_menu(  # type: ignore[attr-defined]
             step_id="existing_codes_confirm",
-            menu_options=["existing_codes_clear", "existing_codes_cancel"],
+            menu_options=["existing_codes_continue", "existing_codes_cancel"],
             description_placeholders={
-                "slots": ", ".join(str(s) for s in self._slots_to_clear),
+                "details": self._format_occupied_slots(self._occupied_lock_slots),
             },
         )
 
-    async def async_step_existing_codes_clear(
+    async def async_step_existing_codes_continue(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """User confirmed clearing. Run the next step."""
+        """User acknowledged existing codes. Proceed to next step."""
         if self._next_step is None:
             return self.async_abort(reason="unknown")  # type: ignore[attr-defined]
         return await self._next_step()
@@ -362,10 +326,7 @@ class LockCodeManagerFlowHandler(
             self._abort_if_unique_id_configured()
             self.data = user_input
             # Scan locks for existing codes once upfront
-            (
-                self._all_codes,
-                self._lock_instances,
-            ) = await _async_get_all_codes(
+            self._all_codes = await _async_get_all_codes(
                 self.hass, self.dev_reg, self.ent_reg, user_input[CONF_LOCKS]
             )
             return await self.async_step_choose_path()
@@ -403,10 +364,10 @@ class LockCodeManagerFlowHandler(
             description_placeholders.update(additional_placeholders)
             if not errors:
                 self.slots_to_configure = list(range(start, start + num_slots))
-                self._slots_to_clear = self._slots_with_existing_codes(
+                self._occupied_lock_slots = self._find_occupied_lock_slots(
                     self.slots_to_configure
                 )
-                if self._slots_to_clear:
+                if self._occupied_lock_slots:
                     self._next_step = self.async_step_code_slot
                     return await self.async_step_existing_codes_confirm()
                 return await self.async_step_code_slot()
@@ -458,9 +419,7 @@ class LockCodeManagerFlowHandler(
                 slot_num = int(self.slots_to_configure.pop(0))
                 self.data[CONF_SLOTS][slot_num] = CODE_SLOT_SCHEMA(user_input)
                 if not self.slots_to_configure:
-                    return await self._clear_then_create_entry(
-                        title=self.title, data=self.data
-                    )
+                    return await self._create_entry(title=self.title, data=self.data)
                 current_slot = self.slots_to_configure[0]
                 description_placeholders["slot_num"] = current_slot
 
@@ -493,10 +452,12 @@ class LockCodeManagerFlowHandler(
 
                 if not errors:
                     self.data[CONF_SLOTS] = slots
-                    self._slots_to_clear = self._slots_with_existing_codes(slots.keys())
-                    if self._slots_to_clear:
+                    self._occupied_lock_slots = self._find_occupied_lock_slots(
+                        slots.keys()
+                    )
+                    if self._occupied_lock_slots:
                         self._next_step = partial(
-                            self._clear_then_create_entry,
+                            self._create_entry,
                             title=self.title,
                             data=self.data,
                         )
@@ -633,7 +594,7 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
         self, user_input: dict[str, Any]
     ) -> dict[str, Any]:
         """
-        Scan added (lock, slot) pairs for codes; confirm clear if any.
+        Scan added (lock, slot) pairs for codes; show confirmation if any exist.
 
         Compares the submitted (lock, slot) pairs against the entry's
         current configuration. If any newly-added pair has a non-empty
@@ -649,22 +610,18 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
         locks_to_query = sorted({lock for lock, _ in diff.pairs_added})
         ent_reg = er.async_get(self.hass)
         dev_reg = dr.async_get(self.hass)
-        all_codes, lock_instances = await _async_get_all_codes(
+        all_codes = await _async_get_all_codes(
             self.hass, dev_reg, ent_reg, locks_to_query
         )
 
-        # Scope to ONLY the added pairs so the mixin's clearing logic
-        # cannot touch already-managed (lock, slot) pairs
-        self._all_codes, self._lock_instances = _scope_codes_to_pairs(
-            all_codes, lock_instances, diff.pairs_added
-        )
+        # Scope to ONLY the added pairs so the confirmation dialog only
+        # shows newly-added lock/slot pairs, not already-managed ones
+        self._all_codes = _scope_codes_to_pairs(all_codes, diff.pairs_added)
 
         added_slot_nums = {slot for _, slot in diff.pairs_added}
-        self._slots_to_clear = self._slots_with_existing_codes(added_slot_nums)
-        if not self._slots_to_clear:
+        self._occupied_lock_slots = self._find_occupied_lock_slots(added_slot_nums)
+        if not self._occupied_lock_slots:
             return self.async_create_entry(title="", data=user_input)
 
-        self._next_step = partial(
-            self._clear_then_create_entry, title="", data=user_input
-        )
+        self._next_step = partial(self._create_entry, title="", data=user_input)
         return await self.async_step_existing_codes_confirm()
