@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "5bc73e23d1cf",
+  "strategy": "manual-commit",
+  "branch": "docs/readme-zha-support",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5b/c73e23d1cf/0/metadata.json",
+      "transcript": "/5b/c73e23d1cf/0/full.jsonl",
+      "content_hash": "/5b/c73e23d1cf/0/content_hash.txt",
+      "prompt": "/5b/c73e23d1cf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27,
+    "cache_creation_tokens": 71226,
+    "cache_read_tokens": 979524,
+    "output_tokens": 7590,
+    "api_call_count": 17
+  }
+}

@@ -1,0 +1,1 @@
+open a PR to update the README to include ZHA support
