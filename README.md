@@ -23,6 +23,7 @@ Supported lock integrations:
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | ✅ | ✅ | Some locks mask PINs |
+| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events |
 | [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock |
 | [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec |
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
@@ -50,6 +51,7 @@ If you rename the device in HA, keep it aligned with the **friendly name** in Zi
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
 [local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
 [hass-virtual]: https://github.com/twrecked/hass-virtual
+[wiki-zha]: https://github.com/raman325/lock_code_manager/wiki/ZHA-integration
 [wiki-zwave]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-integration
 
 Adding support for new lock integrations is straightforward — see the
@@ -73,7 +75,7 @@ for details.
 The best way to install this integration is via HACS.
 
 1. Set up your locks in Home Assistant through a supported integration
-   (Z-Wave, Matter, Schlage, Zigbee2MQTT/MQTT, etc.)
+   (Z-Wave, ZHA, Matter, Schlage, Zigbee2MQTT/MQTT, etc.)
 2. Add this repository as a custom integration repository in HACS
 3. Go to Settings > Devices & Services > Add Integration
 4. Select Lock Code Manager
