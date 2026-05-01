@@ -404,7 +404,7 @@ Commands in `websocket.py` for frontend communication:
 | `lock_code_manager/subscribe_code_slot` | Real-time subscription for slot card updates (includes `sync_status` per lock) |
 | `lock_code_manager/subscribe_lock_codes` | Real-time subscription for lock codes card (includes `sync_status` when suspended) |
 | `lock_code_manager/set_lock_usercode` | Set/clear usercode on unmanaged slots |
-| `lock_code_manager/update_slot_condition` | Add/edit/remove slot conditions (entity_id, number_of_uses) |
+| `lock_code_manager/update_slot_condition` | Add/edit/remove slot condition entity |
 
 ## Frontend
 
@@ -412,8 +412,8 @@ Commands in `websocket.py` for frontend communication:
 
 Primary card for managing individual code slots. Features:
 
-- **Inline editing**: Name, PIN, and number of uses editable directly in card
-- **Condition management**: Add/edit/remove condition entities and number of uses via dialog
+- **Inline editing**: Name and PIN editable directly in card
+- **Condition management**: Add/edit/remove condition entity via dialog
 - **Lock status**: Per-lock sync status, actual code on lock (masked/revealed)
 - **Collapsible sections**: Conditions and lock status can be collapsed
 - **Real-time updates**: WebSocket subscription for instant state changes
