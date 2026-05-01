@@ -162,13 +162,13 @@
     }
   },
   "issues": {
-    "number_of_uses_deprecated": {
-      "title": "Number of Uses is deprecated",
+    "number_of_uses_removed": {
+      "title": "Number of Uses has been removed",
       "fix_flow": {
         "step": {
           "init": {
-            "title": "Migrate from Number of Uses",
-            "description": "The built-in **Number of Uses** feature is deprecated and will be removed in a future release.\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\n**Warning:** Clicking **Submit** will permanently remove Number of Uses from your configuration. Only do this after you have set up the blueprint replacement."
+            "title": "Number of Uses removed from slot configuration",
+            "description": "The built-in **Number of Uses** feature has been removed and the field was automatically stripped from the following slot configuration:\n\n{impacted}\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\nClick **Submit** to acknowledge this issue."
           }
         }
       }

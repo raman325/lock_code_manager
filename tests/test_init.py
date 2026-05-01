@@ -43,7 +43,6 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.models import SyncState
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
-    NumberOfUsesDeprecatedFlow,
     async_create_fix_flow,
 )
 
@@ -95,7 +94,8 @@ async def test_entry_setup_and_unload(
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
 
-    unique_ids.add(f"{lcm_entry_id}|2|{CONF_NUMBER_OF_USES}")
+    # BASE_CONFIG slot 2 includes number_of_uses, but the migration strips it
+    # before platform forwarding so the number entity is never created.
 
     assert unique_ids == {
         entity.unique_id
@@ -700,126 +700,160 @@ async def test_unload_fires_lock_removed_callbacks(
 
 
 @pytest.mark.parametrize("config", [{}])
-async def test_number_of_uses_repair_issue_created(
+async def test_number_of_uses_auto_stripped_and_repair_raised(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-):
-    """Test that a repair issue is created when slots have number_of_uses."""
-    config = {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID],
-        CONF_SLOTS: {
-            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
-            "2": {
-                CONF_NAME: "test2",
-                CONF_PIN: "5678",
-                CONF_ENABLED: True,
-                CONF_NUMBER_OF_USES: 5,
+) -> None:
+    """Strip number_of_uses on setup and raise a one-time repair issue."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {
+                    CONF_NAME: "alice",
+                    CONF_PIN: "1234",
+                    CONF_ENABLED: True,
+                    CONF_NUMBER_OF_USES: 5,
+                },
+                3: {
+                    CONF_NAME: "bob",
+                    CONF_PIN: "5678",
+                    CONF_ENABLED: True,
+                    CONF_NUMBER_OF_USES: 0,
+                },
             },
         },
-    }
-    config_entry = MockConfigEntry(
-        domain=DOMAIN, data=config, unique_id="Repair Test", title="Repair Test"
+        unique_id="House Locks",
+        title="House Locks",
     )
-    config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(config_entry.entry_id)
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    issue_reg = ir.async_get(hass)
-    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is not None
+    # Field stripped from both slots
+    assert CONF_NUMBER_OF_USES not in entry.data[CONF_SLOTS][1]
+    assert CONF_NUMBER_OF_USES not in entry.data[CONF_SLOTS][3]
 
-    await hass.config_entries.async_unload(config_entry.entry_id)
+    # Informational repair raised with impacted slot list
+    issue_registry = ir.async_get(hass)
+    issue = issue_registry.async_get_issue(
+        DOMAIN, f"number_of_uses_removed_{entry.entry_id}"
+    )
+    assert issue is not None
+    assert issue.translation_placeholders is not None
+    assert "House Locks" in issue.translation_placeholders["impacted"]
+    assert "1, 3" in issue.translation_placeholders["impacted"]
+
+    await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("config", [{}])
-async def test_number_of_uses_no_repair_when_absent(
+async def test_number_of_uses_repair_not_raised_when_nothing_to_strip(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-):
-    """Test that no repair issue is created when no slots have number_of_uses."""
-    config = {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID],
-        CONF_SLOTS: {
-            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
-        },
-    }
-    config_entry = MockConfigEntry(
-        domain=DOMAIN, data=config, unique_id="No Repair Test", title="No Repair Test"
-    )
-    config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    issue_reg = ir.async_get(hass)
-    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is None
-
-    await hass.config_entries.async_unload(config_entry.entry_id)
-
-
-@pytest.mark.parametrize("config", [{}])
-async def test_number_of_uses_repair_flow_strips_data(
-    hass: HomeAssistant,
-    setup_lovelace_ui,
-    mock_lock_config_entry,
-):
-    """Test that the repair flow strips number_of_uses from all entries."""
-    config = {
-        CONF_LOCKS: [LOCK_1_ENTITY_ID],
-        CONF_SLOTS: {
-            "1": {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
-            "2": {
-                CONF_NAME: "test2",
-                CONF_PIN: "5678",
-                CONF_ENABLED: True,
-                CONF_NUMBER_OF_USES: 5,
+) -> None:
+    """A clean config entry produces no repair."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "alice", CONF_PIN: "1234", CONF_ENABLED: True},
             },
         },
-    }
-    config_entry = MockConfigEntry(
-        domain=DOMAIN, data=config, unique_id="Repair Flow Test", title="Repair Flow"
+        unique_id="Clean House Locks",
+        title="Clean House Locks",
     )
-    config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(config_entry.entry_id)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    # Verify repair issue exists
-    issue_reg = ir.async_get(hass)
-    assert issue_reg.async_get_issue(DOMAIN, "number_of_uses_deprecated") is not None
+    issue_registry = ir.async_get(hass)
+    assert (
+        issue_registry.async_get_issue(
+            DOMAIN, f"number_of_uses_removed_{entry.entry_id}"
+        )
+        is None
+    )
 
-    # Execute the repair flow (simulate user clicking Submit)
-    flow = NumberOfUsesDeprecatedFlow()
-    flow.hass = hass
-    result = await flow.async_step_init(user_input={})
-
-    assert result["type"] == "create_entry"
-
-    # Listener normalizes slot keys to int before persisting; look up by int.
-    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][2]
-    # Slot 1 should be unchanged
-    assert CONF_NUMBER_OF_USES not in config_entry.data[CONF_SLOTS][1]
-
-    await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("config", [{}])
-async def test_number_of_uses_repair_flow_shows_form(
+async def test_number_of_uses_repair_per_entry(
     hass: HomeAssistant,
     setup_lovelace_ui,
     mock_lock_config_entry,
-):
-    """Test that the repair flow shows a form on initial step."""
-    flow = NumberOfUsesDeprecatedFlow()
-    flow.hass = hass
-    result = await flow.async_step_init(user_input=None)
-    assert result["type"] == "form"
-    assert result["step_id"] == "init"
+) -> None:
+    """Each impacted entry gets its own repair issue (no clobbering)."""
+    entry_a = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {
+                    CONF_NAME: "alice",
+                    CONF_PIN: "1234",
+                    CONF_ENABLED: True,
+                    CONF_NUMBER_OF_USES: 5,
+                },
+            },
+        },
+        unique_id="House Locks",
+        title="House Locks",
+    )
+    entry_a.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry_a.entry_id)
+    await hass.async_block_till_done()
+
+    entry_b = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_2_ENTITY_ID],
+            CONF_SLOTS: {
+                2: {
+                    CONF_NAME: "bob",
+                    CONF_PIN: "5678",
+                    CONF_ENABLED: True,
+                    CONF_NUMBER_OF_USES: 3,
+                },
+            },
+        },
+        unique_id="Garage",
+        title="Garage",
+    )
+    entry_b.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry_b.entry_id)
+    await hass.async_block_till_done()
+
+    issue_registry = ir.async_get(hass)
+    issue_a = issue_registry.async_get_issue(
+        DOMAIN, f"number_of_uses_removed_{entry_a.entry_id}"
+    )
+    issue_b = issue_registry.async_get_issue(
+        DOMAIN, f"number_of_uses_removed_{entry_b.entry_id}"
+    )
+    assert issue_a is not None
+    assert issue_a.translation_placeholders is not None
+    assert "House Locks" in issue_a.translation_placeholders["impacted"]
+    assert issue_b is not None
+    assert issue_b.translation_placeholders is not None
+    assert "Garage" in issue_b.translation_placeholders["impacted"]
+
+    await hass.config_entries.async_unload(entry_a.entry_id)
+    await hass.config_entries.async_unload(entry_b.entry_id)
 
 
 async def test_async_create_fix_flow():
     """Test async_create_fix_flow returns the correct flow."""
-    flow = await async_create_fix_flow(None, "number_of_uses_deprecated", None)
-    assert isinstance(flow, NumberOfUsesDeprecatedFlow)
+    flow = await async_create_fix_flow(
+        None, "number_of_uses_removed_test_entry_id", None
+    )
+    assert isinstance(flow, AcknowledgeRepairFlow)
 
 
 async def test_async_create_fix_flow_slot_disabled():

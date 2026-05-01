@@ -124,8 +124,9 @@ async def test_get_config_entry_data(
     assert config_entry["entry_id"] == lock_code_manager_config_entry.entry_id
     assert config_entry["title"] == "Mock Title"
 
-    # Verify entities
-    assert len(result[CONF_ENTITIES]) == 19
+    # Verify entities (no number_of_uses entity since the migration strips
+    # number_of_uses from BASE_CONFIG slot 2 before platform forwarding).
+    assert len(result[CONF_ENTITIES]) == 18
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
