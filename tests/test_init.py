@@ -128,6 +128,9 @@ async def test_entry_setup_and_unload(
     assert not locks[LOCK_2_ENTITY_ID].service_calls["hard_refresh_codes"]
 
     new_config = copy.deepcopy(BASE_CONFIG)
+    # number_of_uses values in options are accepted (for backward compatibility
+    # with stored configs) but no entity is created — entity creation for the
+    # deprecated key was removed.
     new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
     new_config[CONF_SLOTS][2].pop(CONF_NUMBER_OF_USES)
     new_config[CONF_SLOTS][3] = {
@@ -155,8 +158,6 @@ async def test_entry_setup_and_unload(
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
-
-    unique_ids.add(f"{lcm_entry_id}|1|{CONF_NUMBER_OF_USES}")
 
     assert unique_ids == {
         entity.unique_id
@@ -197,8 +198,6 @@ async def test_entry_setup_and_unload(
             EVENT_PIN_USED,
         ):
             unique_ids.add(f"{lcm_entry_id}|{slot}|{key}")
-
-    unique_ids.add(f"{lcm_entry_id}|1|{CONF_NUMBER_OF_USES}")
 
     assert unique_ids == {
         entity.unique_id

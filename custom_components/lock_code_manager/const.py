@@ -131,7 +131,6 @@ PLATFORM_MAP = {
     CONF_CALENDAR: Platform.CALENDAR,
     CONF_ENABLED: Platform.SWITCH,
     CONF_NAME: Platform.TEXT,
-    CONF_NUMBER_OF_USES: Platform.NUMBER,
     CONF_PIN: Platform.TEXT,
     EVENT_PIN_USED: Platform.EVENT,
 }

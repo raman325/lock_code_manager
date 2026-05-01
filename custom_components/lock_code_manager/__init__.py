@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 import logging
 from pathlib import Path
 from typing import Any
@@ -723,58 +723,6 @@ async def _async_setup_new_locks(
         callbacks.invoke_lock_added_handlers(added_locks)
 
 
-async def _async_reconcile_slot_entities(
-    config_entry: LockCodeManagerConfigEntry,
-    slot_num: int,
-    old_config: Mapping[str, Any],
-    new_config: Mapping[str, Any],
-    callbacks: Any,
-    ent_reg: er.EntityRegistry,
-) -> None:
-    """Reconcile entities for a slot whose configuration has changed."""
-    entry_id = config_entry.entry_id
-    entry_title = config_entry.title
-    entities_to_remove: set[str] = set()
-    entities_to_add: set[str] = set()
-
-    # Check if number of uses has changed
-    old_val = old_config.get(CONF_NUMBER_OF_USES)
-    new_val = new_config.get(CONF_NUMBER_OF_USES)
-
-    # If number of uses value hasn't changed, skip
-    if old_val == new_val:
-        return
-
-    # If number of uses value has been removed, fire a signal to remove
-    # corresponding entity
-    if old_val not in (None, "") and new_val in (None, ""):
-        entities_to_remove.add(CONF_NUMBER_OF_USES)
-    # If number of uses value has been added, fire a signal to add
-    # corresponding entity
-    elif old_val in (None, "") and new_val not in (None, ""):
-        entities_to_add.add(CONF_NUMBER_OF_USES)
-
-    for key in entities_to_remove:
-        _LOGGER.debug(
-            "%s (%s): Removing %s entity for slot %s due to changed configuration",
-            entry_id,
-            entry_title,
-            key,
-            slot_num,
-        )
-        await callbacks.invoke_entity_removers_for_key(slot_num, key)
-
-    for key in entities_to_add:
-        _LOGGER.debug(
-            "%s (%s): Adding %s entity for slot %s due to changed configuration",
-            entry_id,
-            entry_title,
-            key,
-            slot_num,
-        )
-        callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
-
-
 async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
@@ -808,7 +756,6 @@ async def async_update_listener(
     # to_dict() at the write site.
     old_config = EntryConfig.from_mapping(config_entry.data)
     new_config = EntryConfig.from_mapping(config_entry.options)
-    curr_slots = old_config.slots
     new_slots = new_config.slots
 
     # Set up any platforms that the new slot configs need that haven't
@@ -877,7 +824,7 @@ async def async_update_listener(
     # For each new slot, add standard entities and configuration entities. We also
     # add slot sensors for existing locks only since new locks were already set up
     # above.
-    for slot_num, slot_config in slots_to_add.items():
+    for slot_num in slots_to_add:
         # First we store the set of entities we are adding so we can track when they
         # are done
         entities_to_add: set[str] = {
@@ -886,10 +833,6 @@ async def async_update_listener(
             CONF_PIN,
             EVENT_PIN_USED,
         }
-
-        # Check if we need to add a number of uses entity
-        if slot_config.get(CONF_NUMBER_OF_USES) not in (None, ""):
-            entities_to_add.add(CONF_NUMBER_OF_USES)
 
         _LOGGER.debug(
             "%s (%s): Adding PIN enabled binary sensor for slot %s",
@@ -920,18 +863,6 @@ async def async_update_listener(
                 slot_num,
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-
-    # For all slots that are in both the old and new config, check if any of the
-    # configuration options have changed
-    for slot_num in diff.slots_unchanged:
-        await _async_reconcile_slot_entities(
-            config_entry,
-            slot_num,
-            curr_slots[slot_num],
-            new_slots[slot_num],
-            callbacks,
-            ent_reg,
-        )
 
     # Existing entities will listen to updates and act on it.
     # Use to_dict() so the stored data has plain dicts (not the read-only
