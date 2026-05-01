@@ -60,7 +60,6 @@ from custom_components.lock_code_manager.const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_NAME,
-    CONF_NUMBER_OF_USES,
     CONF_PIN,
     CONF_SLOTS,
 )
@@ -89,6 +88,10 @@ from .common import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Legacy slot field name; the constant was deleted but this test still verifies
+# the websocket payload doesn't surface it under the legacy key.
+LEGACY_NUMBER_OF_USES_KEY = "number_of_uses"
 
 CALENDAR_TEST_ENTITY_ID = f"{CALENDAR_DOMAIN}.test_cal"
 BINARY_SENSOR_TEST_ENTITY_ID = "binary_sensor.test_motion"
@@ -819,8 +822,8 @@ async def test_subscribe_code_slot_omits_number_of_uses(
     event = await ws_client.receive_json()
     assert event["type"] == "event"
     data = event["event"]
-    assert CONF_NUMBER_OF_USES not in data[CONF_CONDITIONS]
-    assert CONF_NUMBER_OF_USES not in data[CONF_ENTITIES]
+    assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_CONDITIONS]
+    assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_ENTITIES]
 
 
 async def test_subscribe_code_slot_with_event_type(

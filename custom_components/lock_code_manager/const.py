@@ -92,7 +92,6 @@ ATTR_IN_SYNC = "in_sync"
 ATTR_SYNC_STATUS = "sync_status"
 
 # Code slot properties
-CONF_NUMBER_OF_USES = "number_of_uses"
 CONF_CALENDAR = "calendar"
 
 # Supported domains for condition entities (CONF_ENTITY_ID option)

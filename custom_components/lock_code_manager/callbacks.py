@@ -76,9 +76,11 @@ class EntityCallbackRegistry:
             code sensor showing the actual code on the lock, in-sync binary
             sensor). For 3 locks with 2 slots, this creates 6 entities.
 
-        Keyed: Entities created only when a specific config key has a value
-            (e.g., number_of_uses). The key parameter identifies which config
-            option triggers entity creation.
+        Keyed: Entities created only when a specific config key has a value.
+            The key parameter identifies which config option triggers entity
+            creation. No platform currently uses this; the infrastructure
+            remains so future per-key entities can register without
+            re-introducing it.
     """
 
     # Entity creation callbacks (platforms register these in async_setup_entry)
@@ -134,7 +136,7 @@ class EntityCallbackRegistry:
         """
         Register callback for adding keyed entities (only when config key is set).
 
-        Used by: number (number_of_uses)
+        Currently unused by any built-in platform; reserved for future per-key entities.
         """
         self.add_keyed_entity.setdefault(key, []).append(callback)
         return lambda: (

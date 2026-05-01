@@ -64,7 +64,6 @@ from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
     CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -460,6 +459,8 @@ async def async_setup_entry(
     # upgrading from a previous release don't see an obsolete unfixable repair.
     async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
 
+    # Legacy slot field name; the constant was deleted alongside the field.
+    legacy_number_of_uses_key = "number_of_uses"
     new_data = {**config_entry.data}
     new_options = {**config_entry.options}
     changed = False
@@ -470,8 +471,8 @@ async def async_setup_entry(
         new_slots = {}
         for slot_num, slot_config in data_dict[CONF_SLOTS].items():
             new_slot = {**slot_config}
-            if CONF_NUMBER_OF_USES in new_slot:
-                new_slot.pop(CONF_NUMBER_OF_USES)
+            if legacy_number_of_uses_key in new_slot:
+                new_slot.pop(legacy_number_of_uses_key)
                 changed = True
                 entry_impacted.add(str(slot_num))
             new_slots[slot_num] = new_slot

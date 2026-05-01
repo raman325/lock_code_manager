@@ -33,7 +33,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_IN_SYNC,
     CONF_CALENDAR,
     CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -59,6 +58,10 @@ from .conftest import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Legacy slot field name; the constant was deleted but the migration tests
+# still need to plant it in mock configs to verify it gets stripped.
+LEGACY_NUMBER_OF_USES_KEY = "number_of_uses"
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -131,8 +134,8 @@ async def test_entry_setup_and_unload(
     # number_of_uses values in options are accepted (for backward compatibility
     # with stored configs) but no entity is created — entity creation for the
     # deprecated key was removed.
-    new_config[CONF_SLOTS][1][CONF_NUMBER_OF_USES] = 5
-    new_config[CONF_SLOTS][2].pop(CONF_NUMBER_OF_USES)
+    new_config[CONF_SLOTS][1][LEGACY_NUMBER_OF_USES_KEY] = 5
+    new_config[CONF_SLOTS][2].pop(LEGACY_NUMBER_OF_USES_KEY)
     new_config[CONF_SLOTS][3] = {
         CONF_NAME: "test3",
         ATTR_CODE: "4321",
@@ -714,13 +717,13 @@ async def test_number_of_uses_auto_stripped_and_repair_raised(
                     CONF_NAME: "alice",
                     CONF_PIN: "1234",
                     CONF_ENABLED: True,
-                    CONF_NUMBER_OF_USES: 5,
+                    LEGACY_NUMBER_OF_USES_KEY: 5,
                 },
                 3: {
                     CONF_NAME: "bob",
                     CONF_PIN: "5678",
                     CONF_ENABLED: True,
-                    CONF_NUMBER_OF_USES: 0,
+                    LEGACY_NUMBER_OF_USES_KEY: 0,
                 },
             },
         },
@@ -733,8 +736,8 @@ async def test_number_of_uses_auto_stripped_and_repair_raised(
     await hass.async_block_till_done()
 
     # Field stripped from both slots
-    assert CONF_NUMBER_OF_USES not in entry.data[CONF_SLOTS][1]
-    assert CONF_NUMBER_OF_USES not in entry.data[CONF_SLOTS][3]
+    assert LEGACY_NUMBER_OF_USES_KEY not in entry.data[CONF_SLOTS][1]
+    assert LEGACY_NUMBER_OF_USES_KEY not in entry.data[CONF_SLOTS][3]
 
     # Informational repair raised with impacted slot list
     issue_registry = ir.async_get(hass)
@@ -798,7 +801,7 @@ async def test_number_of_uses_repair_per_entry(
                     CONF_NAME: "alice",
                     CONF_PIN: "1234",
                     CONF_ENABLED: True,
-                    CONF_NUMBER_OF_USES: 5,
+                    LEGACY_NUMBER_OF_USES_KEY: 5,
                 },
             },
         },
@@ -818,7 +821,7 @@ async def test_number_of_uses_repair_per_entry(
                     CONF_NAME: "bob",
                     CONF_PIN: "5678",
                     CONF_ENABLED: True,
-                    CONF_NUMBER_OF_USES: 3,
+                    LEGACY_NUMBER_OF_USES_KEY: 3,
                 },
             },
         },
