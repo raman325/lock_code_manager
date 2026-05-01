@@ -128,24 +128,6 @@ export const lcmStatusIndicatorStyles = css`
     .lcm-sync-icon.unknown {
         color: var(--lcm-disabled-color);
     }
-
-    .lcm-status-dot {
-        border-radius: 50%;
-        height: 12px;
-        width: 12px;
-    }
-
-    .lcm-status-dot.active {
-        background-color: var(--lcm-success-color);
-    }
-
-    .lcm-status-dot.inactive {
-        background-color: var(--lcm-warning-color);
-    }
-
-    .lcm-status-dot.disabled {
-        background-color: var(--lcm-disabled-color);
-    }
 `;
 
 /**

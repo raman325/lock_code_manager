@@ -228,26 +228,6 @@ const slotCardComponentStyles = css`
         letter-spacing: 4px;
     }
 
-    /* Status Section */
-    .status-row {
-        align-items: center;
-        display: flex;
-        gap: 12px;
-    }
-
-    .status-text {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        font-weight: 500;
-    }
-
-    .status-detail {
-        color: var(--secondary-text-color);
-        font-size: 13px;
-        margin-left: 24px;
-        margin-top: 4px;
-    }
-
     /* Conditions Section */
     .condition-row {
         align-items: center;

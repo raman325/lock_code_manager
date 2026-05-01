@@ -260,7 +260,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderFromData(data: SlotCardData): TemplateResult {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        const { pin, enabled, active, conditions, locks } = data;
+        const { pin, enabled, conditions, locks } = data;
         const pinLength = data.pin_length;
 
         // Transform locks to the expected format
@@ -308,7 +308,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 ${this._renderHeader()}
                 <div class="content">
                     ${this._renderHero(pin, pinLength, enabled, mode)}
-                    ${this._renderStatus(enabled, active)}
                     ${showManageConditions ? this._renderManageConditionsRow() : nothing}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
@@ -447,41 +446,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         @change=${this._handleEnabledToggle}
                     ></ha-switch>
                 </div>
-            </div>
-        `;
-    }
-
-    private _renderStatus(enabled: boolean | null, active: boolean | null): TemplateResult {
-        let statusClass: string;
-        let statusText: string;
-        let statusDetail: string;
-
-        if (enabled === false) {
-            statusClass = 'disabled';
-            statusText = 'Disabled';
-            statusDetail = 'Slot is disabled by user';
-        } else if (active === true) {
-            statusClass = 'active';
-            statusText = 'Active';
-            statusDetail = '';
-        } else if (active === false) {
-            statusClass = 'inactive';
-            statusText = 'Inactive';
-            statusDetail = 'Blocked by conditions';
-        } else {
-            statusClass = 'disabled';
-            statusText = 'Unknown';
-            statusDetail = 'Status unavailable';
-        }
-
-        return html`
-            <div class="lcm-section">
-                <div class="lcm-section-header">Status</div>
-                <div class="status-row">
-                    <span class="lcm-status-dot ${statusClass}"></span>
-                    <span class="status-text">${statusText}</span>
-                </div>
-                ${statusDetail ? html`<div class="status-detail">${statusDetail}</div>` : nothing}
             </div>
         `;
     }
