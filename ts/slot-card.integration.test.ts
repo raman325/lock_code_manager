@@ -777,6 +777,10 @@ describe('LockCodeManagerSlotCard integration', () => {
             (card as any)._dialogEntityId = null;
             await (card as any)._saveConditionChanges();
             expect((card as any)._actionError).toBe('Please select an entity before saving');
+            // Validation-failure path must reset the in-flight flag so the
+            // user can retry after fixing the picker value (the early
+            // re-entry guard would otherwise lock them out).
+            expect((card as any)._dialogSaving).toBe(false);
         });
 
         it('sets action error when _dialogEntityId is empty string', async () => {
@@ -784,6 +788,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             (card as any)._dialogEntityId = '   ';
             await (card as any)._saveConditionChanges();
             expect((card as any)._actionError).toBe('Please select an entity before saving');
+            expect((card as any)._dialogSaving).toBe(false);
         });
 
         it('sets action error when entity not found in hass.states', async () => {
@@ -793,6 +798,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._actionError).toBe(
                 'Selected entity not found: input_boolean.nonexistent'
             );
+            expect((card as any)._dialogSaving).toBe(false);
         });
 
         it('calls _setSlotCondition for valid entity in add mode', async () => {
@@ -805,6 +811,11 @@ describe('LockCodeManagerSlotCard integration', () => {
                     type: 'lock_code_manager/set_slot_condition'
                 })
             );
+            // Resubscribe must run on the success path — verify it was
+            // re-issued at least once on top of the initial subscribe.
+            const subscribeMessageMock = (card as any)._hass.connection
+                .subscribeMessage as ReturnType<typeof vi.fn>;
+            expect(subscribeMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
         });
 
         it('calls _setSlotCondition for valid entity in manage mode', async () => {
@@ -817,6 +828,9 @@ describe('LockCodeManagerSlotCard integration', () => {
                     type: 'lock_code_manager/set_slot_condition'
                 })
             );
+            const subscribeMessageMock = (card as any)._hass.connection
+                .subscribeMessage as ReturnType<typeof vi.fn>;
+            expect(subscribeMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
         });
 
         it('sets action error when callWS throws', async () => {
@@ -855,6 +869,12 @@ describe('LockCodeManagerSlotCard integration', () => {
             );
             expect((card as any)._showConditionDialog).toBe(false);
             expect((card as any)._dialogSaving).toBe(false);
+            // Resubscribe is awaited so a failure surfaces in the banner;
+            // verify it was actually re-issued (initial subscribe + the
+            // post-remove resubscribe).
+            const subscribeMessageMock = (card as any)._hass.connection
+                .subscribeMessage as ReturnType<typeof vi.fn>;
+            expect(subscribeMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
         });
 
         it('sets action error when _clearSlotCondition fails', async () => {
@@ -2608,7 +2628,15 @@ describe('LockCodeManagerSlotCard integration', () => {
         beforeEach(async () => {
             card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
             card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
+            // Provide a registered state for the slot's event entity so the
+            // happy-path tests render the row. Tests that exercise
+            // unavailable / missing-entity branches override card.hass with
+            // their own mock.
+            card.hass = createMockHassWithConnection({
+                states: {
+                    'event.lcm_slot_1_pin_used': { state: '2026-05-01T18:23:00Z' }
+                }
+            });
             container.appendChild(card);
             await flush();
         });
@@ -2813,6 +2841,370 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('event-row');
             expect(joined).toContain('Last used');
             expect(joined).toContain('Front Door');
+        });
+
+        it('returns nothing when the event entity is missing from hass.states', () => {
+            // Override the per-suite hass with one that has no states. The
+            // event entity isn't in hass.states (registry race or the
+            // entity was removed), so the row must suppress to avoid
+            // clicking through to an empty more-info dialog.
+            const hass = createMockHassWithConnection({ states: {} });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            expect(tmpl?.strings).toBeUndefined();
+        });
+
+        it('_navigateToEventHistory is a no-op when entity missing from hass.states', () => {
+            const hass = createMockHassWithConnection({ states: {} });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used'
+            });
+            const dispatched: Event[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e)) as EventListener);
+            (card as any)._navigateToEventHistory();
+            expect(dispatched).toHaveLength(0);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('review-fix coverage (PR #1116)', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        afterEach(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            delete (window as any).loadCardHelpers;
+        });
+
+        // A1: _getEntityRow exception handling
+        describe('_getEntityRow error handling', () => {
+            it('returns an error placeholder and surfaces _setActionError when loadCardHelpers rejects', async () => {
+                (window as any).loadCardHelpers = vi
+                    .fn()
+                    .mockRejectedValue(new Error('helpers boom'));
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                const result = await (card as any)._getEntityRow('binary_sensor.test');
+                expect(result.tagName).toBe('DIV');
+                expect(result.className).toBe('entity-row-error');
+                expect(result.textContent).toContain('binary_sensor.test');
+                expect((card as any)._actionError).toContain('helpers boom');
+            });
+
+            it('returns an error placeholder when createRowElement throws', async () => {
+                (window as any).loadCardHelpers = vi.fn().mockResolvedValue({
+                    createRowElement: () => {
+                        throw new Error('createRowElement boom');
+                    }
+                });
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                const result = await (card as any)._getEntityRow('binary_sensor.test');
+                expect(result.className).toBe('entity-row-error');
+                expect((card as any)._actionError).toContain('createRowElement boom');
+            });
+
+            it('does not cache the error placeholder so the next render retries', async () => {
+                let attempts = 0;
+                (window as any).loadCardHelpers = vi.fn().mockImplementation(() => {
+                    attempts += 1;
+                    return Promise.reject(new Error('still failing'));
+                });
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                await (card as any)._getEntityRow('binary_sensor.test');
+                await (card as any)._getEntityRow('binary_sensor.test');
+                expect(attempts).toBe(2);
+            });
+        });
+
+        // A2: _saveConditionChanges resubscribe failure surfaces in banner
+        describe('save resubscribe failure handling', () => {
+            it('_saveConditionChanges surfaces a resubscribe failure via _setActionError', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                let subscribeCallCount = 0;
+                const subscribeMock = vi.fn().mockImplementation(() => {
+                    subscribeCallCount += 1;
+                    if (subscribeCallCount >= 2) {
+                        return Promise.reject(new Error('resubscribe boom'));
+                    }
+                    return Promise.resolve(() => {});
+                });
+                const hass = {
+                    callWS: vi.fn().mockResolvedValue(undefined),
+                    config: { state: 'RUNNING' },
+                    connection: { subscribeMessage: subscribeMock },
+                    states: { 'input_boolean.valid_entity': { state: 'on' } }
+                } as unknown as HomeAssistant;
+                card.hass = hass;
+                container.appendChild(card);
+                await flush();
+
+                (card as any)._dialogMode = 'add';
+                (card as any)._dialogEntityId = 'input_boolean.valid_entity';
+                await (card as any)._saveConditionChanges();
+                expect((card as any)._actionError).toContain('Failed to save');
+                expect((card as any)._actionError).toContain('resubscribe boom');
+                expect((card as any)._dialogSaving).toBe(false);
+            });
+
+            it('_removeCondition surfaces a resubscribe failure via _setActionError', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                let subscribeCallCount = 0;
+                const subscribeMock = vi.fn().mockImplementation(() => {
+                    subscribeCallCount += 1;
+                    if (subscribeCallCount >= 2) {
+                        return Promise.reject(new Error('resubscribe boom'));
+                    }
+                    return Promise.resolve(() => {});
+                });
+                const hass = {
+                    callWS: vi.fn().mockResolvedValue(undefined),
+                    config: { state: 'RUNNING' },
+                    connection: { subscribeMessage: subscribeMock },
+                    states: {}
+                } as unknown as HomeAssistant;
+                card.hass = hass;
+                container.appendChild(card);
+                await flush();
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogMode = 'manage';
+                await (card as any)._removeCondition();
+                expect((card as any)._actionError).toContain('Failed to remove condition');
+                expect((card as any)._actionError).toContain('resubscribe boom');
+                expect((card as any)._dialogSaving).toBe(false);
+            });
+        });
+
+        // B2: helpers list excludes the active condition entity
+        describe('_renderHelpers excludes active condition entity', () => {
+            it('does not render a helper row for the entity used as the condition entity', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({
+                    condition_helpers: ['input_boolean.shared_entity', 'input_boolean.helper_only'],
+                    config_entry_id: 'abc',
+                    slot: 1,
+                    type: 'custom:lcm-slot'
+                });
+                card.hass = createMockHassWithConnection({
+                    states: {
+                        'input_boolean.shared_entity': { state: 'on' },
+                        'input_boolean.helper_only': { state: 'on' }
+                    }
+                });
+                container.appendChild(card);
+                await flush();
+                (card as any)._data = makeSlotCardData({
+                    conditions: {
+                        condition_entity: {
+                            condition_entity_id: 'input_boolean.shared_entity',
+                            state: 'on'
+                        }
+                    }
+                });
+
+                // Spy on _getEntityRow to record which entity ids the helper
+                // list asks to mount. The condition entity must not appear
+                // in this list — only `helper_only`.
+                const requested: string[] = [];
+                (card as any)._getEntityRow = (eid: string) => {
+                    requested.push(eid);
+                    return Promise.resolve(document.createElement('div'));
+                };
+                (card as any)._renderHelpers();
+                expect(requested).toEqual(['input_boolean.helper_only']);
+            });
+        });
+
+        // B3: Cancel disabled during in-flight; close-then-reopen doesn't
+        // drop the in-flight state
+        describe('dialog in-flight Cancel + close-state preservation', () => {
+            it('renders Cancel with .disabled bound to _dialogSaving', () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogMode = 'add';
+                (card as any)._dialogSaving = true;
+                const tmpl = (card as any)._renderConditionDialog();
+                // The Cancel button is rendered inline in the outer dialog
+                // template — locate the static-string fragment that
+                // immediately precedes its `.disabled=` binding so we can
+                // identify the binding's index, then verify the bound value
+                // is true under in-flight.
+                const strings: string[] = tmpl.strings ?? [];
+                const values: unknown[] = tmpl.values ?? [];
+                const cancelDisabledIdx = strings.findIndex((s) =>
+                    /slot="secondaryAction"\s*\.disabled=$/.test(s)
+                );
+                expect(cancelDisabledIdx).toBeGreaterThanOrEqual(0);
+                // The fragment two ahead (`.disabled` value, then @click
+                // value, then static text) should contain the literal
+                // "Cancel" label that wraps the button.
+                expect(strings[cancelDisabledIdx + 2]).toContain('Cancel');
+                expect(values[cancelDisabledIdx]).toBe(true);
+
+                // And when not in flight the binding flips to false.
+                (card as any)._dialogSaving = false;
+                const tmpl2 = (card as any)._renderConditionDialog();
+                expect((tmpl2.values ?? [])[cancelDisabledIdx]).toBe(false);
+            });
+
+            it('_closeConditionDialog does NOT reset _dialogSaving', () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogSaving = true;
+                (card as any)._closeConditionDialog();
+                // Closing must NOT reset the in-flight flag — otherwise the
+                // user could close-then-reopen the dialog and bypass the
+                // re-entry guard while the WS write is still pending.
+                expect((card as any)._dialogSaving).toBe(true);
+                expect((card as any)._showConditionDialog).toBe(false);
+            });
+        });
+
+        // C1: _saveConditionChanges re-entry guard
+        describe('_saveConditionChanges re-entry guard', () => {
+            it('early-returns when _dialogSaving is already true', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                const hass = createMockHassWithConnection({
+                    states: { 'input_boolean.valid_entity': { state: 'on' } }
+                });
+                const callWSMock = hass.callWS as ReturnType<typeof vi.fn>;
+                card.hass = hass;
+                container.appendChild(card);
+                await flush();
+
+                callWSMock.mockClear();
+                (card as any)._dialogSaving = true;
+                (card as any)._dialogMode = 'add';
+                (card as any)._dialogEntityId = 'input_boolean.valid_entity';
+                await (card as any)._saveConditionChanges();
+                expect(callWSMock).not.toHaveBeenCalled();
+            });
+        });
+
+        // C2: _startEditing('pin') resubscribe failure handling
+        describe('_startEditing pin resubscribe failure handling', () => {
+            it('reverts _revealed and surfaces _setActionError on resubscribe failure', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                // Replace _subscribe with a failing implementation so we can
+                // exercise the .catch branch deterministically.
+                (card as any)._subscribe = vi.fn().mockRejectedValue(new Error('subscribe boom'));
+                (card as any)._revealed = false;
+                (card as any)._startEditing('pin');
+                // Reveal flips optimistically before the await.
+                expect((card as any)._revealed).toBe(true);
+                await flush();
+                await flush();
+                expect((card as any)._revealed).toBe(false);
+                expect((card as any)._actionError).toContain('subscribe boom');
+            });
+        });
+
+        // C3: _setActionError timer tracking
+        describe('_setActionError timer tracking', () => {
+            it('back-to-back errors do not let the first timer dismiss the second early', () => {
+                vi.useFakeTimers();
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._setActionError('first');
+                expect((card as any)._actionError).toBe('first');
+                // Advance 4s — the first timer would fire 1s from now, but
+                // we set a second error before then.
+                vi.advanceTimersByTime(4000);
+                (card as any)._setActionError('second');
+                expect((card as any)._actionError).toBe('second');
+                // Advance another 1s — that's 5s after the FIRST set, so
+                // the previous-tracked-timer-bug would dismiss the banner.
+                vi.advanceTimersByTime(1000);
+                expect((card as any)._actionError).toBe('second');
+                // 4s more (total 5s after the second set) finally clears.
+                vi.advanceTimersByTime(4000);
+                expect((card as any)._actionError).toBeUndefined();
+                vi.useRealTimers();
+            });
+
+            it('disconnectedCallback clears the pending error timer', () => {
+                vi.useFakeTimers();
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._setActionError('about to disconnect');
+                expect((card as any)._actionErrorTimer).toBeDefined();
+                card.remove();
+                expect((card as any)._actionErrorTimer).toBeUndefined();
+                vi.useRealTimers();
+            });
+        });
+
+        // C4: _closeConditionDialog resets _dialogEntityId and _dialogMode
+        describe('_closeConditionDialog state cleanup', () => {
+            it('resets _dialogEntityId and _dialogMode', () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogEntityId = 'input_boolean.something';
+                (card as any)._dialogMode = 'add';
+                (card as any)._closeConditionDialog();
+                expect((card as any)._showConditionDialog).toBe(false);
+                expect((card as any)._dialogEntityId).toBeNull();
+                expect((card as any)._dialogMode).toBe('manage');
+            });
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

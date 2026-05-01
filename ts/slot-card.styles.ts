@@ -325,6 +325,13 @@ const slotCardComponentStyles = css`
         padding: 10px 12px;
     }
 
+    .entity-row-error {
+        color: var(--disabled-text-color);
+        font-size: 12px;
+        font-style: italic;
+        padding: 10px 12px;
+    }
+
     .no-conditions {
         color: var(--secondary-text-color);
         font-size: 13px;

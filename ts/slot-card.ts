@@ -98,6 +98,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
+    private _actionErrorTimer?: ReturnType<typeof setTimeout>;
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -135,7 +136,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     setTimeout(() => resolve(stub), 2000)
                 )
             ]);
-        } catch {
+        } catch (err) {
+            // Log but don't surface to the user — this runs in the card
+            // picker, where there's no dashboard banner to display errors.
+            // eslint-disable-next-line no-console
+            console.warn('lcm-slot: failed to fetch config entries for stub config', err);
             return stub;
         }
     }
@@ -165,6 +170,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._isStub = config.config_entry_id === 'stub';
         if (!this._isStub) {
             void this._subscribe();
+        }
+    }
+
+    // connectedCallback provided by mixin; we override disconnectedCallback
+    // here to clean up the action-error timer in addition to letting the
+    // mixin tear down its subscription.
+    override disconnectedCallback(): void {
+        super.disconnectedCallback();
+        if (this._actionErrorTimer !== undefined) {
+            clearTimeout(this._actionErrorTimer);
+            this._actionErrorTimer = undefined;
         }
     }
 
@@ -198,8 +214,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     protected _handleSubscriptionData(data: unknown): void {
         this._data = data as SlotCardData;
     }
-
-    // connectedCallback and disconnectedCallback provided by mixin
 
     protected updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
@@ -303,10 +317,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * lock and a relative timestamp for the slot's most recent PIN use, or a
      * "Never used" empty state when the slot has been configured but the PIN
      * has not been used yet. Returns `nothing` when there is no event entity
-     * (e.g. the slot has no PIN at all) or when the event entity is in the
-     * `unavailable` state, so the row simply doesn't render — clicking
-     * through to a more-info dialog with no useful content would be
-     * misleading.
+     * (e.g. the slot has no PIN at all), when the event entity is missing
+     * from `hass.states` entirely (registry race or removed entity), or when
+     * it is in the `unavailable` state — clicking through to a more-info
+     * dialog with no useful content would be misleading.
      *
      * Clicking the row opens HA's more-info dialog on the event entity, which
      * provides the full firing history. The row is keyboard-focusable
@@ -319,7 +333,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const eventEntityId = this._data?.event_entity_id;
 
         if (!eventEntityId) return nothing;
-        if (this._hass?.states[eventEntityId]?.state === 'unavailable') return nothing;
+        const eventState = this._hass?.states[eventEntityId];
+        if (!eventState || eventState.state === 'unavailable') return nothing;
 
         const meta = lastUsed
             ? html`${lastUsedLock ?? 'Used'} ·
@@ -351,14 +366,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     /**
      * Click handler for the event row — opens the HA more-info dialog on the
      * slot's PIN-used event entity, which surfaces the full event firing
-     * history. No-op when there is no event entity or when the entity is
-     * `unavailable` (the row itself is also suppressed in that case, so this
-     * is just defense in depth).
+     * history. No-op when there is no event entity, when the entity is
+     * missing from `hass.states`, or when it is `unavailable` (the row
+     * itself is also suppressed in those cases, so this is defense in
+     * depth).
      */
     private _navigateToEventHistory(): void {
         const eventEntityId = this._data?.event_entity_id;
         if (!eventEntityId) return;
-        if (this._hass?.states[eventEntityId]?.state === 'unavailable') return;
+        const eventState = this._hass?.states[eventEntityId];
+        if (!eventState || eventState.state === 'unavailable') return;
         const event = new CustomEvent('hass-more-info', {
             bubbles: true,
             composed: true,
@@ -634,10 +651,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     /**
      * Render the helpers sub-list under the Conditions body. Helpers come from
      * the card config (not the slot data) and render as plain HA entity rows.
+     *
+     * The active condition entity is excluded from the helpers list so the
+     * shared cached HTMLElement returned by `_getEntityRow` can't be moved
+     * between two mount points — the DOM permits each node in only one
+     * place, and Lit's `until()` would silently lose one of them.
      */
     private _renderHelpers(): TemplateResult {
+        const conditionEntityId = this._data?.conditions?.condition_entity?.condition_entity_id;
         const helpers = [...new Set(this._config!.condition_helpers)].filter(
-            (eid: string) => this._hass?.states[eid]
+            (eid: string) => eid !== conditionEntityId && this._hass?.states[eid]
         );
         return html`
             <div class="helpers-label">Helpers</div>
@@ -673,7 +696,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * Lazy-loads (and caches) an HA entity row element using the
      * `loadCardHelpers().createRowElement()` helper. Falls back to a plain
      * text node when the helper isn't available (e.g. older HA, jsdom test
-     * environment without the global stub).
+     * environment without the global stub). On any failure (loadHelpers
+     * throws, createRowElement throws, etc.) returns a visible error
+     * placeholder and surfaces a friendly message via _setActionError so
+     * the user isn't stuck with an infinite "Loading…" spinner. The error
+     * placeholder is intentionally NOT cached so the next render retries.
      */
     private async _getEntityRow(entityId: string): Promise<HTMLElement> {
         const cached = this._entityRowCache.get(entityId);
@@ -692,12 +719,22 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             fallback.textContent = entityId;
             return fallback;
         }
-        const helpers = await loadHelpers();
-        const el = helpers.createRowElement({ entity: entityId }) as HTMLElement;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (el as any).hass = this._hass;
-        this._entityRowCache.set(entityId, el);
-        return el;
+        try {
+            const helpers = await loadHelpers();
+            const el = helpers.createRowElement({ entity: entityId }) as HTMLElement;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (el as any).hass = this._hass;
+            this._entityRowCache.set(entityId, el);
+            return el;
+        } catch (err) {
+            this._setActionError(
+                `Failed to load entity row for ${entityId}: ${err instanceof Error ? err.message : String(err)}`
+            );
+            const errorEl = document.createElement('div');
+            errorEl.className = 'entity-row-error';
+            errorEl.textContent = `Failed to load row for ${entityId}`;
+            return errorEl;
+        }
     }
 
     private _renderLockStatusSection(lockStatuses: LockSyncStatus[]): TemplateResult {
@@ -872,9 +909,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._showConditionDialog = true;
     }
 
+    /**
+     * Close the condition dialog and reset its transient picker state. Does
+     * NOT reset `_dialogSaving` — that flag tracks whether a Save/Remove WS
+     * call is still in flight, and closing the dialog (e.g. via the Esc
+     * key) must not drop that signal or the re-entry guards in
+     * `_removeCondition` and `_saveConditionChanges` would let a second
+     * request through. Success-path callers reset `_dialogSaving` after the
+     * resubscribe resolves; error-path callers reset it inside their catch
+     * blocks.
+     */
     private _closeConditionDialog(): void {
         this._showConditionDialog = false;
-        this._dialogSaving = false;
+        this._dialogEntityId = null;
+        this._dialogMode = 'manage';
     }
 
     /**
@@ -882,8 +930,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * the Manage dialog). The dialog's destructive styling is the visual
      * safety here — there is no extra confirmation step. The early
      * `_dialogSaving` guard plus the disabled state on the Remove button
-     * together prevent double-firing `clear_slot_condition` from rapid
-     * clicks while a save/remove is already in flight.
+     * (and on Cancel) together prevent double-firing `clear_slot_condition`
+     * from rapid clicks while a save/remove is already in flight, and
+     * prevent the user from closing-then-reopening the dialog to bypass the
+     * guard. The subscribe happens via `await` so a resubscribe failure
+     * surfaces in the user-visible error banner instead of being lost as a
+     * fire-and-forget rejection after the dialog has closed.
      */
     private async _removeCondition(): Promise<void> {
         if (this._dialogSaving) return;
@@ -892,7 +944,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             await this._clearSlotCondition();
             this._closeConditionDialog();
             this._unsubscribe();
-            void this._subscribe();
+            await this._subscribe();
+            // _subscribe() catches its own errors and stores them on
+            // this._error rather than rethrowing, so we promote that to a
+            // banner error here.
+            if (this._error) {
+                throw new Error(this._error);
+            }
+            this._dialogSaving = false;
         } catch (err) {
             this._setActionError(
                 `Failed to remove condition: ${err instanceof Error ? err.message : String(err)}`
@@ -967,7 +1026,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           Remove condition
                       </ha-button>`
                     : nothing}
-                <ha-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
+                <ha-button
+                    slot="secondaryAction"
+                    .disabled=${this._dialogSaving}
+                    @click=${() => this._closeConditionDialog()}
+                >
                     Cancel
                 </ha-button>
                 <ha-button
@@ -982,6 +1045,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private async _saveConditionChanges(): Promise<void> {
+        // Re-entry guard mirrors `_removeCondition` — covers programmatic
+        // invocation paths the disabled Save button can't catch.
+        if (this._dialogSaving) return;
         if (!this._hass || !this._config) {
             this._setActionError('Card not initialized');
             return;
@@ -1010,9 +1076,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
             this._closeConditionDialog();
             // Force re-subscribe to get updated data since config changes
-            // don't trigger entity state changes
+            // don't trigger entity state changes. Awaited so a resubscribe
+            // failure surfaces in the banner instead of disappearing as a
+            // fire-and-forget rejection after the dialog has closed.
             this._unsubscribe();
-            void this._subscribe();
+            await this._subscribe();
+            if (this._error) {
+                throw new Error(this._error);
+            }
+            this._dialogSaving = false;
         } catch (err) {
             this._setActionError(
                 `Failed to save: ${err instanceof Error ? err.message : String(err)}`
@@ -1047,9 +1119,19 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         if (field === 'pin' && !this._revealed) {
             this._revealed = true;
             this._unsubscribe();
-            void this._subscribe().then(() => {
-                this._editingField = 'pin';
-            });
+            this._subscribe()
+                .then(() => {
+                    this._editingField = 'pin';
+                })
+                .catch((err: unknown) => {
+                    // Resubscribe failed — revert the optimistic reveal so
+                    // the UI doesn't claim the PIN was revealed when we
+                    // never got the data, and surface the failure.
+                    this._revealed = false;
+                    this._setActionError(
+                        `Failed to reveal PIN: ${err instanceof Error ? err.message : String(err)}`
+                    );
+                });
         } else {
             this._editingField = field;
         }
@@ -1107,9 +1189,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _setActionError(message: string): void {
         this._actionError = message;
-        // Auto-dismiss after 5 seconds
-        setTimeout(() => {
+        // Track the timer id so a follow-up error can clear the previous
+        // timer instead of letting it fire early on the new error and
+        // dismiss the banner mid-read. The timer is also cleared in
+        // disconnectedCallback so we don't leak it across element removal.
+        if (this._actionErrorTimer !== undefined) {
+            clearTimeout(this._actionErrorTimer);
+        }
+        this._actionErrorTimer = setTimeout(() => {
             this._actionError = undefined;
+            this._actionErrorTimer = undefined;
         }, 5000);
     }
 
