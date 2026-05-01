@@ -400,6 +400,9 @@ async def test_subscribe_code_slot(
     assert data[CONF_ENTITIES][CONF_ENABLED]
     assert CONF_LOCKS in data
     assert CONF_CONDITIONS in data
+    # Config entry title is surfaced so the slot card header can render
+    # the "Slot N · {title}" kicker without a separate WS round-trip.
+    assert data[ATTR_CONFIG_ENTRY_TITLE] == lock_code_manager_config_entry.title
 
 
 async def test_subscribe_code_slot_masked(

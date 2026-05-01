@@ -175,6 +175,10 @@ class LcmSlotCardEditor extends LitElement {
                 <label @click=${this._toggleShowLockSync}>Sync Status in Lock Status</label>
             </div>
 
+            <!-- show_lock_count is a no-op for the redesigned slot card layout
+                 (the lock-count pill was removed from the header). Kept here
+                 so existing card configs with this option set continue to
+                 validate and save without error. -->
             <div class="checkbox-row">
                 <ha-checkbox
                     .checked=${this._config.show_lock_count !== false}

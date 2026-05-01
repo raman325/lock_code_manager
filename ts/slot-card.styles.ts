@@ -388,11 +388,6 @@ const slotCardComponentStyles = css`
         color: var(--lcm-warning-color);
     }
 
-    .lock-status-text {
-        color: var(--secondary-text-color);
-        font-size: 12px;
-    }
-
     .lock-code-field {
         align-items: center;
         display: flex;
