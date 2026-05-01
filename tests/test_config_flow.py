@@ -1,6 +1,5 @@
 """Config flow tests."""
 
-import copy
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -207,8 +206,22 @@ async def test_options_flow(hass: HomeAssistant):
     """Test options flow."""
     entry = MockConfigEntry(domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title")
     entry.add_to_hass(hass)
-    new_config = copy.deepcopy(BASE_CONFIG)
-    new_config[CONF_SLOTS][3] = {CONF_ENABLED: True, CONF_PIN: ""}
+    # The options flow now rejects the deprecated number_of_uses key, so build
+    # the user-submitted config from scratch without it. Real entries have it
+    # auto-stripped during migration before any options-flow interaction.
+    new_config = {
+        CONF_LOCKS: list(BASE_CONFIG[CONF_LOCKS]),
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            2: {
+                CONF_NAME: "test2",
+                CONF_PIN: "5678",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "calendar.test_1",
+            },
+            3: {CONF_ENABLED: True, CONF_PIN: ""},
+        },
+    }
     result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert result["type"] == "form"
