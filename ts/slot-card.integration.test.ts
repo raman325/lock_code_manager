@@ -216,6 +216,126 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
     });
 
+    describe('header redesign (slot kicker + state chip + name)', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Join a TemplateResult's static strings to inspect element tags */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function templateStrings(result: any): string {
+            return (result?.strings ?? []).join('');
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders slot kicker with config entry title and active state chip', () => {
+            (card as any)._data = makeSlotCardData({
+                active: true,
+                config_entry_title: 'House Locks',
+                enabled: true,
+                name: 'Alice',
+                slot_num: 1
+            });
+
+            // Kicker text comes from _renderSlotKicker; prefer the card config
+            // title when set, otherwise fall back to the data payload title.
+            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · House Locks');
+
+            // State chip should be rendered as the second value in header-top.
+            const chip = (card as any)._renderStateChip();
+            const chipStrings = templateStrings(chip);
+            expect(chipStrings).toContain('state-chip');
+            // The class modifier and text are rendered as dynamic values.
+            expect(chip.values).toContain('active');
+            expect(chip.values).toContain('Active');
+
+            // Header structure includes name and pencil button.
+            const header = (card as any)._renderHeader();
+            const headerStrings = templateStrings(header);
+            expect(headerStrings).toContain('slot-kicker');
+            expect(headerStrings).toContain('class="name"');
+            expect(headerStrings).toContain('ha-icon-button');
+            expect(headerStrings).toContain('class="pencil"');
+            // Name value flows through as a nested template for "Alice".
+            const nameValues = (header.values ?? [])
+                .filter((v: unknown) => v && typeof v === 'object' && 'strings' in v)
+                .map((v: any) => (v.values ?? []).join(' '));
+            expect(nameValues.some((s: string) => s.includes('Alice'))).toBe(true);
+        });
+
+        it('renders state chip with descriptive text for inactive (blocked)', () => {
+            (card as any)._data = makeSlotCardData({
+                active: false,
+                enabled: true
+            });
+
+            const chip = (card as any)._renderStateChip();
+            const chipStrings = templateStrings(chip);
+            expect(chipStrings).toContain('state-chip');
+            expect(chip.values).toContain('inactive');
+            expect(chip.values).toContain('Blocked by conditions');
+        });
+
+        it('renders state chip with descriptive text for disabled by user', () => {
+            (card as any)._data = makeSlotCardData({ enabled: false });
+
+            const chip = (card as any)._renderStateChip();
+            const chipStrings = templateStrings(chip);
+            expect(chipStrings).toContain('state-chip');
+            expect(chip.values).toContain('disabled');
+            expect(chip.values).toContain('Disabled by user');
+        });
+
+        it('omits the title separator when no config_entry_title is available', () => {
+            (card as any)._data = makeSlotCardData({ config_entry_title: '' });
+            // _config has no title and data title is empty — kicker should be just "Slot N".
+            expect((card as any)._renderSlotKicker()).toBe('Slot 1');
+        });
+
+        it('falls back to data payload title when card config has no title', () => {
+            (card as any)._config = { config_entry_id: 'abc', slot: 2, type: 'custom:lcm-slot' };
+            (card as any)._data = makeSlotCardData({
+                config_entry_title: 'Payload Title',
+                slot_num: 2
+            });
+            expect((card as any)._renderSlotKicker()).toBe('Slot 2 · Payload Title');
+        });
+
+        it('prefers card config title over data payload title', () => {
+            (card as any)._config = {
+                config_entry_id: 'abc',
+                config_entry_title: 'Config Title',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            };
+            (card as any)._data = makeSlotCardData({ config_entry_title: 'Payload Title' });
+            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · Config Title');
+        });
+
+        it('renders <No Name> placeholder when name is empty', () => {
+            (card as any)._data = makeSlotCardData({ name: '' });
+            const header = (card as any)._renderHeader();
+            const headerStrings = templateStrings(header);
+            expect(headerStrings).toContain('class="name"');
+            // Placeholder template appears as a nested template value.
+            const placeholderRendered = (header.values ?? []).some(
+                (v: any) =>
+                    v &&
+                    typeof v === 'object' &&
+                    'strings' in v &&
+                    templateStrings(v).includes('placeholder')
+            );
+            expect(placeholderRendered).toBe(true);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('error handling', () => {
         it('sets _error when subscription fails', async () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
@@ -1909,42 +2029,6 @@ describe('LockCodeManagerSlotCard integration', () => {
 
         it('returns null for null code', () => {
             expect((card as any)._formatLockCode({ code: null })).toBeNull();
-        });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
-    });
-
-    describe('_navigateToEventHistory', () => {
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('dispatches hass-more-info event', async () => {
-            const card = document.createElement('lcm-slot') as SlotCardElement &
-                Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
-            container.appendChild(card);
-            await flush();
-
-            (card as any)._data = makeSlotCardData({ event_entity_id: 'event.test_slot_1' });
-            const dispatchSpy = vi.spyOn(card, 'dispatchEvent');
-            (card as any)._navigateToEventHistory();
-            expect(dispatchSpy).toHaveBeenCalledWith(
-                expect.objectContaining({ type: 'hass-more-info' })
-            );
-            dispatchSpy.mockRestore();
-        });
-
-        it('returns early without event_entity_id', async () => {
-            const card = document.createElement('lcm-slot') as SlotCardElement &
-                Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
-            container.appendChild(card);
-            await flush();
-
-            (card as any)._data = makeSlotCardData({});
-            const dispatchSpy = vi.spyOn(card, 'dispatchEvent');
-            (card as any)._navigateToEventHistory();
-            expect(dispatchSpy).not.toHaveBeenCalled();
-            dispatchSpy.mockRestore();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

@@ -4,12 +4,9 @@ import {
     mdiCalendarRemove,
     mdiChevronDown,
     mdiChevronUp,
-    mdiClock,
     mdiDelete,
     mdiEye,
     mdiEyeOff,
-    mdiKey,
-    mdiLock,
     mdiPencil,
     mdiPlus,
     mdiToggleSwitch,
@@ -323,74 +320,63 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderHeader(): TemplateResult {
-        const lockCount = this._data?.locks?.length ?? 0;
-        const showLockCount = this._config?.show_lock_count !== false;
-        const lastUsed = this._data?.last_used;
-        const eventEntityId = this._data?.event_entity_id;
-        const eventEntityState = eventEntityId ? this._hass?.states[eventEntityId] : undefined;
-        const showLastUsed = eventEntityState && eventEntityState.state !== 'unavailable';
-
-        const showPills = (showLockCount && lockCount > 0) || showLastUsed;
+        const slotKicker = this._renderSlotKicker();
+        const stateChip = this._renderStateChip();
+        const name = this._data?.name;
 
         return html`
             <div class="header">
                 <div class="header-top">
-                    <div class="header-icon">
-                        <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
-                    </div>
-                    <div class="header-info">
-                        <span class="header-title">Code Slot ${this._config?.slot}</span>
-                    </div>
-                    ${showPills
-                        ? html`<div class="header-pills">
-                              ${showLockCount && lockCount > 0
-                                  ? html`<span
-                                        class="header-pill clickable"
-                                        title=${this._data?.locks?.map((l) => l.name).join(', ') ??
-                                        ''}
-                                        @click=${this._toggleLockStatus}
-                                    >
-                                        <ha-svg-icon .path=${mdiLock}></ha-svg-icon>
-                                        ${lockCount}
-                                    </span>`
-                                  : nothing}
-                              ${showLastUsed
-                                  ? html`<span
-                                        class="header-pill ${lastUsed ? 'clickable' : ''}"
-                                        title=${lastUsed
-                                            ? this._data?.last_used_lock
-                                                ? `Used on ${this._data.last_used_lock} - Click for details`
-                                                : 'Click for PIN usage details'
-                                            : 'This PIN has never been used'}
-                                        @click=${() => lastUsed && this._navigateToEventHistory()}
-                                    >
-                                        <ha-svg-icon .path=${mdiClock}></ha-svg-icon>
-                                        ${lastUsed
-                                            ? html`${this._data?.last_used_lock ?? 'Used'}
-                                                  <ha-relative-time
-                                                      .hass=${this._hass}
-                                                      .datetime=${lastUsed}
-                                                  ></ha-relative-time>`
-                                            : 'Never used'}
-                                    </span>`
-                                  : nothing}
-                          </div>`
-                        : nothing}
+                    <span class="slot-kicker">${slotKicker}</span>
+                    ${stateChip}
+                </div>
+                <div class="name">
+                    ${name ? html`${name}` : html`<em class="placeholder">&lt;No Name&gt;</em>`}
+                    <ha-icon-button
+                        class="pencil"
+                        .path=${mdiPencil}
+                        @click=${() => this._startEditing('name')}
+                        .label=${'Edit name'}
+                    ></ha-icon-button>
                 </div>
             </div>
         `;
     }
 
-    private _navigateToEventHistory(): void {
-        const eventEntityId = this._data?.event_entity_id;
-        if (!eventEntityId) return;
-        // Open the more-info dialog for this event entity
-        const event = new CustomEvent('hass-more-info', {
-            bubbles: true,
-            composed: true,
-            detail: { entityId: eventEntityId }
-        });
-        this.dispatchEvent(event);
+    private _renderSlotKicker(): string {
+        const slot = this._config?.slot;
+        const title = this._configEntryTitle();
+        return title ? `Slot ${slot} · ${title}` : `Slot ${slot}`;
+    }
+
+    private _configEntryTitle(): string | undefined {
+        // Prefer the explicit config_entry_title from the card config when set;
+        // otherwise fall back to the title surfaced in the websocket payload.
+        if (this._config?.config_entry_title) {
+            return this._config.config_entry_title;
+        }
+        return this._data?.config_entry_title || undefined;
+    }
+
+    private _renderStateChip(): TemplateResult {
+        const enabled = this._data?.enabled;
+        const active = this._data?.active;
+        let cls: 'active' | 'inactive' | 'disabled';
+        let text: string;
+        if (enabled === false) {
+            cls = 'disabled';
+            text = 'Disabled by user';
+        } else if (active === true) {
+            cls = 'active';
+            text = 'Active';
+        } else if (active === false) {
+            cls = 'inactive';
+            text = 'Blocked by conditions';
+        } else {
+            cls = 'disabled';
+            text = 'Unknown';
+        }
+        return html` <span class="state-chip ${cls}"> <span class="dot"></span>${text} </span> `;
     }
 
     private _renderPrimaryControls(
