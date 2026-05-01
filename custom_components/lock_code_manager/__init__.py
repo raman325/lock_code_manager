@@ -430,30 +430,14 @@ async def async_setup_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
     """Set up is called when Home Assistant is loading our component."""
-    ent_reg = er.async_get(hass)
-    entry_id = config_entry.entry_id
-    try:
-        entity_id = next(
-            entity_id
-            for entity_id in get_entry_config(config_entry).locks
-            if not ent_reg.async_get(entity_id)
-        )
-    except StopIteration:
-        pass
-    else:
-        config_entry.async_start_reauth(hass, context={"lock_entity_id": entity_id})
-        raise ConfigEntryError(
-            f"Unable to start because lock {entity_id} can't be found"
-        )
-
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
-    await _async_register_strategy_resource(hass)
-
     # Auto-migrate: strip the deprecated number_of_uses field from this entry's
     # slot configs and surface a one-time informational repair so the user knows
     # what happened and can find the replacement (Slot Usage Limiter blueprint).
-    # This runs BEFORE EntryConfig.from_entry / platform forwarding so platforms
-    # never see the soon-to-be-stripped field and never create stale entities.
+    # Runs as the FIRST work in setup — before any consumer of EntryConfig
+    # (e.g. the missing-lock reauth check below, platform forwarding, or
+    # runtime_data construction) — so the deprecated field never leaks into
+    # parsed config. Migration runs at most once per entry: once stripped,
+    # subsequent setups find nothing to migrate and the repair is not re-raised.
 
     # Clear any stale issue from prior versions that used the old key so users
     # upgrading from a previous release don't see an obsolete unfixable repair.
@@ -507,6 +491,25 @@ async def async_setup_entry(
             config_entry.title,
             ", ".join(impacted_slots),
         )
+
+    ent_reg = er.async_get(hass)
+    entry_id = config_entry.entry_id
+    try:
+        entity_id = next(
+            entity_id
+            for entity_id in get_entry_config(config_entry).locks
+            if not ent_reg.async_get(entity_id)
+        )
+    except StopIteration:
+        pass
+    else:
+        config_entry.async_start_reauth(hass, context={"lock_entity_id": entity_id})
+        raise ConfigEntryError(
+            f"Unable to start because lock {entity_id} can't be found"
+        )
+
+    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
+    await _async_register_strategy_resource(hass)
 
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
         config=EntryConfig.from_entry(config_entry),
