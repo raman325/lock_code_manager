@@ -18,7 +18,6 @@ from homeassistant.components.calendar import (
     SERVICE_GET_EVENTS,
 )
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
-from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.schedule import (
     ATTR_NEXT_EVENT as SCHEDULE_ATTR_NEXT_EVENT,
     DOMAIN as SCHEDULE_DOMAIN,
@@ -92,7 +91,6 @@ from .const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_NAME,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -148,26 +146,6 @@ def _get_bool_state(hass: HomeAssistant, entity_id: str | None) -> bool | None:
             return True
         if state.state == STATE_OFF:
             return False
-    return None
-
-
-def _get_number_state(hass: HomeAssistant, entity_id: str | None) -> int | None:
-    """Get integer state from a number entity, returning None if unavailable."""
-    if not entity_id:
-        return None
-    if (
-        (state := hass.states.get(entity_id))
-        and state.state
-        and state.state
-        not in (
-            STATE_UNKNOWN,
-            STATE_UNAVAILABLE,
-        )
-    ):
-        try:
-            return int(float(state.state))
-        except ValueError, TypeError:
-            return None
     return None
 
 
@@ -383,7 +361,6 @@ class SlotEntities:
     pin_entity_id: str | None = None
     enabled_entity_id: str | None = None
     active_entity_id: str | None = None
-    number_of_uses_entity_id: str | None = None
     event_entity_id: str | None = None
 
     def all_entity_ids(self) -> list[str]:
@@ -395,7 +372,6 @@ class SlotEntities:
                 self.pin_entity_id,
                 self.enabled_entity_id,
                 self.active_entity_id,
-                self.number_of_uses_entity_id,
                 self.event_entity_id,
             )
             if eid
@@ -645,7 +621,6 @@ def _get_slot_entity_data(
         pin_entity_id=_get_entity_id(TEXT_DOMAIN, CONF_PIN),
         enabled_entity_id=_get_entity_id(SWITCH_DOMAIN, CONF_ENABLED),
         active_entity_id=_get_entity_id(BINARY_SENSOR_DOMAIN, ATTR_ACTIVE),
-        number_of_uses_entity_id=_get_entity_id(NUMBER_DOMAIN, CONF_NUMBER_OF_USES),
         event_entity_id=_get_entity_id(EVENT_DOMAIN, EVENT_PIN_USED),
     )
 
@@ -879,7 +854,6 @@ def _serialize_slot_card_data(
     pin = _get_text_state(hass, slot_entities.pin_entity_id)
     enabled = _get_bool_state(hass, slot_entities.enabled_entity_id)
     active = _get_bool_state(hass, slot_entities.active_entity_id)
-    number_of_uses = _get_number_state(hass, slot_entities.number_of_uses_entity_id)
 
     last_used, last_used_lock_name = _get_last_used_info(
         hass, slot_entities.event_entity_id
@@ -916,7 +890,6 @@ def _serialize_slot_card_data(
             ATTR_ACTIVE: slot_entities.active_entity_id,
             CONF_ENABLED: slot_entities.enabled_entity_id,
             CONF_NAME: slot_entities.name_entity_id,
-            CONF_NUMBER_OF_USES: slot_entities.number_of_uses_entity_id,
             CONF_PIN: slot_entities.pin_entity_id,
         },
         CONF_LOCKS: locks_data,
@@ -943,8 +916,6 @@ def _serialize_slot_card_data(
         result[CONF_PIN] = None
 
     # Conditions
-    if number_of_uses is not None:
-        result[CONF_CONDITIONS][CONF_NUMBER_OF_USES] = number_of_uses
     # Include condition entity data (handles both calendar and non-calendar entities)
     if condition_entity_id and (
         condition_data := _get_condition_entity_data(hass, condition_entity_id)
@@ -982,7 +953,7 @@ async def subscribe_code_slot(
     Subscribe to slot data for a specific slot in a config entry.
 
     Provides real-time updates when:
-    - Slot entities change (name, PIN, enabled, active, number_of_uses)
+    - Slot entities change (name, PIN, enabled, active)
     - Lock coordinator data changes (codes on locks)
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
