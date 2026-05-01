@@ -303,10 +303,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * lock and a relative timestamp for the slot's most recent PIN use, or a
      * "Never used" empty state when the slot has been configured but the PIN
      * has not been used yet. Returns `nothing` when there is no event entity
-     * (e.g. the slot has no PIN at all), so the row simply doesn't render.
+     * (e.g. the slot has no PIN at all) or when the event entity is in the
+     * `unavailable` state, so the row simply doesn't render — clicking
+     * through to a more-info dialog with no useful content would be
+     * misleading.
      *
      * Clicking the row opens HA's more-info dialog on the event entity, which
-     * provides the full firing history.
+     * provides the full firing history. The row is keyboard-focusable
+     * (`role="button"`, `tabindex="0"`) and responds to Enter/Space so screen
+     * readers and keyboard users can reach the activity history too.
      */
     private _renderEventRow(): TemplateResult | typeof nothing {
         const lastUsed = this._data?.last_used;
@@ -314,6 +319,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const eventEntityId = this._data?.event_entity_id;
 
         if (!eventEntityId) return nothing;
+        if (this._hass?.states[eventEntityId]?.state === 'unavailable') return nothing;
 
         const meta = lastUsed
             ? html`${lastUsedLock ?? 'Used'} ·
@@ -321,7 +327,19 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             : html`Never used`;
 
         return html`
-            <div class="event-row" @click=${() => this._navigateToEventHistory()}>
+            <div
+                class="event-row"
+                role="button"
+                tabindex="0"
+                aria-label="View activity history"
+                @click=${() => this._navigateToEventHistory()}
+                @keydown=${(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        this._navigateToEventHistory();
+                    }
+                }}
+            >
                 <ha-svg-icon class="event-icon" .path=${mdiClockOutline}></ha-svg-icon>
                 <span class="event-name">Last used</span>
                 <span class="event-meta">${meta}</span>
@@ -333,11 +351,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     /**
      * Click handler for the event row — opens the HA more-info dialog on the
      * slot's PIN-used event entity, which surfaces the full event firing
-     * history. No-op when the event entity is unavailable.
+     * history. No-op when there is no event entity or when the entity is
+     * `unavailable` (the row itself is also suppressed in that case, so this
+     * is just defense in depth).
      */
     private _navigateToEventHistory(): void {
         const eventEntityId = this._data?.event_entity_id;
         if (!eventEntityId) return;
+        if (this._hass?.states[eventEntityId]?.state === 'unavailable') return;
         const event = new CustomEvent('hass-more-info', {
             bubbles: true,
             composed: true,
@@ -521,13 +542,37 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return html`
             ${hasEntity
                 ? html`${this._renderConditionBlock(conditions.condition_entity!)}
-                      <span class="manage-link" @click=${() => this._openConditionDialog('manage')}>
+                      <span
+                          class="manage-link"
+                          role="button"
+                          tabindex="0"
+                          aria-label="Manage condition"
+                          @click=${() => this._openConditionDialog('manage')}
+                          @keydown=${(e: KeyboardEvent) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  this._openConditionDialog('manage');
+                              }
+                          }}
+                      >
                           <ha-svg-icon .path=${mdiCog}></ha-svg-icon>
                           Manage condition
                       </span>`
                 : html`<div class="empty-state">
                       No condition has been set.<br />
-                      <span class="add-link" @click=${() => this._openConditionDialog('add')}>
+                      <span
+                          class="add-link"
+                          role="button"
+                          tabindex="0"
+                          aria-label="Add a condition"
+                          @click=${() => this._openConditionDialog('add')}
+                          @keydown=${(e: KeyboardEvent) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  this._openConditionDialog('add');
+                              }
+                          }}
+                      >
                           + Add a condition
                       </span>
                   </div>`}
@@ -611,15 +656,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     /**
      * Format an ISO timestamp as a short relative phrase suitable for the
      * single-line overlay context (e.g. "in 5 days", "3 days ago", "today").
-     * For sub-day deltas we collapse to "today" — the overlay isn't the place
-     * for hour-level precision; the entity row above shows full state.
+     * Anything strictly under one day in either direction collapses to
+     * "today" — the overlay isn't the place for hour-level precision; the
+     * entity row above shows full state. Past the one-day boundary we round
+     * to the nearest whole day count.
      */
     private _formatRelative(iso: string): string {
         const ms = new Date(iso).getTime() - Date.now();
-        const absDays = Math.abs(Math.round(ms / 86400000));
-        if (absDays === 0) return 'today';
-        if (absDays === 1) return ms > 0 ? 'in 1 day' : '1 day ago';
-        return ms > 0 ? `in ${absDays} days` : `${absDays} days ago`;
+        if (Math.abs(ms) < 86400000) return 'today';
+        const days = Math.round(Math.abs(ms) / 86400000);
+        if (days === 1) return ms > 0 ? 'in 1 day' : '1 day ago';
+        return ms > 0 ? `in ${days} days` : `${days} days ago`;
     }
 
     /**
@@ -833,9 +880,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     /**
      * Clear the condition entity from the slot (destructive Remove action in
      * the Manage dialog). The dialog's destructive styling is the visual
-     * safety here — there is no extra confirmation step.
+     * safety here — there is no extra confirmation step. The early
+     * `_dialogSaving` guard plus the disabled state on the Remove button
+     * together prevent double-firing `clear_slot_condition` from rapid
+     * clicks while a save/remove is already in flight.
      */
     private async _removeCondition(): Promise<void> {
+        if (this._dialogSaving) return;
         this._dialogSaving = true;
         try {
             await this._clearSlotCondition();
@@ -910,6 +961,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ? html`<ha-button
                           slot="secondaryAction"
                           class="destructive"
+                          .disabled=${this._dialogSaving}
                           @click=${() => this._removeCondition()}
                       >
                           Remove condition

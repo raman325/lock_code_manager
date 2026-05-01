@@ -866,6 +866,14 @@ describe('LockCodeManagerSlotCard integration', () => {
             // Dialog stays open so the user sees the error
             expect((card as any)._dialogSaving).toBe(false);
         });
+
+        it('is a no-op while a save/remove is already in flight', async () => {
+            // Simulate an in-flight save: _dialogSaving already true.
+            (card as any)._dialogSaving = true;
+            await (card as any)._removeCondition();
+            // The early guard should bail before issuing the websocket call.
+            expect(callWSMock).not.toHaveBeenCalled();
+        });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
@@ -2236,6 +2244,74 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(opened).toContain('manage');
         });
 
+        it('add-link is keyboard-accessible (role=button, tabindex, aria-label)', () => {
+            const tmpl = (card as any)._renderConditionsBody({}, false, false);
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('role="button"');
+            expect(joined).toContain('tabindex="0"');
+            expect(joined).toContain('aria-label="Add a condition"');
+        });
+
+        it('manage-link is keyboard-accessible (role=button, tabindex, aria-label)', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('role="button"');
+            expect(joined).toContain('tabindex="0"');
+            expect(joined).toContain('aria-label="Manage condition"');
+        });
+
+        it('add-link Enter/Space keys open the condition dialog in add mode', () => {
+            const tmpl = (card as any)._renderConditionsBody({}, false, false);
+            const handlers = collectHandlers(tmpl);
+            const opened: string[] = [];
+            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
+            // Pick the keydown handler by arity (one arg) — the @click
+            // handler is zero-arity and would fire indiscriminately.
+            const keydown = handlers.find((h) => h.length === 1);
+            expect(keydown).toBeDefined();
+            keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(opened).toHaveLength(0);
+            keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(opened).toEqual(['add']);
+            keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(opened).toEqual(['add', 'add']);
+        });
+
+        it('manage-link Enter/Space keys open the condition dialog in manage mode', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const handlers = collectHandlers(tmpl);
+            const opened: string[] = [];
+            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
+            const keydown = handlers.find((h) => h.length === 1);
+            expect(keydown).toBeDefined();
+            keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(opened).toEqual(['manage']);
+            keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(opened).toEqual(['manage', 'manage']);
+            keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(opened).toEqual(['manage', 'manage']);
+        });
+
         it('renders the helpers sub-list under the condition when hasHelpers', () => {
             (card as any)._config = {
                 ...(card as any)._config,
@@ -2440,9 +2516,21 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._formatRelative('2026-04-30T21:00:00Z')).toBe('today');
         });
 
+        it('returns "today" right up to the 24h boundary (no rounding-up bug)', () => {
+            // 23h forward — was previously reported as "in 1 day" because the
+            // implementation rounded ms/86400000. Sub-day deltas must collapse
+            // to "today" regardless of how close to 24h they are.
+            expect((card as any)._formatRelative('2026-05-01T23:00:00Z')).toBe('today');
+            // 23h ago — same boundary behavior in the past direction.
+            expect((card as any)._formatRelative('2026-04-30T01:00:00Z')).toBe('today');
+        });
+
         it('returns "in 1 day" / "1 day ago" at the day boundary', () => {
             expect((card as any)._formatRelative('2026-05-02T00:00:00Z')).toBe('in 1 day');
             expect((card as any)._formatRelative('2026-04-30T00:00:00Z')).toBe('1 day ago');
+            // 25h either direction rounds to one day.
+            expect((card as any)._formatRelative('2026-05-02T01:00:00Z')).toBe('in 1 day');
+            expect((card as any)._formatRelative('2026-04-29T23:00:00Z')).toBe('1 day ago');
         });
 
         it('returns "in N days" / "N days ago" for multi-day deltas', () => {
@@ -2634,6 +2722,84 @@ describe('LockCodeManagerSlotCard integration', () => {
                 dispatched.push(e)) as EventListener);
             (card as any)._navigateToEventHistory();
             expect(dispatched).toHaveLength(0);
+        });
+
+        it('returns nothing when the event entity is unavailable', () => {
+            // Configure hass with an explicit unavailable state for the entity
+            // referenced by the slot data so the row suppresses rendering.
+            const hass = createMockHassWithConnection({
+                states: {
+                    'event.lcm_slot_1_pin_used': { state: 'unavailable' }
+                }
+            });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            // `nothing` from lit is a sentinel — verify we don't get a TemplateResult.
+            expect(tmpl?.strings).toBeUndefined();
+        });
+
+        it('_navigateToEventHistory is a no-op when the event entity is unavailable', () => {
+            const hass = createMockHassWithConnection({
+                states: {
+                    'event.lcm_slot_1_pin_used': { state: 'unavailable' }
+                }
+            });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used'
+            });
+            const dispatched: Event[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e)) as EventListener);
+            (card as any)._navigateToEventHistory();
+            expect(dispatched).toHaveLength(0);
+        });
+
+        it('event row exposes role=button, tabindex=0 and an aria-label for a11y', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('role="button"');
+            expect(joined).toContain('tabindex="0"');
+            expect(joined).toContain('aria-label="View activity history"');
+        });
+
+        it('Enter and Space on the event row dispatch hass-more-info; other keys do not', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const dispatched: CustomEvent[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e as CustomEvent)) as EventListener);
+
+            // Two function values are present on the event-row div: the
+            // zero-arity @click handler and the one-arg @keydown handler. We
+            // pick the keydown handler by arity so we can isolate keyboard
+            // routing from mouse routing.
+            const tmpl = (card as any)._renderEventRow();
+            const handlers = collectHandlers(tmpl);
+            const keydown = handlers.find((h) => h.length === 1);
+            expect(keydown).toBeDefined();
+
+            keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(dispatched).toHaveLength(0);
+
+            keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(dispatched).toHaveLength(1);
+
+            keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(dispatched).toHaveLength(2);
         });
 
         it('_renderFromData appends the event row after the sections', () => {

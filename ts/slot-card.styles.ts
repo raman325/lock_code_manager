@@ -270,6 +270,13 @@ const slotCardComponentStyles = css`
         color: var(--primary-text-color);
     }
 
+    .manage-link:focus-visible,
+    .add-link:focus-visible {
+        border-radius: 4px;
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
     .manage-link ha-svg-icon {
         --mdc-icon-size: 14px;
     }
@@ -416,6 +423,12 @@ const slotCardComponentStyles = css`
 
     .event-row:hover {
         background: rgba(var(--rgb-primary-text-color), 0.06);
+    }
+
+    .event-row:focus-visible {
+        background: rgba(var(--rgb-primary-text-color), 0.06);
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
     }
 
     .event-icon {
