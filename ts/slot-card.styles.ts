@@ -407,6 +407,45 @@ const slotCardComponentStyles = css`
         letter-spacing: var(--lcm-code-letter-spacing);
     }
 
+    /* Event row — single click-through row at the bottom of the card that
+       opens the more-info dialog for the slot's PIN-used event entity. Sits
+       below the content flex container so the gap above provides natural
+       separation (no top border needed). */
+    .event-row {
+        align-items: center;
+        cursor: pointer;
+        display: flex;
+        gap: 10px;
+        padding: 12px 16px;
+    }
+
+    .event-row:hover {
+        background: rgba(var(--rgb-primary-text-color), 0.06);
+    }
+
+    .event-icon {
+        --mdc-icon-size: 14px;
+        color: var(--secondary-text-color);
+        flex-shrink: 0;
+    }
+
+    .event-name {
+        color: var(--primary-text-color);
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    .event-meta {
+        color: var(--secondary-text-color);
+        flex: 1;
+        font-size: 12px;
+    }
+
+    .event-arrow {
+        --mdc-icon-size: 14px;
+        color: var(--disabled-text-color);
+    }
+
     /* Message states */
     .message {
         color: var(--secondary-text-color);

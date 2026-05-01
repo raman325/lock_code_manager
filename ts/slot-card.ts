@@ -1,4 +1,13 @@
-import { mdiChevronDown, mdiChevronUp, mdiCog, mdiEye, mdiEyeOff, mdiPencil } from '@mdi/js';
+import {
+    mdiChevronDown,
+    mdiChevronRight,
+    mdiChevronUp,
+    mdiClockOutline,
+    mdiCog,
+    mdiEye,
+    mdiEyeOff,
+    mdiPencil
+} from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
@@ -283,9 +292,58 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
+                ${this._renderEventRow()}
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
             </ha-card>
         `;
+    }
+
+    /**
+     * Render the click-through event row at the bottom of the card. Shows the
+     * lock and a relative timestamp for the slot's most recent PIN use, or a
+     * "Never used" empty state when the slot has been configured but the PIN
+     * has not been used yet. Returns `nothing` when there is no event entity
+     * (e.g. the slot has no PIN at all), so the row simply doesn't render.
+     *
+     * Clicking the row opens HA's more-info dialog on the event entity, which
+     * provides the full firing history.
+     */
+    private _renderEventRow(): TemplateResult | typeof nothing {
+        const lastUsed = this._data?.last_used;
+        const lastUsedLock = this._data?.last_used_lock;
+        const eventEntityId = this._data?.event_entity_id;
+
+        if (!eventEntityId) return nothing;
+
+        const meta = lastUsed
+            ? html`${lastUsedLock ?? 'Used'} ·
+                  <ha-relative-time .hass=${this._hass} .datetime=${lastUsed}></ha-relative-time>`
+            : html`Never used`;
+
+        return html`
+            <div class="event-row" @click=${() => this._navigateToEventHistory()}>
+                <ha-svg-icon class="event-icon" .path=${mdiClockOutline}></ha-svg-icon>
+                <span class="event-name">Last used</span>
+                <span class="event-meta">${meta}</span>
+                <ha-svg-icon class="event-arrow" .path=${mdiChevronRight}></ha-svg-icon>
+            </div>
+        `;
+    }
+
+    /**
+     * Click handler for the event row — opens the HA more-info dialog on the
+     * slot's PIN-used event entity, which surfaces the full event firing
+     * history. No-op when the event entity is unavailable.
+     */
+    private _navigateToEventHistory(): void {
+        const eventEntityId = this._data?.event_entity_id;
+        if (!eventEntityId) return;
+        const event = new CustomEvent('hass-more-info', {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: eventEntityId }
+        });
+        this.dispatchEvent(event);
     }
 
     private _renderHeader(): TemplateResult {

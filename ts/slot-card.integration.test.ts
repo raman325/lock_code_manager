@@ -2512,4 +2512,142 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    describe('event row (last_used)', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Recursively join all template strings (incl. dynamic primitive values) */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        function collectHandlers(result: any): Array<(...args: any[]) => void> {
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        it('renders event row with Last used label and lock + relative time when last_used is set', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('event-row');
+            expect(joined).toContain('event-icon');
+            expect(joined).toContain('event-name');
+            expect(joined).toContain('Last used');
+            expect(joined).toContain('event-meta');
+            expect(joined).toContain('Front Door');
+            expect(joined).toContain('event-arrow');
+            // The relative time component should be wired up for the timestamp.
+            expect(joined).toContain('ha-relative-time');
+        });
+
+        it('renders Never used copy when event entity exists but last_used is null', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: undefined,
+                last_used_lock: undefined
+            });
+            const tmpl = (card as any)._renderEventRow();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('event-row');
+            expect(joined).toContain('Last used');
+            expect(joined).toContain('Never used');
+            // No ha-relative-time when there's no datetime to render.
+            expect(joined).not.toContain('ha-relative-time');
+        });
+
+        it('returns nothing when event_entity_id is absent', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: undefined,
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            // `nothing` from lit is a sentinel; it is neither a TemplateResult
+            // nor a primitive string — verify we don't get a template back.
+            expect(tmpl?.strings).toBeUndefined();
+        });
+
+        it('clicking the event row dispatches hass-more-info for the event entity', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const dispatched: CustomEvent[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e as CustomEvent)) as EventListener);
+            const tmpl = (card as any)._renderEventRow();
+            const handlers = collectHandlers(tmpl);
+            for (const h of handlers) {
+                try {
+                    h();
+                } catch {
+                    // ignore; handlers may call into other internals
+                }
+            }
+            expect(dispatched).toHaveLength(1);
+            expect(dispatched[0].detail).toEqual({
+                entityId: 'event.lcm_slot_1_pin_used'
+            });
+        });
+
+        it('_navigateToEventHistory is a no-op when event_entity_id is absent', () => {
+            (card as any)._data = makeSlotCardData({ event_entity_id: undefined });
+            const dispatched: Event[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e)) as EventListener);
+            (card as any)._navigateToEventHistory();
+            expect(dispatched).toHaveLength(0);
+        });
+
+        it('_renderFromData appends the event row after the sections', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderFromData((card as any)._data);
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('event-row');
+            expect(joined).toContain('Last used');
+            expect(joined).toContain('Front Door');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });
