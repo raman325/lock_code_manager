@@ -588,7 +588,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         it('condition dialog renders ha-button for actions', () => {
             (card as any)._showConditionDialog = true;
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             const tmpl = (card as any)._renderConditionDialog();
             const joined = templateStrings(tmpl);
             expect(joined).toContain('ha-button');
@@ -791,21 +791,21 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         it('sets action error when _dialogEntityId is null (empty)', async () => {
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             (card as any)._dialogEntityId = null;
             await (card as any)._saveConditionChanges();
             expect((card as any)._actionError).toBe('Please select an entity before saving');
         });
 
         it('sets action error when _dialogEntityId is empty string', async () => {
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             (card as any)._dialogEntityId = '   ';
             await (card as any)._saveConditionChanges();
             expect((card as any)._actionError).toBe('Please select an entity before saving');
         });
 
         it('sets action error when entity not found in hass.states', async () => {
-            (card as any)._dialogMode = 'edit-entity';
+            (card as any)._dialogMode = 'manage';
             (card as any)._dialogEntityId = 'input_boolean.nonexistent';
             await (card as any)._saveConditionChanges();
             expect((card as any)._actionError).toBe(
@@ -814,7 +814,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         it('calls _setSlotCondition for valid entity in add mode', async () => {
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             (card as any)._dialogEntityId = 'input_boolean.valid_entity';
             await (card as any)._saveConditionChanges();
             expect(callWSMock).toHaveBeenCalledWith(
@@ -825,8 +825,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             );
         });
 
-        it('calls _setSlotCondition for valid entity in edit mode', async () => {
-            (card as any)._dialogMode = 'edit-entity';
+        it('calls _setSlotCondition for valid entity in manage mode', async () => {
+            (card as any)._dialogMode = 'manage';
             (card as any)._dialogEntityId = 'input_boolean.valid_entity';
             await (card as any)._saveConditionChanges();
             expect(callWSMock).toHaveBeenCalledWith(
@@ -838,7 +838,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         it('sets action error when callWS throws', async () => {
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             (card as any)._dialogEntityId = 'input_boolean.valid_entity';
             callWSMock.mockRejectedValueOnce(new Error('Server error'));
             await (card as any)._saveConditionChanges();
@@ -899,14 +899,14 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('sets dialog mode and opens dialog for add-entity', () => {
-            (card as any)._openConditionDialog('add-entity');
-            expect((card as any)._dialogMode).toBe('add-entity');
+        it('sets dialog mode and opens dialog for add', () => {
+            (card as any)._openConditionDialog('add');
+            expect((card as any)._dialogMode).toBe('add');
             expect((card as any)._showConditionDialog).toBe(true);
             expect((card as any)._dialogEntityId).toBeNull();
         });
 
-        it('initializes entity id from data for edit-entity', () => {
+        it('initializes entity id from data for manage', () => {
             (card as any)._data = makeSlotCardData({
                 conditions: {
                     condition_entity: {
@@ -915,8 +915,8 @@ describe('LockCodeManagerSlotCard integration', () => {
                     }
                 }
             });
-            (card as any)._openConditionDialog('edit-entity');
-            expect((card as any)._dialogMode).toBe('edit-entity');
+            (card as any)._openConditionDialog('manage');
+            expect((card as any)._dialogMode).toBe('manage');
             expect((card as any)._dialogEntityId).toBe('input_boolean.existing');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -1019,7 +1019,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             // covering the .some() callback on line 991
             const tmpl = (card2 as any)._renderFromData(card2._data!);
             const joined = templateStrings(tmpl);
-            // The conditions section should render (it contains condition-helpers)
+            // The conditions section should render (it contains helpers-list)
             expect(joined).toBeDefined();
         });
 
@@ -1102,9 +1102,10 @@ describe('LockCodeManagerSlotCard integration', () => {
 
             // Call _renderConditionsSection directly to exercise the template
             const tmpl = (card2 as any)._renderConditionsSection(card2._data!.conditions);
-            // Use recursive join since condition-helpers is in a nested content template
+            // Use recursive join since helpers-list is in a nested content template
             const joined = allTemplateStrings(tmpl);
-            expect(joined).toContain('condition-helpers');
+            expect(joined).toContain('helpers-list');
+            expect(joined).toContain('helpers-label');
         });
 
         it('click handler on condition helper row dispatches hass-more-info', async () => {
@@ -1507,7 +1508,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         it('input and change handlers set _dialogEntityId for valid entities', () => {
             (card as any)._showConditionDialog = true;
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             const tmpl = (card as any)._renderConditionDialog();
             const handlers = extractHandlers(tmpl);
 
@@ -1545,7 +1546,7 @@ describe('LockCodeManagerSlotCard integration', () => {
 
         it('save button handler in condition dialog invokes _saveConditionChanges', () => {
             (card as any)._showConditionDialog = true;
-            (card as any)._dialogMode = 'add-entity';
+            (card as any)._dialogMode = 'add';
             const tmpl = (card as any)._renderConditionDialog();
             const handlers = extractHandlers(tmpl);
 
@@ -1913,7 +1914,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_renderConditionContext', () => {
+    describe('_renderConditionsSummary', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1925,60 +1926,78 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
         });
 
-        it('returns context for active calendar with event', () => {
-            const entity = {
-                calendar: {
-                    end_time: '2026-01-01T12:00:00',
-                    start_time: '2026-01-01T10:00:00',
-                    summary: 'Test Event'
-                },
-                condition_entity_id: 'calendar.test',
-                domain: 'calendar',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionContext(entity, true);
-            expect(result).not.toBe(undefined);
-            expect(result.values).toBeDefined();
+        /** Recursively join the static strings + primitive value text of a
+         *  TemplateResult and any nested templates */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) {
+                return result.map(deepTemplateStrings).join('');
+            }
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        it('returns muted "none" badge when no condition entity is configured', () => {
+            const tmpl = (card as any)._renderConditionsSummary({});
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('collapsible-badge muted');
+            expect(joined).toContain('none');
         });
 
-        it('returns context for inactive calendar with next event', () => {
-            const entity = {
-                calendar_next: { start_time: '2026-01-02T10:00:00', summary: 'Next Event' },
-                condition_entity_id: 'calendar.test',
-                domain: 'calendar',
-                state: 'off'
-            };
-            const result = (card as any)._renderConditionContext(entity, false);
-            expect(result).not.toBe(undefined);
-            expect(result.values).toBeDefined();
+        it('uses friendly_name and ✓ when entity is allowing', () => {
+            const tmpl = (card as any)._renderConditionsSummary({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'on'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('collapsible-badge');
+            // Allowing case: dynamic class modifier is empty, not "warning".
+            expect(tmpl.values).not.toContain('warning');
+            expect(joined).toContain('✓');
+            expect(joined).toContain('Vacation');
         });
 
-        it('returns context for active schedule', () => {
-            const entity = {
-                condition_entity_id: 'schedule.test',
-                domain: 'schedule',
-                schedule: { next_event: '2026-01-01T17:00:00' },
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionContext(entity, true);
-            expect(result).not.toBe(undefined);
-            expect(result.values).toBeDefined();
+        it('uses warning badge with ✗ when entity is blocking', () => {
+            const tmpl = (card as any)._renderConditionsSummary({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'off'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            // Blocking case: dynamic class modifier is "warning" (Lit will
+            // splice it into the class attribute at render time).
+            expect(joined).toContain('collapsible-badge');
+            expect(tmpl.values).toContain('warning');
+            expect(joined).toContain('✗');
+            expect(joined).toContain('Vacation');
         });
 
-        it('returns nothing for binary_sensor', () => {
-            const entity = {
-                condition_entity_id: 'binary_sensor.test',
-                domain: 'binary_sensor',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionContext(entity, true);
-            // Lit's `nothing` is a symbol
-            expect(typeof result).toBe('symbol');
+        it('falls back to entity id when no friendly_name', () => {
+            const tmpl = (card as any)._renderConditionsSummary({
+                condition_entity: {
+                    condition_entity_id: 'binary_sensor.foo',
+                    domain: 'binary_sensor',
+                    state: 'on'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('binary_sensor.foo');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_renderConditionEntity', () => {
+    describe('_renderConditionsBody', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1989,6 +2008,18 @@ describe('LockCodeManagerSlotCard integration', () => {
             container.appendChild(card);
             await flush();
         });
+
+        /** Recursively join all template strings (incl. dynamic primitive values) */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
 
         /** Recursively collect all function values from a TemplateResult */
         function collectHandlers(result: any): Array<(...args: any[]) => void> {
@@ -1999,43 +2030,117 @@ describe('LockCodeManagerSlotCard integration', () => {
                     handlers.push(v);
                 } else if (v?.strings && v?.values) {
                     handlers.push(...collectHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectHandlers(item));
+                        }
+                    }
                 }
             }
             return handlers;
         }
 
-        it('renders with edit actions when showEdit is true', () => {
-            const entity = {
-                condition_entity_id: 'switch.test',
-                domain: 'switch',
-                friendly_name: 'Test Switch',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionEntity(entity, true);
-            expect(result).toBeDefined();
-            expect(result.values.length).toBeGreaterThan(0);
+        it('renders the empty state with + Add a condition link when no entity', () => {
+            const tmpl = (card as any)._renderConditionsBody({}, false, false);
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('empty-state');
+            expect(joined).toContain('No condition has been set');
+            expect(joined).toContain('add-link');
+            expect(joined).toContain('+ Add a condition');
+            // The empty state's manage-link variant should NOT be present.
+            expect(joined).not.toContain('Manage condition');
         });
 
-        it('inline click handlers execute without error', () => {
-            const entity = {
-                condition_entity_id: 'switch.test',
-                domain: 'switch',
-                friendly_name: 'Test Switch',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionEntity(entity, true);
-            const handlers = collectHandlers(result);
-            // Exercise each handler — these are the click/stopPropagation
-            // lambdas inside the template that codecov flags as uncovered.
-            for (const handler of handlers) {
-                expect(() => handler({ stopPropagation: () => {} })).not.toThrow();
+        it('add-link click opens the condition dialog in add mode', () => {
+            const tmpl = (card as any)._renderConditionsBody({}, false, false);
+            const handlers = collectHandlers(tmpl);
+            const opened: string[] = [];
+            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
+            for (const h of handlers) {
+                try {
+                    h();
+                } catch {
+                    // ignore; handlers may call into other internals
+                }
             }
-            expect(handlers.length).toBeGreaterThan(0);
+            expect(opened).toContain('add');
+        });
+
+        it('renders the condition block + Manage condition link when entity exists', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('condition-block');
+            expect(joined).toContain('manage-link');
+            expect(joined).toContain('Manage condition');
+            expect(joined).not.toContain('empty-state');
+        });
+
+        it('manage-link click opens the condition dialog in manage mode', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const handlers = collectHandlers(tmpl);
+            const opened: string[] = [];
+            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
+            for (const h of handlers) {
+                try {
+                    h();
+                } catch {
+                    // ignore
+                }
+            }
+            expect(opened).toContain('manage');
+        });
+
+        it('renders the helpers sub-list under the condition when hasHelpers', () => {
+            (card as any)._config = {
+                ...(card as any)._config,
+                condition_helpers: ['input_boolean.h1']
+            };
+            (card as any)._hass = {
+                ...(card as any)._hass,
+                states: {
+                    'input_boolean.h1': { attributes: { friendly_name: 'H1' }, state: 'on' }
+                }
+            };
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                true
+            );
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('helpers-label');
+            expect(joined).toContain('helpers-list');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_getConditionEntityIcon', () => {
+    describe('_renderConditionBlock', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -2047,25 +2152,44 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
         });
 
-        it.each([
-            ['calendar', true],
-            ['calendar', false],
-            ['binary_sensor', true],
-            ['switch', true],
-            ['switch', false],
-            ['schedule', true],
-            ['input_boolean', true],
-            ['input_boolean', false],
-            ['unknown_domain', true]
-        ])('returns an icon for domain=%s isActive=%s', (domain, isActive) => {
-            const icon = (card as any)._getConditionEntityIcon(domain, isActive);
-            expect(typeof icon).toBe('string');
-            expect(icon.length).toBeGreaterThan(0);
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        it('renders the LCM overlay strip with allowing class when entity is on', () => {
+            const tmpl = (card as any)._renderConditionBlock({
+                condition_entity_id: 'calendar.vacation',
+                domain: 'calendar',
+                state: 'on'
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('condition-block');
+            expect(joined).toContain('lcm-overlay');
+            expect(joined).toContain('allowing');
+            expect(joined).toContain('✓ Allowing access');
+        });
+
+        it('renders the LCM overlay strip with blocking class when entity is off', () => {
+            const tmpl = (card as any)._renderConditionBlock({
+                condition_entity_id: 'calendar.vacation',
+                domain: 'calendar',
+                state: 'off'
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('blocking');
+            expect(joined).toContain('✗ Blocking access');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_getConditionStatusText', () => {
+    describe('_renderOverlayContext', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -2075,23 +2199,99 @@ describe('LockCodeManagerSlotCard integration', () => {
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
+            vi.useFakeTimers();
+            vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
         });
 
-        it.each([
-            ['calendar', true, 'Event active'],
-            ['calendar', false, 'No event'],
-            ['schedule', true, 'In schedule'],
-            ['schedule', false, 'Outside schedule'],
-            ['switch', true, 'On'],
-            ['switch', false, 'Off']
-        ])('returns correct text for domain=%s isActive=%s', (domain, isActive, expected) => {
-            const text = (card as any)._getConditionStatusText(domain, isActive);
-            expect(text).toContain(expected);
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('returns calendar event summary + ends-relative when allowing', () => {
+            const text = (card as any)._renderOverlayContext(
+                {
+                    calendar: {
+                        end_time: '2026-05-06T00:00:00Z',
+                        summary: "Alice's stay"
+                    },
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    state: 'on'
+                },
+                true
+            );
+            expect(text).toContain("Alice's stay");
+            expect(text).toContain('ends in 5 days');
+        });
+
+        it('returns "Next: <summary> starts <relative>" for blocking calendar', () => {
+            const text = (card as any)._renderOverlayContext(
+                {
+                    calendar_next: {
+                        start_time: '2026-05-03T00:00:00Z',
+                        summary: 'Trip'
+                    },
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    state: 'off'
+                },
+                false
+            );
+            expect(text).toContain('Next: Trip');
+            expect(text).toContain('starts in 2 days');
+        });
+
+        it('returns Ends/Starts label for schedule', () => {
+            const allowing = (card as any)._renderOverlayContext(
+                {
+                    condition_entity_id: 'schedule.business_hours',
+                    domain: 'schedule',
+                    schedule: { next_event: '2026-05-02T00:00:00Z' },
+                    state: 'on'
+                },
+                true
+            );
+            expect(allowing).toContain('Ends');
+            expect(allowing).toContain('in 1 day');
+
+            const blocking = (card as any)._renderOverlayContext(
+                {
+                    condition_entity_id: 'schedule.business_hours',
+                    domain: 'schedule',
+                    schedule: { next_event: '2026-05-02T00:00:00Z' },
+                    state: 'off'
+                },
+                false
+            );
+            expect(blocking).toContain('Starts');
+        });
+
+        it('falls back to generic text for binary_sensor and unknown domains', () => {
+            expect(
+                (card as any)._renderOverlayContext(
+                    {
+                        condition_entity_id: 'binary_sensor.test',
+                        domain: 'binary_sensor',
+                        state: 'on'
+                    },
+                    true
+                )
+            ).toBe('Condition is on');
+            expect(
+                (card as any)._renderOverlayContext(
+                    {
+                        condition_entity_id: 'binary_sensor.test',
+                        domain: 'binary_sensor',
+                        state: 'off'
+                    },
+                    false
+                )
+            ).toBe('Condition is off');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_formatScheduleDate', () => {
+    describe('_formatRelative', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -2103,27 +2303,26 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
             // Pin time AFTER element setup so flush()'s setTimeout isn't blocked
             vi.useFakeTimers();
-            vi.setSystemTime(new Date('2026-03-18T12:00:00'));
+            vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
         });
 
         afterEach(() => {
             vi.useRealTimers();
         });
 
-        it('returns empty string for today', () => {
-            expect((card as any)._formatScheduleDate(new Date('2026-03-18T17:00:00'))).toBe('');
+        it('returns "today" for sub-day deltas in either direction', () => {
+            expect((card as any)._formatRelative('2026-05-01T03:00:00Z')).toBe('today');
+            expect((card as any)._formatRelative('2026-04-30T21:00:00Z')).toBe('today');
         });
 
-        it('returns "tomorrow " for tomorrow', () => {
-            expect((card as any)._formatScheduleDate(new Date('2026-03-19T10:00:00'))).toBe(
-                'tomorrow '
-            );
+        it('returns "in 1 day" / "1 day ago" at the day boundary', () => {
+            expect((card as any)._formatRelative('2026-05-02T00:00:00Z')).toBe('in 1 day');
+            expect((card as any)._formatRelative('2026-04-30T00:00:00Z')).toBe('1 day ago');
         });
 
-        it('returns weekday for other dates', () => {
-            const result = (card as any)._formatScheduleDate(new Date('2026-03-23T10:00:00'));
-            expect(result.length).toBeGreaterThan(0);
-            expect(result).not.toBe('tomorrow ');
+        it('returns "in N days" / "N days ago" for multi-day deltas', () => {
+            expect((card as any)._formatRelative('2026-05-08T00:00:00Z')).toBe('in 7 days');
+            expect((card as any)._formatRelative('2026-04-24T00:00:00Z')).toBe('7 days ago');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

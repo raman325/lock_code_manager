@@ -126,32 +126,6 @@ const slotCardComponentStyles = css`
         padding: 16px;
     }
 
-    /* Condition-specific icons (extend shared collapsible styles) */
-    .condition-blocking-icons {
-        align-items: center;
-        display: flex;
-        gap: 4px;
-    }
-
-    .condition-icon {
-        --mdc-icon-size: 16px;
-        color: var(--lcm-disabled-color);
-    }
-
-    .condition-icon.blocking {
-        color: var(--lcm-warning-color);
-    }
-
-    .condition-row-icon {
-        --mdc-icon-size: 18px;
-        color: var(--lcm-disabled-color);
-        flex-shrink: 0;
-    }
-
-    .condition-row-icon.blocking {
-        color: var(--lcm-warning-color);
-    }
-
     /* Hero row (PIN + Enable) — tinted always-visible band at the top of .content */
     .hero {
         align-items: center;
@@ -228,205 +202,126 @@ const slotCardComponentStyles = css`
         letter-spacing: 4px;
     }
 
-    /* Conditions Section */
-    .condition-row {
+    /* Conditions section — body styles for the collapsible.
+       The body composes an HA entity row (rendered via loadCardHelpers) inside
+       a tinted block, with an LCM overlay strip below it that explains what
+       the entity's state means for *this slot*. A Manage / Add link sits
+       directly under the block, and helpers (config-level extras) render as
+       plain HA entity rows under a small HELPERS sub-label. */
+
+    .condition-block {
+        background: var(--lcm-section-bg);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .lcm-overlay {
         align-items: center;
+        border-top: 1px solid var(--lcm-border-color);
         display: flex;
-        gap: 12px;
-        padding: 8px 0;
+        gap: 10px;
+        padding: 8px 12px;
     }
 
-    .condition-row:first-child {
-        padding-top: 0;
+    .lcm-overlay.allowing {
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.08);
     }
 
-    .condition-row:last-child {
-        padding-bottom: 0;
+    .lcm-overlay.blocking {
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.1);
     }
 
-    .condition-label {
+    .lcm-overlay-status {
+        flex-shrink: 0;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .lcm-overlay.allowing .lcm-overlay-status {
+        color: var(--success-color, #43a047);
+    }
+
+    .lcm-overlay.blocking .lcm-overlay-status {
+        color: var(--warning-color, #ffa726);
+    }
+
+    .lcm-overlay-context {
         color: var(--secondary-text-color);
-        font-size: 13px;
-        min-width: 100px;
+        flex: 1;
+        font-size: 12px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    .condition-value {
-        color: var(--primary-text-color);
-        font-size: 14px;
-    }
-
-    /* Unified condition item (matches condition-entity structure) */
-    .condition-item {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        padding: 8px 0;
-    }
-
-    .condition-item-header {
+    .manage-link {
         align-items: center;
-        display: flex;
-        gap: 8px;
+        color: var(--secondary-text-color);
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 12px;
+        gap: 6px;
+        margin: 10px 0 4px;
+        padding: 4px 0;
     }
 
-    .condition-item-detail {
-        font-size: 13px;
-        margin-left: 28px;
-    }
-
-    /* Inline edit container for number of uses */
-    .condition-edit-container {
-        position: relative;
-    }
-
-    .condition-edit-container .edit-input {
-        background: var(--card-background-color);
-        border: 1px solid var(--primary-color);
-        border-radius: 4px;
+    .manage-link:hover {
         color: var(--primary-text-color);
-        font-size: 14px;
-        padding: 4px 8px;
-        width: 60px;
     }
 
-    .condition-edit-container .edit-help {
+    .manage-link ha-svg-icon {
+        --mdc-icon-size: 14px;
+    }
+
+    .helpers-label {
         color: var(--secondary-text-color);
         font-size: 10px;
-        left: 0;
-        position: absolute;
-        top: 100%;
-        white-space: nowrap;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        margin: 14px 0 4px 4px;
+        text-transform: uppercase;
+    }
+
+    .helpers-list {
+        background: var(--lcm-section-bg);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .helpers-list > * + * {
+        border-top: 1px solid var(--lcm-border-color);
+    }
+
+    .empty-state {
+        background: var(--lcm-section-bg);
+        border-radius: 8px;
+        color: var(--secondary-text-color);
+        font-size: 12px;
+        line-height: 1.5;
+        padding: 12px;
+        text-align: center;
+    }
+
+    .add-link {
+        color: var(--primary-color);
+        cursor: pointer;
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 500;
+        margin-top: 6px;
+    }
+
+    .entity-row-loading {
+        color: var(--disabled-text-color);
+        font-size: 12px;
+        padding: 10px 12px;
     }
 
     .no-conditions {
         color: var(--secondary-text-color);
         font-size: 13px;
         font-style: italic;
-    }
-
-    /* Condition helper entity rows */
-    .condition-helpers {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin-top: 8px;
-    }
-
-    .condition-helper-row {
-        align-items: center;
-        cursor: pointer;
-        display: flex;
-        gap: 12px;
-        padding: 4px 0;
-    }
-
-    .condition-helper-info {
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-    }
-
-    .condition-helper-name {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .condition-helper-state {
-        color: var(--secondary-text-color);
-        font-size: 12px;
-        text-transform: capitalize;
-    }
-
-    /* Unified condition entity styles */
-    .condition-entity {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        padding: 8px 0;
-    }
-
-    .condition-entity.clickable {
-        border-radius: 8px;
-        cursor: pointer;
-        margin: 8px -8px 0;
-        padding: 8px;
-        transition: background-color 0.2s;
-    }
-
-    .condition-entity.clickable:hover {
-        background: var(--lcm-active-bg);
-    }
-
-    .condition-entity:first-child {
-        padding-top: 0;
-    }
-
-    .condition-entity.clickable:first-child {
-        margin-top: 0;
-    }
-
-    .condition-entity-header {
-        align-items: center;
-        display: flex;
-        gap: 6px;
-    }
-
-    .condition-entity-icon {
-        --mdc-icon-size: 18px;
-        flex-shrink: 0;
-    }
-
-    .condition-entity-icon.active {
-        color: var(--lcm-success-color);
-    }
-
-    .condition-entity-icon.inactive {
-        color: var(--lcm-warning-color);
-    }
-
-    .condition-entity-status {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        font-weight: 500;
-    }
-
-    .condition-entity-domain {
-        background: var(--lcm-section-bg);
-        border-radius: 4px;
-        color: var(--secondary-text-color);
-        font-size: 10px;
-        font-weight: 500;
-        letter-spacing: 0.03em;
-        margin-left: auto;
-        padding: 2px 6px;
-        text-transform: uppercase;
-    }
-
-    .condition-entity-name {
-        color: var(--secondary-text-color);
-        font-size: 13px;
-        margin-left: 24px;
-    }
-
-    .condition-context {
-        color: var(--secondary-text-color);
-        font-size: 12px;
-        margin-left: 24px;
-    }
-
-    .condition-context-label {
-        font-weight: 500;
-        margin-right: 4px;
-    }
-
-    .condition-context-next {
-        border-top: 1px solid var(--lcm-border-color);
-        margin-top: 4px;
-        opacity: 0.8;
-        padding-top: 4px;
     }
 
     /* Lock Status Section */
@@ -548,124 +443,6 @@ const slotCardComponentStyles = css`
 
     .action-error-dismiss:hover {
         opacity: 1;
-    }
-
-    /* Condition action icons */
-    .condition-action-icons {
-        align-items: center;
-        display: flex;
-        gap: 4px;
-        margin-left: auto;
-    }
-
-    .condition-edit-icon,
-    .condition-delete-icon {
-        --mdc-icon-size: 18px;
-        color: var(--secondary-text-color);
-        cursor: pointer;
-        opacity: 0.6;
-        transition: opacity 0.2s;
-    }
-
-    .condition-edit-icon:hover {
-        opacity: 1;
-    }
-
-    .condition-delete-icon:hover {
-        color: var(--error-color);
-        opacity: 1;
-    }
-
-    .condition-entity-header .condition-action-icons {
-        margin-left: 8px;
-    }
-
-    /* Add condition links - compact inline style */
-    .add-condition-links {
-        align-items: center;
-        color: var(--secondary-text-color);
-        display: flex;
-        flex-wrap: wrap;
-        font-size: 13px;
-        gap: 4px;
-        padding: 4px 0;
-    }
-
-    .add-condition-link {
-        color: var(--primary-color);
-        cursor: pointer;
-        text-decoration: none;
-    }
-
-    .add-condition-link:hover {
-        text-decoration: underline;
-    }
-
-    .add-condition-separator {
-        color: var(--divider-color);
-        margin: 0 4px;
-    }
-
-    /* Empty conditions header row */
-    .empty-conditions-header {
-        align-items: center;
-        background: var(--lcm-section-bg);
-        border-radius: 8px;
-        display: flex;
-        gap: 8px;
-        padding: 12px;
-    }
-
-    .empty-conditions-title {
-        color: var(--secondary-text-color);
-        font-size: 11px;
-        font-weight: 500;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
-    }
-
-    .empty-conditions-badge {
-        background: var(--lcm-section-bg-hover);
-        border-radius: 10px;
-        color: var(--secondary-text-color);
-        font-size: 11px;
-        padding: 2px 8px;
-    }
-
-    .empty-conditions-spacer {
-        flex: 1;
-    }
-
-    .empty-conditions-actions {
-        align-items: center;
-        display: flex;
-        gap: 4px;
-    }
-
-    .empty-conditions-btn {
-        --mdc-icon-size: 18px;
-        align-items: center;
-        background: transparent;
-        border: 1px solid var(--divider-color);
-        border-radius: 14px;
-        color: var(--primary-color);
-        cursor: pointer;
-        display: flex;
-        font-size: 11px;
-        gap: 2px;
-        padding: 4px 8px;
-        transition:
-            background-color 0.2s,
-            border-color 0.2s;
-    }
-
-    .empty-conditions-btn:hover {
-        background: var(--lcm-active-bg);
-        border-color: var(--primary-color);
-    }
-
-    .empty-conditions-btn ha-svg-icon {
-        --mdc-icon-size: 14px;
     }
 
     /* Dialog styles */
