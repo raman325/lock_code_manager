@@ -30,7 +30,6 @@ from .const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
     ATTR_SYNC_STATUS,
-    CONF_NUMBER_OF_USES,
     EVENT_PIN_USED,
 )
 from .coordinator import LockUsercodeUpdateCoordinator
@@ -143,13 +142,9 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
                 )
                 continue
 
-            if key == CONF_NUMBER_OF_USES:
-                states[key] = bool(int(float(state)))
-                continue
             states[key] = state
 
-        # For the binary sensor to be on, all states must be 'on', or for the number
-        # of uses, greater than 0
+        # For the binary sensor to be on, all states must be 'on'.
         inactive_because_of = [key for key, state in states.items() if not state]
         self._attr_is_on = bool(not inactive_because_of)
         if inactive_because_of:

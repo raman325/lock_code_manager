@@ -26,10 +26,9 @@
           "entity_id": "Condition Entity",
           "enabled": "Enabled",
           "name": "Name",
-          "number_of_uses": "Number of Uses",
           "pin": "PIN Code"
         },
-        "description": "**Configure slot {slot_num}:** A slot is active when all conditions are met: the condition entity (if configured) is 'on', and Number of Uses (if configured) is greater than 0. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
+        "description": "**Configure slot {slot_num}:** A slot is active when the condition entity (if configured) is 'on'. For calendars, 'on' means an event is in progress. Supported entity types: calendar, binary_sensor, switch, schedule, input_boolean.",
         "title": "Configure Slot {slot_num}"
       },
       "existing_codes_confirm": {
@@ -102,11 +101,6 @@
         }
       }
     },
-    "number": {
-      "number_of_uses": {
-        "name": "number of uses"
-      }
-    },
     "sensor": {
       "code": {
         "name": "Code slot {slot_num}"
@@ -162,13 +156,13 @@
     }
   },
   "issues": {
-    "number_of_uses_deprecated": {
-      "title": "Number of Uses is deprecated",
+    "number_of_uses_removed": {
+      "title": "Number of Uses has been removed",
       "fix_flow": {
         "step": {
           "init": {
-            "title": "Migrate from Number of Uses",
-            "description": "The built-in **Number of Uses** feature is deprecated and will be removed in a future release.\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\n**Warning:** Clicking **Submit** will permanently remove Number of Uses from your configuration. Only do this after you have set up the blueprint replacement."
+            "title": "Number of Uses removed from slot configuration",
+            "description": "The built-in **Number of Uses** feature has been removed and the field was automatically stripped from the following slot configuration:\n\n{impacted}\n\nUse the **[Slot Usage Limiter blueprint]({blueprint_url})** instead. It provides the same functionality with added features like notifications and unlimited mode.\n\nClick **Submit** to acknowledge this issue."
           }
         }
       }

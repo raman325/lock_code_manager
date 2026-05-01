@@ -92,7 +92,6 @@ ATTR_IN_SYNC = "in_sync"
 ATTR_SYNC_STATUS = "sync_status"
 
 # Code slot properties
-CONF_NUMBER_OF_USES = "number_of_uses"
 CONF_CALENDAR = "calendar"
 
 # Supported domains for condition entities (CONF_ENTITY_ID option)
@@ -131,7 +130,6 @@ PLATFORM_MAP = {
     CONF_CALENDAR: Platform.CALENDAR,
     CONF_ENABLED: Platform.SWITCH,
     CONF_NAME: Platform.TEXT,
-    CONF_NUMBER_OF_USES: Platform.NUMBER,
     CONF_PIN: Platform.TEXT,
     EVENT_PIN_USED: Platform.EVENT,
 }

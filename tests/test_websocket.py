@@ -60,7 +60,6 @@ from custom_components.lock_code_manager.const import (
     CONF_ENTITIES,
     CONF_LOCKS,
     CONF_NAME,
-    CONF_NUMBER_OF_USES,
     CONF_PIN,
     CONF_SLOTS,
 )
@@ -74,7 +73,6 @@ from custom_components.lock_code_manager.websocket import (
     _get_condition_entity_data,
     _get_last_changed,
     _get_next_calendar_event,
-    _get_number_state,
     _get_slot_condition_entity_id,
     _get_slot_entity_data,
     _get_slot_state_entity_ids,
@@ -90,6 +88,10 @@ from .common import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Legacy slot field name; the constant was deleted but this test still verifies
+# the websocket payload doesn't surface it under the legacy key.
+LEGACY_NUMBER_OF_USES_KEY = "number_of_uses"
 
 CALENDAR_TEST_ENTITY_ID = f"{CALENDAR_DOMAIN}.test_cal"
 BINARY_SENSOR_TEST_ENTITY_ID = "binary_sensor.test_motion"
@@ -124,8 +126,9 @@ async def test_get_config_entry_data(
     assert config_entry["entry_id"] == lock_code_manager_config_entry.entry_id
     assert config_entry["title"] == "Mock Title"
 
-    # Verify entities
-    assert len(result[CONF_ENTITIES]) == 19
+    # Verify entities (no number_of_uses entity since the migration strips
+    # number_of_uses from BASE_CONFIG slot 2 before platform forwarding).
+    assert len(result[CONF_ENTITIES]) == 18
 
     # Verify locks (now objects with entity_id and name)
     lock_entity_ids = {lock[ATTR_ENTITY_ID] for lock in result[CONF_LOCKS]}
@@ -790,6 +793,39 @@ async def test_subscribe_code_slot_slot_2_with_calendar(
     assert CONF_CONDITIONS in data
 
 
+async def test_subscribe_code_slot_omits_number_of_uses(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """The websocket subscribe payload no longer includes number_of_uses anywhere.
+
+    Slot 2 historically had ``number_of_uses`` in BASE_CONFIG. Now that the
+    migration strips that field and the entity is no longer created, neither
+    the per-slot conditions dict nor the entities dict should reference it.
+    """
+    ws_client = await hass_ws_client(hass)
+
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 2,
+            "reveal": True,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert msg["success"], msg
+
+    event = await ws_client.receive_json()
+    assert event["type"] == "event"
+    data = event["event"]
+    assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_CONDITIONS]
+    assert LEGACY_NUMBER_OF_USES_KEY not in data[CONF_ENTITIES]
+
+
 async def test_subscribe_code_slot_with_event_type(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1378,7 +1414,6 @@ async def test_subscribe_code_slot_response_shape(
         ATTR_ACTIVE,
         CONF_ENABLED,
         CONF_NAME,
-        CONF_NUMBER_OF_USES,
         CONF_PIN,
     }
     assert expected_entity_keys == set(entities.keys())
@@ -1534,33 +1569,6 @@ class TestGetBoolState:
         if entity_id is not None and state_value is not None:
             hass.states.async_set(entity_id, state_value)
         assert _get_bool_state(hass, entity_id) is expected
-
-
-class TestGetNumberState:
-    """Tests for _get_number_state helper."""
-
-    @pytest.mark.parametrize(
-        ("entity_id", "state_value", "expected"),
-        [
-            pytest.param("number.test", "42", 42, id="integer"),
-            pytest.param("number.test", "3.14", 3, id="float-to-integer"),
-            pytest.param("number.test", "not_a_number", None, id="invalid"),
-            pytest.param("number.test", STATE_UNKNOWN, None, id="unknown"),
-            pytest.param("number.test", STATE_UNAVAILABLE, None, id="unavailable"),
-            pytest.param(None, None, None, id="none-entity-id"),
-        ],
-    )
-    async def test_get_number_state(
-        self,
-        hass: HomeAssistant,
-        entity_id: str | None,
-        state_value: str | None,
-        expected: int | None,
-    ) -> None:
-        """Test _get_number_state for various inputs."""
-        if entity_id is not None and state_value is not None:
-            hass.states.async_set(entity_id, state_value)
-        assert _get_number_state(hass, entity_id) == expected
 
 
 class TestGetLastChanged:
@@ -2571,7 +2579,6 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
             pin_entity_id=real_entity_data.pin_entity_id,
             enabled_entity_id=real_entity_data.enabled_entity_id,
             active_entity_id=real_entity_data.active_entity_id,
-            number_of_uses_entity_id=real_entity_data.number_of_uses_entity_id,
             event_entity_id=real_entity_data.event_entity_id,
         )
 

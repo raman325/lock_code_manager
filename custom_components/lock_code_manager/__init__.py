@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 import logging
 from pathlib import Path
 from typing import Any
@@ -64,7 +64,6 @@ from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
     CONF_LOCKS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     DOMAIN,
     EVENT_PIN_USED,
@@ -431,6 +430,68 @@ async def async_setup_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
     """Set up is called when Home Assistant is loading our component."""
+    # Auto-migrate: strip the deprecated number_of_uses field from this entry's
+    # slot configs and surface a one-time informational repair so the user knows
+    # what happened and can find the replacement (Slot Usage Limiter blueprint).
+    # Runs as the FIRST work in setup — before any consumer of EntryConfig
+    # (e.g. the missing-lock reauth check below, platform forwarding, or
+    # runtime_data construction) — so the deprecated field never leaks into
+    # parsed config. Migration runs at most once per entry: once stripped,
+    # subsequent setups find nothing to migrate and the repair is not re-raised.
+
+    # Clear any stale issue from prior versions that used the old key so users
+    # upgrading from a previous release don't see an obsolete unfixable repair.
+    async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
+
+    # Legacy slot field name; the constant was deleted alongside the field.
+    legacy_number_of_uses_key = "number_of_uses"
+    new_data = {**config_entry.data}
+    new_options = {**config_entry.options}
+    changed = False
+    entry_impacted: set[str] = set()
+    for data_dict in (new_data, new_options):
+        if CONF_SLOTS not in data_dict:
+            continue
+        new_slots = {}
+        for slot_num, slot_config in data_dict[CONF_SLOTS].items():
+            new_slot = {**slot_config}
+            if legacy_number_of_uses_key in new_slot:
+                new_slot.pop(legacy_number_of_uses_key)
+                changed = True
+                entry_impacted.add(str(slot_num))
+            new_slots[slot_num] = new_slot
+        data_dict[CONF_SLOTS] = new_slots
+    if changed:
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options
+        )
+        impacted_slots = sorted(entry_impacted, key=int)
+        impacted_md = f"- **{config_entry.title}**: slots {', '.join(impacted_slots)}"
+
+        async_create_issue(
+            hass,
+            DOMAIN,
+            f"number_of_uses_removed_{config_entry.entry_id}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=IssueSeverity.WARNING,
+            translation_key="number_of_uses_removed",
+            translation_placeholders={
+                "impacted": impacted_md,
+                "blueprint_url": (
+                    "https://github.com/raman325/lock_code_manager/wiki/"
+                    "Blueprints#slot-usage-limiter"
+                ),
+            },
+        )
+
+        _LOGGER.warning(
+            "Removed deprecated number_of_uses from %s slot(s): %s. "
+            "Use the Slot Usage Limiter blueprint instead.",
+            config_entry.title,
+            ", ".join(impacted_slots),
+        )
+
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     try:
@@ -449,6 +510,7 @@ async def async_setup_entry(
 
     hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
     await _async_register_strategy_resource(hass)
+
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
         config=EntryConfig.from_entry(config_entry),
     )
@@ -463,29 +525,6 @@ async def async_setup_entry(
     )
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
-
-    # Create or dismiss repair issue based on deprecated number_of_uses presence
-    # across ALL config entries (not just this one) since the issue is global
-    has_number_of_uses = any(
-        CONF_NUMBER_OF_USES in slot_config
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        for slot_config in get_entry_config(entry).slots.values()
-    )
-    if has_number_of_uses:
-        async_create_issue(
-            hass,
-            DOMAIN,
-            "number_of_uses_deprecated",
-            is_fixable=True,
-            is_persistent=True,
-            severity=IssueSeverity.WARNING,
-            translation_key="number_of_uses_deprecated",
-            translation_placeholders={
-                "blueprint_url": "https://github.com/raman325/lock_code_manager/wiki/Blueprints#slot-usage-limiter",
-            },
-        )
-    else:
-        async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
 
     if hass.state == CoreState.running:
         _setup_entry_after_start(hass, config_entry)
@@ -688,58 +727,6 @@ async def _async_setup_new_locks(
         callbacks.invoke_lock_added_handlers(added_locks)
 
 
-async def _async_reconcile_slot_entities(
-    config_entry: LockCodeManagerConfigEntry,
-    slot_num: int,
-    old_config: Mapping[str, Any],
-    new_config: Mapping[str, Any],
-    callbacks: Any,
-    ent_reg: er.EntityRegistry,
-) -> None:
-    """Reconcile entities for a slot whose configuration has changed."""
-    entry_id = config_entry.entry_id
-    entry_title = config_entry.title
-    entities_to_remove: set[str] = set()
-    entities_to_add: set[str] = set()
-
-    # Check if number of uses has changed
-    old_val = old_config.get(CONF_NUMBER_OF_USES)
-    new_val = new_config.get(CONF_NUMBER_OF_USES)
-
-    # If number of uses value hasn't changed, skip
-    if old_val == new_val:
-        return
-
-    # If number of uses value has been removed, fire a signal to remove
-    # corresponding entity
-    if old_val not in (None, "") and new_val in (None, ""):
-        entities_to_remove.add(CONF_NUMBER_OF_USES)
-    # If number of uses value has been added, fire a signal to add
-    # corresponding entity
-    elif old_val in (None, "") and new_val not in (None, ""):
-        entities_to_add.add(CONF_NUMBER_OF_USES)
-
-    for key in entities_to_remove:
-        _LOGGER.debug(
-            "%s (%s): Removing %s entity for slot %s due to changed configuration",
-            entry_id,
-            entry_title,
-            key,
-            slot_num,
-        )
-        await callbacks.invoke_entity_removers_for_key(slot_num, key)
-
-    for key in entities_to_add:
-        _LOGGER.debug(
-            "%s (%s): Adding %s entity for slot %s due to changed configuration",
-            entry_id,
-            entry_title,
-            key,
-            slot_num,
-        )
-        callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
-
-
 async def async_update_listener(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> None:
@@ -773,12 +760,11 @@ async def async_update_listener(
     # to_dict() at the write site.
     old_config = EntryConfig.from_mapping(config_entry.data)
     new_config = EntryConfig.from_mapping(config_entry.options)
-    curr_slots = old_config.slots
     new_slots = new_config.slots
 
     # Set up any platforms that the new slot configs need that haven't
-    # already been set up. The number_of_uses deprecation cleanup lives
-    # in the repair flow (NumberOfUsesDeprecatedFlow), not here.
+    # already been set up. The number_of_uses deprecation cleanup runs
+    # in async_setup_entry before platform forwarding, not here.
     for platform in {
         platform
         for slot_config in new_slots.values()
@@ -842,7 +828,7 @@ async def async_update_listener(
     # For each new slot, add standard entities and configuration entities. We also
     # add slot sensors for existing locks only since new locks were already set up
     # above.
-    for slot_num, slot_config in slots_to_add.items():
+    for slot_num in slots_to_add:
         # First we store the set of entities we are adding so we can track when they
         # are done
         entities_to_add: set[str] = {
@@ -851,10 +837,6 @@ async def async_update_listener(
             CONF_PIN,
             EVENT_PIN_USED,
         }
-
-        # Check if we need to add a number of uses entity
-        if slot_config.get(CONF_NUMBER_OF_USES) not in (None, ""):
-            entities_to_add.add(CONF_NUMBER_OF_USES)
 
         _LOGGER.debug(
             "%s (%s): Adding PIN enabled binary sensor for slot %s",
@@ -885,18 +867,6 @@ async def async_update_listener(
                 slot_num,
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-
-    # For all slots that are in both the old and new config, check if any of the
-    # configuration options have changed
-    for slot_num in diff.slots_unchanged:
-        await _async_reconcile_slot_entities(
-            config_entry,
-            slot_num,
-            curr_slots[slot_num],
-            new_slots[slot_num],
-            callbacks,
-            ent_reg,
-        )
 
     # Existing entities will listen to updates and act on it.
     # Use to_dict() so the stored data has plain dicts (not the read-only

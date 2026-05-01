@@ -26,7 +26,6 @@ from .const import (
     CONDITION_ENTITY_DOMAINS,
     CONF_LOCKS,
     CONF_NUM_SLOTS,
-    CONF_NUMBER_OF_USES,
     CONF_SLOTS,
     CONF_START_SLOT,
     DEFAULT_NUM_SLOTS,
@@ -41,7 +40,7 @@ from .providers import INTEGRATIONS_CLASS_MAP
 
 _LOGGER = logging.getLogger(__name__)
 
-UI_CODE_SLOT_SCHEMA = vol.Schema(
+CODE_SLOT_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_NAME): cv.string,
         vol.Optional(CONF_PIN): cv.string,
@@ -50,13 +49,6 @@ UI_CODE_SLOT_SCHEMA = vol.Schema(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
         ),
     }
-)
-
-# Validation schema accepts number_of_uses for backward compatibility with
-# existing config entries, but the UI schema above does not show it for new
-# entries. number_of_uses is deprecated — use the Slot Usage Limiter blueprint.
-CODE_SLOT_SCHEMA = UI_CODE_SLOT_SCHEMA.extend(
-    {vol.Optional(CONF_NUMBER_OF_USES): vol.Coerce(int)}
 )
 
 
@@ -425,7 +417,7 @@ class LockCodeManagerFlowHandler(
 
         return self.async_show_form(
             step_id="code_slot",
-            data_schema=UI_CODE_SLOT_SCHEMA,
+            data_schema=CODE_SLOT_SCHEMA,
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=len(self.slots_to_configure) == 1,

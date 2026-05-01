@@ -12,7 +12,6 @@ import {
     mdiLock,
     mdiPencil,
     mdiPlus,
-    mdiPound,
     mdiToggleSwitch,
     mdiToggleSwitchOutline
 } from '@mdi/js';
@@ -55,7 +54,7 @@ interface LockSyncStatus {
 
 /** Maps editable field names to their entity key, HA service, and value transform. */
 const EDIT_FIELD_CONFIG: Record<
-    'name' | 'pin' | 'numberOfUses',
+    'name' | 'pin',
     {
         entityKey: keyof NonNullable<SlotCardData['entities']>;
         service: string;
@@ -67,14 +66,6 @@ const EDIT_FIELD_CONFIG: Record<
         service: 'text.set_value',
         serviceData: (v) => {
             return { value: v.trim() };
-        }
-    },
-    numberOfUses: {
-        entityKey: 'number_of_uses',
-        service: 'number.set_value',
-        serviceData: (v) => {
-            const num = parseInt(v, 10);
-            return !isNaN(num) && num >= 0 ? { value: num } : {};
         }
     },
     pin: {
@@ -103,7 +94,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() _error?: string;
     @state() private _actionError?: string;
     @state() private _conditionsExpanded = false;
-    @state() private _editingField: 'name' | 'pin' | 'numberOfUses' | null = null;
+    @state() private _editingField: 'name' | 'pin' | null = null;
     @state() private _lockStatusExpanded = false;
 
     // Condition dialog state
@@ -231,7 +222,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         if (this._editingField) {
             const selectors: Record<string, string> = {
                 name: '.control-row .edit-input.name-edit-input',
-                numberOfUses: '.condition-row .edit-input[type="number"]',
                 pin: '.pin-edit-input'
             };
             const input = this.shadowRoot?.querySelector<HTMLInputElement>(
@@ -297,7 +287,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             (this._config?.condition_helpers?.length ?? 0) > 0 &&
             this._config!.condition_helpers!.some((eid: string) => this._hass?.states[eid]);
         const hasConditions =
-            (conditions.number_of_uses !== undefined && conditions.number_of_uses !== null) ||
             conditions.condition_entity !== undefined ||
             conditions.calendar !== undefined ||
             hasConditionHelpers;
@@ -535,39 +524,28 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderConditionsSection(conditions: SlotCardConditions): TemplateResult {
-        const { number_of_uses, condition_entity } = conditions;
-        const hasNumberOfUses = number_of_uses !== undefined && number_of_uses !== null;
+        const { condition_entity } = conditions;
         const hasConditionEntity = condition_entity !== undefined;
-        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
         const entityBlocking = hasConditionEntity && condition_entity.state !== 'on';
 
         return this._renderCollapsible(
             'Conditions',
             this._conditionsExpanded,
             this._toggleConditions,
-            this._renderConditionContent(conditions, hasNumberOfUses, hasConditionEntity),
-            this._renderConditionHeaderExtra(
-                conditions,
-                hasNumberOfUses,
-                hasConditionEntity,
-                usesBlocking,
-                entityBlocking
-            )
+            this._renderConditionContent(conditions, hasConditionEntity),
+            this._renderConditionHeaderExtra(conditions, hasConditionEntity, entityBlocking)
         );
     }
 
     private _renderConditionHeaderExtra(
         conditions: SlotCardConditions,
-        hasNumberOfUses: boolean,
         hasConditionEntity: boolean,
-        usesBlocking: boolean,
         entityBlocking: boolean
     ): TemplateResult | undefined {
-        const hasConditions = hasNumberOfUses || hasConditionEntity;
-        if (!hasConditions) return undefined;
+        if (!hasConditionEntity) return undefined;
 
-        const totalConditions = (hasNumberOfUses ? 1 : 0) + (hasConditionEntity ? 1 : 0);
-        const blockingConditions = (usesBlocking ? 1 : 0) + (entityBlocking ? 1 : 0);
+        const totalConditions = 1;
+        const blockingConditions = entityBlocking ? 1 : 0;
         const passingConditions = totalConditions - blockingConditions;
         const allPassing = blockingConditions === 0;
 
@@ -575,74 +553,26 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 >${allPassing ? '✓' : '✗'} ${passingConditions}/${totalConditions}</span
             >
             <span class="condition-blocking-icons">
-                ${hasNumberOfUses
-                    ? html`<ha-svg-icon
-                          class="condition-icon ${usesBlocking ? 'blocking' : ''}"
-                          .path=${mdiPound}
-                          title="${usesBlocking
-                              ? 'No uses remaining'
-                              : `${conditions.number_of_uses} uses remaining`}"
-                      ></ha-svg-icon>`
-                    : nothing}
-                ${hasConditionEntity
-                    ? html`<ha-svg-icon
-                          class="condition-icon ${entityBlocking ? 'blocking' : ''}"
-                          .path=${this._getConditionEntityIcon(
-                              conditions.condition_entity!.domain,
-                              !entityBlocking
-                          )}
-                          title="${entityBlocking
-                              ? 'Condition blocking access'
-                              : 'Condition allowing access'}"
-                      ></ha-svg-icon>`
-                    : nothing}
+                <ha-svg-icon
+                    class="condition-icon ${entityBlocking ? 'blocking' : ''}"
+                    .path=${this._getConditionEntityIcon(
+                        conditions.condition_entity!.domain,
+                        !entityBlocking
+                    )}
+                    title="${entityBlocking
+                        ? 'Condition blocking access'
+                        : 'Condition allowing access'}"
+                ></ha-svg-icon>
             </span>`;
     }
 
     private _renderConditionContent(
         conditions: SlotCardConditions,
-        hasNumberOfUses: boolean,
         hasConditionEntity: boolean
     ): TemplateResult {
-        const { number_of_uses, condition_entity } = conditions;
-        const usesBlocking = hasNumberOfUses && number_of_uses === 0;
-        const usesStatusText = usesBlocking ? 'No uses left' : 'Uses available';
-        const usesStatusClass = usesBlocking ? 'inactive' : 'active';
+        const { condition_entity } = conditions;
 
         return html`
-            ${hasNumberOfUses
-                ? html`<div class="condition-item">
-                      <div class="condition-item-header">
-                          <ha-svg-icon
-                              class="condition-entity-icon ${usesStatusClass}"
-                              .path=${mdiPound}
-                          ></ha-svg-icon>
-                          <span class="condition-entity-status">${usesStatusText}</span>
-                          <span class="condition-entity-domain"># of Uses</span>
-                          <span class="condition-action-icons"> </span>
-                      </div>
-                      <div class="condition-item-detail">
-                          <div class="condition-edit-container">
-                              ${this._editingField === 'numberOfUses'
-                                  ? html`<input
-                                            class="edit-input"
-                                            type="number"
-                                            inputmode="numeric"
-                                            min="0"
-                                            .value=${String(number_of_uses ?? 0)}
-                                            @blur=${this._handleEditBlur}
-                                            @keydown=${this._handleEditKeydown}
-                                        />
-                                        <div class="edit-help">Enter to save, Esc to cancel</div>`
-                                  : html`<span
-                                        class="condition-value editable"
-                                        @click=${() => this._startEditing('numberOfUses')}
-                                        >${number_of_uses} uses remaining</span
-                                    >`}
-                          </div>
-                      </div>
-                  </div>`
-                : nothing}
             ${hasConditionEntity ? this._renderConditionEntity(condition_entity!, true) : nothing}
             ${!this._isStub && this._config?.condition_helpers?.length
                 ? html`<div class="condition-helpers">
@@ -1321,8 +1251,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
     }
 
-    // Consolidated edit handlers for name, pin, and numberOfUses fields
-    private _startEditing(field: 'name' | 'pin' | 'numberOfUses'): void {
+    // Consolidated edit handlers for name and pin fields
+    private _startEditing(field: 'name' | 'pin'): void {
         // Special handling for PIN: reveal first to show current value
         if (field === 'pin' && !this._revealed) {
             this._revealed = true;
@@ -1356,8 +1286,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         const config = EDIT_FIELD_CONFIG[this._editingField];
         const entityId = this._data?.entities?.[config.entityKey];
-        const fieldLabel =
-            this._editingField === 'numberOfUses' ? 'number of uses' : this._editingField;
+        const fieldLabel = this._editingField;
 
         if (!entityId) {
             this._setActionError(`Cannot update ${fieldLabel}: entity is unavailable`);

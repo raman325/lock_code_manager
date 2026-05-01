@@ -57,10 +57,9 @@ read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
   Document when to use each.
 - **TypedDict for slot config** — Define `class SlotConfig(TypedDict)` with
   `pin: NotRequired[str]`, `enabled: bool`, `name: NotRequired[str]`,
-  `entity_id: NotRequired[str]`, `number_of_uses: NotRequired[int]` to
-  replace `dict[str, Any]` for slot inner dicts. Gives pyright real signal
-  on slot reads/writes. Would let `EntryConfig.slots` be typed
-  `Mapping[int, SlotConfig]`.
+  `entity_id: NotRequired[str]` to replace `dict[str, Any]` for slot inner
+  dicts. Gives pyright real signal on slot reads/writes. Would let
+  `EntryConfig.slots` be typed `Mapping[int, SlotConfig]`.
 - **`coordinator.data` typing** — Currently `dict[int, str | SlotCode]`,
   already int-keyed. `binary_sensor.py:281` and `entity.py:193` cast
   defensively against `self.slot_num`'s type variance — could be cleaned
