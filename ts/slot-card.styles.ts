@@ -447,91 +447,23 @@ const slotCardComponentStyles = css`
 
     /* Dialog styles */
     .dialog-content {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
         min-width: 300px;
+        padding: 0 8px;
     }
 
-    .entity-select {
-        background: var(--card-background-color);
-        border: 1px solid var(--divider-color);
-        border-radius: 4px;
-        color: var(--primary-text-color);
-        font-size: 14px;
-        padding: 8px;
-        width: 100%;
-    }
-
-    .dialog-section {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .dialog-section-header {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        font-weight: 500;
-    }
-
-    .dialog-section-description {
+    .dialog-description {
         color: var(--secondary-text-color);
-        font-size: 12px;
-    }
-
-    .dialog-checkbox-row {
-        align-items: center;
-        display: flex;
-        gap: 8px;
-    }
-
-    .dialog-checkbox-row label {
-        color: var(--primary-text-color);
-        cursor: pointer;
-        font-size: 14px;
-    }
-
-    .dialog-number-input {
-        margin-top: 8px;
-    }
-
-    .dialog-number-input input {
-        background: var(--input-background-color, var(--card-background-color));
-        border: 1px solid var(--divider-color);
-        border-radius: 4px;
-        color: var(--primary-text-color);
-        font-size: 14px;
-        padding: 8px 12px;
-        width: 100px;
-    }
-
-    .dialog-clear-button {
-        background: none;
-        border: 1px solid var(--divider-color);
-        border-radius: 4px;
-        color: var(--error-color);
-        cursor: pointer;
         font-size: 13px;
-        margin-top: 8px;
-        padding: 6px 12px;
-    }
-
-    .dialog-clear-button:hover {
-        background: var(--error-color);
-        color: white;
-    }
-
-    /* Confirmation dialog styles */
-    .confirm-dialog-content {
-        color: var(--primary-text-color);
-        font-size: 14px;
         line-height: 1.5;
-        padding: 8px 0;
+        margin: 0 0 16px;
+    }
+
+    .dialog-content ha-entity-picker {
+        display: block;
     }
 
     ha-button.destructive {
-        --mdc-theme-primary: var(--error-color);
+        --mdc-theme-primary: var(--warning-color, #ffa726);
     }
 
     /* Make dialog buttons more obviously interactive */

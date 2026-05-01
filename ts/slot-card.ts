@@ -87,13 +87,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogSaving = false;
 
-    // Confirmation dialog state
-    @state() private _confirmDialog: {
-        onConfirm: () => void;
-        text: string;
-        title: string;
-    } | null = null;
-
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
 
@@ -291,7 +284,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ${showLockStatus ? this._renderLockStatusSection(lockStatuses) : nothing}
                 </div>
                 ${this._showConditionDialog ? this._renderConditionDialog() : nothing}
-                ${this._confirmDialog ? this._renderConfirmDialog() : nothing}
             </ha-card>
         `;
     }
@@ -761,11 +753,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     /**
-     * Open the condition dialog. Mode `'manage'` pre-fills with the slot's
-     * current condition entity (so the user can replace or remove it). Mode
-     * `'add'` starts with an empty picker. Task 5 will rewrite the dialog body
-     * itself to use `ha-entity-picker`; here we only rename the modes so the
-     * new manage-link / add-link affordances open with the right semantics.
+     * Open the condition dialog. Mode `'manage'` pre-fills the entity picker
+     * with the slot's current condition entity (so the user can replace it,
+     * or click the destructive Remove button to clear it). Mode `'add'` opens
+     * with an empty picker and no Remove button.
      */
     private _openConditionDialog(mode: 'manage' | 'add'): void {
         this._dialogMode = mode;
@@ -781,23 +772,24 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this._dialogSaving = false;
     }
 
-    private _deleteConditionEntity(): void {
-        this._confirmDialog = {
-            onConfirm: async () => {
-                try {
-                    await this._clearSlotCondition();
-                    // Force re-subscribe to get updated data
-                    this._unsubscribe();
-                    void this._subscribe();
-                } catch (err) {
-                    this._setActionError(
-                        `Failed to remove condition: ${err instanceof Error ? err.message : 'Unknown error'}`
-                    );
-                }
-            },
-            text: 'This will remove the condition entity from controlling when this PIN is active.',
-            title: 'Remove condition entity?'
-        };
+    /**
+     * Clear the condition entity from the slot (destructive Remove action in
+     * the Manage dialog). The dialog's destructive styling is the visual
+     * safety here — there is no extra confirmation step.
+     */
+    private async _removeCondition(): Promise<void> {
+        this._dialogSaving = true;
+        try {
+            await this._clearSlotCondition();
+            this._closeConditionDialog();
+            this._unsubscribe();
+            void this._subscribe();
+        } catch (err) {
+            this._setActionError(
+                `Failed to remove condition: ${err instanceof Error ? err.message : String(err)}`
+            );
+            this._dialogSaving = false;
+        }
     }
 
     private async _setSlotCondition(entity_id: string): Promise<void> {
@@ -830,70 +822,41 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderConditionDialog(): TemplateResult {
-        const dialogTitle =
-            this._dialogMode === 'add' ? 'Add Condition Entity' : 'Manage Condition Entity';
+        const isManage = this._dialogMode === 'manage';
+        const title = isManage ? 'Manage condition' : 'Add a condition';
 
         return html`
-            <ha-dialog open @closed=${this._closeConditionDialog} .heading=${dialogTitle}>
+            <ha-dialog open @closed=${this._closeConditionDialog} .heading=${title}>
                 <div class="dialog-content">
-                    <div class="dialog-section">
-                        <div class="dialog-section-description">
-                            PIN is active only when this entity is "on"
-                        </div>
-                        <input
-                            type="text"
-                            class="entity-select"
-                            list="condition-entity-list"
-                            placeholder="Search or select entity..."
-                            .value=${this._dialogEntityId ?? ''}
-                            @focus=${(e: Event) => {
-                                // Select all on focus for easier replacement
-                                (e.target as HTMLInputElement).select();
-                            }}
-                            @input=${(e: Event) => {
-                                const val = (e.target as HTMLInputElement).value;
-                                // Only set if it's a valid entity ID
-                                if (this._hass?.states[val]) {
-                                    this._dialogEntityId = val;
-                                } else if (val === '') {
-                                    this._dialogEntityId = null;
-                                }
-                            }}
-                            @change=${(e: Event) => {
-                                const val = (e.target as HTMLInputElement).value;
-                                if (this._hass?.states[val]) {
-                                    this._dialogEntityId = val;
-                                } else if (val === '') {
-                                    this._dialogEntityId = null;
-                                }
-                            }}
-                        />
-                        <datalist id="condition-entity-list">
-                            ${this._hass
-                                ? Object.keys(this._hass.states)
-                                      .filter((eid) =>
-                                          [
-                                              'calendar',
-                                              'schedule',
-                                              'binary_sensor',
-                                              'switch',
-                                              'input_boolean'
-                                          ].includes(eid.split('.')[0])
-                                      )
-                                      .sort()
-                                      .map(
-                                          (eid) => html`
-                                              <option
-                                                  value=${eid}
-                                                  label="${this._hass.states[eid]?.attributes
-                                                      ?.friendly_name ?? eid}"
-                                              ></option>
-                                          `
-                                      )
-                                : nothing}
-                        </datalist>
-                    </div>
+                    <p class="dialog-description">
+                        PIN is active only when this entity is on. Pick a calendar, schedule, binary
+                        sensor, switch, or input boolean.
+                    </p>
+                    <ha-entity-picker
+                        .hass=${this._hass}
+                        .value=${this._dialogEntityId ?? ''}
+                        .label=${'Condition entity'}
+                        .includeDomains=${[
+                            'calendar',
+                            'schedule',
+                            'binary_sensor',
+                            'switch',
+                            'input_boolean'
+                        ]}
+                        @value-changed=${(e: CustomEvent) => {
+                            this._dialogEntityId = e.detail.value || null;
+                        }}
+                    ></ha-entity-picker>
                 </div>
+                ${isManage
+                    ? html`<ha-button
+                          slot="secondaryAction"
+                          class="destructive"
+                          @click=${() => this._removeCondition()}
+                      >
+                          Remove condition
+                      </ha-button>`
+                    : nothing}
                 <ha-button slot="secondaryAction" @click=${() => this._closeConditionDialog()}>
                     Cancel
                 </ha-button>
@@ -902,31 +865,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     @click=${() => this._saveConditionChanges()}
                     .disabled=${this._dialogSaving}
                 >
-                    ${this._dialogSaving ? 'Saving...' : 'Save'}
-                </ha-button>
-            </ha-dialog>
-        `;
-    }
-
-    private _renderConfirmDialog(): TemplateResult {
-        if (!this._confirmDialog) return html``;
-
-        return html`
-            <ha-dialog open @closed=${() => (this._confirmDialog = null)}>
-                <div slot="heading">${this._confirmDialog.title}</div>
-                <div class="confirm-dialog-content">${this._confirmDialog.text}</div>
-                <ha-button slot="secondaryAction" @click=${() => (this._confirmDialog = null)}>
-                    Cancel
-                </ha-button>
-                <ha-button
-                    slot="primaryAction"
-                    class="destructive"
-                    @click=${() => {
-                        this._confirmDialog?.onConfirm();
-                        this._confirmDialog = null;
-                    }}
-                >
-                    Remove
+                    ${this._dialogSaving ? 'Saving…' : 'Save'}
                 </ha-button>
             </ha-dialog>
         `;
