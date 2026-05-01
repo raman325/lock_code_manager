@@ -1545,15 +1545,6 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._actionError).toContain('unavailable');
         });
 
-        it('_saveEditValue skips invalid numberOfUses value', async () => {
-            (card as any)._editingField = 'numberOfUses';
-            (card as any)._data = makeSlotCardData({
-                entities: { number_of_uses: 'number.slot_1_uses' }
-            });
-            await (card as any)._saveEditValue('abc');
-            expect(callServiceMock).not.toHaveBeenCalled();
-        });
-
         it('_saveEditValue sets error when service call fails', async () => {
             (card as any)._editingField = 'name';
             (card as any)._data = makeSlotCardData({

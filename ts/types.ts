@@ -266,15 +266,12 @@ export interface SlotCardConditions {
     calendar_next?: CalendarNextEventInfo;
     /** Generic condition entity info (new unified approach) */
     condition_entity?: ConditionEntityInfo;
-    /** Number of uses remaining */
-    number_of_uses?: number;
 }
 
 export interface SlotCardEntities {
     active?: string | null;
     enabled?: string | null;
     name?: string | null;
-    number_of_uses?: string | null;
     pin?: string | null;
 }
 
