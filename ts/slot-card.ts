@@ -218,8 +218,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Focus the appropriate input when entering edit mode
         if (this._editingField) {
             const selectors: Record<string, string> = {
-                name: '.control-row .edit-input.name-edit-input',
-                pin: '.pin-edit-input'
+                name: '.name .name-edit-input',
+                pin: '.hero-pin .pin-edit-input'
             };
             const input = this.shadowRoot?.querySelector<HTMLInputElement>(
                 selectors[this._editingField]
@@ -260,7 +260,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderFromData(data: SlotCardData): TemplateResult {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        const { name, pin, enabled, active, conditions, locks } = data;
+        const { pin, enabled, active, conditions, locks } = data;
         const pinLength = data.pin_length;
 
         // Transform locks to the expected format
@@ -307,7 +307,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     : nothing}
                 ${this._renderHeader()}
                 <div class="content">
-                    ${this._renderPrimaryControls(name, pin, pinLength, enabled, mode)}
+                    ${this._renderHero(pin, pinLength, enabled, mode)}
                     ${this._renderStatus(enabled, active)}
                     ${showManageConditions ? this._renderManageConditionsRow() : nothing}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
@@ -323,6 +323,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const slotKicker = this._renderSlotKicker();
         const stateChip = this._renderStateChip();
         const name = this._data?.name;
+        const editingName = this._editingField === 'name';
 
         return html`
             <div class="header">
@@ -331,13 +332,25 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     ${stateChip}
                 </div>
                 <div class="name">
-                    ${name ? html`${name}` : html`<em class="placeholder">&lt;No Name&gt;</em>`}
-                    <ha-icon-button
-                        class="pencil"
-                        .path=${mdiPencil}
-                        @click=${() => this._startEditing('name')}
-                        .label=${'Edit name'}
-                    ></ha-icon-button>
+                    ${editingName
+                        ? html`<input
+                              class="edit-input name-edit-input"
+                              type="text"
+                              .value=${name ?? ''}
+                              @blur=${this._handleEditBlur}
+                              @keydown=${this._handleEditKeydown}
+                          />`
+                        : html`
+                              ${name
+                                  ? html`${name}`
+                                  : html`<em class="placeholder">&lt;No Name&gt;</em>`}
+                              <ha-icon-button
+                                  class="pencil"
+                                  .path=${mdiPencil}
+                                  @click=${() => this._startEditing('name')}
+                                  .label=${'Edit name'}
+                              ></ha-icon-button>
+                          `}
                 </div>
             </div>
         `;
@@ -379,15 +392,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return html` <span class="state-chip ${cls}"> <span class="dot"></span>${text} </span> `;
     }
 
-    private _renderPrimaryControls(
-        name: string | null,
+    private _renderHero(
         pin: string | null,
         pinLength: number | undefined,
         enabled: boolean | null,
         mode: CodeDisplayMode
     ): TemplateResult {
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
-        // Use pin if revealed, otherwise show masked dots based on pin or pinLength
         const hasPin = pin !== null || pinLength !== undefined;
         const displayPin = pin
             ? shouldMask
@@ -398,72 +409,38 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
               : null;
 
         return html`
-            <div class="lcm-section">
-                <div class="lcm-section-header">Primary Controls</div>
-
-                <div class="control-row">
-                    <span class="control-label">Name</span>
-                    <div style="flex: 1;">
-                        ${this._editingField === 'name'
-                            ? html`<input
-                                      class="edit-input name-edit-input"
-                                      type="text"
-                                      .value=${name ?? ''}
-                                      @blur=${this._handleEditBlur}
-                                      @keydown=${this._handleEditKeydown}
-                                  />
-                                  <div class="edit-help">Enter to save, Esc to cancel</div>`
-                            : html`<span
-                                  class="control-value editable"
-                                  @click=${() => this._startEditing('name')}
-                              >
-                                  ${name || html`<em class="placeholder">&lt;No Name&gt;</em>`}
-                              </span>`}
-                    </div>
+            <div class="hero">
+                <div class="hero-pin">
+                    <span class="hero-pin-label">PIN</span>
+                    ${this._editingField === 'pin'
+                        ? html`<input
+                              class="edit-input pin-edit-input"
+                              type="text"
+                              inputmode="numeric"
+                              pattern="[0-9]*"
+                              .value=${pin ?? ''}
+                              @blur=${this._handleEditBlur}
+                              @keydown=${this._handleEditKeydown}
+                          />`
+                        : html`<span
+                              class="hero-pin-value editable ${shouldMask && hasPin
+                                  ? 'masked'
+                                  : ''}"
+                              @click=${() => this._startEditing('pin')}
+                          >
+                              ${displayPin ?? html`<em class="placeholder">&lt;No PIN&gt;</em>`}
+                          </span>`}
+                    ${mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
+                        ? html`<ha-icon-button
+                              class="reveal"
+                              .path=${this._revealed ? mdiEyeOff : mdiEye}
+                              @click=${this._toggleReveal}
+                              .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
+                          ></ha-icon-button>`
+                        : nothing}
                 </div>
-
-                <div class="control-row">
-                    <span class="control-label">PIN</span>
-                    <div style="flex: 1;">
-                        <div class="pin-field">
-                            ${this._editingField === 'pin'
-                                ? html`<input
-                                      class="edit-input pin-edit-input"
-                                      type="text"
-                                      inputmode="numeric"
-                                      pattern="[0-9]*"
-                                      .value=${pin ?? ''}
-                                      @blur=${this._handleEditBlur}
-                                      @keydown=${this._handleEditKeydown}
-                                  />`
-                                : html`<span
-                                      class="pin-value editable ${shouldMask && hasPin
-                                          ? 'masked'
-                                          : ''}"
-                                      @click=${() => this._startEditing('pin')}
-                                  >
-                                      ${displayPin ??
-                                      html`<em class="placeholder">&lt;No PIN&gt;</em>`}
-                                  </span>`}
-                            ${mode === 'masked_with_reveal' &&
-                            hasPin &&
-                            this._editingField !== 'pin'
-                                ? html`<ha-icon-button
-                                      class="pin-reveal"
-                                      .path=${this._revealed ? mdiEyeOff : mdiEye}
-                                      @click=${this._toggleReveal}
-                                      .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
-                                  ></ha-icon-button>`
-                                : nothing}
-                        </div>
-                        ${this._editingField === 'pin'
-                            ? html`<div class="edit-help">Enter to save, Esc to cancel</div>`
-                            : nothing}
-                    </div>
-                </div>
-
-                <div class="enabled-row">
-                    <span class="enabled-label">Enabled</span>
+                <div class="hero-toggle">
+                    <span class="hero-toggle-label">Enabled</span>
                     <ha-switch
                         .checked=${enabled === true}
                         .disabled=${enabled === null}

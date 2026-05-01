@@ -152,63 +152,65 @@ const slotCardComponentStyles = css`
         color: var(--lcm-warning-color);
     }
 
-    /* Primary Controls Section */
-    .control-row {
+    /* Hero row (PIN + Enable) — tinted always-visible band at the top of .content */
+    .hero {
         align-items: center;
+        background: var(--lcm-section-bg);
+        border-top: 1px solid var(--lcm-border-color);
         display: flex;
         gap: 16px;
-        margin-bottom: 12px;
+        padding: 18px 16px;
     }
 
-    .control-row:last-child {
-        margin-bottom: 0;
-    }
-
-    .control-label {
-        color: var(--secondary-text-color);
-        font-size: 14px;
-        min-width: 60px;
-    }
-
-    .control-value {
+    .hero-pin {
         align-items: center;
-        color: var(--primary-text-color);
         display: flex;
         flex: 1;
+        gap: 12px;
+        min-width: 0;
+    }
+
+    .hero-pin-label {
+        color: var(--secondary-text-color);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .hero-pin-value {
+        color: var(--primary-text-color);
+        cursor: pointer;
         font-family: var(--lcm-code-font);
-        font-size: var(--lcm-code-font-size);
-        font-weight: var(--lcm-code-font-weight);
-        gap: 8px;
+        font-size: 22px;
+        letter-spacing: 4px;
         min-height: 1.5em;
+    }
+
+    .hero-pin-value.masked {
+        color: var(--secondary-text-color);
+    }
+
+    .hero-pin .reveal {
+        --mdc-icon-button-size: 28px;
+        --mdc-icon-size: 16px;
+        color: var(--secondary-text-color);
+    }
+
+    .hero-toggle {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+    }
+
+    .hero-toggle-label {
+        color: var(--secondary-text-color);
+        font-size: 12px;
     }
 
     .placeholder {
         color: var(--secondary-text-color);
         font-style: italic;
-    }
-
-    .pin-field {
-        align-items: center;
-        display: flex;
-        flex: 1;
-        gap: 8px;
-    }
-
-    .pin-value {
-        font-family: var(--lcm-code-font);
-        font-size: var(--lcm-code-font-size);
-        font-weight: var(--lcm-code-font-weight);
-        letter-spacing: 2px;
-        min-height: 1.5em;
-    }
-
-    .pin-value.masked {
-        color: var(--secondary-text-color);
-    }
-
-    .pin-reveal {
-        --mdc-icon-button-size: 32px;
-        --mdc-icon-size: 18px;
     }
 
     /* Name-specific edit input (extends shared editable styles) */
@@ -221,21 +223,9 @@ const slotCardComponentStyles = css`
     /* PIN-specific edit input (extends shared editable styles) */
     .pin-edit-input {
         font-family: var(--lcm-code-font);
-        font-size: var(--lcm-code-font-size);
+        font-size: 22px;
         font-weight: var(--lcm-code-font-weight);
-        letter-spacing: 2px;
-    }
-
-    .enabled-row {
-        align-items: center;
-        display: flex;
-        gap: 16px;
-        justify-content: space-between;
-    }
-
-    .enabled-label {
-        color: var(--secondary-text-color);
-        font-size: 14px;
+        letter-spacing: 4px;
     }
 
     /* Status Section */

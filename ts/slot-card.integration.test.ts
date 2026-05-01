@@ -233,6 +233,22 @@ describe('LockCodeManagerSlotCard integration', () => {
             return (result?.strings ?? []).join('');
         }
 
+        /** Recursively join the static strings + primitive value text of a
+         *  TemplateResult and any nested templates */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) {
+                return result.map(deepTemplateStrings).join('');
+            }
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
         /* eslint-disable @typescript-eslint/no-explicit-any */
         it('renders slot kicker with config entry title and active state chip', () => {
             (card as any)._data = makeSlotCardData({
@@ -255,17 +271,19 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(chip.values).toContain('active');
             expect(chip.values).toContain('Active');
 
-            // Header structure includes name and pencil button.
+            // Header structure includes name and pencil button (now in a nested
+            // not-editing branch since the input is rendered when editing).
             const header = (card as any)._renderHeader();
             const headerStrings = templateStrings(header);
             expect(headerStrings).toContain('slot-kicker');
             expect(headerStrings).toContain('class="name"');
-            expect(headerStrings).toContain('ha-icon-button');
-            expect(headerStrings).toContain('class="pencil"');
+            const headerDeep = deepTemplateStrings(header);
+            expect(headerDeep).toContain('ha-icon-button');
+            expect(headerDeep).toContain('class="pencil"');
             // Name value flows through as a nested template for "Alice".
             const nameValues = (header.values ?? [])
                 .filter((v: unknown) => v && typeof v === 'object' && 'strings' in v)
-                .map((v: any) => (v.values ?? []).join(' '));
+                .map((v: any) => deepTemplateStrings(v));
             expect(nameValues.some((s: string) => s.includes('Alice'))).toBe(true);
         });
 
@@ -323,17 +341,136 @@ describe('LockCodeManagerSlotCard integration', () => {
             const header = (card as any)._renderHeader();
             const headerStrings = templateStrings(header);
             expect(headerStrings).toContain('class="name"');
-            // Placeholder template appears as a nested template value.
-            const placeholderRendered = (header.values ?? []).some(
-                (v: any) =>
+            // Placeholder template appears anywhere in the nested template tree.
+            expect(deepTemplateStrings(header)).toContain('placeholder');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('hero row (PIN + Enable)', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Join a TemplateResult's static strings to inspect element tags */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function templateStrings(result: any): string {
+            return (result?.strings ?? []).join('');
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders hero row with PIN value and enable switch', () => {
+            (card as any)._data = makeSlotCardData({
+                active: true,
+                enabled: true,
+                pin: '1234',
+                pin_length: 4
+            });
+            (card as any)._revealed = false;
+
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const heroStrings = templateStrings(hero);
+            expect(heroStrings).toContain('class="hero"');
+            expect(heroStrings).toContain('hero-pin');
+            expect(heroStrings).toContain('hero-toggle');
+            expect(heroStrings).toContain('ha-switch');
+        });
+
+        it('masked PIN displays bullets matching pin length', () => {
+            (card as any)._revealed = false;
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const valueTemplate = (hero.values ?? []).find(
+                (v: unknown) =>
                     v &&
                     typeof v === 'object' &&
                     'strings' in v &&
-                    templateStrings(v).includes('placeholder')
+                    templateStrings(v).includes('hero-pin-value')
             );
-            expect(placeholderRendered).toBe(true);
+            // The masked display value flows through as a value on the inner template
+            expect(valueTemplate).toBeTruthy();
+            const inner = valueTemplate.values ?? [];
+            expect(inner).toContain('••••');
+        });
+
+        it('revealed PIN displays the actual digits', () => {
+            (card as any)._revealed = true;
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const valueTemplate = (hero.values ?? []).find(
+                (v: unknown) =>
+                    v &&
+                    typeof v === 'object' &&
+                    'strings' in v &&
+                    templateStrings(v).includes('hero-pin-value')
+            );
+            const inner = valueTemplate.values ?? [];
+            expect(inner).toContain('1234');
+        });
+
+        it('omits the eye reveal control when mode is unmasked', () => {
+            (card as any)._revealed = true;
+            const hero = (card as any)._renderHero('1234', 4, true, 'unmasked');
+            const heroStrings = templateStrings(hero);
+            // The reveal slot should be filled with `nothing` rather than an icon button.
+            expect(heroStrings).toContain('hero-pin');
+            // Find the hero-pin nested template; verify it does not contain a reveal class.
+            const pinBlock = (hero.values ?? []).find(
+                (v: unknown) =>
+                    v &&
+                    typeof v === 'object' &&
+                    'strings' in v &&
+                    templateStrings(v).includes('hero-pin')
+            );
+            // For unmasked mode we expect no `class="reveal"` substring in the rendered template.
+            // The reveal button only renders for `masked_with_reveal` with a PIN.
+            const heroValuesAll = JSON.stringify(hero, (_, val) =>
+                typeof val === 'function' ? 'fn' : val
+            );
+            expect(heroValuesAll).not.toContain('Reveal PIN');
+            expect(heroValuesAll).not.toContain('Hide PIN');
+            expect(pinBlock).toBeTruthy();
+        });
+
+        it('shows No PIN placeholder when both pin and pin_length are absent', () => {
+            const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            expect(heroJson).toContain('No PIN');
+        });
+
+        it('renders an input field for PIN when editing', () => {
+            (card as any)._editingField = 'pin';
+            (card as any)._revealed = true;
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            expect(heroJson).toContain('pin-edit-input');
+        });
+
+        it('disables the enable switch when enabled is null', () => {
+            const hero = (card as any)._renderHero(null, undefined, null, 'masked_with_reveal');
+            const heroStrings = templateStrings(hero);
+            expect(heroStrings).toContain('ha-switch');
+            // Switch disabled flag is bound as a property; verify the switch template has `.disabled` binding present.
+            expect(heroStrings).toContain('.disabled=');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderPrimaryControls is removed', () => {
+        it('the legacy method does not exist on the component', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            expect((card as any)._renderPrimaryControls).toBeUndefined();
+        });
     });
 
     describe('error handling', () => {
