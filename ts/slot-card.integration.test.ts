@@ -607,6 +607,110 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
+    describe('ha-entity-picker lazy-load', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        afterEach(() => {
+            delete (window as any).loadCardHelpers;
+        });
+
+        it('lazy-loads ha-entity-picker when the dialog opens', async () => {
+            // Simulate the picker not yet being in the customElements registry
+            const originalGet = customElements.get.bind(customElements);
+            const getSpy = vi.spyOn(customElements, 'get').mockImplementation((name: string) => {
+                if (name === 'ha-entity-picker')
+                    return undefined as unknown as CustomElementConstructor;
+                return originalGet(name);
+            });
+
+            const getConfigElementSpy = vi.fn().mockResolvedValue(undefined);
+            const createCardElementSpy = vi.fn().mockReturnValue({
+                constructor: { getConfigElement: getConfigElementSpy }
+            });
+            (window as any).loadCardHelpers = vi.fn().mockResolvedValue({
+                createCardElement: createCardElementSpy
+            });
+
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            // connectedCallback already triggers the load; clear the call
+            // history so this assertion only sees the dialog-open path.
+            createCardElementSpy.mockClear();
+            getConfigElementSpy.mockClear();
+
+            (card as any)._openConditionDialog('add');
+            await flush();
+
+            expect(createCardElementSpy).toHaveBeenCalledWith({
+                entities: [],
+                type: 'entities'
+            });
+            expect(getConfigElementSpy).toHaveBeenCalled();
+
+            getSpy.mockRestore();
+        });
+
+        it('short-circuits when ha-entity-picker is already registered', async () => {
+            const loadHelpersSpy = vi.fn();
+            (window as any).loadCardHelpers = loadHelpersSpy;
+
+            // Don't mock customElements.get — the real registry won't have
+            // ha-entity-picker either, so force it to look registered.
+            const originalGet = customElements.get.bind(customElements);
+            const getSpy = vi.spyOn(customElements, 'get').mockImplementation((name: string) => {
+                if (name === 'ha-entity-picker')
+                    return class FakePicker extends HTMLElement {} as unknown as CustomElementConstructor;
+                return originalGet(name);
+            });
+
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            expect(loadHelpersSpy).not.toHaveBeenCalled();
+
+            getSpy.mockRestore();
+        });
+
+        it('swallows lazy-load failures so the dialog can still open', async () => {
+            const originalGet = customElements.get.bind(customElements);
+            const getSpy = vi.spyOn(customElements, 'get').mockImplementation((name: string) => {
+                if (name === 'ha-entity-picker')
+                    return undefined as unknown as CustomElementConstructor;
+                return originalGet(name);
+            });
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            (window as any).loadCardHelpers = vi.fn().mockRejectedValue(new Error('helpers boom'));
+
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            // _openConditionDialog still flips the visibility state even
+            // though the picker load is failing.
+            (card as any)._openConditionDialog('add');
+            expect((card as any)._showConditionDialog).toBe(true);
+
+            await flush();
+            expect(warnSpy).toHaveBeenCalled();
+
+            warnSpy.mockRestore();
+            getSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('condition_helpers config', () => {
         it('stores condition_helpers in config when provided', () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
@@ -3064,6 +3168,10 @@ describe('LockCodeManagerSlotCard integration', () => {
                 container.appendChild(card);
                 await flush();
 
+                // connectedCallback also calls loadCardHelpers via
+                // _ensureEntityPickerLoaded. Reset the attempt counter so we
+                // measure only the _getEntityRow retries this test cares about.
+                attempts = 0;
                 await (card as any)._getEntityRow('binary_sensor.test');
                 await (card as any)._getEntityRow('binary_sensor.test');
                 expect(attempts).toBe(2);

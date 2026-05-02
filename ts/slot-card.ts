@@ -174,9 +174,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
     }
 
-    // connectedCallback provided by mixin; we override disconnectedCallback
-    // here to clean up the action-error timer in addition to letting the
-    // mixin tear down its subscription.
+    // The mixin provides connectedCallback (which kicks off the slot
+    // subscription); we extend it here to also force-register HA's
+    // ha-entity-picker before the user can open the condition dialog.
+    override connectedCallback(): void {
+        super.connectedCallback();
+        void this._ensureEntityPickerLoaded();
+    }
+
+    // We override disconnectedCallback here to clean up the action-error
+    // timer in addition to letting the mixin tear down its subscription.
     override disconnectedCallback(): void {
         super.disconnectedCallback();
         if (this._actionErrorTimer !== undefined) {
@@ -714,6 +721,39 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     /**
+     * Force HA's `ha-entity-picker` element to register. The picker is
+     * lazy-loaded by Home Assistant — the Lovelace editor context loads it
+     * eagerly, but a standalone custom card never triggers the load, so
+     * the unregistered tag inside our condition dialog stays empty. We
+     * piggyback on the entities-card config element, which uses
+     * ha-entity-picker internally, so requesting its `getConfigElement()`
+     * forces the picker to register as a side effect.
+     *
+     * Idempotent: short-circuits once the picker is in the
+     * customElements registry. Failures are swallowed (logged via
+     * console.warn) because the dialog itself still opens — the picker
+     * just won't render until HA registers it some other way.
+     */
+    private async _ensureEntityPickerLoaded(): Promise<void> {
+        if (customElements.get('ha-entity-picker')) return;
+        const loadHelpers = (window as Window & { loadCardHelpers?: () => Promise<unknown> })
+            .loadCardHelpers;
+        if (!loadHelpers) return;
+        try {
+            const helpers = (await loadHelpers()) as {
+                createCardElement: (config: { entities: string[]; type: string }) => HTMLElement & {
+                    constructor: { getConfigElement?: () => Promise<unknown> };
+                };
+            };
+            const cardElement = helpers.createCardElement({ entities: [], type: 'entities' });
+            await cardElement.constructor.getConfigElement?.();
+        } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn('lcm-slot: failed to lazy-load ha-entity-picker', err);
+        }
+    }
+
+    /**
      * Lazy-loads (and caches) an HA entity row element using the
      * `loadCardHelpers().createRowElement()` helper. Falls back to a plain
      * text node when the helper isn't available (e.g. older HA, jsdom test
@@ -922,6 +962,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * with an empty picker and no Remove button.
      */
     private _openConditionDialog(mode: 'manage' | 'add'): void {
+        // Defensive: connectedCallback already kicks the picker load, but
+        // re-trigger here in case the card connected in a state where the
+        // global helper wasn't yet available. Idempotent — short-circuits
+        // once the element is registered.
+        void this._ensureEntityPickerLoaded();
         this._dialogMode = mode;
         this._dialogEntityId =
             mode === 'manage'
