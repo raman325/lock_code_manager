@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "091c1f0f5def",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-02T04:24:08.530724Z",
+  "branch": "phase-b/card-polish",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/shared-styles.ts",
+    "ts/slot-card.styles.ts",
+    "ts/slot-card.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "9ecdd16a003d",
+  "token_usage": {
+    "input_tokens": 1075,
+    "cache_creation_tokens": 1677132,
+    "cache_read_tokens": 276504174,
+    "output_tokens": 498330,
+    "api_call_count": 520
+  },
+  "session_metrics": {
+    "turn_count": 65
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-02T04:24:07.593954Z",
+    "agent_lines": 0,
+    "human_added": 24,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 24,
+    "agent_percentage": 0
+  }
+}
