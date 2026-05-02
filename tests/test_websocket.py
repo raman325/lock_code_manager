@@ -1474,7 +1474,9 @@ async def test_subscribe_lock_codes_response_shape(
         assert isinstance(slot.get(CONF_NAME, ""), str)
         assert isinstance(slot[ATTR_MANAGED], bool)
 
-        # Managed slots also have active, enabled, and config_entry_id
+        # Managed slots also have active, enabled, config_entry_id, and
+        # config_entry_title (so the lock card can render "Slot N · {title}"
+        # for managed slots without an extra round-trip to look it up).
         if slot[ATTR_MANAGED]:
             assert (
                 isinstance(slot.get(ATTR_ACTIVE), bool) or slot.get(ATTR_ACTIVE) is None
@@ -1484,6 +1486,9 @@ async def test_subscribe_lock_codes_response_shape(
                 or slot.get(CONF_ENABLED) is None
             )
             assert isinstance(slot.get(ATTR_CONFIG_ENTRY_ID), str)
+            assert isinstance(slot.get(ATTR_CONFIG_ENTRY_TITLE), str)
+            # Title comes from the LCM config entry that owns the slot.
+            assert slot[ATTR_CONFIG_ENTRY_TITLE] == lock_code_manager_config_entry.title
 
 
 async def test_subscribe_lock_codes_masked_shape_contract(

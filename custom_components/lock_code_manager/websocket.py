@@ -316,6 +316,7 @@ def _serialize_slot(
     active: bool | None = None,
     enabled: bool | None = None,
     config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
 ) -> dict[str, Any]:
     """Serialize a slot dict, masking the code unless ``reveal`` is True."""
     result: dict[str, Any] = {ATTR_SLOT: slot}
@@ -329,6 +330,8 @@ def _serialize_slot(
         result[CONF_ENABLED] = enabled
     if config_entry_id:
         result[ATTR_CONFIG_ENTRY_ID] = config_entry_id
+    if config_entry_title:
+        result[ATTR_CONFIG_ENTRY_TITLE] = config_entry_title
 
     # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
     # regular codes are masked or revealed, None stays None.
@@ -482,6 +485,11 @@ def _serialize_lock_coordinator(
     for slot, code in sorted(data.items()):
         meta = slot_metadata.get(slot)
         slot_ids = slot_entity_ids.get(slot)
+        entry_id = slot_ids.config_entry_id if slot_ids else None
+        entry_title = None
+        if entry_id:
+            entry = hass.config_entries.async_get_entry(entry_id)
+            entry_title = entry.title if entry else None
         slots.append(
             _serialize_slot(
                 slot,
@@ -492,7 +500,8 @@ def _serialize_lock_coordinator(
                 configured_code=meta.configured_pin if meta else None,
                 active=meta.active if meta else None,
                 enabled=meta.enabled if meta else None,
-                config_entry_id=slot_ids.config_entry_id if slot_ids else None,
+                config_entry_id=entry_id,
+                config_entry_title=entry_title,
             )
         )
 

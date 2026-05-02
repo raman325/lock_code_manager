@@ -138,6 +138,8 @@ export interface LockCoordinatorSlotData {
     code_length?: number;
     /** Config entry ID of the LCM instance managing this slot (for navigation) */
     config_entry_id?: string;
+    /** Config entry title (LCM instance name), present for managed slots */
+    config_entry_title?: string;
     /** Configured PIN from LCM (for disabled slots with no code on lock) */
     configured_code?: string;
     /** Length of configured PIN when masked */
