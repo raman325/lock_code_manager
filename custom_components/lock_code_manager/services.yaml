@@ -75,3 +75,15 @@ clear_slot_condition:
           min: 1
           max: 9999
           mode: box
+
+generate_pin:
+  fields:
+    length:
+      default: 4
+      example: 4
+      selector:
+        number:
+          min: 4
+          max: 12
+          step: 1
+          mode: box
