@@ -24,12 +24,28 @@ const slotCardComponentStyles = css`
         overflow: hidden;
     }
 
-    /* Header Section */
+    /* Card-level state tinting — mirrors the lock card's slot-chip backgrounds
+       so a slot reads the same regardless of which card you see it on.
+       Active = primary tint, Inactive = warning (blocked), Disabled = muted. */
+    ha-card.slot-card-state-active {
+        background: var(
+            --lcm-active-bg-gradient,
+            var(--ha-card-background, var(--card-background-color))
+        );
+    }
+    ha-card.slot-card-state-inactive {
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
+    }
+    ha-card.slot-card-state-disabled {
+        background: rgba(var(--rgb-primary-text-color), 0.04);
+        opacity: 0.9;
+    }
+
+    /* Header Section — matches the lock card pattern: icon bubble + title + state chip on the right. */
     .header {
-        background: var(--ha-card-background, var(--card-background-color, #fff));
+        align-items: center;
         border-bottom: 1px solid var(--lcm-border-color);
         display: flex;
-        flex-direction: column;
         gap: 12px;
         padding: 16px;
     }
@@ -37,8 +53,9 @@ const slotCardComponentStyles = css`
     .header-top {
         align-items: center;
         display: flex;
-        flex-wrap: wrap;
-        gap: 8px 12px;
+        flex: 1;
+        gap: 12px;
+        min-width: 0;
     }
 
     .header-icon {
@@ -52,153 +69,206 @@ const slotCardComponentStyles = css`
         justify-content: center;
         width: 40px;
     }
-
     .header-icon ha-svg-icon {
         --mdc-icon-size: 24px;
     }
 
-    .header-info {
-        display: flex;
-        flex: 1;
-        flex-direction: column;
-        gap: 2px;
-        min-width: 0;
-    }
-
     .header-title {
         color: var(--primary-text-color);
+        flex: 1;
         font-size: 18px;
         font-weight: 500;
-        white-space: nowrap;
-    }
-
-    .header-pills {
-        align-items: center;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-    }
-
-    .header-pill {
-        align-items: center;
-        background: var(--lcm-section-bg);
-        border-radius: 12px;
-        color: var(--secondary-text-color);
-        display: flex;
-        font-size: 11px;
-        gap: 4px;
-        max-width: 100%;
+        min-width: 0;
         overflow: hidden;
-        padding: 4px 8px;
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .header-pill ha-svg-icon {
-        --mdc-icon-size: 14px;
+    .state-chip {
+        align-items: center;
+        border-radius: 12px;
+        display: inline-flex;
         flex-shrink: 0;
+        font-size: 11px;
+        font-weight: 600;
+        gap: 6px;
+        max-width: 60%;
+        overflow: hidden;
+        padding: 4px 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    .header-pill.clickable {
-        cursor: pointer;
-        transition: background-color 0.2s;
+    .state-chip .dot {
+        border-radius: 50%;
+        flex-shrink: 0;
+        height: 6px;
+        width: 6px;
     }
 
-    .header-pill.clickable:hover {
-        background: var(--lcm-section-bg-hover);
+    .state-chip.active {
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.16);
+        color: var(--success-color, #43a047);
+    }
+
+    .state-chip.active .dot {
+        background: var(--success-color, #43a047);
+    }
+
+    .state-chip.inactive {
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.16);
+        color: var(--warning-color, #ffa726);
+    }
+
+    .state-chip.inactive .dot {
+        background: var(--warning-color, #ffa726);
+    }
+
+    .state-chip.disabled {
+        background: rgba(var(--rgb-disabled-color, 117, 117, 117), 0.2);
+        color: var(--secondary-text-color);
+    }
+
+    .state-chip.disabled .dot {
+        background: var(--disabled-color, #757575);
     }
 
     /* Content Sections */
     .content {
         display: flex;
         flex-direction: column;
-        gap: 16px;
-        padding: 16px;
+        gap: 12px;
+        padding: 12px 16px 16px;
     }
 
-    /* Condition-specific icons (extend shared collapsible styles) */
-    .condition-blocking-icons {
-        align-items: center;
+    /* Hero band — Name row on top, PIN + Enable row below. The name acts as
+       the visual anchor of the card (matching the PIN's weight) and the
+       form-like row labels are dropped — typography self-describes. The PIN
+       row keeps its label since "••••" isn't self-evident. */
+    .hero {
+        background: var(--lcm-section-bg);
+        border-radius: 12px;
         display: flex;
-        gap: 4px;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 16px;
     }
 
-    .condition-icon {
-        --mdc-icon-size: 16px;
-        color: var(--lcm-disabled-color);
-    }
-
-    .condition-icon.blocking {
-        color: var(--lcm-warning-color);
-    }
-
-    .condition-row-icon {
-        --mdc-icon-size: 18px;
-        color: var(--lcm-disabled-color);
-        flex-shrink: 0;
-    }
-
-    .condition-row-icon.blocking {
-        color: var(--lcm-warning-color);
-    }
-
-    /* Primary Controls Section */
-    .control-row {
+    .hero-row {
         align-items: center;
         display: flex;
         gap: 16px;
-        margin-bottom: 12px;
     }
 
-    .control-row:last-child {
-        margin-bottom: 0;
-    }
-
-    .control-label {
-        color: var(--secondary-text-color);
-        font-size: 14px;
-        min-width: 60px;
-    }
-
-    .control-value {
+    .hero-field {
         align-items: center;
-        color: var(--primary-text-color);
         display: flex;
         flex: 1;
+        gap: 12px;
+        min-width: 0;
+    }
+
+    /* Only the PIN row uses .hero-field-label now; the name and switch
+       self-describe. No min-width column-alignment is needed. */
+    .hero-field-label {
+        color: var(--secondary-text-color);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .hero-name-value {
+        color: var(--primary-text-color);
+        font-size: 22px;
+        font-weight: 600;
+    }
+
+    .hero-name-value.editable {
+        border-radius: 4px;
+        cursor: pointer;
+        margin: 0 -4px;
+        padding: 0 4px;
+        text-decoration: none;
+        transition: background 0.15s ease;
+    }
+    .hero-name-value.editable:hover {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+    }
+    .hero-name-value:focus-visible {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    .hero-name-pencil {
+        --mdc-icon-button-size: 28px;
+        --mdc-icon-size: 14px;
+        color: var(--disabled-text-color);
+    }
+
+    .hero-pin {
+        align-items: center;
+        display: flex;
+        flex: 1;
+        gap: 12px;
+        min-width: 0;
+    }
+
+    .hero-pin-value {
+        color: var(--primary-text-color);
+        cursor: pointer;
         font-family: var(--lcm-code-font);
-        font-size: var(--lcm-code-font-size);
-        font-weight: var(--lcm-code-font-weight);
-        gap: 8px;
-        min-height: 1.5em;
+        font-size: 22px;
+        letter-spacing: 4px;
+    }
+
+    .hero-pin-value.masked {
+        color: var(--secondary-text-color);
+    }
+
+    /* Override the shared .editable dashed-underline affordance for the PIN.
+       At 22px monospace with letter-spacing, the dashed underline renders as
+       broken dashes that look like a bug. Use a subtle hover background instead. */
+    .hero-pin-value.editable {
+        border-radius: 4px;
+        margin: 0 -4px;
+        padding: 0 4px;
+        text-decoration: none;
+        transition: background 0.15s ease;
+    }
+
+    .hero-pin-value.editable:hover {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+    }
+
+    .hero-pin-value:focus-visible {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+        border-radius: 4px;
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    .hero-pin .reveal {
+        --mdc-icon-button-size: 28px;
+        --mdc-icon-size: 16px;
+        color: var(--secondary-text-color);
+    }
+
+    .hero-toggle {
+        align-items: center;
+        display: flex;
+        gap: 10px;
+    }
+
+    .hero-toggle-label {
+        color: var(--secondary-text-color);
+        font-size: 12px;
     }
 
     .placeholder {
         color: var(--secondary-text-color);
         font-style: italic;
-    }
-
-    .pin-field {
-        align-items: center;
-        display: flex;
-        flex: 1;
-        gap: 8px;
-    }
-
-    .pin-value {
-        font-family: var(--lcm-code-font);
-        font-size: var(--lcm-code-font-size);
-        font-weight: var(--lcm-code-font-weight);
-        letter-spacing: 2px;
-        min-height: 1.5em;
-    }
-
-    .pin-value.masked {
-        color: var(--secondary-text-color);
-    }
-
-    .pin-reveal {
-        --mdc-icon-button-size: 32px;
-        --mdc-icon-size: 18px;
     }
 
     /* Name-specific edit input (extends shared editable styles) */
@@ -211,242 +281,168 @@ const slotCardComponentStyles = css`
     /* PIN-specific edit input (extends shared editable styles) */
     .pin-edit-input {
         font-family: var(--lcm-code-font);
-        font-size: var(--lcm-code-font-size);
+        font-size: 22px;
         font-weight: var(--lcm-code-font-weight);
-        letter-spacing: 2px;
+        letter-spacing: 4px;
     }
 
-    .enabled-row {
+    /* Conditions section — body styles for the collapsible.
+       The body composes an HA entity row (rendered via loadCardHelpers) inside
+       a tinted block, with an LCM overlay strip below it that explains what
+       the entity's state means for *this slot*. A Manage / Add link sits
+       directly under the block, and helpers (config-level extras) render as
+       plain HA entity rows under a small HELPERS sub-label. */
+
+    .condition-block {
+        background: var(--lcm-section-bg);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .lcm-overlay {
         align-items: center;
+        border-top: 1px solid var(--lcm-border-color);
         display: flex;
-        gap: 16px;
-        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 12px;
     }
 
-    .enabled-label {
+    .lcm-overlay.allowing {
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.08);
+    }
+
+    .lcm-overlay.blocking {
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.1);
+    }
+
+    .lcm-overlay-status {
+        flex-shrink: 0;
+        font-size: 12px;
+        font-weight: 600;
+    }
+
+    .lcm-overlay.allowing .lcm-overlay-status {
+        color: var(--success-color, #43a047);
+    }
+
+    .lcm-overlay.blocking .lcm-overlay-status {
+        color: var(--warning-color, #ffa726);
+    }
+
+    .lcm-overlay-context {
         color: var(--secondary-text-color);
-        font-size: 14px;
+        flex: 1;
+        font-size: 12px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
-    /* Status Section */
-    .status-row {
+    /* Remove condition link — sits below the condition block. Warning color
+       since it's destructive (clears the condition); user can re-Add via
+       the empty-state button if they want to switch entities. */
+    .remove-link {
         align-items: center;
-        display: flex;
-        gap: 12px;
+        color: var(--warning-color, #ffa726);
+        cursor: pointer;
+        display: inline-flex;
+        font-size: 12px;
+        gap: 6px;
+        margin: 10px 0 4px;
+        padding: 4px 0;
     }
 
-    .status-text {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        font-weight: 500;
+    .remove-link:hover {
+        color: var(--error-color, #ef5350);
     }
 
-    .status-detail {
-        color: var(--secondary-text-color);
-        font-size: 13px;
-        margin-left: 24px;
-        margin-top: 4px;
-    }
-
-    /* Conditions Section */
-    .condition-row {
-        align-items: center;
-        display: flex;
-        gap: 12px;
-        padding: 8px 0;
-    }
-
-    .condition-row:first-child {
-        padding-top: 0;
-    }
-
-    .condition-row:last-child {
-        padding-bottom: 0;
-    }
-
-    .condition-label {
-        color: var(--secondary-text-color);
-        font-size: 13px;
-        min-width: 100px;
-    }
-
-    .condition-value {
-        color: var(--primary-text-color);
-        font-size: 14px;
-    }
-
-    /* Unified condition item (matches condition-entity structure) */
-    .condition-item {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        padding: 8px 0;
-    }
-
-    .condition-item-header {
-        align-items: center;
-        display: flex;
-        gap: 8px;
-    }
-
-    .condition-item-detail {
-        font-size: 13px;
-        margin-left: 28px;
-    }
-
-    /* Inline edit container for number of uses */
-    .condition-edit-container {
-        position: relative;
-    }
-
-    .condition-edit-container .edit-input {
-        background: var(--card-background-color);
-        border: 1px solid var(--primary-color);
+    .remove-link:focus-visible {
         border-radius: 4px;
-        color: var(--primary-text-color);
-        font-size: 14px;
-        padding: 4px 8px;
-        width: 60px;
+        outline: 2px solid var(--warning-color, #ffa726);
+        outline-offset: 2px;
     }
 
-    .condition-edit-container .edit-help {
+    .remove-link ha-svg-icon {
+        --mdc-icon-size: 14px;
+    }
+
+    /* Add condition button — sits in the headerExtra slot of the Conditions
+       section (collapsed row) when no condition is set. Replaces the muted
+       "none" badge with a directly-actionable button. */
+    .add-condition-btn {
+        align-items: center;
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+        border: none;
+        border-radius: 12px;
+        color: var(--primary-color);
+        cursor: pointer;
+        display: inline-flex;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        gap: 4px;
+        padding: 4px 10px;
+    }
+    .add-condition-btn:hover {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+    }
+    .add-condition-btn ha-svg-icon {
+        --mdc-icon-size: 14px;
+    }
+    .add-condition-btn:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    /* Static (non-collapsible) variant of .collapsible-header used when the
+       Conditions section has no content to expand to — no chevron, no hover,
+       no toggle handler. Same outer chrome (.collapsible-section) so it
+       visually aligns with sibling sections. */
+    .collapsible-header.static {
+        cursor: default;
+    }
+    .collapsible-header.static:hover {
+        background: transparent;
+    }
+
+    .helpers-label {
         color: var(--secondary-text-color);
         font-size: 10px;
-        left: 0;
-        position: absolute;
-        top: 100%;
-        white-space: nowrap;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        margin: 14px 0 4px 4px;
+        text-transform: uppercase;
+    }
+
+    .helpers-list {
+        background: var(--lcm-section-bg);
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .helpers-list > * + * {
+        border-top: 1px solid var(--lcm-border-color);
+    }
+
+    .entity-row-loading {
+        color: var(--disabled-text-color);
+        font-size: 12px;
+        padding: 10px 12px;
+    }
+
+    .entity-row-error {
+        color: var(--disabled-text-color);
+        font-size: 12px;
+        font-style: italic;
+        padding: 10px 12px;
     }
 
     .no-conditions {
         color: var(--secondary-text-color);
         font-size: 13px;
         font-style: italic;
-    }
-
-    /* Condition helper entity rows */
-    .condition-helpers {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin-top: 8px;
-    }
-
-    .condition-helper-row {
-        align-items: center;
-        cursor: pointer;
-        display: flex;
-        gap: 12px;
-        padding: 4px 0;
-    }
-
-    .condition-helper-info {
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-    }
-
-    .condition-helper-name {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .condition-helper-state {
-        color: var(--secondary-text-color);
-        font-size: 12px;
-        text-transform: capitalize;
-    }
-
-    /* Unified condition entity styles */
-    .condition-entity {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        padding: 8px 0;
-    }
-
-    .condition-entity.clickable {
-        border-radius: 8px;
-        cursor: pointer;
-        margin: 8px -8px 0;
-        padding: 8px;
-        transition: background-color 0.2s;
-    }
-
-    .condition-entity.clickable:hover {
-        background: var(--lcm-active-bg);
-    }
-
-    .condition-entity:first-child {
-        padding-top: 0;
-    }
-
-    .condition-entity.clickable:first-child {
-        margin-top: 0;
-    }
-
-    .condition-entity-header {
-        align-items: center;
-        display: flex;
-        gap: 6px;
-    }
-
-    .condition-entity-icon {
-        --mdc-icon-size: 18px;
-        flex-shrink: 0;
-    }
-
-    .condition-entity-icon.active {
-        color: var(--lcm-success-color);
-    }
-
-    .condition-entity-icon.inactive {
-        color: var(--lcm-warning-color);
-    }
-
-    .condition-entity-status {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        font-weight: 500;
-    }
-
-    .condition-entity-domain {
-        background: var(--lcm-section-bg);
-        border-radius: 4px;
-        color: var(--secondary-text-color);
-        font-size: 10px;
-        font-weight: 500;
-        letter-spacing: 0.03em;
-        margin-left: auto;
-        padding: 2px 6px;
-        text-transform: uppercase;
-    }
-
-    .condition-entity-name {
-        color: var(--secondary-text-color);
-        font-size: 13px;
-        margin-left: 24px;
-    }
-
-    .condition-context {
-        color: var(--secondary-text-color);
-        font-size: 12px;
-        margin-left: 24px;
-    }
-
-    .condition-context-label {
-        font-weight: 500;
-        margin-right: 4px;
-    }
-
-    .condition-context-next {
-        border-top: 1px solid var(--lcm-border-color);
-        margin-top: 4px;
-        opacity: 0.8;
-        padding-top: 4px;
     }
 
     /* Lock Status Section */
@@ -483,6 +479,20 @@ const slotCardComponentStyles = css`
         text-decoration: underline;
     }
 
+    .lock-name:focus-visible {
+        border-radius: 4px;
+        color: var(--primary-color);
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    /* Collapsible-header focus ring — the section already has rounded
+       corners, so use an inset outline so it doesn't bleed past them. */
+    .collapsible-header:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
+    }
+
     .lock-info {
         display: flex;
         flex: 1;
@@ -513,11 +523,6 @@ const slotCardComponentStyles = css`
         color: var(--lcm-warning-color);
     }
 
-    .lock-status-text {
-        color: var(--secondary-text-color);
-        font-size: 12px;
-    }
-
     .lock-code-field {
         align-items: center;
         display: flex;
@@ -530,6 +535,51 @@ const slotCardComponentStyles = css`
         font-size: 13px;
         font-weight: 500;
         letter-spacing: var(--lcm-code-letter-spacing);
+    }
+
+    /* Event row — single click-through row at the bottom of the card that
+       opens the more-info dialog for the slot's PIN-used event entity. Sits
+       below the content flex container so the gap above provides natural
+       separation (no top border needed). */
+    .event-row {
+        align-items: center;
+        cursor: pointer;
+        display: flex;
+        gap: 10px;
+        padding: 12px 16px;
+    }
+
+    .event-row:hover {
+        background: rgba(var(--rgb-primary-text-color), 0.06);
+    }
+
+    .event-row:focus-visible {
+        background: rgba(var(--rgb-primary-text-color), 0.06);
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
+    }
+
+    .event-icon {
+        --mdc-icon-size: 14px;
+        color: var(--secondary-text-color);
+        flex-shrink: 0;
+    }
+
+    .event-name {
+        color: var(--primary-text-color);
+        font-size: 13px;
+        font-weight: 500;
+    }
+
+    .event-meta {
+        color: var(--secondary-text-color);
+        flex: 1;
+        font-size: 12px;
+    }
+
+    .event-arrow {
+        --mdc-icon-size: 14px;
+        color: var(--disabled-text-color);
     }
 
     /* Message states */
@@ -570,220 +620,32 @@ const slotCardComponentStyles = css`
         opacity: 1;
     }
 
-    /* Condition action icons */
-    .condition-action-icons {
-        align-items: center;
-        display: flex;
-        gap: 4px;
-        margin-left: auto;
-    }
-
-    .condition-edit-icon,
-    .condition-delete-icon {
-        --mdc-icon-size: 18px;
-        color: var(--secondary-text-color);
-        cursor: pointer;
-        opacity: 0.6;
-        transition: opacity 0.2s;
-    }
-
-    .condition-edit-icon:hover {
-        opacity: 1;
-    }
-
-    .condition-delete-icon:hover {
-        color: var(--error-color);
-        opacity: 1;
-    }
-
-    .condition-entity-header .condition-action-icons {
-        margin-left: 8px;
-    }
-
-    /* Add condition links - compact inline style */
-    .add-condition-links {
-        align-items: center;
-        color: var(--secondary-text-color);
-        display: flex;
-        flex-wrap: wrap;
-        font-size: 13px;
-        gap: 4px;
-        padding: 4px 0;
-    }
-
-    .add-condition-link {
-        color: var(--primary-color);
-        cursor: pointer;
-        text-decoration: none;
-    }
-
-    .add-condition-link:hover {
-        text-decoration: underline;
-    }
-
-    .add-condition-separator {
-        color: var(--divider-color);
-        margin: 0 4px;
-    }
-
-    /* Empty conditions header row */
-    .empty-conditions-header {
-        align-items: center;
-        background: var(--lcm-section-bg);
-        border-radius: 8px;
-        display: flex;
-        gap: 8px;
-        padding: 12px;
-    }
-
-    .empty-conditions-title {
-        color: var(--secondary-text-color);
-        font-size: 11px;
-        font-weight: 500;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
-    }
-
-    .empty-conditions-badge {
-        background: var(--lcm-section-bg-hover);
-        border-radius: 10px;
-        color: var(--secondary-text-color);
-        font-size: 11px;
-        padding: 2px 8px;
-    }
-
-    .empty-conditions-spacer {
-        flex: 1;
-    }
-
-    .empty-conditions-actions {
-        align-items: center;
-        display: flex;
-        gap: 4px;
-    }
-
-    .empty-conditions-btn {
-        --mdc-icon-size: 18px;
-        align-items: center;
-        background: transparent;
-        border: 1px solid var(--divider-color);
-        border-radius: 14px;
-        color: var(--primary-color);
-        cursor: pointer;
-        display: flex;
-        font-size: 11px;
-        gap: 2px;
-        padding: 4px 8px;
-        transition:
-            background-color 0.2s,
-            border-color 0.2s;
-    }
-
-    .empty-conditions-btn:hover {
-        background: var(--lcm-active-bg);
-        border-color: var(--primary-color);
-    }
-
-    .empty-conditions-btn ha-svg-icon {
-        --mdc-icon-size: 14px;
-    }
-
-    /* Dialog styles */
+    /* Manage Condition dialog — buttons render inline in the body since
+       ha-button slot rendering is unreliable in the standalone card context. */
     .dialog-content {
         display: flex;
         flex-direction: column;
         gap: 16px;
-        min-width: 300px;
+        padding: 0 8px;
+        min-width: 320px;
     }
 
-    .entity-select {
-        background: var(--card-background-color);
-        border: 1px solid var(--divider-color);
-        border-radius: 4px;
-        color: var(--primary-text-color);
-        font-size: 14px;
-        padding: 8px;
-        width: 100%;
+    .dialog-description {
+        color: var(--secondary-text-color);
+        font-size: 13px;
+        line-height: 1.5;
+        margin: 0;
     }
 
-    .dialog-section {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
+    .dialog-content ha-entity-picker {
+        display: block;
     }
 
-    .dialog-section-header {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        font-weight: 500;
-    }
-
-    .dialog-section-description {
+    .dialog-saving {
+        align-self: center;
         color: var(--secondary-text-color);
         font-size: 12px;
-    }
-
-    .dialog-checkbox-row {
-        align-items: center;
-        display: flex;
-        gap: 8px;
-    }
-
-    .dialog-checkbox-row label {
-        color: var(--primary-text-color);
-        cursor: pointer;
-        font-size: 14px;
-    }
-
-    .dialog-number-input {
-        margin-top: 8px;
-    }
-
-    .dialog-number-input input {
-        background: var(--input-background-color, var(--card-background-color));
-        border: 1px solid var(--divider-color);
-        border-radius: 4px;
-        color: var(--primary-text-color);
-        font-size: 14px;
-        padding: 8px 12px;
-        width: 100px;
-    }
-
-    .dialog-clear-button {
-        background: none;
-        border: 1px solid var(--divider-color);
-        border-radius: 4px;
-        color: var(--error-color);
-        cursor: pointer;
-        font-size: 13px;
-        margin-top: 8px;
-        padding: 6px 12px;
-    }
-
-    .dialog-clear-button:hover {
-        background: var(--error-color);
-        color: white;
-    }
-
-    /* Confirmation dialog styles */
-    .confirm-dialog-content {
-        color: var(--primary-text-color);
-        font-size: 14px;
-        line-height: 1.5;
-        padding: 8px 0;
-    }
-
-    ha-button.destructive {
-        --mdc-theme-primary: var(--error-color);
-    }
-
-    /* Make dialog buttons more obviously interactive */
-    ha-dialog ha-button {
-        cursor: pointer;
-    }
-
-    ha-dialog ha-button:hover {
-        opacity: 0.8;
+        font-style: italic;
     }
 `;
 

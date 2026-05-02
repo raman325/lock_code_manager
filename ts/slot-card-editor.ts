@@ -148,7 +148,7 @@ class LcmSlotCardEditor extends LitElement {
                     .checked=${this._config.show_conditions !== false}
                     @change=${this._showConditionsChanged}
                 ></ha-checkbox>
-                <label @click=${this._toggleShowConditions}>Conditions</label>
+                <label @click=${this._toggleShowConditions}>Condition</label>
             </div>
 
             <div class="checkbox-row">
@@ -175,6 +175,10 @@ class LcmSlotCardEditor extends LitElement {
                 <label @click=${this._toggleShowLockSync}>Sync Status in Lock Status</label>
             </div>
 
+            <!-- show_lock_count is a no-op for the redesigned slot card layout
+                 (the lock-count pill was removed from the header). Kept here
+                 so existing card configs with this option set continue to
+                 validate and save without error. -->
             <div class="checkbox-row">
                 <ha-checkbox
                     .checked=${this._config.show_lock_count !== false}
@@ -187,22 +191,26 @@ class LcmSlotCardEditor extends LitElement {
 
             <div class="checkbox-row">
                 <ha-checkbox
-                    .checked=${!(
-                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
-                    ).includes('conditions')}
+                    .checked=${(() => {
+                        const sections = this._config.collapsed_sections ?? [
+                            'condition',
+                            'lock_status'
+                        ];
+                        return !(sections.includes('condition') || sections.includes('conditions'));
+                    })()}
                     @change=${(e: Event) =>
                         this._toggleCollapsedSection(
-                            'conditions',
+                            'condition',
                             !(e.target as HTMLInputElement).checked
                         )}
                 ></ha-checkbox>
-                <label>Conditions</label>
+                <label>Condition</label>
             </div>
 
             <div class="checkbox-row">
                 <ha-checkbox
                     .checked=${!(
-                        this._config.collapsed_sections ?? ['conditions', 'lock_status']
+                        this._config.collapsed_sections ?? ['condition', 'lock_status']
                     ).includes('lock_status')}
                     @change=${(e: Event) =>
                         this._toggleCollapsedSection(
@@ -331,15 +339,27 @@ class LcmSlotCardEditor extends LitElement {
     }
 
     private _toggleCollapsedSection(
-        section: 'conditions' | 'lock_status',
+        section: 'condition' | 'lock_status',
         collapsed: boolean
     ): void {
-        const current = this._config?.collapsed_sections ?? ['conditions', 'lock_status'];
-        const updated = collapsed
-            ? current.includes(section)
-                ? current
-                : [...current, section]
-            : current.filter((s: string) => s !== section);
+        type CollapsedSection = 'condition' | 'conditions' | 'lock_status';
+        const current: CollapsedSection[] = this._config?.collapsed_sections ?? [
+            'condition',
+            'lock_status'
+        ];
+        let updated: CollapsedSection[];
+        if (section === 'condition') {
+            // Treat the legacy plural 'conditions' as the same section so
+            // toggling either keeps the list canonical (singular).
+            const withoutCondition = current.filter((s) => s !== 'condition' && s !== 'conditions');
+            updated = collapsed ? [...withoutCondition, 'condition'] : withoutCondition;
+        } else {
+            updated = collapsed
+                ? current.includes(section)
+                    ? [...current]
+                    : [...current, section]
+                : current.filter((s) => s !== section);
+        }
         this._updateConfig('collapsed_sections', updated);
     }
 

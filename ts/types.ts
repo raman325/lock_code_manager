@@ -28,7 +28,7 @@ export interface LockCodeManagerStrategyConfig {
     /** How to display codes in slot cards and lock codes cards */
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default in slot cards */
-    collapsed_sections?: ('conditions' | 'lock_status')[];
+    collapsed_sections?: ('condition' | 'conditions' | 'lock_status')[];
     /** @deprecated Use show_code_sensors instead */
     include_code_slot_sensors?: boolean;
     /** @deprecated Use show_lock_sync instead */
@@ -82,7 +82,7 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     /** How to display codes */
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
-    collapsed_sections?: ('conditions' | 'lock_status')[];
+    collapsed_sections?: ('condition' | 'conditions' | 'lock_status')[];
     /** Condition helper entity IDs for this slot */
     condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
@@ -138,6 +138,8 @@ export interface LockCoordinatorSlotData {
     code_length?: number;
     /** Config entry ID of the LCM instance managing this slot (for navigation) */
     config_entry_id?: string;
+    /** Config entry title (LCM instance name), present for managed slots */
+    config_entry_title?: string;
     /** Configured PIN from LCM (for disabled slots with no code on lock) */
     configured_code?: string;
     /** Length of configured PIN when masked */
@@ -177,7 +179,7 @@ export interface LockCodeManagerSlotCardConfig {
     /** How to display code/PIN values (consistent with lock-data card) */
     code_display?: CodeDisplayMode;
     /** Sections to show collapsed by default */
-    collapsed_sections?: ('conditions' | 'lock_status')[];
+    collapsed_sections?: ('condition' | 'conditions' | 'lock_status')[];
     /** Condition helper entity IDs for this slot */
     condition_helpers?: string[];
     /** Config entry ID for the LCM instance (use this OR config_entry_title) */
@@ -327,7 +329,7 @@ export type GetConfigEntriesResponse = ConfigEntryJSONFragment[];
 
 export interface GenerateViewOptions {
     codeDisplay: CodeDisplayMode;
-    collapsedSections?: ('conditions' | 'lock_status')[];
+    collapsedSections?: ('condition' | 'conditions' | 'lock_status')[];
     conditionHelpers?: Record<number, string[]>;
     showCodeSensors: boolean;
     showConditions?: boolean;

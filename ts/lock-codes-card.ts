@@ -1,4 +1,4 @@
-import { mdiCheck, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js';
+import { mdiCheck, mdiClockOutline, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
@@ -452,6 +452,13 @@ class LockCodesCard extends LockCodesCardBase {
         const showName = !!slotName || managed !== false;
         const isClickable = managed === true && !!slot.config_entry_id;
 
+        // Pending: slot has a configured code but the lock doesn't have it yet.
+        // Mirrors the .lcm-code.pending detection on the PIN — out-of-sync,
+        // syncing, etc. Defensive default when enabled is unknown (undefined
+        // doesn't mean "off").
+        const lockHasCode = !isSlotEmpty(slot.code) || !!slot.code_length;
+        const isPending = hasConfiguredCode && !lockHasCode && slot.enabled !== false;
+
         // Determine state for LCM-managed slots:
         // - Active: active=true (code on lock, conditions met)
         // - Inactive: enabled=true + active=false (enabled but conditions blocking)
@@ -495,19 +502,46 @@ class LockCodesCard extends LockCodesCardBase {
         // Determine managed class for styling
         const managedClass = managed === true ? 'managed' : managed === false ? 'unmanaged' : '';
         const clickableClass = isClickable ? 'clickable' : '';
+        const pendingClass = isPending ? 'pending' : '';
 
         return html`
             <div
-                class="slot-chip ${stateClass} ${managedClass} ${clickableClass} ${isAlone
+                class="slot-chip ${stateClass} ${pendingClass} ${managedClass} ${clickableClass} ${isAlone
                     ? 'full-width'
                     : ''}"
                 title=${isClickable ? 'Click to manage this slot' : nothing}
+                role=${isClickable ? 'button' : nothing}
+                tabindex=${isClickable ? '0' : nothing}
+                aria-label=${isClickable
+                    ? `Manage slot ${slot.slot}${slot.config_entry_title ? ` · ${slot.config_entry_title}` : ''}`
+                    : nothing}
                 @click=${isClickable ? () => this._navigateToSlot(slot.config_entry_id) : nothing}
+                @keydown=${isClickable
+                    ? (e: KeyboardEvent) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              this._navigateToSlot(slot.config_entry_id);
+                          }
+                      }
+                    : nothing}
             >
                 <div class="slot-top">
-                    <span class="slot-label">Slot ${slot.slot}</span>
+                    <span class="slot-label">
+                        Slot
+                        ${slot.slot}${slot.config_entry_title
+                            ? html` ·
+                                  <span class="slot-entry-title">${slot.config_entry_title}</span>`
+                            : nothing}
+                    </span>
                     <div class="slot-badges">
-                        <span class="lcm-badge ${statusClass}"> ${statusText} </span>
+                        <span class="lcm-badge ${statusClass}">
+                            ${statusClass === 'active' ||
+                            statusClass === 'inactive' ||
+                            statusClass === 'disabled'
+                                ? html`<span class="dot"></span>`
+                                : nothing}
+                            ${statusText}
+                        </span>
                         ${managed === undefined
                             ? nothing
                             : html`<span class="lcm-badge ${managed ? 'managed' : 'external'}">
@@ -515,12 +549,22 @@ class LockCodesCard extends LockCodesCardBase {
                               </span>`}
                     </div>
                 </div>
-                ${showName
-                    ? html`<span class="slot-name ${slotName ? '' : 'unnamed'}">
-                          ${slotName ?? 'Unnamed'}
-                      </span>`
-                    : nothing}
-                ${this._renderCodeSection(slot, hasCode, mode)}
+                <div class="slot-content-row">
+                    ${showName
+                        ? html`<span class="slot-name-row">
+                              ${isPending
+                                  ? html`<ha-svg-icon
+                                        class="slot-name-pending-icon"
+                                        .path=${mdiClockOutline}
+                                    ></ha-svg-icon>`
+                                  : nothing}
+                              <span class="slot-name ${slotName ? '' : 'unnamed'}">
+                                  ${slotName ?? 'Unnamed'}
+                              </span>
+                          </span>`
+                        : html`<span class="slot-name-row"></span>`}
+                    ${this._renderCodeSection(slot, hasCode, mode)}
+                </div>
             </div>
         `;
     }
@@ -583,21 +627,36 @@ class LockCodesCard extends LockCodesCardBase {
         isEditable: boolean
     ): TemplateResult {
         const editableClass = isEditable ? 'editable' : '';
+        const codeClass = this._getCodeClass(slot);
+        const isPending = codeClass.split(' ').includes('pending');
         return html`
             <div class="slot-code-row">
                 <span
-                    class="lcm-code ${this._getCodeClass(slot)} ${editableClass}"
+                    class="lcm-code ${codeClass} ${editableClass}"
                     title=${isEditable ? 'Click to edit' : nothing}
                     @click=${isEditable ? (e: Event) => this._startEditing(e, slot) : nothing}
                 >
+                    ${isPending
+                        ? html`<ha-svg-icon
+                              class="lcm-code-pending-icon"
+                              .path=${mdiClockOutline}
+                          ></ha-svg-icon>`
+                        : nothing}
                     ${this._formatCode(slot)}
                 </span>
-                ${mode === 'masked_with_reveal' && hasCode
+                ${mode === 'masked_with_reveal' &&
+                (hasCode || !!slot.configured_code || !!slot.configured_code_length)
                     ? html`<span class="slot-code-actions">
                           <ha-icon-button
                               class="lcm-reveal-button"
                               .path=${this._revealed ? mdiEyeOff : mdiEye}
-                              @click=${this._toggleReveal}
+                              @click=${(e: Event) => {
+                                  // Stop propagation so the click doesn't also
+                                  // trigger the parent slot-chip's navigation
+                                  // when the chip is clickable (managed slots).
+                                  e.stopPropagation();
+                                  this._toggleReveal();
+                              }}
                               .label=${this._revealed ? 'Hide codes' : 'Reveal codes'}
                           ></ha-icon-button>
                       </span>`
@@ -609,17 +668,18 @@ class LockCodesCard extends LockCodesCardBase {
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
+        const maskSuffix = shouldMask ? ' masked' : '';
 
         if (slot.code === SLOT_CODE_UNREADABLE || slot.code_length) return 'masked';
         if (!isSlotEmpty(slot.code)) return '';
 
-        // Empty/null code on the lock — check for a configured PIN
-        // (disabled LCM slot where the code hasn't been pushed yet).
-        if (slot.configured_code) {
-            return shouldMask ? 'disabled masked' : 'disabled';
-        }
-        if (slot.configured_code_length) {
-            return 'disabled masked';
+        // Empty/null code on the lock — distinguish "off" (user disabled the slot)
+        // from "pending" (slot enabled but code not yet on the lock). Pending is the
+        // defensive default when the enabled state is unknown — undefined doesn't
+        // mean "off".
+        if (slot.configured_code || slot.configured_code_length) {
+            const cause = slot.enabled === false ? 'off' : 'pending';
+            return `${cause}${maskSuffix}`;
         }
         return 'no-code';
     }

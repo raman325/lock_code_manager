@@ -81,12 +81,97 @@ read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
 
 ## Frontend
 
-- Unify slot and lock data card designs (prefer slot card pattern).
-- Test visual editor for both cards.
+- Test visual editor for both cards (post-redesign).
 - **Enhance sync_status display** — The slot card and lock-codes card now show
   granular sync states (in_sync, out_of_sync, syncing, suspended) with distinct
   icons and colors. Future work: spinner animation for syncing state, richer
   suspended state details (e.g., show the repair issue reason).
+
+### Slot/lock card redesign — Phase B (deferred from PR #1116)
+
+Polish + a11y items deferred from the slot/lock card redesign. Phase A
+fixed the WCAG-blocking interactions and the design hierarchy issues.
+Phase B is non-blocking but worth a follow-up pass.
+
+**Visual / consistency:**
+
+- **Color opacity unification** — settle on 2-3 canonical opacity stops for
+  state colors. Currently warning is used at 4%, 6%, 8%, 10%, 16% across
+  the slot card alone. Decide a system (e.g., 6% backgrounds, 12% surfaces,
+  16% chips/badges) and apply consistently.
+- **Active state vocabulary** — slot card has three positive signals for
+  the same Active state (card-level blue tint, green chip with dot, green
+  badge). Decide whether Active should be neutral ("color the exception,
+  not the norm") or unify to a single color family.
+- **Active-Unmanaged chip on the lock card** is nearly identical to the
+  Empty chip. Add a subtle warm-gray accent so an active unmanaged code
+  reads as "occupied" at a glance.
+- **`Slot N · {entry_title}` rendering inconsistency** — slot card uses
+  18px title style, lock card uses 11px uppercase kicker style. Pick one.
+- **Redundant `ENABLED` label** in the hero next to the switch — a switch
+  self-describes. Consider dropping the label.
+- **Pencil + editable-span dual click target** on the name in the hero —
+  pick one affordance and remove the other.
+- **`.collapsible-content { max-height: 500px }`** could clip when many
+  helpers + a calendar entity row stack. Use `auto` with a transition shim
+  or a much larger ceiling.
+- **Condition summary badge color** — allowing currently uses primary blue
+  tint instead of success green. Switch to success-color treatment so
+  green = good, warning = needs attention everywhere.
+- **`Helpers` sublabel** uses 10px while other small-caps labels use 11px.
+  Unify to one scale.
+- **Replace ✓ / ✗ glyphs** in summary badges with `mdiCheck` / `mdiClose`
+  for visual parity with the rest of the card chrome.
+- **Card-header icon bubble semantics** — slot card uses a generic key
+  icon, lock card uses a lock icon. Decide whether the bubble is "this is
+  an LCM card" (consistent) or surfaces state on the slot card (key when
+  active, clock when blocked, lock-off when disabled).
+- **Dialog microcopy** — "Pick a calendar, schedule, binary sensor, switch,
+  or input boolean" enumerates technical domains. Consider "Pick a
+  calendar, schedule, helper, or any on/off entity" for non-power users.
+
+**Accessibility:**
+
+- **Color contrast verification** against HA default light + dark themes.
+  Likely sub-AA combinations to check:
+  - `.hero-field-label` on the hero tinted background.
+  - `.lcm-code.off` (`disabled-text-color`) on `--lcm-section-bg` — likely
+    the worst case.
+  - `.lock-synced-time` (11px secondary-text).
+  - `.summary-cell-zero` on numeric "0" cells — these convey data, not
+    just decoration.
+  - `.action-error` (white on `--error-color, #db4437`) — about 4.21:1,
+    below AA for normal text. Use a darker red or bump font weight.
+- **`prefers-reduced-motion` opt-out** for transitions — collapsible
+  chevron rotation, content max-height animation, slot chip hover
+  translate, editable hover background.
+- **`aria-hidden="true"`** on decorative dots in `.state-chip .dot` and
+  `.lcm-badge .dot` (and the `.lcm-code-pending-icon` clock prefix).
+- **Edit inputs missing accessible names** — name/PIN inputs and
+  slot-code-input have placeholders but no `aria-label` (placeholders
+  are not accessible names).
+- **Card titles should be real headings** — `.card-header-title` and
+  `.header-title` are `<span>`s. HA stock cards use `<h2>`/`<h3>`.
+- **Helper / lock lists** could be `<ul>`/`<li>` so screen readers
+  announce the item count.
+- **Conditions/Lock Status section titles** inside collapsible headers
+  could be `<h3>`s for heading navigation.
+- **Summary table missing semantics** — add
+  `<caption class="visually-hidden">` and `scope="col"` / `scope="row"`.
+- **Suspended banner** on lock card needs `role="status"` (persistent
+  state info, but `alert` would be too aggressive).
+- **Touch targets** — pencil and reveal buttons at 28px pass WCAG 2.5.5
+  AA (24px) but miss the 44px AAA recommendation. Action error dismiss
+  button is borderline 24px.
+- **Lock card "Last used: Never used" with clickable arrow** opens an
+  empty more-info dialog. Either suppress the arrow or reword.
+- **State chip color-only differentiation** — `.lcm-code.off` vs
+  `.lcm-code.pending` distinguish via clock-icon prefix only. Add
+  `aria-label` to the icon or visually-hidden text inside the pending
+  span.
+- **Collapsible badge symbols (✓/✗)** — most screen readers say "check
+  mark"/"ballot X". Add `aria-label="Allowing access: {name}"` on the
+  parent badge.
 
 ## Process
 

@@ -819,36 +819,470 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: '1234' })).toBe('');
         });
 
-        it('returns disabled masked for configured_code when masked', () => {
+        it('returns "off masked" when slot disabled and code masked', () => {
             (card as any)._config = {
                 code_display: 'masked',
                 lock_entity_id: 'lock.test_1',
                 type: 'custom:lcm-lock-codes'
             };
             expect(
-                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
-            ).toBe('disabled masked');
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    enabled: false
+                })
+            ).toBe('off masked');
         });
 
-        it('returns disabled for configured_code when unmasked', () => {
+        it('returns "off" when slot disabled and code unmasked', () => {
             (card as any)._config = {
                 code_display: 'unmasked',
                 lock_entity_id: 'lock.test_1',
                 type: 'custom:lcm-lock-codes'
             };
             expect(
-                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
-            ).toBe('disabled');
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    enabled: false
+                })
+            ).toBe('off');
         });
 
-        it('returns disabled masked for configured_code_length', () => {
+        it('returns "pending masked" when slot enabled and code masked', () => {
+            (card as any)._config = {
+                code_display: 'masked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
             expect(
                 (card as any)._getCodeClass({
                     slot: 1,
                     code: 'empty',
-                    configured_code_length: 4
+                    configured_code: '1234',
+                    enabled: true
                 })
-            ).toBe('disabled masked');
+            ).toBe('pending masked');
+        });
+
+        it('returns "pending" when slot enabled and code unmasked', () => {
+            (card as any)._config = {
+                code_display: 'unmasked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    enabled: true
+                })
+            ).toBe('pending');
+        });
+
+        it('returns "pending masked" when enabled state is unknown (defensive default)', () => {
+            (card as any)._config = {
+                code_display: 'masked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
+            // Undefined enabled does not mean "off"; treat as pending.
+            expect(
+                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
+            ).toBe('pending masked');
+        });
+
+        it('returns "off masked" for configured_code_length when slot disabled', () => {
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code_length: 4,
+                    enabled: false
+                })
+            ).toBe('off masked');
+        });
+
+        it('returns "pending masked" for configured_code_length when slot enabled', () => {
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code_length: 4,
+                    enabled: true
+                })
+            ).toBe('pending masked');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderCodeDisplayMode pending icon', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // Recursively collect all template-literal strings, including nested
+        // sub-templates passed via ${...}. Used to assert presence of conditional
+        // markup like the pending icon.
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const parts: string[] = [];
+            if (tmpl.strings) parts.push(tmpl.strings.join(''));
+            for (const v of tmpl.values ?? []) {
+                if (v && typeof v === 'object' && (v.strings || v.values)) {
+                    parts.push(collectAllStrings(v));
+                }
+            }
+            return parts.join(' ');
+        };
+
+        it('renders clock-icon prefix for pending state', () => {
+            const slot = {
+                slot: 1,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: true,
+                managed: true
+            };
+            const result = (card as any)._renderCodeDisplayMode(
+                slot,
+                false,
+                'masked_with_reveal',
+                false
+            );
+            expect(collectAllStrings(result)).toContain('lcm-code-pending-icon');
+        });
+
+        it('does not render clock-icon prefix for off state', () => {
+            const slot = {
+                slot: 1,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true
+            };
+            const result = (card as any)._renderCodeDisplayMode(
+                slot,
+                false,
+                'masked_with_reveal',
+                false
+            );
+            expect(collectAllStrings(result)).not.toContain('lcm-code-pending-icon');
+        });
+
+        it('does not render clock-icon prefix when lock has the code', () => {
+            const slot = { slot: 1, code: '1234', enabled: true, managed: true };
+            const result = (card as any)._renderCodeDisplayMode(
+                slot,
+                true,
+                'masked_with_reveal',
+                false
+            );
+            expect(collectAllStrings(result)).not.toContain('lcm-code-pending-icon');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderSlotChip pending state on slot name', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // Recursively collect template-literal strings, including nested
+        // sub-templates, so we can assert presence of conditional markup
+        // and class modifiers on the rendered chip.
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const parts: string[] = [];
+            if (tmpl.strings) parts.push(tmpl.strings.join(''));
+            for (const v of tmpl.values ?? []) {
+                if (v && typeof v === 'object' && (v.strings || v.values)) {
+                    parts.push(collectAllStrings(v));
+                } else if (typeof v === 'string') {
+                    parts.push(v);
+                }
+            }
+            return parts.join(' ');
+        };
+
+        // Split a rendered template's collected text into whitespace-separated
+        // tokens. The chip's interpolated class modifiers ('active', 'pending',
+        // 'disabled', etc.) appear as their own tokens, distinct from the
+        // hyphenated 'slot-name-pending-icon' class on the icon element.
+        const tokenize = (rendered: string): string[] =>
+            rendered.split(/\s+/).filter((s) => s.length > 0);
+
+        it('marks chip as pending when slot is enabled and lock has no code', () => {
+            const slot = {
+                active: true,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const tokens = tokenize(collectAllStrings(result));
+            expect(tokens).toContain('pending');
+        });
+
+        it('does not mark chip as pending when slot is disabled', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            const tokens = tokenize(rendered);
+            // Chip should be 'disabled' but not 'pending'.
+            expect(tokens).toContain('disabled');
+            expect(tokens).not.toContain('pending');
+            expect(rendered).not.toContain('slot-name-pending-icon');
+        });
+
+        it('does not mark chip as pending when lock has the code', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            const tokens = tokenize(rendered);
+            expect(tokens).not.toContain('pending');
+            expect(rendered).not.toContain('slot-name-pending-icon');
+        });
+
+        it('renders clock-icon prefix on slot-name for pending slots', () => {
+            const slot = {
+                active: true,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            expect(collectAllStrings(result)).toContain('slot-name-pending-icon');
+        });
+
+        it('does not render clock-icon prefix on slot-name for disabled slots', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            expect(collectAllStrings(result)).not.toContain('slot-name-pending-icon');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderSlotChip — slot label and state badge dot', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // Variant of collectAllStrings that also folds numeric values into
+        // the rendered string so we can assert on slot numbers and similar
+        // primitive interpolations. Interleaves strings + values in the
+        // same order the template renders so adjacent text reads naturally.
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const strings: string[] = (tmpl.strings ?? []) as string[];
+            const values: unknown[] = (tmpl.values ?? []) as unknown[];
+            const parts: string[] = [];
+            for (let i = 0; i < strings.length; i++) {
+                parts.push(strings[i]);
+                if (i < values.length) {
+                    const v = values[i];
+                    if (v && typeof v === 'object' && ((v as any).strings || (v as any).values)) {
+                        parts.push(collectAllStrings(v));
+                    } else if (Array.isArray(v)) {
+                        for (const item of v) {
+                            if (item && typeof item === 'object') {
+                                parts.push(collectAllStrings(item));
+                            }
+                        }
+                    } else if (
+                        typeof v === 'string' ||
+                        typeof v === 'number' ||
+                        typeof v === 'boolean'
+                    ) {
+                        parts.push(String(v));
+                    }
+                }
+            }
+            return parts.join('');
+        };
+
+        it('renders "Slot N · {entry_title}" when config_entry_title is set', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                config_entry_title: 'House Locks',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 3
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('slot-entry-title');
+            expect(rendered).toContain('House Locks');
+            // The slot number should still be present.
+            expect(rendered).toMatch(/Slot\s*3/);
+        });
+
+        it('renders just "Slot N" when config_entry_title is absent', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 3
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            // No entry-title span when no title is provided.
+            expect(rendered).not.toContain('slot-entry-title');
+            expect(rendered).toMatch(/Slot\s*3/);
+        });
+
+        it('renders a colored dot prefix on the state badge for active slots', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            // The dot span sits inside the lcm-badge for state badges.
+            expect(rendered).toContain('class="dot"');
+        });
+
+        it('renders a dot prefix on inactive (blocked) state badges', () => {
+            const slot = {
+                active: false,
+                code: '1234',
+                configured_code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('class="dot"');
+        });
+
+        it('renders a dot prefix on disabled state badges', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('class="dot"');
+        });
+
+        it('does NOT render a dot on Managed/External identity badges', () => {
+            // External slot: status badge is 'empty' (no dot), managed badge is 'external' (no dot).
+            const slot = {
+                code: '9999',
+                managed: false,
+                slot: 5
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            // The status badge for an external slot is 'active' (has code), so it gets a dot,
+            // but the identity badge (external) must not.
+            // Count dot spans — only the state badge should have one.
+            const dotMatches = rendered.match(/class="dot"/g) ?? [];
+            expect(dotMatches.length).toBe(1);
+        });
+
+        it('renders the eye reveal button for disabled slots with configured_code', () => {
+            // A disabled managed slot whose lock has no code, but LCM has the
+            // configured PIN — eye reveal should render so the user can see
+            // the masked configured PIN.
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('lcm-reveal-button');
+        });
+
+        it('renders the eye reveal button for slots with only configured_code_length', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code_length: 4,
+                enabled: false,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('lcm-reveal-button');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -945,6 +1379,170 @@ describe('LockCodesCard integration', () => {
             (card as any)._navigateToSlot(undefined);
             expect(pushStateSpy).not.toHaveBeenCalled();
             pushStateSpy.mockRestore();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase A — A3 + A8: keyboard a11y on managed slot chips and the
+    // reveal-button click no longer bubbles into chip navigation.
+    describe('Phase A — slot-chip a11y + reveal stopPropagation', () => {
+        /** Recursively join all template strings (deep) */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function collectAllHandlers(result: any): Array<(...args: any[]) => void> {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectAllHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectAllHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // A3 — slot-chip a11y when clickable. The a11y attributes are bound
+        // as dynamic Lit values (ternary on isClickable), so they appear in
+        // the template's `values` array rather than in the static `strings`.
+        // We assert against the raw template fragment values for the chip.
+        it('exposes role=button, tabindex=0 and aria-label on a clickable managed slot chip', () => {
+            const tmpl = (card as any)._renderSlotChip(
+                {
+                    active: true,
+                    code: '1234',
+                    config_entry_id: 'entry-id',
+                    config_entry_title: 'Front Door',
+                    enabled: true,
+                    managed: true,
+                    name: 'Alice',
+                    slot: 3
+                },
+                false
+            );
+            const values = tmpl.values ?? [];
+            // The chip's static strings include "role=", "tabindex=" and
+            // "aria-label=" attribute names; the dynamic values fill in the
+            // attribute values. When clickable, those values are populated.
+            expect(values).toContain('button');
+            expect(values).toContain('0');
+            expect(values).toContain('Manage slot 3 · Front Door');
+        });
+
+        it('does NOT expose button role on a non-clickable (unmanaged) slot chip', () => {
+            const tmpl = (card as any)._renderSlotChip(
+                {
+                    code: '5678',
+                    managed: false,
+                    slot: 4
+                },
+                false
+            );
+            const values = tmpl.values ?? [];
+            // When not clickable, the ternaries fall through to `nothing`,
+            // so the dynamic role/tabindex/aria-label values are removed.
+            expect(values).not.toContain('button');
+            // 'Manage slot 4' must NOT appear as an aria-label value.
+            expect(
+                values.some((v: unknown) => typeof v === 'string' && v.startsWith('Manage slot'))
+            ).toBe(false);
+        });
+
+        it('Enter and Space on a clickable slot chip navigate to the slot', () => {
+            let navTo: string | undefined;
+            (card as any)._navigateToSlot = (id: string) => {
+                navTo = id;
+            };
+            const tmpl = (card as any)._renderSlotChip(
+                {
+                    active: true,
+                    code: '1234',
+                    config_entry_id: 'entry-id',
+                    enabled: true,
+                    managed: true,
+                    name: 'Alice',
+                    slot: 3
+                },
+                false
+            );
+            const handlers = collectAllHandlers(tmpl);
+            // Find a keydown-shaped handler that responds to Enter.
+            for (const h of handlers.filter((fn) => fn.length === 1)) {
+                if (navTo === 'entry-id') break;
+                try {
+                    h({
+                        key: 'Enter',
+                        preventDefault: () => undefined
+                    } as unknown as KeyboardEvent);
+                } catch {
+                    // ignore — some handlers expect different shapes
+                }
+            }
+            expect(navTo).toBe('entry-id');
+        });
+
+        // A8 — reveal click stops propagation so chip navigation doesn't fire
+        it('reveal-button click on a clickable slot calls stopPropagation', () => {
+            let stopped = 0;
+            const tmpl = (card as any)._renderCodeDisplayMode(
+                {
+                    active: true,
+                    code: '1234',
+                    config_entry_id: 'entry-id',
+                    enabled: true,
+                    managed: true,
+                    name: 'Alice',
+                    slot: 3
+                },
+                true,
+                'masked_with_reveal',
+                false
+            );
+            const handlers = collectAllHandlers(tmpl);
+            // The reveal click handler is the arity-1 handler that calls
+            // stopPropagation on the synthetic Event. Lift the fakeEvent out
+            // of the loop so the no-loop-func ESLint rule is satisfied.
+            const fakeEvent = {
+                stopPropagation: () => {
+                    stopped += 1;
+                }
+            } as unknown as Event;
+            for (const h of handlers.filter((fn) => fn.length === 1)) {
+                try {
+                    h(fakeEvent);
+                } catch {
+                    // ignore
+                }
+            }
+            expect(stopped).toBeGreaterThanOrEqual(1);
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

@@ -59,6 +59,8 @@ export const lcmCssVars = css`
  * Classes: .lcm-badge, .lcm-badge.active, .lcm-badge.inactive, .lcm-badge.disabled, .lcm-badge.empty
  */
 export const lcmBadgeStyles = css`
+    /* Base badge — used by identity tags (Managed/Unmanaged/Empty).
+       Compact uppercase for category labels. */
     .lcm-badge {
         border-radius: var(--lcm-badge-radius);
         font-size: var(--lcm-badge-font-size);
@@ -68,19 +70,52 @@ export const lcmBadgeStyles = css`
         text-transform: uppercase;
     }
 
+    /* State badges (active/inactive/disabled) align visually with the slot
+       card's .state-chip: pill shape, sentence-case, optional colored dot
+       prefix, 16% color tint. Same colors as the slot card so a state reads
+       the same regardless of which card you're on. */
+    .lcm-badge.active,
+    .lcm-badge.inactive,
+    .lcm-badge.disabled {
+        align-items: center;
+        border-radius: 12px;
+        display: inline-flex;
+        font-size: 10px;
+        font-weight: 600;
+        gap: 5px;
+        letter-spacing: normal;
+        padding: 3px 8px;
+        text-transform: none;
+    }
+    .lcm-badge .dot {
+        border-radius: 50%;
+        flex-shrink: 0;
+        height: 5px;
+        width: 5px;
+    }
+
     .lcm-badge.active {
-        background: rgba(var(--rgb-primary-color), 0.16);
-        color: var(--primary-color);
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.16);
+        color: var(--success-color, #43a047);
+    }
+    .lcm-badge.active .dot {
+        background: var(--success-color, #43a047);
     }
 
     .lcm-badge.inactive {
-        background: rgba(var(--rgb-primary-color), 0.12);
-        color: var(--primary-color);
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.16);
+        color: var(--warning-color, #ffa726);
+    }
+    .lcm-badge.inactive .dot {
+        background: var(--warning-color, #ffa726);
     }
 
     .lcm-badge.disabled {
-        background: rgba(var(--rgb-disabled-text-color, 158, 158, 158), 0.15);
-        color: var(--lcm-disabled-color);
+        background: rgba(var(--rgb-disabled-color, 117, 117, 117), 0.2);
+        color: var(--secondary-text-color);
+    }
+    .lcm-badge.disabled .dot {
+        background: var(--disabled-color, #757575);
     }
 
     .lcm-badge.empty {
@@ -128,29 +163,11 @@ export const lcmStatusIndicatorStyles = css`
     .lcm-sync-icon.unknown {
         color: var(--lcm-disabled-color);
     }
-
-    .lcm-status-dot {
-        border-radius: 50%;
-        height: 12px;
-        width: 12px;
-    }
-
-    .lcm-status-dot.active {
-        background-color: var(--lcm-success-color);
-    }
-
-    .lcm-status-dot.inactive {
-        background-color: var(--lcm-warning-color);
-    }
-
-    .lcm-status-dot.disabled {
-        background-color: var(--lcm-disabled-color);
-    }
 `;
 
 /**
  * Shared PIN/code display styles.
- * Classes: .lcm-code, .lcm-code.masked, .lcm-code.disabled, .lcm-code.no-code
+ * Classes: .lcm-code, .lcm-code.masked, .lcm-code.off, .lcm-code.pending, .lcm-code.no-code
  */
 export const lcmCodeStyles = css`
     .lcm-code {
@@ -165,9 +182,28 @@ export const lcmCodeStyles = css`
         color: var(--secondary-text-color);
     }
 
-    .lcm-code.disabled {
+    /* Slot disabled by user — PIN exists in config but is intentionally not on
+       the lock. Heavily dimmed dots in a muted pill, no strikethrough. */
+    .lcm-code.off {
+        background: var(--lcm-section-bg, rgba(127, 127, 127, 0.05));
+        border-radius: 6px;
+        color: var(--disabled-text-color);
+        padding: 2px 8px;
+    }
+
+    /* Slot enabled but lock doesn't have the code yet (out-of-sync, syncing, etc.).
+       Dim dots with a clock-icon prefix. No strikethrough. */
+    .lcm-code.pending {
+        align-items: center;
         color: var(--secondary-text-color);
-        text-decoration: line-through;
+        display: inline-flex;
+        gap: 4px;
+    }
+
+    .lcm-code.pending .lcm-code-pending-icon {
+        --mdc-icon-size: 12px;
+        color: var(--secondary-text-color);
+        flex-shrink: 0;
     }
 
     .lcm-code.no-code {

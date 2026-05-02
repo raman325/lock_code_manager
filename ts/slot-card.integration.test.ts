@@ -216,6 +216,403 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
     });
 
+    describe('header redesign (icon bubble + title + state chip)', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Join a TemplateResult's static strings to inspect element tags */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function templateStrings(result: any): string {
+            return (result?.strings ?? []).join('');
+        }
+
+        /** Recursively join the static strings + primitive value text of a
+         *  TemplateResult and any nested templates */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) {
+                return result.map(deepTemplateStrings).join('');
+            }
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders header with icon bubble, slot kicker as title, and active state chip', () => {
+            (card as any)._data = makeSlotCardData({
+                active: true,
+                config_entry_title: 'House Locks',
+                enabled: true,
+                name: 'Alice',
+                slot_num: 1
+            });
+
+            // Kicker text comes from _renderSlotKicker; prefer the card config
+            // title when set, otherwise fall back to the data payload title.
+            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · House Locks');
+
+            // State chip should be rendered as the third value in header-top
+            // (after icon bubble and title).
+            const chip = (card as any)._renderStateChip();
+            const chipStrings = templateStrings(chip);
+            expect(chipStrings).toContain('state-chip');
+            // The class modifier and text are rendered as dynamic values.
+            expect(chip.values).toContain('active');
+            expect(chip.values).toContain('Active');
+
+            // Header structure: icon bubble + title (kicker) + state chip.
+            // The name lives in the hero band, NOT in the header.
+            const header = (card as any)._renderHeader();
+            const headerStrings = templateStrings(header);
+            expect(headerStrings).toContain('header-icon');
+            expect(headerStrings).toContain('header-title');
+            // Name no longer rendered in the header.
+            expect(headerStrings).not.toContain('class="name"');
+            const headerDeep = deepTemplateStrings(header);
+            // Icon (key) and chip should both be present.
+            expect(headerDeep).toContain('ha-svg-icon');
+            // State chip text flows through as a nested template value.
+            expect(headerDeep).toContain('Active');
+        });
+
+        it('renders state chip with descriptive text for inactive (blocked)', () => {
+            (card as any)._data = makeSlotCardData({
+                active: false,
+                enabled: true
+            });
+
+            const chip = (card as any)._renderStateChip();
+            const chipStrings = templateStrings(chip);
+            expect(chipStrings).toContain('state-chip');
+            expect(chip.values).toContain('inactive');
+            expect(chip.values).toContain('Blocked by condition');
+        });
+
+        it('renders state chip with descriptive text for disabled by user', () => {
+            (card as any)._data = makeSlotCardData({ enabled: false });
+
+            const chip = (card as any)._renderStateChip();
+            const chipStrings = templateStrings(chip);
+            expect(chipStrings).toContain('state-chip');
+            expect(chip.values).toContain('disabled');
+            expect(chip.values).toContain('Disabled by user');
+        });
+
+        it('omits the title separator when no config_entry_title is available', () => {
+            (card as any)._data = makeSlotCardData({ config_entry_title: '' });
+            // _config has no title and data title is empty — kicker should be just "Slot N".
+            expect((card as any)._renderSlotKicker()).toBe('Slot 1');
+        });
+
+        it('falls back to data payload title when card config has no title', () => {
+            (card as any)._config = { config_entry_id: 'abc', slot: 2, type: 'custom:lcm-slot' };
+            (card as any)._data = makeSlotCardData({
+                config_entry_title: 'Payload Title',
+                slot_num: 2
+            });
+            expect((card as any)._renderSlotKicker()).toBe('Slot 2 · Payload Title');
+        });
+
+        it('prefers card config title over data payload title', () => {
+            (card as any)._config = {
+                config_entry_id: 'abc',
+                config_entry_title: 'Config Title',
+                slot: 1,
+                type: 'custom:lcm-slot'
+            };
+            (card as any)._data = makeSlotCardData({ config_entry_title: 'Payload Title' });
+            expect((card as any)._renderSlotKicker()).toBe('Slot 1 · Config Title');
+        });
+
+        it('does not render the name in the header (name lives in the hero band)', () => {
+            (card as any)._data = makeSlotCardData({ name: 'Alice' });
+            const header = (card as any)._renderHeader();
+            const headerDeep = deepTemplateStrings(header);
+            // Name value should NOT appear inside the header.
+            expect(headerDeep).not.toContain('Alice');
+            // No <No Name> placeholder either — that lives in the hero now.
+            expect(headerDeep).not.toContain('No Name');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('hero row (PIN + Enable)', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Join a TemplateResult's static strings to inspect element tags */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function templateStrings(result: any): string {
+            return (result?.strings ?? []).join('');
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders hero row with PIN value and enable switch', () => {
+            (card as any)._data = makeSlotCardData({
+                active: true,
+                enabled: true,
+                pin: '1234',
+                pin_length: 4
+            });
+            (card as any)._revealed = false;
+
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const heroStrings = templateStrings(hero);
+            expect(heroStrings).toContain('class="hero"');
+            expect(heroStrings).toContain('hero-pin');
+            expect(heroStrings).toContain('hero-toggle');
+            expect(heroStrings).toContain('ha-switch');
+        });
+
+        it('masked PIN displays bullets matching pin length', () => {
+            (card as any)._revealed = false;
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const valueTemplate = (hero.values ?? []).find(
+                (v: unknown) =>
+                    v &&
+                    typeof v === 'object' &&
+                    'strings' in v &&
+                    templateStrings(v).includes('hero-pin-value')
+            );
+            // The masked display value flows through as a value on the inner template
+            expect(valueTemplate).toBeTruthy();
+            const inner = valueTemplate.values ?? [];
+            expect(inner).toContain('••••');
+        });
+
+        it('revealed PIN displays the actual digits', () => {
+            (card as any)._revealed = true;
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const valueTemplate = (hero.values ?? []).find(
+                (v: unknown) =>
+                    v &&
+                    typeof v === 'object' &&
+                    'strings' in v &&
+                    templateStrings(v).includes('hero-pin-value')
+            );
+            const inner = valueTemplate.values ?? [];
+            expect(inner).toContain('1234');
+        });
+
+        it('omits the eye reveal control when mode is unmasked', () => {
+            (card as any)._revealed = true;
+            const hero = (card as any)._renderHero('1234', 4, true, 'unmasked');
+            const heroStrings = templateStrings(hero);
+            // The reveal slot should be filled with `nothing` rather than an icon button.
+            expect(heroStrings).toContain('hero-pin');
+            // Find the hero-pin nested template; verify it does not contain a reveal class.
+            const pinBlock = (hero.values ?? []).find(
+                (v: unknown) =>
+                    v &&
+                    typeof v === 'object' &&
+                    'strings' in v &&
+                    templateStrings(v).includes('hero-pin')
+            );
+            // For unmasked mode we expect no `class="reveal"` substring in the rendered template.
+            // The reveal button only renders for `masked_with_reveal` with a PIN.
+            const heroValuesAll = JSON.stringify(hero, (_, val) =>
+                typeof val === 'function' ? 'fn' : val
+            );
+            expect(heroValuesAll).not.toContain('Reveal PIN');
+            expect(heroValuesAll).not.toContain('Hide PIN');
+            expect(pinBlock).toBeTruthy();
+        });
+
+        it('shows "No PIN set" placeholder when both pin and pin_length are absent', () => {
+            const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            expect(heroJson).toContain('No PIN set');
+        });
+
+        it('renders an input field for PIN when editing', () => {
+            (card as any)._editingField = 'pin';
+            (card as any)._revealed = true;
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            expect(heroJson).toContain('pin-edit-input');
+        });
+
+        it('disables the enable switch when enabled is null', () => {
+            const hero = (card as any)._renderHero(null, undefined, null, 'masked_with_reveal');
+            const heroStrings = templateStrings(hero);
+            expect(heroStrings).toContain('ha-switch');
+            // Switch disabled flag is bound as a property; verify the switch template has `.disabled` binding present.
+            expect(heroStrings).toContain('.disabled=');
+        });
+
+        it('hero PIN value does not inherit the dashed-underline editable affordance', async () => {
+            // The shared .editable rule applies `text-decoration: underline dashed`,
+            // which renders as broken dashes under a 22px monospace PIN. The slot
+            // card's stylesheet must override it for .hero-pin-value.editable.
+            // jsdom does not resolve adopted stylesheets through getComputedStyle,
+            // so we assert the override rule is present in the stylesheet source.
+            const { slotCardStyles } = await import('./slot-card.styles');
+            const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+            expect(allCss).toMatch(/\.hero-pin-value\.editable\s*\{[^}]*text-decoration:\s*none/);
+        });
+
+        it('renders a Name row in the hero band with editable affordance', () => {
+            (card as any)._data = makeSlotCardData({
+                active: true,
+                enabled: true,
+                name: 'Alice',
+                pin: '1234',
+                pin_length: 4
+            });
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            // The NAME label was dropped (typography self-describes); the
+            // editable name span and pencil button are still present and
+            // accessible (role/tabindex/aria-label).
+            expect(heroJson).toContain('hero-name-value');
+            expect(heroJson).toContain('Edit name');
+            expect(heroJson).toContain('Alice');
+            // Pencil button for editing the name.
+            expect(heroJson).toContain('hero-name-pencil');
+            // PIN row keeps its label since "••••" isn't self-evident.
+            expect(heroJson).toContain('hero-field-label');
+        });
+
+        it('hero name pencil click invokes _startEditing("name")', () => {
+            (card as any)._data = makeSlotCardData({ name: 'Alice' });
+            const calls: string[] = [];
+            (card as any)._startEditing = (field: string) => calls.push(field);
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            // Walk the template to find the pencil click handler — it's the
+            // arity-0 click bound to either the name value or the pencil icon.
+            const collect = (
+                node: any,
+                acc: Array<(...a: unknown[]) => void> = []
+            ): Array<(...a: unknown[]) => void> => {
+                if (!node?.values) return acc;
+                for (const v of node.values) {
+                    if (typeof v === 'function') acc.push(v);
+                    else if (v?.strings && v?.values) collect(v, acc);
+                    else if (Array.isArray(v))
+                        for (const it of v) if (it?.strings) collect(it, acc);
+                }
+                return acc;
+            };
+            const handlers = collect(hero);
+            // Run all arity-0 click handlers — only the ones in the hero name
+            // section call _startEditing('name').
+            for (const h of handlers) {
+                if (h.length === 0) {
+                    try {
+                        h();
+                    } catch {
+                        // ignore — some bound handlers expect args
+                    }
+                }
+            }
+            expect(calls).toContain('name');
+        });
+
+        it('renders a name input field when _editingField === "name"', () => {
+            (card as any)._editingField = 'name';
+            (card as any)._data = makeSlotCardData({ name: 'Alice' });
+            const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            expect(heroJson).toContain('name-edit-input');
+        });
+
+        it('renders the "Not named" placeholder in the hero name row when name is empty', () => {
+            (card as any)._data = makeSlotCardData({ name: '' });
+            const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+            const heroJson = JSON.stringify(hero);
+            expect(heroJson).toContain('placeholder');
+            expect(heroJson).toContain('Not named');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('card-level state class', () => {
+        // The state class is bound as `class="slot-card-state-${cls}"` —
+        // Lit splits the static prefix from the dynamic suffix, so the
+        // joined static string contains "slot-card-state-" and the first
+        // value is the modifier ('active' / 'inactive' / 'disabled').
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function stateClassModifier(tmpl: any): string | undefined {
+            const strings: string[] = (tmpl?.strings ?? []) as string[];
+            const values: unknown[] = (tmpl?.values ?? []) as unknown[];
+            for (let i = 0; i < values.length; i++) {
+                if (strings[i] && strings[i].includes('slot-card-state-')) {
+                    return values[i] as string;
+                }
+            }
+            return undefined;
+        }
+
+        async function makeCard(): Promise<SlotCardElement & Record<string, unknown>> {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+            return card;
+        }
+
+        it('applies slot-card-state-active when slot is active', async () => {
+            const card = await makeCard();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (card as any)._data = makeSlotCardData({ active: true, enabled: true });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tmpl = (card as any)._renderFromData((card as any)._data);
+            expect(stateClassModifier(tmpl)).toBe('active');
+        });
+
+        it('applies slot-card-state-inactive when slot is enabled but blocked', async () => {
+            const card = await makeCard();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (card as any)._data = makeSlotCardData({ active: false, enabled: true });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tmpl = (card as any)._renderFromData((card as any)._data);
+            expect(stateClassModifier(tmpl)).toBe('inactive');
+        });
+
+        it('applies slot-card-state-disabled when slot is disabled by user', async () => {
+            const card = await makeCard();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (card as any)._data = makeSlotCardData({ active: true, enabled: false });
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tmpl = (card as any)._renderFromData((card as any)._data);
+            expect(stateClassModifier(tmpl)).toBe('disabled');
+        });
+    });
+
+    describe('_renderPrimaryControls is removed', () => {
+        it('the legacy method does not exist on the component', async () => {
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            expect((card as any)._renderPrimaryControls).toBeUndefined();
+        });
+    });
+
     describe('error handling', () => {
         it('sets _error when subscription fails', async () => {
             el = document.createElement('lcm-slot') as SlotCardElement;
@@ -305,7 +702,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
     });
 
-    describe('dialog templates use ha-button instead of mwc-button', () => {
+    describe('condition dialog template never uses mwc-button', () => {
         let card: SlotCardElement & Record<string, unknown>;
 
         beforeEach(async () => {
@@ -322,48 +719,116 @@ describe('LockCodeManagerSlotCard integration', () => {
             return (result?.strings ?? []).join('');
         }
 
-        /** Extract inline handler functions from a TemplateResult's values */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function extractHandlers(result: any): Array<() => void> {
-            return (result?.values ?? []).filter((v: unknown) => typeof v === 'function');
-        }
-
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('condition dialog renders ha-button for actions', () => {
+        it('condition dialog does not render mwc-button', () => {
             (card as any)._showConditionDialog = true;
-            (card as any)._dialogMode = 'add-entity';
             const tmpl = (card as any)._renderConditionDialog();
             const joined = templateStrings(tmpl);
-            expect(joined).toContain('ha-button');
             expect(joined).not.toContain('mwc-button');
-            // Invoke inline handlers to mark lambdas as covered; they may
-            // throw because `this` context is lost, which is expected.
-            for (const handler of extractHandlers(tmpl)) {
-                try {
-                    handler();
-                } catch {
-                    // expected — handlers reference component internals
-                }
-            }
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('ha-entity-picker lazy-load', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        afterEach(() => {
+            delete (window as any).loadCardHelpers;
         });
 
-        it('confirm dialog renders ha-button for actions', () => {
-            (card as any)._confirmDialog = {
-                onConfirm: () => {},
-                text: 'Test confirmation',
-                title: 'Confirm'
-            };
-            const tmpl = (card as any)._renderConfirmDialog();
-            const joined = templateStrings(tmpl);
-            expect(joined).toContain('ha-button');
-            expect(joined).not.toContain('mwc-button');
-            for (const handler of extractHandlers(tmpl)) {
-                try {
-                    handler();
-                } catch {
-                    // expected
-                }
-            }
+        it('lazy-loads ha-entity-picker when the dialog opens', async () => {
+            // Simulate the picker not yet being in the customElements registry
+            const originalGet = customElements.get.bind(customElements);
+            const getSpy = vi.spyOn(customElements, 'get').mockImplementation((name: string) => {
+                if (name === 'ha-entity-picker')
+                    return undefined as unknown as CustomElementConstructor;
+                return originalGet(name);
+            });
+
+            const getConfigElementSpy = vi.fn().mockResolvedValue(undefined);
+            const createCardElementSpy = vi.fn().mockReturnValue({
+                constructor: { getConfigElement: getConfigElementSpy }
+            });
+            (window as any).loadCardHelpers = vi.fn().mockResolvedValue({
+                createCardElement: createCardElementSpy
+            });
+
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            // connectedCallback already triggers the load; clear the call
+            // history so this assertion only sees the dialog-open path.
+            createCardElementSpy.mockClear();
+            getConfigElementSpy.mockClear();
+
+            (card as any)._openConditionDialog('add');
+            await flush();
+
+            expect(createCardElementSpy).toHaveBeenCalledWith({
+                entities: [],
+                type: 'entities'
+            });
+            expect(getConfigElementSpy).toHaveBeenCalled();
+
+            getSpy.mockRestore();
+        });
+
+        it('short-circuits when ha-entity-picker is already registered', async () => {
+            const loadHelpersSpy = vi.fn();
+            (window as any).loadCardHelpers = loadHelpersSpy;
+
+            // Don't mock customElements.get — the real registry won't have
+            // ha-entity-picker either, so force it to look registered.
+            const originalGet = customElements.get.bind(customElements);
+            const getSpy = vi.spyOn(customElements, 'get').mockImplementation((name: string) => {
+                if (name === 'ha-entity-picker')
+                    return class FakePicker extends HTMLElement {} as unknown as CustomElementConstructor;
+                return originalGet(name);
+            });
+
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            expect(loadHelpersSpy).not.toHaveBeenCalled();
+
+            getSpy.mockRestore();
+        });
+
+        it('swallows lazy-load failures so the dialog can still open', async () => {
+            const originalGet = customElements.get.bind(customElements);
+            const getSpy = vi.spyOn(customElements, 'get').mockImplementation((name: string) => {
+                if (name === 'ha-entity-picker')
+                    return undefined as unknown as CustomElementConstructor;
+                return originalGet(name);
+            });
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            (window as any).loadCardHelpers = vi.fn().mockRejectedValue(new Error('helpers boom'));
+
+            const card = document.createElement('lcm-slot') as SlotCardElement &
+                Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+
+            // _openConditionDialog still flips the visibility state even
+            // though the picker load is failing.
+            (card as any)._openConditionDialog('add');
+            expect((card as any)._showConditionDialog).toBe(true);
+
+            await flush();
+            expect(warnSpy).toHaveBeenCalled();
+
+            warnSpy.mockRestore();
+            getSpy.mockRestore();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -508,7 +973,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_saveConditionChanges', () => {
+    describe('_commitConditionPick', () => {
         let card: SlotCardElement & Record<string, unknown>;
         let callWSMock: ReturnType<typeof vi.fn>;
 
@@ -529,68 +994,49 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         it('sets action error when card is not initialized', async () => {
             (card as any)._hass = null;
-            await (card as any)._saveConditionChanges();
+            await (card as any)._commitConditionPick('input_boolean.valid_entity');
             expect((card as any)._actionError).toBe('Card not initialized');
         });
 
-        it('sets action error when _dialogEntityId is null (empty)', async () => {
-            (card as any)._dialogMode = 'add-entity';
-            (card as any)._dialogEntityId = null;
-            await (card as any)._saveConditionChanges();
-            expect((card as any)._actionError).toBe('Please select an entity before saving');
-        });
-
-        it('sets action error when _dialogEntityId is empty string', async () => {
-            (card as any)._dialogMode = 'add-entity';
-            (card as any)._dialogEntityId = '   ';
-            await (card as any)._saveConditionChanges();
-            expect((card as any)._actionError).toBe('Please select an entity before saving');
-        });
-
         it('sets action error when entity not found in hass.states', async () => {
-            (card as any)._dialogMode = 'edit-entity';
-            (card as any)._dialogEntityId = 'input_boolean.nonexistent';
-            await (card as any)._saveConditionChanges();
+            await (card as any)._commitConditionPick('input_boolean.nonexistent');
             expect((card as any)._actionError).toBe(
                 'Selected entity not found: input_boolean.nonexistent'
             );
+            // Validation failure must not flip the in-flight flag — the
+            // dialog stays open and the user can pick again.
+            expect((card as any)._dialogSaving).toBe(false);
         });
 
-        it('calls _setSlotCondition for valid entity in add mode', async () => {
-            (card as any)._dialogMode = 'add-entity';
-            (card as any)._dialogEntityId = 'input_boolean.valid_entity';
-            await (card as any)._saveConditionChanges();
+        it('calls _setSlotCondition and closes the dialog on success', async () => {
+            (card as any)._showConditionDialog = true;
+            await (card as any)._commitConditionPick('input_boolean.valid_entity');
             expect(callWSMock).toHaveBeenCalledWith(
                 expect.objectContaining({
                     entity_id: 'input_boolean.valid_entity',
                     type: 'lock_code_manager/set_slot_condition'
                 })
             );
-        });
-
-        it('calls _setSlotCondition for valid entity in edit mode', async () => {
-            (card as any)._dialogMode = 'edit-entity';
-            (card as any)._dialogEntityId = 'input_boolean.valid_entity';
-            await (card as any)._saveConditionChanges();
-            expect(callWSMock).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    entity_id: 'input_boolean.valid_entity',
-                    type: 'lock_code_manager/set_slot_condition'
-                })
-            );
+            // Dialog closes immediately once the WS call resolves.
+            expect((card as any)._showConditionDialog).toBe(false);
+            expect((card as any)._dialogSaving).toBe(false);
+            // Resubscribe must run on the success path — verify it was
+            // re-issued at least once on top of the initial subscribe.
+            const subscribeMessageMock = (card as any)._hass.connection
+                .subscribeMessage as ReturnType<typeof vi.fn>;
+            expect(subscribeMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
         });
 
         it('sets action error when callWS throws', async () => {
-            (card as any)._dialogMode = 'add-entity';
-            (card as any)._dialogEntityId = 'input_boolean.valid_entity';
             callWSMock.mockRejectedValueOnce(new Error('Server error'));
-            await (card as any)._saveConditionChanges();
-            expect((card as any)._actionError).toBe('Failed to save: Server error');
+            await (card as any)._commitConditionPick('input_boolean.valid_entity');
+            expect((card as any)._actionError).toBe('Failed to set condition: Server error');
+            expect((card as any)._dialogSaving).toBe(false);
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_deleteConditionEntity', () => {
+    describe('_removeCondition', () => {
         let card: SlotCardElement & Record<string, unknown>;
         let callWSMock: ReturnType<typeof vi.fn>;
 
@@ -605,27 +1051,39 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('sets up confirm dialog with correct text', () => {
-            (card as any)._deleteConditionEntity();
-            expect((card as any)._confirmDialog).toBeDefined();
-            expect((card as any)._confirmDialog.title).toBe('Remove condition entity?');
-        });
-
-        it('onConfirm calls _clearSlotCondition', async () => {
-            (card as any)._deleteConditionEntity();
-            await (card as any)._confirmDialog.onConfirm();
+        it('calls clear_slot_condition on success', async () => {
+            (card as any)._showConditionDialog = true;
+            await (card as any)._removeCondition();
             expect(callWSMock).toHaveBeenCalledWith(
                 expect.objectContaining({
                     type: 'lock_code_manager/clear_slot_condition'
                 })
             );
+            expect((card as any)._showConditionDialog).toBe(false);
+            expect((card as any)._dialogSaving).toBe(false);
+            // Resubscribe is awaited so a failure surfaces in the banner;
+            // verify it was actually re-issued (initial subscribe + the
+            // post-remove resubscribe).
+            const subscribeMessageMock = (card as any)._hass.connection
+                .subscribeMessage as ReturnType<typeof vi.fn>;
+            expect(subscribeMessageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
         });
 
-        it('onConfirm sets action error when _clearSlotCondition fails', async () => {
+        it('sets action error when _clearSlotCondition fails', async () => {
             callWSMock.mockRejectedValueOnce(new Error('Clear failed'));
-            (card as any)._deleteConditionEntity();
-            await (card as any)._confirmDialog.onConfirm();
+            (card as any)._showConditionDialog = true;
+            await (card as any)._removeCondition();
             expect((card as any)._actionError).toBe('Failed to remove condition: Clear failed');
+            // Dialog stays open so the user sees the error
+            expect((card as any)._dialogSaving).toBe(false);
+        });
+
+        it('is a no-op while a save/remove is already in flight', async () => {
+            // Simulate an in-flight save: _dialogSaving already true.
+            (card as any)._dialogSaving = true;
+            await (card as any)._removeCondition();
+            // The early guard should bail before issuing the websocket call.
+            expect(callWSMock).not.toHaveBeenCalled();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -642,14 +1100,16 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('sets dialog mode and opens dialog for add-entity', () => {
-            (card as any)._openConditionDialog('add-entity');
-            expect((card as any)._dialogMode).toBe('add-entity');
+        it('opens the dialog with an empty picker (add-only mode)', () => {
+            (card as any)._openConditionDialog();
             expect((card as any)._showConditionDialog).toBe(true);
             expect((card as any)._dialogEntityId).toBeNull();
         });
 
-        it('initializes entity id from data for edit-entity', () => {
+        it('always starts with an empty entity even if a condition is set', () => {
+            // The dialog is Add-only — to swap conditions, the user removes
+            // the existing one via the inline Remove link first. Opening the
+            // dialog never pre-fills with the current entity.
             (card as any)._data = makeSlotCardData({
                 conditions: {
                     condition_entity: {
@@ -658,9 +1118,249 @@ describe('LockCodeManagerSlotCard integration', () => {
                     }
                 }
             });
-            (card as any)._openConditionDialog('edit-entity');
-            expect((card as any)._dialogMode).toBe('edit-entity');
-            expect((card as any)._dialogEntityId).toBe('input_boolean.existing');
+            (card as any)._openConditionDialog();
+            expect((card as any)._showConditionDialog).toBe(true);
+            expect((card as any)._dialogEntityId).toBeNull();
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('Add Condition dialog (ha-entity-picker)', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+        let callWSMock: ReturnType<typeof vi.fn>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            const hass = createMockHassWithConnection({
+                states: {
+                    'calendar.vacation': {
+                        attributes: { friendly_name: 'Vacation' },
+                        state: 'on'
+                    },
+                    'schedule.business_hours': {
+                        attributes: { friendly_name: 'Business Hours' },
+                        state: 'on'
+                    }
+                }
+            });
+            callWSMock = hass.callWS as ReturnType<typeof vi.fn>;
+            card.hass = hass;
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Recursively join a TemplateResult's strings + nested sub-template
+         *  values so we can assert against text rendered by ${} expressions. */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (result?.strings && result?.values) {
+                const strings: string[] = result.strings;
+                const values: unknown[] = result.values;
+                let out = '';
+                for (let i = 0; i < strings.length; i++) {
+                    out += strings[i];
+                    if (i < values.length) out += deepTemplateStrings(values[i]);
+                }
+                return out;
+            }
+            return '';
+        }
+
+        /** Locate the value-changed handler in the rendered template by
+         *  invoking each function value with a fake event and checking
+         *  whether _dialogEntityId was updated. */
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        function findPickerHandler(tmpl: any, c: any): ((e: CustomEvent) => void) | undefined {
+            const collect = (
+                node: any,
+                acc: Array<(e?: any) => void> = []
+            ): Array<(e?: any) => void> => {
+                if (!node?.values) return acc;
+                for (const v of node.values) {
+                    if (typeof v === 'function') acc.push(v);
+                    else if (v?.strings && v?.values) collect(v, acc);
+                    else if (Array.isArray(v))
+                        for (const item of v) if (item?.strings) collect(item, acc);
+                }
+                return acc;
+            };
+            const handlers = collect(tmpl);
+            return handlers.find((h) => {
+                const before = c._dialogEntityId;
+                try {
+                    h({ detail: { value: '__probe_value_changed_marker__' } });
+                } catch {
+                    return false;
+                }
+                const matched = c._dialogEntityId === '__probe_value_changed_marker__';
+                // Restore prior state so the probe does not pollute later
+                // assertions in the same test. Reassigning `c` is safe — `c`
+                // is the card test helper, not a true function param boundary.
+                // eslint-disable-next-line no-param-reassign
+                c._dialogEntityId = before;
+                return matched;
+            }) as ((e: CustomEvent) => void) | undefined;
+        }
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        it('renders ha-entity-picker with empty value (Add-only dialog)', () => {
+            // Even when a condition is set, opening the dialog starts blank —
+            // the dialog is Add-only and the existing condition is removed
+            // separately via the inline Remove link.
+            (card as any)._data = makeSlotCardData({
+                conditions: {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        state: 'on'
+                    }
+                }
+            });
+            (card as any)._openConditionDialog();
+            const tmpl = (card as any)._renderConditionDialog();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('ha-entity-picker');
+            expect(joined).not.toContain('datalist');
+            expect((card as any)._dialogEntityId).toBeNull();
+        });
+
+        it('does not render a destructive Remove button inside the dialog', () => {
+            // The destructive Remove action lives on the inline Remove link in
+            // the conditions body; the dialog itself is Add-only.
+            (card as any)._openConditionDialog();
+            const tmpl = (card as any)._renderConditionDialog();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).not.toContain('dialog-remove-btn');
+            expect(joined).not.toContain('Remove condition');
+        });
+
+        it('uses the "Add condition" dialog title', () => {
+            (card as any)._openConditionDialog();
+            const tmpl = (card as any)._renderConditionDialog();
+            // Title is bound as a property; check both strings and values.
+            const joined = deepTemplateStrings(tmpl) + JSON.stringify(tmpl.values ?? []);
+            expect(joined).toContain('Add condition');
+            // Old wording must not slip back in.
+            expect(joined).not.toContain('Manage condition');
+            expect(joined).not.toContain('Add a condition');
+        });
+
+        it('auto-commits when the picker emits value-changed with a new entity', async () => {
+            (card as any)._openConditionDialog();
+            const tmpl = (card as any)._renderConditionDialog();
+            const pickerHandler = findPickerHandler(tmpl, card);
+            expect(pickerHandler).toBeDefined();
+
+            pickerHandler!({ detail: { value: 'calendar.vacation' } } as CustomEvent);
+            // Auto-commit kicks off the WS call synchronously; let microtasks
+            // settle so the awaited callWS + resubscribe complete.
+            await flush();
+            await flush();
+
+            expect(callWSMock).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    config_entry_id: 'abc',
+                    entity_id: 'calendar.vacation',
+                    slot: 1,
+                    type: 'lock_code_manager/set_slot_condition'
+                })
+            );
+            expect((card as any)._showConditionDialog).toBe(false);
+            expect((card as any)._dialogSaving).toBe(false);
+        });
+
+        it('does not commit when the picker is cleared (empty value)', async () => {
+            (card as any)._openConditionDialog();
+            const tmpl = (card as any)._renderConditionDialog();
+            const pickerHandler = findPickerHandler(tmpl, card);
+            expect(pickerHandler).toBeDefined();
+
+            callWSMock.mockClear();
+            pickerHandler!({ detail: { value: '' } } as CustomEvent);
+            await flush();
+
+            expect(callWSMock).not.toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'lock_code_manager/set_slot_condition'
+                })
+            );
+            expect((card as any)._showConditionDialog).toBe(true);
+            expect((card as any)._dialogEntityId).toBeNull();
+        });
+
+        it('shows Saving… indicator while a commit is in flight', async () => {
+            (card as any)._openConditionDialog();
+            // Mock callWS to delay so we can observe the in-flight state
+            // before the awaited call resolves.
+            let releaseCommit: () => void = () => {};
+            callWSMock.mockImplementationOnce(
+                () =>
+                    new Promise<void>((resolve) => {
+                        releaseCommit = resolve;
+                    })
+            );
+            const tmpl = (card as any)._renderConditionDialog();
+            const pickerHandler = findPickerHandler(tmpl, card);
+            expect(pickerHandler).toBeDefined();
+
+            pickerHandler!({ detail: { value: 'calendar.vacation' } } as CustomEvent);
+            // Allow microtask hop into _commitConditionPick so the in-flight
+            // flag flips before we sample state.
+            await flush();
+            expect((card as any)._dialogSaving).toBe(true);
+            const inFlightTmpl = (card as any)._renderConditionDialog();
+            expect(deepTemplateStrings(inFlightTmpl)).toContain('Saving…');
+            expect(deepTemplateStrings(inFlightTmpl)).toContain('dialog-saving');
+
+            // Let the commit resolve so test cleanup is clean.
+            releaseCommit();
+            await flush();
+            await flush();
+        });
+
+        it('picker has both .includeDomains and .entityFilter that restrict to allowed domains', () => {
+            (card as any)._openConditionDialog();
+            const tmpl = (card as any)._renderConditionDialog();
+
+            // Walk the static strings to find the value paired with each
+            // property binding. Lit splits a template into strings + values,
+            // so the substring before a `${...}` interpolation tells us
+            // which property the next value belongs to.
+            const strings: string[] = (tmpl.strings ?? []) as string[];
+            const values: unknown[] = (tmpl.values ?? []) as unknown[];
+
+            const findValueFor = (propName: string): unknown => {
+                const marker = `.${propName}=`;
+                for (let i = 0; i < values.length; i++) {
+                    if (strings[i] && strings[i].includes(marker)) return values[i];
+                }
+                return undefined;
+            };
+
+            const includeDomains = findValueFor('includeDomains') as readonly string[];
+            const entityFilter = findValueFor('entityFilter') as (s: {
+                entity_id: string;
+            }) => boolean;
+
+            expect(Array.isArray(includeDomains)).toBe(true);
+            expect([...includeDomains].sort()).toEqual(
+                ['binary_sensor', 'calendar', 'input_boolean', 'schedule', 'switch'].sort()
+            );
+
+            expect(typeof entityFilter).toBe('function');
+            // Allowed domains should pass the filter
+            expect(entityFilter({ entity_id: 'calendar.vacation' })).toBe(true);
+            expect(entityFilter({ entity_id: 'schedule.business_hours' })).toBe(true);
+            expect(entityFilter({ entity_id: 'binary_sensor.door' })).toBe(true);
+            expect(entityFilter({ entity_id: 'switch.porch' })).toBe(true);
+            expect(entityFilter({ entity_id: 'input_boolean.guest_mode' })).toBe(true);
+            // Disallowed domain should be filtered out
+            expect(entityFilter({ entity_id: 'light.foo' })).toBe(false);
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -762,7 +1462,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             // covering the .some() callback on line 991
             const tmpl = (card2 as any)._renderFromData(card2._data!);
             const joined = templateStrings(tmpl);
-            // The conditions section should render (it contains condition-helpers)
+            // The conditions section should render (it contains helpers-list)
             expect(joined).toBeDefined();
         });
 
@@ -845,9 +1545,10 @@ describe('LockCodeManagerSlotCard integration', () => {
 
             // Call _renderConditionsSection directly to exercise the template
             const tmpl = (card2 as any)._renderConditionsSection(card2._data!.conditions);
-            // Use recursive join since condition-helpers is in a nested content template
+            // Use recursive join since helpers-list is in a nested content template
             const joined = allTemplateStrings(tmpl);
-            expect(joined).toContain('condition-helpers');
+            expect(joined).toContain('helpers-list');
+            expect(joined).toContain('helpers-label');
         });
 
         it('click handler on condition helper row dispatches hass-more-info', async () => {
@@ -1225,81 +1926,52 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('condition dialog input handlers', () => {
+    describe('_handlePickerChange', () => {
         let card: SlotCardElement & Record<string, unknown>;
+        let callWSMock: ReturnType<typeof vi.fn>;
 
         beforeEach(async () => {
             card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
             card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection({
+            const hass = createMockHassWithConnection({
                 states: {
                     'input_boolean.valid': { state: 'on' },
                     'switch.valid': { state: 'off' }
                 }
             });
+            callWSMock = hass.callWS as ReturnType<typeof vi.fn>;
+            card.hass = hass;
             container.appendChild(card);
             await flush();
         });
 
-        /** Extract inline handler functions from a TemplateResult's values */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function extractHandlers(result: any): Array<(e?: any) => void> {
-            return (result?.values ?? []).filter((v: unknown) => typeof v === 'function');
-        }
-
         /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('input and change handlers set _dialogEntityId for valid entities', () => {
+        it('updates _dialogEntityId on value change', () => {
             (card as any)._showConditionDialog = true;
-            (card as any)._dialogMode = 'add-entity';
-            const tmpl = (card as any)._renderConditionDialog();
-            const handlers = extractHandlers(tmpl);
-
-            // Invoke each handler with mock events to cover the lambdas
-            for (const handler of handlers) {
-                try {
-                    // Simulate valid entity input
-                    handler({
-                        stopPropagation: () => {},
-                        target: { select: () => {}, value: 'input_boolean.valid' }
-                    });
-                } catch {
-                    // expected — some handlers reference component internals
-                }
-                try {
-                    // Simulate empty input
-                    handler({
-                        stopPropagation: () => {},
-                        target: { select: () => {}, value: '' }
-                    });
-                } catch {
-                    // expected
-                }
-                try {
-                    // Simulate invalid entity input
-                    handler({
-                        stopPropagation: () => {},
-                        target: { select: () => {}, value: 'nonexistent.entity' }
-                    });
-                } catch {
-                    // expected
-                }
-            }
+            (card as any)._handlePickerChange({
+                detail: { value: 'input_boolean.valid' }
+            } as CustomEvent);
+            expect((card as any)._dialogEntityId).toBe('input_boolean.valid');
         });
 
-        it('save button handler in condition dialog invokes _saveConditionChanges', () => {
+        it('clears _dialogEntityId when value is empty and does not commit', () => {
             (card as any)._showConditionDialog = true;
-            (card as any)._dialogMode = 'add-entity';
-            const tmpl = (card as any)._renderConditionDialog();
-            const handlers = extractHandlers(tmpl);
+            (card as any)._dialogEntityId = 'switch.valid';
+            callWSMock.mockClear();
+            (card as any)._handlePickerChange({ detail: { value: '' } } as CustomEvent);
+            expect((card as any)._dialogEntityId).toBeNull();
+            expect(callWSMock).not.toHaveBeenCalled();
+        });
 
-            // The save handler is the last function in the template values
-            for (const handler of handlers) {
-                try {
-                    handler();
-                } catch {
-                    // expected
-                }
-            }
+        it('does not re-commit while a previous commit is in flight', async () => {
+            (card as any)._showConditionDialog = true;
+            (card as any)._dialogSaving = true;
+            callWSMock.mockClear();
+            (card as any)._handlePickerChange({
+                detail: { value: 'input_boolean.valid' }
+            } as CustomEvent);
+            await flush();
+            expect(callWSMock).not.toHaveBeenCalled();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -1485,6 +2157,76 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._revealed).toBe(true);
         });
 
+        it('reverts the auto-revealed PIN to masked when exiting edit mode via Escape', async () => {
+            (card as any)._revealed = false;
+            (card as any)._revealedForEdit = false;
+
+            (card as any)._startEditing('pin');
+            await flush();
+            // _startEditing flips reveal optimistically before the resubscribe resolves
+            expect((card as any)._revealed).toBe(true);
+            expect((card as any)._revealedForEdit).toBe(true);
+
+            // Simulate Escape
+            const event = { key: 'Escape', target: { value: '' } };
+            (card as any)._handleEditKeydown(event);
+            expect((card as any)._editingField).toBeNull();
+            expect((card as any)._revealed).toBe(false);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
+        it('preserves the manually-revealed PIN when exiting edit mode via Escape', async () => {
+            // User manually revealed via eye button
+            (card as any)._revealed = true;
+            (card as any)._revealedForEdit = false;
+
+            (card as any)._startEditing('pin');
+            await flush();
+            // _startEditing took the else branch since _revealed was already true
+            expect((card as any)._revealed).toBe(true);
+            expect((card as any)._revealedForEdit).toBe(false);
+
+            // Simulate Escape
+            const event = { key: 'Escape', target: { value: '' } };
+            (card as any)._handleEditKeydown(event);
+            expect((card as any)._editingField).toBeNull();
+            // stays revealed
+            expect((card as any)._revealed).toBe(true);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
+        it('reverts auto-revealed PIN on blur', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { pin: 'text.slot_1_pin' }
+            });
+            (card as any)._revealed = false;
+            (card as any)._revealedForEdit = false;
+            (card as any)._startEditing('pin');
+            await flush();
+            expect((card as any)._revealedForEdit).toBe(true);
+
+            const event = { target: { value: '5678' } };
+            (card as any)._handleEditBlur(event);
+            expect((card as any)._revealed).toBe(false);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
+        it('reverts auto-revealed PIN on Enter (after save)', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { pin: 'text.slot_1_pin' }
+            });
+            (card as any)._revealed = false;
+            (card as any)._revealedForEdit = false;
+            (card as any)._startEditing('pin');
+            await flush();
+            expect((card as any)._revealedForEdit).toBe(true);
+
+            const event = { key: 'Enter', target: { value: '5678' } };
+            (card as any)._handleEditKeydown(event);
+            expect((card as any)._revealed).toBe(false);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
         it('_handleEditBlur saves value and clears editingField', () => {
             (card as any)._editingField = 'name';
             (card as any)._data = makeSlotCardData({
@@ -1656,7 +2398,7 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_renderConditionContext', () => {
+    describe('_renderConditionsSummary', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1668,60 +2410,78 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
         });
 
-        it('returns context for active calendar with event', () => {
-            const entity = {
-                calendar: {
-                    end_time: '2026-01-01T12:00:00',
-                    start_time: '2026-01-01T10:00:00',
-                    summary: 'Test Event'
-                },
-                condition_entity_id: 'calendar.test',
-                domain: 'calendar',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionContext(entity, true);
-            expect(result).not.toBe(undefined);
-            expect(result.values).toBeDefined();
+        /** Recursively join the static strings + primitive value text of a
+         *  TemplateResult and any nested templates */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) {
+                return result.map(deepTemplateStrings).join('');
+            }
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        it('returns muted "none" badge when no condition entity is configured', () => {
+            const tmpl = (card as any)._renderConditionsSummary({});
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('collapsible-badge muted');
+            expect(joined).toContain('none');
         });
 
-        it('returns context for inactive calendar with next event', () => {
-            const entity = {
-                calendar_next: { start_time: '2026-01-02T10:00:00', summary: 'Next Event' },
-                condition_entity_id: 'calendar.test',
-                domain: 'calendar',
-                state: 'off'
-            };
-            const result = (card as any)._renderConditionContext(entity, false);
-            expect(result).not.toBe(undefined);
-            expect(result.values).toBeDefined();
+        it('uses friendly_name and ✓ when entity is allowing', () => {
+            const tmpl = (card as any)._renderConditionsSummary({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'on'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('collapsible-badge');
+            // Allowing case: dynamic class modifier is empty, not "warning".
+            expect(tmpl.values).not.toContain('warning');
+            expect(joined).toContain('✓');
+            expect(joined).toContain('Vacation');
         });
 
-        it('returns context for active schedule', () => {
-            const entity = {
-                condition_entity_id: 'schedule.test',
-                domain: 'schedule',
-                schedule: { next_event: '2026-01-01T17:00:00' },
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionContext(entity, true);
-            expect(result).not.toBe(undefined);
-            expect(result.values).toBeDefined();
+        it('uses warning badge with ✗ when entity is blocking', () => {
+            const tmpl = (card as any)._renderConditionsSummary({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'off'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            // Blocking case: dynamic class modifier is "warning" (Lit will
+            // splice it into the class attribute at render time).
+            expect(joined).toContain('collapsible-badge');
+            expect(tmpl.values).toContain('warning');
+            expect(joined).toContain('✗');
+            expect(joined).toContain('Vacation');
         });
 
-        it('returns nothing for binary_sensor', () => {
-            const entity = {
-                condition_entity_id: 'binary_sensor.test',
-                domain: 'binary_sensor',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionContext(entity, true);
-            // Lit's `nothing` is a symbol
-            expect(typeof result).toBe('symbol');
+        it('falls back to entity id when no friendly_name', () => {
+            const tmpl = (card as any)._renderConditionsSummary({
+                condition_entity: {
+                    condition_entity_id: 'binary_sensor.foo',
+                    domain: 'binary_sensor',
+                    state: 'on'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('binary_sensor.foo');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_renderConditionEntity', () => {
+    describe('_renderConditionsBody', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1732,6 +2492,18 @@ describe('LockCodeManagerSlotCard integration', () => {
             container.appendChild(card);
             await flush();
         });
+
+        /** Recursively join all template strings (incl. dynamic primitive values) */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
 
         /** Recursively collect all function values from a TemplateResult */
         function collectHandlers(result: any): Array<(...args: any[]) => void> {
@@ -1742,43 +2514,343 @@ describe('LockCodeManagerSlotCard integration', () => {
                     handlers.push(v);
                 } else if (v?.strings && v?.values) {
                     handlers.push(...collectHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectHandlers(item));
+                        }
+                    }
                 }
             }
             return handlers;
         }
 
-        it('renders with edit actions when showEdit is true', () => {
-            const entity = {
-                condition_entity_id: 'switch.test',
-                domain: 'switch',
-                friendly_name: 'Test Switch',
-                state: 'on'
-            };
-            const result = (card as any)._renderConditionEntity(entity, true);
-            expect(result).toBeDefined();
-            expect(result.values.length).toBeGreaterThan(0);
+        it('renders no empty-state callout when no entity (Add affordance is on the header)', () => {
+            const tmpl = (card as any)._renderConditionsBody({}, false, false);
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).not.toContain('empty-state');
+            expect(joined).not.toContain('add-link');
+            expect(joined).not.toContain('No condition has been set');
+            expect(joined).not.toContain('Remove condition');
+            expect(joined).not.toContain('Manage condition');
         });
 
-        it('inline click handlers execute without error', () => {
-            const entity = {
-                condition_entity_id: 'switch.test',
-                domain: 'switch',
-                friendly_name: 'Test Switch',
-                state: 'on'
+        it('renders the condition block + Remove condition link when entity exists', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('condition-block');
+            expect(joined).toContain('remove-link');
+            expect(joined).toContain('Remove condition');
+            // Old wording must not slip back in.
+            expect(joined).not.toContain('Manage condition');
+            expect(joined).not.toContain('manage-link');
+            expect(joined).not.toContain('empty-state');
+        });
+
+        it('remove-link click invokes _removeCondition() (no dialog opens)', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const handlers = collectHandlers(tmpl);
+            let removeCalls = 0;
+            let openCalls = 0;
+            (card as any)._removeCondition = () => {
+                removeCalls += 1;
             };
-            const result = (card as any)._renderConditionEntity(entity, true);
-            const handlers = collectHandlers(result);
-            // Exercise each handler — these are the click/stopPropagation
-            // lambdas inside the template that codecov flags as uncovered.
-            for (const handler of handlers) {
-                expect(() => handler({ stopPropagation: () => {} })).not.toThrow();
+            (card as any)._openConditionDialog = () => {
+                openCalls += 1;
+            };
+            for (const h of handlers) {
+                try {
+                    h();
+                } catch {
+                    // ignore — keydown handler expects an event arg
+                }
             }
-            expect(handlers.length).toBeGreaterThan(0);
+            expect(removeCalls).toBeGreaterThanOrEqual(1);
+            expect(openCalls).toBe(0);
+        });
+
+        it('remove-link is keyboard-accessible (role=button, tabindex, aria-label)', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('role="button"');
+            expect(joined).toContain('tabindex="0"');
+            expect(joined).toContain('aria-label="Remove condition"');
+        });
+
+        it('remove-link Enter/Space keys invoke _removeCondition (Tab does not)', () => {
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                false
+            );
+            const handlers = collectHandlers(tmpl);
+            let removeCalls = 0;
+            (card as any)._removeCondition = () => {
+                removeCalls += 1;
+            };
+            const keydown = handlers.find((h) => h.length === 1);
+            expect(keydown).toBeDefined();
+            keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(removeCalls).toBe(1);
+            keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(removeCalls).toBe(2);
+            // Tab must NOT trigger remove — only Enter/Space should.
+            keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(removeCalls).toBe(2);
+        });
+
+        it('renders the helpers sub-list under the condition when hasHelpers', () => {
+            (card as any)._config = {
+                ...(card as any)._config,
+                condition_helpers: ['input_boolean.h1']
+            };
+            (card as any)._hass = {
+                ...(card as any)._hass,
+                states: {
+                    'input_boolean.h1': { attributes: { friendly_name: 'H1' }, state: 'on' }
+                }
+            };
+            const tmpl = (card as any)._renderConditionsBody(
+                {
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        state: 'on'
+                    }
+                },
+                true,
+                true
+            );
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('helpers-label');
+            expect(joined).toContain('helpers-list');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_getConditionEntityIcon', () => {
+    describe('_renderConditionsSection (Add affordance promotion)', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        /** Recursively join all template strings (incl. dynamic primitive values) */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        function collectHandlers(result: any): Array<(...args: any[]) => void> {
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('renders a static, non-collapsible header row with Add button when no condition and no helpers', () => {
+            const tmpl = (card as any)._renderConditionsSection({});
+            const joined = deepTemplateStrings(tmpl);
+            // Static-header marker present, no chevron, no badge.
+            expect(joined).toContain('collapsible-header static');
+            expect(joined).toContain('add-condition-btn');
+            expect(joined).toContain('Add condition');
+            expect(joined).toContain('aria-label="Add condition"');
+            expect(joined).not.toContain('collapsible-chevron');
+            expect(joined).not.toContain('collapsible-badge');
+            // The empty-state callout in the body should be gone too.
+            expect(joined).not.toContain('empty-state');
+            expect(joined).not.toContain('add-link');
+        });
+
+        it('static-header Add button click opens the dialog and stops propagation', () => {
+            const tmpl = (card as any)._renderConditionsSection({});
+            const handlers = collectHandlers(tmpl);
+            let openCalls = 0;
+            (card as any)._openConditionDialog = () => {
+                openCalls += 1;
+            };
+            let stopPropCalls = 0;
+            const fakeEvent = {
+                stopPropagation: () => {
+                    stopPropCalls += 1;
+                }
+            } as unknown as Event;
+            // The button click handler takes the Event arg; the only arity-1
+            // handler in this template is the @click on the add button.
+            const click = handlers.find((h) => h.length === 1);
+            expect(click).toBeDefined();
+            click!(fakeEvent);
+            expect(openCalls).toBe(1);
+            expect(stopPropCalls).toBe(1);
+        });
+
+        it('renders a collapsible row with Add button as headerExtra when no condition but helpers exist', async () => {
+            (card as any)._config = {
+                ...(card as any)._config,
+                condition_helpers: ['input_boolean.h1']
+            };
+            (card as any)._hass = {
+                ...(card as any)._hass,
+                states: {
+                    'input_boolean.h1': { attributes: { friendly_name: 'H1' }, state: 'on' }
+                }
+            };
+            const tmpl = (card as any)._renderConditionsSection({});
+            const joined = deepTemplateStrings(tmpl);
+            // Standard collapsible (chevron present, NOT static).
+            expect(joined).not.toContain('collapsible-header static');
+            expect(joined).toContain('collapsible-chevron');
+            // Add button is the headerExtra (no muted "none" badge).
+            expect(joined).toContain('add-condition-btn');
+            expect(joined).toContain('Add condition');
+            expect(joined).not.toContain('collapsible-badge muted');
+            // Body has helpers but NOT the empty-state callout.
+            expect(joined).toContain('helpers-list');
+            expect(joined).not.toContain('empty-state');
+            expect(joined).not.toContain('No condition has been set');
+        });
+
+        it('header Add button click stops propagation so the section does not toggle', () => {
+            (card as any)._config = {
+                ...(card as any)._config,
+                condition_helpers: ['input_boolean.h1']
+            };
+            (card as any)._hass = {
+                ...(card as any)._hass,
+                states: {
+                    'input_boolean.h1': { attributes: { friendly_name: 'H1' }, state: 'on' }
+                }
+            };
+            const expandedBefore = (card as any)._conditionsExpanded;
+            const tmpl = (card as any)._renderConditionsSection({});
+            const handlers = collectHandlers(tmpl);
+            let openCalls = 0;
+            (card as any)._openConditionDialog = () => {
+                openCalls += 1;
+            };
+            // Run every arity-1 handler with a synthetic click-shaped Event;
+            // the Add button calls stopPropagation + opens the dialog while
+            // the collapsible keydown handler short-circuits on missing key.
+            // Both behaviors are exercised; only the Add button counts as a
+            // successful match.
+            let totalStopPropCalls = 0;
+            const fakeEvent = {
+                key: 'NotAKey',
+                preventDefault: () => undefined,
+                stopPropagation: () => {
+                    totalStopPropCalls += 1;
+                }
+            } as unknown as Event;
+            for (const h of handlers.filter((fn) => fn.length === 1)) {
+                try {
+                    h(fakeEvent);
+                } catch {
+                    // ignore — some handlers may expect different shapes
+                }
+            }
+            expect(totalStopPropCalls).toBeGreaterThanOrEqual(1);
+            expect(openCalls).toBe(1);
+            // Section did NOT toggle (button stopped propagation).
+            expect((card as any)._conditionsExpanded).toBe(expandedBefore);
+        });
+
+        it('renders the standard collapsible with summary badge when a condition entity is set', () => {
+            const tmpl = (card as any)._renderConditionsSection({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'on'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).not.toContain('collapsible-header static');
+            expect(joined).toContain('collapsible-chevron');
+            expect(joined).toContain('collapsible-badge');
+            expect(joined).toContain('Vacation');
+            expect(joined).toContain('✓');
+            expect(joined).not.toContain('add-condition-btn');
+        });
+
+        it('renders the warning summary badge when the condition entity is blocking', () => {
+            const tmpl = (card as any)._renderConditionsSection({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'off'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('collapsible-badge');
+            expect(joined).toContain('✗');
+            expect(joined).not.toContain('add-condition-btn');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderConditionBlock', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1790,25 +2862,44 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
         });
 
-        it.each([
-            ['calendar', true],
-            ['calendar', false],
-            ['binary_sensor', true],
-            ['switch', true],
-            ['switch', false],
-            ['schedule', true],
-            ['input_boolean', true],
-            ['input_boolean', false],
-            ['unknown_domain', true]
-        ])('returns an icon for domain=%s isActive=%s', (domain, isActive) => {
-            const icon = (card as any)._getConditionEntityIcon(domain, isActive);
-            expect(typeof icon).toBe('string');
-            expect(icon.length).toBeGreaterThan(0);
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        it('renders the LCM overlay strip with allowing class when entity is on', () => {
+            const tmpl = (card as any)._renderConditionBlock({
+                condition_entity_id: 'calendar.vacation',
+                domain: 'calendar',
+                state: 'on'
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('condition-block');
+            expect(joined).toContain('lcm-overlay');
+            expect(joined).toContain('allowing');
+            expect(joined).toContain('✓ Allowing access');
+        });
+
+        it('renders the LCM overlay strip with blocking class when entity is off', () => {
+            const tmpl = (card as any)._renderConditionBlock({
+                condition_entity_id: 'calendar.vacation',
+                domain: 'calendar',
+                state: 'off'
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('blocking');
+            expect(joined).toContain('✗ Blocking access');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_getConditionStatusText', () => {
+    describe('_renderOverlayContext', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1818,23 +2909,99 @@ describe('LockCodeManagerSlotCard integration', () => {
             card.hass = createMockHassWithConnection();
             container.appendChild(card);
             await flush();
+            vi.useFakeTimers();
+            vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
         });
 
-        it.each([
-            ['calendar', true, 'Event active'],
-            ['calendar', false, 'No event'],
-            ['schedule', true, 'In schedule'],
-            ['schedule', false, 'Outside schedule'],
-            ['switch', true, 'On'],
-            ['switch', false, 'Off']
-        ])('returns correct text for domain=%s isActive=%s', (domain, isActive, expected) => {
-            const text = (card as any)._getConditionStatusText(domain, isActive);
-            expect(text).toContain(expected);
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('returns calendar event summary + ends-relative when allowing', () => {
+            const text = (card as any)._renderOverlayContext(
+                {
+                    calendar: {
+                        end_time: '2026-05-06T00:00:00Z',
+                        summary: "Alice's stay"
+                    },
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    state: 'on'
+                },
+                true
+            );
+            expect(text).toContain("Alice's stay");
+            expect(text).toContain('ends in 5 days');
+        });
+
+        it('returns "Next: <summary> starts <relative>" for blocking calendar', () => {
+            const text = (card as any)._renderOverlayContext(
+                {
+                    calendar_next: {
+                        start_time: '2026-05-03T00:00:00Z',
+                        summary: 'Trip'
+                    },
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    state: 'off'
+                },
+                false
+            );
+            expect(text).toContain('Next: Trip');
+            expect(text).toContain('starts in 2 days');
+        });
+
+        it('returns Ends/Starts label for schedule', () => {
+            const allowing = (card as any)._renderOverlayContext(
+                {
+                    condition_entity_id: 'schedule.business_hours',
+                    domain: 'schedule',
+                    schedule: { next_event: '2026-05-02T00:00:00Z' },
+                    state: 'on'
+                },
+                true
+            );
+            expect(allowing).toContain('Ends');
+            expect(allowing).toContain('in 1 day');
+
+            const blocking = (card as any)._renderOverlayContext(
+                {
+                    condition_entity_id: 'schedule.business_hours',
+                    domain: 'schedule',
+                    schedule: { next_event: '2026-05-02T00:00:00Z' },
+                    state: 'off'
+                },
+                false
+            );
+            expect(blocking).toContain('Starts');
+        });
+
+        it('falls back to generic text for binary_sensor and unknown domains', () => {
+            expect(
+                (card as any)._renderOverlayContext(
+                    {
+                        condition_entity_id: 'binary_sensor.test',
+                        domain: 'binary_sensor',
+                        state: 'on'
+                    },
+                    true
+                )
+            ).toBe('Condition is on');
+            expect(
+                (card as any)._renderOverlayContext(
+                    {
+                        condition_entity_id: 'binary_sensor.test',
+                        domain: 'binary_sensor',
+                        state: 'off'
+                    },
+                    false
+                )
+            ).toBe('Condition is off');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_formatScheduleDate', () => {
+    describe('_formatRelative', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: SlotCardElement & Record<string, unknown>;
 
@@ -1846,27 +3013,38 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
             // Pin time AFTER element setup so flush()'s setTimeout isn't blocked
             vi.useFakeTimers();
-            vi.setSystemTime(new Date('2026-03-18T12:00:00'));
+            vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
         });
 
         afterEach(() => {
             vi.useRealTimers();
         });
 
-        it('returns empty string for today', () => {
-            expect((card as any)._formatScheduleDate(new Date('2026-03-18T17:00:00'))).toBe('');
+        it('returns "today" for sub-day deltas in either direction', () => {
+            expect((card as any)._formatRelative('2026-05-01T03:00:00Z')).toBe('today');
+            expect((card as any)._formatRelative('2026-04-30T21:00:00Z')).toBe('today');
         });
 
-        it('returns "tomorrow " for tomorrow', () => {
-            expect((card as any)._formatScheduleDate(new Date('2026-03-19T10:00:00'))).toBe(
-                'tomorrow '
-            );
+        it('returns "today" right up to the 24h boundary (no rounding-up bug)', () => {
+            // 23h forward — was previously reported as "in 1 day" because the
+            // implementation rounded ms/86400000. Sub-day deltas must collapse
+            // to "today" regardless of how close to 24h they are.
+            expect((card as any)._formatRelative('2026-05-01T23:00:00Z')).toBe('today');
+            // 23h ago — same boundary behavior in the past direction.
+            expect((card as any)._formatRelative('2026-04-30T01:00:00Z')).toBe('today');
         });
 
-        it('returns weekday for other dates', () => {
-            const result = (card as any)._formatScheduleDate(new Date('2026-03-23T10:00:00'));
-            expect(result.length).toBeGreaterThan(0);
-            expect(result).not.toBe('tomorrow ');
+        it('returns "in 1 day" / "1 day ago" at the day boundary', () => {
+            expect((card as any)._formatRelative('2026-05-02T00:00:00Z')).toBe('in 1 day');
+            expect((card as any)._formatRelative('2026-04-30T00:00:00Z')).toBe('1 day ago');
+            // 25h either direction rounds to one day.
+            expect((card as any)._formatRelative('2026-05-02T01:00:00Z')).toBe('in 1 day');
+            expect((card as any)._formatRelative('2026-04-29T23:00:00Z')).toBe('1 day ago');
+        });
+
+        it('returns "in N days" / "N days ago" for multi-day deltas', () => {
+            expect((card as any)._formatRelative('2026-05-08T00:00:00Z')).toBe('in 7 days');
+            expect((card as any)._formatRelative('2026-04-24T00:00:00Z')).toBe('7 days ago');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -1913,42 +3091,6 @@ describe('LockCodeManagerSlotCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
-    describe('_navigateToEventHistory', () => {
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        it('dispatches hass-more-info event', async () => {
-            const card = document.createElement('lcm-slot') as SlotCardElement &
-                Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
-            container.appendChild(card);
-            await flush();
-
-            (card as any)._data = makeSlotCardData({ event_entity_id: 'event.test_slot_1' });
-            const dispatchSpy = vi.spyOn(card, 'dispatchEvent');
-            (card as any)._navigateToEventHistory();
-            expect(dispatchSpy).toHaveBeenCalledWith(
-                expect.objectContaining({ type: 'hass-more-info' })
-            );
-            dispatchSpy.mockRestore();
-        });
-
-        it('returns early without event_entity_id', async () => {
-            const card = document.createElement('lcm-slot') as SlotCardElement &
-                Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
-            container.appendChild(card);
-            await flush();
-
-            (card as any)._data = makeSlotCardData({});
-            const dispatchSpy = vi.spyOn(card, 'dispatchEvent');
-            (card as any)._navigateToEventHistory();
-            expect(dispatchSpy).not.toHaveBeenCalled();
-            dispatchSpy.mockRestore();
-        });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
-    });
-
     describe('_toggleLockStatus', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         it('toggles lock status expanded state', async () => {
@@ -1965,6 +3107,981 @@ describe('LockCodeManagerSlotCard integration', () => {
             (card as any)._toggleLockStatus();
             expect((card as any)._lockStatusExpanded).toBe(false);
         });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('event row (last_used)', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            // Provide a registered state for the slot's event entity so the
+            // happy-path tests render the row. Tests that exercise
+            // unavailable / missing-entity branches override card.hass with
+            // their own mock.
+            card.hass = createMockHassWithConnection({
+                states: {
+                    'event.lcm_slot_1_pin_used': { state: '2026-05-01T18:23:00Z' }
+                }
+            });
+            container.appendChild(card);
+            await flush();
+        });
+
+        /** Recursively join all template strings (incl. dynamic primitive values) */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        function collectHandlers(result: any): Array<(...args: any[]) => void> {
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        it('renders event row with Last used label and lock + relative time when last_used is set', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('event-row');
+            expect(joined).toContain('event-icon');
+            expect(joined).toContain('event-name');
+            expect(joined).toContain('Last used');
+            expect(joined).toContain('event-meta');
+            expect(joined).toContain('Front Door');
+            expect(joined).toContain('event-arrow');
+            // The relative time component should be wired up for the timestamp.
+            expect(joined).toContain('ha-relative-time');
+        });
+
+        it('renders Never used copy when event entity exists but last_used is null', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: undefined,
+                last_used_lock: undefined
+            });
+            const tmpl = (card as any)._renderEventRow();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('event-row');
+            expect(joined).toContain('Last used');
+            expect(joined).toContain('Never used');
+            // No ha-relative-time when there's no datetime to render.
+            expect(joined).not.toContain('ha-relative-time');
+        });
+
+        it('returns nothing when event_entity_id is absent', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: undefined,
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            // `nothing` from lit is a sentinel; it is neither a TemplateResult
+            // nor a primitive string — verify we don't get a template back.
+            expect(tmpl?.strings).toBeUndefined();
+        });
+
+        it('clicking the event row dispatches hass-more-info for the event entity', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const dispatched: CustomEvent[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e as CustomEvent)) as EventListener);
+            const tmpl = (card as any)._renderEventRow();
+            const handlers = collectHandlers(tmpl);
+            for (const h of handlers) {
+                try {
+                    h();
+                } catch {
+                    // ignore; handlers may call into other internals
+                }
+            }
+            expect(dispatched).toHaveLength(1);
+            expect(dispatched[0].detail).toEqual({
+                entityId: 'event.lcm_slot_1_pin_used'
+            });
+        });
+
+        it('_navigateToEventHistory is a no-op when event_entity_id is absent', () => {
+            (card as any)._data = makeSlotCardData({ event_entity_id: undefined });
+            const dispatched: Event[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e)) as EventListener);
+            (card as any)._navigateToEventHistory();
+            expect(dispatched).toHaveLength(0);
+        });
+
+        it('returns nothing when the event entity is unavailable', () => {
+            // Configure hass with an explicit unavailable state for the entity
+            // referenced by the slot data so the row suppresses rendering.
+            const hass = createMockHassWithConnection({
+                states: {
+                    'event.lcm_slot_1_pin_used': { state: 'unavailable' }
+                }
+            });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            // `nothing` from lit is a sentinel — verify we don't get a TemplateResult.
+            expect(tmpl?.strings).toBeUndefined();
+        });
+
+        it('_navigateToEventHistory is a no-op when the event entity is unavailable', () => {
+            const hass = createMockHassWithConnection({
+                states: {
+                    'event.lcm_slot_1_pin_used': { state: 'unavailable' }
+                }
+            });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used'
+            });
+            const dispatched: Event[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e)) as EventListener);
+            (card as any)._navigateToEventHistory();
+            expect(dispatched).toHaveLength(0);
+        });
+
+        it('event row exposes role=button, tabindex=0 and an aria-label for a11y', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('role="button"');
+            expect(joined).toContain('tabindex="0"');
+            expect(joined).toContain('aria-label="View activity history"');
+        });
+
+        it('Enter and Space on the event row dispatch hass-more-info; other keys do not', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const dispatched: CustomEvent[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e as CustomEvent)) as EventListener);
+
+            // Two function values are present on the event-row div: the
+            // zero-arity @click handler and the one-arg @keydown handler. We
+            // pick the keydown handler by arity so we can isolate keyboard
+            // routing from mouse routing.
+            const tmpl = (card as any)._renderEventRow();
+            const handlers = collectHandlers(tmpl);
+            const keydown = handlers.find((h) => h.length === 1);
+            expect(keydown).toBeDefined();
+
+            keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(dispatched).toHaveLength(0);
+
+            keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(dispatched).toHaveLength(1);
+
+            keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
+            expect(dispatched).toHaveLength(2);
+        });
+
+        it('_renderFromData appends the event row after the sections', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderFromData((card as any)._data);
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('event-row');
+            expect(joined).toContain('Last used');
+            expect(joined).toContain('Front Door');
+        });
+
+        it('returns nothing when the event entity is missing from hass.states', () => {
+            // Override the per-suite hass with one that has no states. The
+            // event entity isn't in hass.states (registry race or the
+            // entity was removed), so the row must suppress to avoid
+            // clicking through to an empty more-info dialog.
+            const hass = createMockHassWithConnection({ states: {} });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            const tmpl = (card as any)._renderEventRow();
+            expect(tmpl?.strings).toBeUndefined();
+        });
+
+        it('_navigateToEventHistory is a no-op when entity missing from hass.states', () => {
+            const hass = createMockHassWithConnection({ states: {} });
+            card.hass = hass;
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used'
+            });
+            const dispatched: Event[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e)) as EventListener);
+            (card as any)._navigateToEventHistory();
+            expect(dispatched).toHaveLength(0);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('review-fix coverage (PR #1116)', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        afterEach(() => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            delete (window as any).loadCardHelpers;
+        });
+
+        // A1: _getEntityRow exception handling
+        describe('_getEntityRow error handling', () => {
+            it('returns an error placeholder and surfaces _setActionError when loadCardHelpers rejects', async () => {
+                (window as any).loadCardHelpers = vi
+                    .fn()
+                    .mockRejectedValue(new Error('helpers boom'));
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                const result = await (card as any)._getEntityRow('binary_sensor.test');
+                expect(result.tagName).toBe('DIV');
+                expect(result.className).toBe('entity-row-error');
+                expect(result.textContent).toContain('binary_sensor.test');
+                expect((card as any)._actionError).toContain('helpers boom');
+            });
+
+            it('returns an error placeholder when createRowElement throws', async () => {
+                (window as any).loadCardHelpers = vi.fn().mockResolvedValue({
+                    createRowElement: () => {
+                        throw new Error('createRowElement boom');
+                    }
+                });
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                const result = await (card as any)._getEntityRow('binary_sensor.test');
+                expect(result.className).toBe('entity-row-error');
+                expect((card as any)._actionError).toContain('createRowElement boom');
+            });
+
+            it('does not cache the error placeholder so the next render retries', async () => {
+                let attempts = 0;
+                (window as any).loadCardHelpers = vi.fn().mockImplementation(() => {
+                    attempts += 1;
+                    return Promise.reject(new Error('still failing'));
+                });
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                // connectedCallback also calls loadCardHelpers via
+                // _ensureEntityPickerLoaded. Reset the attempt counter so we
+                // measure only the _getEntityRow retries this test cares about.
+                attempts = 0;
+                await (card as any)._getEntityRow('binary_sensor.test');
+                await (card as any)._getEntityRow('binary_sensor.test');
+                expect(attempts).toBe(2);
+            });
+        });
+
+        // A2: _commitConditionPick resubscribe failure surfaces in banner
+        describe('save resubscribe failure handling', () => {
+            it('_commitConditionPick surfaces a resubscribe failure via _setActionError', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                let subscribeCallCount = 0;
+                const subscribeMock = vi.fn().mockImplementation(() => {
+                    subscribeCallCount += 1;
+                    if (subscribeCallCount >= 2) {
+                        return Promise.reject(new Error('resubscribe boom'));
+                    }
+                    return Promise.resolve(() => {});
+                });
+                const hass = {
+                    callWS: vi.fn().mockResolvedValue(undefined),
+                    config: { state: 'RUNNING' },
+                    connection: { subscribeMessage: subscribeMock },
+                    states: { 'input_boolean.valid_entity': { state: 'on' } }
+                } as unknown as HomeAssistant;
+                card.hass = hass;
+                container.appendChild(card);
+                await flush();
+
+                await (card as any)._commitConditionPick('input_boolean.valid_entity');
+                expect((card as any)._actionError).toContain('Failed to set condition');
+                expect((card as any)._actionError).toContain('resubscribe boom');
+                expect((card as any)._dialogSaving).toBe(false);
+            });
+
+            it('_removeCondition surfaces a resubscribe failure via _setActionError', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                let subscribeCallCount = 0;
+                const subscribeMock = vi.fn().mockImplementation(() => {
+                    subscribeCallCount += 1;
+                    if (subscribeCallCount >= 2) {
+                        return Promise.reject(new Error('resubscribe boom'));
+                    }
+                    return Promise.resolve(() => {});
+                });
+                const hass = {
+                    callWS: vi.fn().mockResolvedValue(undefined),
+                    config: { state: 'RUNNING' },
+                    connection: { subscribeMessage: subscribeMock },
+                    states: {}
+                } as unknown as HomeAssistant;
+                card.hass = hass;
+                container.appendChild(card);
+                await flush();
+
+                (card as any)._showConditionDialog = true;
+                await (card as any)._removeCondition();
+                expect((card as any)._actionError).toContain('Failed to remove condition');
+                expect((card as any)._actionError).toContain('resubscribe boom');
+                expect((card as any)._dialogSaving).toBe(false);
+            });
+        });
+
+        // B2: helpers list excludes the active condition entity
+        describe('_renderHelpers excludes active condition entity', () => {
+            it('does not render a helper row for the entity used as the condition entity', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({
+                    condition_helpers: ['input_boolean.shared_entity', 'input_boolean.helper_only'],
+                    config_entry_id: 'abc',
+                    slot: 1,
+                    type: 'custom:lcm-slot'
+                });
+                card.hass = createMockHassWithConnection({
+                    states: {
+                        'input_boolean.shared_entity': { state: 'on' },
+                        'input_boolean.helper_only': { state: 'on' }
+                    }
+                });
+                container.appendChild(card);
+                await flush();
+                (card as any)._data = makeSlotCardData({
+                    conditions: {
+                        condition_entity: {
+                            condition_entity_id: 'input_boolean.shared_entity',
+                            state: 'on'
+                        }
+                    }
+                });
+
+                // Spy on _getEntityRow to record which entity ids the helper
+                // list asks to mount. The condition entity must not appear
+                // in this list — only `helper_only`.
+                const requested: string[] = [];
+                (card as any)._getEntityRow = (eid: string) => {
+                    requested.push(eid);
+                    return Promise.resolve(document.createElement('div'));
+                };
+                (card as any)._renderHelpers();
+                expect(requested).toEqual(['input_boolean.helper_only']);
+            });
+        });
+
+        // B3: Saving indicator + close-then-reopen doesn't drop the in-flight
+        // state
+        describe('dialog in-flight indicator + close-state preservation', () => {
+            it('renders the Saving… indicator only while _dialogSaving is true', () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogSaving = true;
+                const inFlight = (card as any)._renderConditionDialog();
+                const inFlightStrings = (inFlight.strings ?? []).join('');
+                const inFlightHasIndicator =
+                    inFlightStrings.includes('dialog-saving') ||
+                    JSON.stringify(inFlight.values ?? []).includes('dialog-saving');
+                expect(inFlightHasIndicator).toBe(true);
+
+                (card as any)._dialogSaving = false;
+                const idle = (card as any)._renderConditionDialog();
+                const idleHasIndicator = JSON.stringify(idle.values ?? []).includes(
+                    'dialog-saving'
+                );
+                expect(idleHasIndicator).toBe(false);
+            });
+
+            it('_closeConditionDialog does NOT reset _dialogSaving', () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogSaving = true;
+                (card as any)._closeConditionDialog();
+                // Closing must NOT reset the in-flight flag — otherwise the
+                // user could close-then-reopen the dialog and bypass the
+                // re-entry guard while the WS write is still pending.
+                expect((card as any)._dialogSaving).toBe(true);
+                expect((card as any)._showConditionDialog).toBe(false);
+            });
+        });
+
+        // C1: _handlePickerChange re-entry guard
+        describe('_handlePickerChange re-entry guard', () => {
+            it('does not commit when _dialogSaving is already true', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                const hass = createMockHassWithConnection({
+                    states: { 'input_boolean.valid_entity': { state: 'on' } }
+                });
+                const callWSMock = hass.callWS as ReturnType<typeof vi.fn>;
+                card.hass = hass;
+                container.appendChild(card);
+                await flush();
+
+                callWSMock.mockClear();
+                (card as any)._dialogSaving = true;
+                (card as any)._handlePickerChange({
+                    detail: { value: 'input_boolean.valid_entity' }
+                } as CustomEvent);
+                await flush();
+                expect(callWSMock).not.toHaveBeenCalled();
+            });
+        });
+
+        // C2: _startEditing('pin') resubscribe failure handling
+        describe('_startEditing pin resubscribe failure handling', () => {
+            it('reverts _revealed and surfaces _setActionError on resubscribe failure', async () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+                await flush();
+
+                // Replace _subscribe with a failing implementation so we can
+                // exercise the .catch branch deterministically.
+                (card as any)._subscribe = vi.fn().mockRejectedValue(new Error('subscribe boom'));
+                (card as any)._revealed = false;
+                (card as any)._startEditing('pin');
+                // Reveal flips optimistically before the await.
+                expect((card as any)._revealed).toBe(true);
+                await flush();
+                await flush();
+                expect((card as any)._revealed).toBe(false);
+                expect((card as any)._actionError).toContain('subscribe boom');
+            });
+        });
+
+        // C3: _setActionError timer tracking
+        describe('_setActionError timer tracking', () => {
+            it('back-to-back errors do not let the first timer dismiss the second early', () => {
+                vi.useFakeTimers();
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._setActionError('first');
+                expect((card as any)._actionError).toBe('first');
+                // Advance 4s — the first timer would fire 1s from now, but
+                // we set a second error before then.
+                vi.advanceTimersByTime(4000);
+                (card as any)._setActionError('second');
+                expect((card as any)._actionError).toBe('second');
+                // Advance another 1s — that's 5s after the FIRST set, so
+                // the previous-tracked-timer-bug would dismiss the banner.
+                vi.advanceTimersByTime(1000);
+                expect((card as any)._actionError).toBe('second');
+                // 4s more (total 5s after the second set) finally clears.
+                vi.advanceTimersByTime(4000);
+                expect((card as any)._actionError).toBeUndefined();
+                vi.useRealTimers();
+            });
+
+            it('disconnectedCallback clears the pending error timer', () => {
+                vi.useFakeTimers();
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._setActionError('about to disconnect');
+                expect((card as any)._actionErrorTimer).toBeDefined();
+                card.remove();
+                expect((card as any)._actionErrorTimer).toBeUndefined();
+                vi.useRealTimers();
+            });
+        });
+
+        // C4: _closeConditionDialog resets dialog state
+        describe('_closeConditionDialog state cleanup', () => {
+            it('resets _showConditionDialog and _dialogEntityId', () => {
+                const card = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+                card.hass = createMockHassWithConnection();
+                container.appendChild(card);
+
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogEntityId = 'input_boolean.something';
+                (card as any)._closeConditionDialog();
+                expect((card as any)._showConditionDialog).toBe(false);
+                expect((card as any)._dialogEntityId).toBeNull();
+                // _dialogMode no longer exists — the dialog is Add-only.
+                expect((card as any)._dialogMode).toBeUndefined();
+            });
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase A: design hierarchy + a11y critical fixes (PR #1116 Phase A).
+    describe('Phase A — design + a11y fix-up', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        /** Recursively join all template strings (deep) */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        /**
+         * Render a TemplateResult to a flat string by interleaving its static
+         * strings with its scalar (string/number/boolean) values, recursing
+         * into nested templates. Functions and other non-scalars are
+         * substituted with an empty string. Useful for asserting on
+         * attributes whose values come from interpolated expressions.
+         */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function renderToString(result: any): string {
+            if (!result || typeof result !== 'object' || !result.strings) return '';
+            const strings: string[] = result.strings;
+            const values: unknown[] = result.values ?? [];
+            let out = '';
+            for (let i = 0; i < strings.length; i++) {
+                out += strings[i];
+                if (i < values.length) {
+                    const v = values[i];
+                    if (v === null || v === undefined || typeof v === 'function') {
+                        // skip
+                    } else if (typeof v === 'object') {
+                        out += renderToString(v);
+                    } else {
+                        out += String(v);
+                    }
+                }
+            }
+            return out;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function collectAllHandlers(result: any): Array<(...args: any[]) => void> {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectAllHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectAllHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        // D1 — name typography promotion + label drops
+        describe('D1: name typography', () => {
+            it('drops the NAME label from the hero name row', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                // The NAME label was dropped — the editable name span and
+                // pencil are still present, but no "NAME" text label.
+                expect(joined).not.toMatch(/>Name</);
+            });
+
+            it('drops the ENABLED label from the hero toggle row', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice', enabled: true });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).not.toMatch(/>Enabled</);
+            });
+
+            it('keeps the PIN label since "••••" is not self-evident', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toMatch(/>PIN</);
+            });
+
+            it('promotes .hero-name-value to 22px / 600 weight in the stylesheet', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /\.hero-name-value\s*\{[^}]*font-size:\s*22px[^}]*font-weight:\s*600/s
+                );
+            });
+        });
+
+        // D3 — collapsed_sections backward compat
+        describe('D3: collapsed_sections backward compat', () => {
+            function makeCard(
+                collapsed?: ('condition' | 'conditions' | 'lock_status')[]
+            ): SlotCardElement & Record<string, unknown> {
+                const c = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                c.setConfig({
+                    collapsed_sections: collapsed,
+                    config_entry_id: 'abc',
+                    slot: 1,
+                    type: 'custom:lcm-slot'
+                });
+                c.hass = createMockHassWithConnection();
+                container.appendChild(c);
+                return c;
+            }
+
+            it('collapses condition section when canonical "condition" is set', () => {
+                const c = makeCard(['condition']);
+                expect((c as any)._conditionsExpanded).toBe(false);
+            });
+
+            it('collapses condition section when legacy "conditions" is set', () => {
+                const c = makeCard(['conditions']);
+                expect((c as any)._conditionsExpanded).toBe(false);
+            });
+
+            it('expands condition section when neither key is in the list', () => {
+                const c = makeCard(['lock_status']);
+                expect((c as any)._conditionsExpanded).toBe(true);
+            });
+
+            it('uses the singular "condition" as the default when nothing is configured', () => {
+                const c = makeCard();
+                // Default of ['condition', 'lock_status'] keeps both collapsed.
+                expect((c as any)._conditionsExpanded).toBe(false);
+                expect((c as any)._lockStatusExpanded).toBe(false);
+            });
+        });
+
+        // D4 — placeholder copy
+        describe('D4: placeholder copy', () => {
+            it('uses "Not named" instead of "<No Name>" for the empty name placeholder', () => {
+                (card as any)._data = makeSlotCardData({ name: '' });
+                const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('Not named');
+                expect(joined).not.toContain('No Name');
+                expect(joined).not.toContain('&lt;No Name&gt;');
+            });
+
+            it('uses "No PIN set" instead of "<No PIN>" for the empty PIN placeholder', () => {
+                const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('No PIN set');
+                expect(joined).not.toContain('No PIN<');
+                expect(joined).not.toContain('&lt;No PIN&gt;');
+            });
+        });
+
+        // C1 — name-edit auto-focus selector regression test
+        describe('C1: name-edit auto-focus selector', () => {
+            it('uses ".name-edit-input" (no .name ancestor) so the focus selector resolves', async () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                (card as any)._startEditing('name');
+                // updated() runs on the next microtask. Awaiting updateComplete
+                // commits the render and triggers updated(), which is what
+                // needs to find the input via the selector.
+                await (card as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+                const input = card.shadowRoot?.querySelector('.name-edit-input');
+                expect(input).not.toBeNull();
+            });
+        });
+
+        // A1 — hero PIN value a11y
+        describe('A1: hero PIN value a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-label on the editable PIN value', () => {
+                (card as any)._data = makeSlotCardData({ pin: '1234' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                // The editable PIN span declares all three a11y attributes.
+                expect(joined).toContain('class="hero-pin-value editable');
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('tabindex="0"');
+                expect(joined).toContain('aria-label="Edit PIN"');
+            });
+
+            it('Enter and Space on the PIN value invoke _startEditing("pin")', () => {
+                (card as any)._data = makeSlotCardData({ pin: '1234' });
+                const calls: string[] = [];
+                (card as any)._startEditing = (field: string) => calls.push(field);
+                // Stub the enable-toggle handler so accidentally-invoked
+                // handlers from our broad arity-1 sweep don't reject async
+                // Promises and leak as unhandled rejections.
+                (card as any)._handleEnabledToggle = () => undefined;
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const handlers = collectAllHandlers(hero);
+                // Try every keydown-shaped (arity 1) handler with Enter/Space;
+                // the PIN-value keydown will fire startEditing('pin').
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore — some handlers expect different shapes
+                    }
+                }
+                // Should have been called twice for pin (Enter + Space).
+                const pinCalls = calls.filter((c) => c === 'pin').length;
+                expect(pinCalls).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A2 — hero name value a11y
+        describe('A2: hero name value a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-label on the editable name value', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('class="hero-name-value editable"');
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('tabindex="0"');
+                expect(joined).toContain('aria-label="Edit name"');
+            });
+
+            it('Enter and Space on the name value invoke _startEditing("name")', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const calls: string[] = [];
+                (card as any)._startEditing = (field: string) => calls.push(field);
+                (card as any)._handleEnabledToggle = () => undefined;
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const handlers = collectAllHandlers(hero);
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore
+                    }
+                }
+                const nameCalls = calls.filter((c) => c === 'name').length;
+                expect(nameCalls).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A4 — lock-name a11y
+        describe('A4: lock-name a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-label on the navigable lock name', () => {
+                const tmpl = (card as any)._renderLockRow({
+                    code: '1234',
+                    entityId: 'lock.front',
+                    inSync: true,
+                    lockEntityId: 'lock.front',
+                    name: 'Front Door',
+                    syncStatus: 'in_sync'
+                });
+                const rendered = renderToString(tmpl);
+                expect(rendered).toContain('role="button"');
+                expect(rendered).toContain('tabindex="0"');
+                expect(rendered).toContain('aria-label="View Front Door more info"');
+            });
+
+            it('Enter and Space on the lock name dispatch hass-more-info', () => {
+                let dispatched = 0;
+                (card as any)._navigateToLock = () => {
+                    dispatched += 1;
+                };
+                const tmpl = (card as any)._renderLockRow({
+                    code: '1234',
+                    entityId: 'lock.front',
+                    inSync: true,
+                    lockEntityId: 'lock.front',
+                    name: 'Front Door',
+                    syncStatus: 'in_sync'
+                });
+                const handlers = collectAllHandlers(tmpl);
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore
+                    }
+                }
+                expect(dispatched).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A5 — collapsible header a11y
+        describe('A5: collapsible header a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-expanded on the collapsible header', () => {
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    true,
+                    () => undefined,
+                    null
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="collapsible-header"');
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('tabindex="0"');
+                // aria-expanded is bound; the joined static strings keep the
+                // attribute name even though the value is interpolated.
+                expect(joined).toContain('aria-expanded=');
+            });
+
+            it('Enter and Space on the collapsible header invoke onToggle', () => {
+                let toggled = 0;
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    true,
+                    () => {
+                        toggled += 1;
+                    },
+                    null
+                );
+                const handlers = collectAllHandlers(tmpl);
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore
+                    }
+                }
+                // Enter + Space → 2 toggles.
+                expect(toggled).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A6 — action error banner role=alert
+        describe('A6: action error banner role=alert', () => {
+            it('renders role="alert" on the .action-error banner', () => {
+                (card as any)._actionError = 'Boom';
+                (card as any)._data = makeSlotCardData({});
+                const tmpl = (card as any)._renderFromData((card as any)._data);
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="action-error"');
+                expect(joined).toContain('role="alert"');
+            });
+        });
+
+        // A7 — Saving… indicator aria-live
+        describe('A7: dialog Saving indicator aria-live', () => {
+            it('renders aria-live="polite" on the Saving… indicator', () => {
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogSaving = true;
+                const tmpl = (card as any)._renderConditionDialog();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="dialog-saving"');
+                expect(joined).toContain('aria-live="polite"');
+            });
+        });
+
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 });

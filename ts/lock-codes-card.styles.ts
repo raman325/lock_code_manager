@@ -88,10 +88,12 @@ const lockCodesCardComponentStyles = css`
         );
     }
 
-    /* Inactive Lock Code Manager Managed: Muted blue, slightly faded */
+    /* Inactive Lock Code Manager Managed: dulled warning tint to match the
+       slot card's inactive state chip color (orange) — communicates "blocked
+       by conditions" without shouting. */
     .slot-chip.inactive.managed {
-        background: rgba(var(--rgb-primary-color), 0.05);
-        opacity: 0.85;
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
+        opacity: 0.9;
     }
 
     /* Disabled Lock Code Manager Managed: Very muted, clear disabled state */
@@ -128,27 +130,59 @@ const lockCodesCardComponentStyles = css`
         transform: translateY(0);
     }
 
+    .slot-chip.clickable:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
     .slot-top {
-        align-items: flex-start;
+        align-items: center;
         display: flex;
-        flex-direction: column;
-        gap: 6px;
+        gap: 12px;
+        justify-content: space-between;
     }
 
     .slot-badges {
-        align-items: center;
+        align-items: flex-end;
         display: inline-flex;
-        flex-wrap: wrap;
-        gap: 6px;
+        flex-direction: column;
+        flex-shrink: 0;
+        gap: 4px;
     }
 
     .slot-label {
         color: var(--secondary-text-color);
+        flex: 1;
         font-size: var(--lcm-section-header-size);
         font-weight: 500;
         letter-spacing: 0.03em;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
         text-transform: uppercase;
-        width: 100%;
+        white-space: nowrap;
+    }
+
+    /* Config entry title appended to "Slot N · {entry}" — matches the slot-card kicker style. */
+    .slot-entry-title {
+        color: var(--secondary-text-color);
+        font-weight: 500;
+    }
+
+    /* Single content row per chip: name on the left, PIN on the right.
+       No labels — position + typography (bold name, monospace PIN dots)
+       carry meaning. Drops a row vs the labeled-field layout. */
+    .slot-content-row {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-top: 6px;
+        min-width: 0;
+    }
+    .slot-content-row .slot-name-row {
+        flex: 1;
+        min-width: 0;
     }
 
     .slot-name {
@@ -165,10 +199,37 @@ const lockCodesCardComponentStyles = css`
         font-weight: 400;
     }
 
-    /* Disabled slot: strikethrough name */
+    /* Wrapper around the slot name; lays out the optional pending icon
+       alongside the name with a small gap. Inline-flex so the row only takes
+       the space it needs and the chip's column layout still controls width. */
+    .slot-name-row {
+        align-items: center;
+        display: inline-flex;
+        gap: 4px;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    /* Slot disabled by user — name shown in a muted pill, no strikethrough.
+       Mirrors the .lcm-code.off treatment for visual consistency. */
     .slot-chip.disabled .slot-name {
+        background: var(--lcm-section-bg, rgba(127, 127, 127, 0.05));
+        border-radius: 6px;
+        color: var(--disabled-text-color);
+        padding: 2px 8px;
+    }
+
+    /* Slot enabled but lock doesn't have the code yet — clock-icon prefix on
+       the name. Mirrors the .lcm-code.pending treatment. The disabled rule's
+       pill background takes precedence if a slot is somehow both. */
+    .slot-chip.pending .slot-name-pending-icon {
+        --mdc-icon-size: 12px;
         color: var(--secondary-text-color);
-        text-decoration: line-through;
+        flex-shrink: 0;
+    }
+
+    .slot-chip.pending .slot-name {
+        color: var(--secondary-text-color);
     }
 
     .slot-code-row {
