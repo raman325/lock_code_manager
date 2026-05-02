@@ -1202,3 +1202,10 @@ Relevant files:
 ---
 
 sure, let's document Phase B in TODO.md then proceed with Phase A. I'd like to talk through the design changes
+
+---
+
+D1. option b
+D2. I don't actually think this is a problem personally, let's leave it as is for now
+D3. fix visible copy. For YAML, make it condition but accept conditions backwards compatibly
+D4. no preference, will let you decide
