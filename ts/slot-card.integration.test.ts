@@ -2051,6 +2051,76 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect((card as any)._revealed).toBe(true);
         });
 
+        it('reverts the auto-revealed PIN to masked when exiting edit mode via Escape', async () => {
+            (card as any)._revealed = false;
+            (card as any)._revealedForEdit = false;
+
+            (card as any)._startEditing('pin');
+            await flush();
+            // _startEditing flips reveal optimistically before the resubscribe resolves
+            expect((card as any)._revealed).toBe(true);
+            expect((card as any)._revealedForEdit).toBe(true);
+
+            // Simulate Escape
+            const event = { key: 'Escape', target: { value: '' } };
+            (card as any)._handleEditKeydown(event);
+            expect((card as any)._editingField).toBeNull();
+            expect((card as any)._revealed).toBe(false);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
+        it('preserves the manually-revealed PIN when exiting edit mode via Escape', async () => {
+            // User manually revealed via eye button
+            (card as any)._revealed = true;
+            (card as any)._revealedForEdit = false;
+
+            (card as any)._startEditing('pin');
+            await flush();
+            // _startEditing took the else branch since _revealed was already true
+            expect((card as any)._revealed).toBe(true);
+            expect((card as any)._revealedForEdit).toBe(false);
+
+            // Simulate Escape
+            const event = { key: 'Escape', target: { value: '' } };
+            (card as any)._handleEditKeydown(event);
+            expect((card as any)._editingField).toBeNull();
+            // stays revealed
+            expect((card as any)._revealed).toBe(true);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
+        it('reverts auto-revealed PIN on blur', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { pin: 'text.slot_1_pin' }
+            });
+            (card as any)._revealed = false;
+            (card as any)._revealedForEdit = false;
+            (card as any)._startEditing('pin');
+            await flush();
+            expect((card as any)._revealedForEdit).toBe(true);
+
+            const event = { target: { value: '5678' } };
+            (card as any)._handleEditBlur(event);
+            expect((card as any)._revealed).toBe(false);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
+        it('reverts auto-revealed PIN on Enter (after save)', async () => {
+            (card as any)._data = makeSlotCardData({
+                entities: { pin: 'text.slot_1_pin' }
+            });
+            (card as any)._revealed = false;
+            (card as any)._revealedForEdit = false;
+            (card as any)._startEditing('pin');
+            await flush();
+            expect((card as any)._revealedForEdit).toBe(true);
+
+            const event = { key: 'Enter', target: { value: '5678' } };
+            (card as any)._handleEditKeydown(event);
+            expect((card as any)._revealed).toBe(false);
+            expect((card as any)._revealedForEdit).toBe(false);
+        });
+
         it('_handleEditBlur saves value and clears editingField', () => {
             (card as any)._editingField = 'name';
             (card as any)._data = makeSlotCardData({

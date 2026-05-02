@@ -109,6 +109,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
     private _actionErrorTimer?: ReturnType<typeof setTimeout>;
+    private _revealedForEdit = false;
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -1191,6 +1192,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Special handling for PIN: reveal first to show current value
         if (field === 'pin' && !this._revealed) {
             this._revealed = true;
+            this._revealedForEdit = true;
             this._unsubscribe();
             this._subscribe()
                 .then(() => {
@@ -1201,6 +1203,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     // the UI doesn't claim the PIN was revealed when we
                     // never got the data, and surface the failure.
                     this._revealed = false;
+                    this._revealedForEdit = false;
                     this._setActionError(
                         `Failed to reveal PIN: ${err instanceof Error ? err.message : String(err)}`
                     );
@@ -1210,19 +1213,50 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
     }
 
+    private _exitPinEdit(): void {
+        this._editingField = null;
+        if (this._revealedForEdit) {
+            this._revealed = false;
+            this._revealedForEdit = false;
+            // Resubscribe with reveal=false so the backend stops sending the
+            // unmasked PIN. Fire-and-forget; if it fails, the UI already
+            // reflects masked state and the next data tick will catch up.
+            this._unsubscribe();
+            void this._subscribe().catch((err: unknown) => {
+                this._setActionError(
+                    `Failed to remask PIN: ${err instanceof Error ? err.message : String(err)}`
+                );
+            });
+        }
+    }
+
     private _handleEditBlur(e: Event): void {
         const target = e.target as HTMLInputElement;
+        const wasPin = this._editingField === 'pin';
         this._saveEditValue(target.value);
-        this._editingField = null;
+        if (wasPin) {
+            this._exitPinEdit();
+        } else {
+            this._editingField = null;
+        }
     }
 
     private _handleEditKeydown(e: KeyboardEvent): void {
         if (e.key === 'Enter') {
             const target = e.target as HTMLInputElement;
+            const wasPin = this._editingField === 'pin';
             this._saveEditValue(target.value);
-            this._editingField = null;
+            if (wasPin) {
+                this._exitPinEdit();
+            } else {
+                this._editingField = null;
+            }
         } else if (e.key === 'Escape') {
-            this._editingField = null;
+            if (this._editingField === 'pin') {
+                this._exitPinEdit();
+            } else {
+                this._editingField = null;
+            }
         }
     }
 
