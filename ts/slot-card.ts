@@ -987,10 +987,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     /**
      * Close the condition dialog and reset its transient picker state. Does
-     * NOT reset `_dialogSaving` — that flag tracks whether a Save/Remove WS
+     * NOT reset `_dialogSaving` — that flag tracks whether a commit/remove WS
      * call is still in flight, and closing the dialog (e.g. via the Esc
      * key) must not drop that signal or the re-entry guards in
-     * `_removeCondition` and `_saveConditionChanges` would let a second
+     * `_removeCondition` and `_commitConditionPick` would let a second
      * request through. Success-path callers reset `_dialogSaving` after the
      * resubscribe resolves; error-path callers reset it inside their catch
      * blocks.
@@ -1006,12 +1006,12 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      * the Manage dialog). The dialog's destructive styling is the visual
      * safety here — there is no extra confirmation step. The early
      * `_dialogSaving` guard plus the disabled state on the Remove button
-     * (and on Cancel) together prevent double-firing `clear_slot_condition`
-     * from rapid clicks while a save/remove is already in flight, and
-     * prevent the user from closing-then-reopening the dialog to bypass the
-     * guard. The subscribe happens via `await` so a resubscribe failure
-     * surfaces in the user-visible error banner instead of being lost as a
-     * fire-and-forget rejection after the dialog has closed.
+     * together prevent double-firing `clear_slot_condition` from rapid clicks
+     * while a commit/remove is already in flight, and prevent the user from
+     * closing-then-reopening the dialog to bypass the guard. The subscribe
+     * happens via `await` so a resubscribe failure surfaces in the
+     * user-visible error banner instead of being lost as a fire-and-forget
+     * rejection after the dialog has closed.
      */
     private async _removeCondition(): Promise<void> {
         if (this._dialogSaving) return;
@@ -1068,6 +1068,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _renderConditionDialog(): TemplateResult {
         const isManage = this._dialogMode === 'manage';
         const title = isManage ? 'Manage condition' : 'Add a condition';
+        const currentEntityId = this._data?.conditions?.condition_entity?.condition_entity_id;
 
         return html`
             <ha-dialog open @closed=${this._closeConditionDialog} .heading=${title}>
@@ -1085,74 +1086,48 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             (CONDITION_DOMAINS as readonly string[]).includes(
                                 state.entity_id.split('.')[0]
                             )}
-                        @value-changed=${(e: CustomEvent) => {
-                            this._dialogEntityId = e.detail.value || null;
-                        }}
+                        @value-changed=${(e: CustomEvent) =>
+                            this._handlePickerChange(e, currentEntityId)}
                     ></ha-entity-picker>
+                    ${isManage
+                        ? html`<button
+                              class="dialog-remove-btn"
+                              .disabled=${this._dialogSaving}
+                              @click=${() => this._removeCondition()}
+                          >
+                              Remove condition
+                          </button>`
+                        : nothing}
+                    ${this._dialogSaving ? html`<div class="dialog-saving">Saving…</div>` : nothing}
                 </div>
-                ${isManage
-                    ? html`<ha-button
-                          slot="secondaryAction"
-                          class="destructive"
-                          .disabled=${this._dialogSaving}
-                          @click=${() => this._removeCondition()}
-                      >
-                          Remove condition
-                      </ha-button>`
-                    : nothing}
-                <ha-button
-                    slot="secondaryAction"
-                    .disabled=${this._dialogSaving}
-                    @click=${() => this._closeConditionDialog()}
-                >
-                    Cancel
-                </ha-button>
-                <ha-button
-                    slot="primaryAction"
-                    @click=${() => this._saveConditionChanges()}
-                    .disabled=${this._dialogSaving}
-                >
-                    ${this._dialogSaving ? 'Saving…' : 'Save'}
-                </ha-button>
             </ha-dialog>
         `;
     }
 
-    private async _saveConditionChanges(): Promise<void> {
-        // Re-entry guard mirrors `_removeCondition` — covers programmatic
-        // invocation paths the disabled Save button can't catch.
+    private _handlePickerChange(e: CustomEvent, currentEntityId?: string): void {
+        const newValue = (e.detail?.value as string) || null;
+        this._dialogEntityId = newValue;
+        if (!newValue) return;
+        // No-op when the picker re-selected the entity that's already set.
+        if (newValue === currentEntityId) return;
+        // Re-entry guard while a previous commit is in flight.
         if (this._dialogSaving) return;
+        void this._commitConditionPick(newValue);
+    }
+
+    private async _commitConditionPick(entityId: string): Promise<void> {
         if (!this._hass || !this._config) {
             this._setActionError('Card not initialized');
             return;
         }
-
+        if (!(entityId in this._hass.states)) {
+            this._setActionError(`Selected entity not found: ${entityId}`);
+            return;
+        }
         this._dialogSaving = true;
-
         try {
-            if (this._dialogMode === 'add' || this._dialogMode === 'manage') {
-                const entityId =
-                    typeof this._dialogEntityId === 'string' ? this._dialogEntityId.trim() : '';
-                if (!entityId) {
-                    this._setActionError('Please select an entity before saving');
-                    this._dialogSaving = false;
-                    return;
-                }
-                if (!(entityId in this._hass.states)) {
-                    this._setActionError(`Selected entity not found: ${entityId}`);
-                    this._dialogSaving = false;
-                    return;
-                }
-                await this._setSlotCondition(entityId);
-            } else {
-                throw new Error(`Unknown dialog mode: ${this._dialogMode}`);
-            }
-
+            await this._setSlotCondition(entityId);
             this._closeConditionDialog();
-            // Force re-subscribe to get updated data since config changes
-            // don't trigger entity state changes. Awaited so a resubscribe
-            // failure surfaces in the banner instead of disappearing as a
-            // fire-and-forget rejection after the dialog has closed.
             this._unsubscribe();
             await this._subscribe();
             if (this._error) {
@@ -1161,7 +1136,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             this._dialogSaving = false;
         } catch (err) {
             this._setActionError(
-                `Failed to save: ${err instanceof Error ? err.message : String(err)}`
+                `Failed to set condition: ${err instanceof Error ? err.message : String(err)}`
             );
             this._dialogSaving = false;
         }

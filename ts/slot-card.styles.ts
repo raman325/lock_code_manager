@@ -534,34 +534,59 @@ const slotCardComponentStyles = css`
         opacity: 1;
     }
 
-    /* Dialog styles */
+    /* Manage Condition dialog — buttons render inline in the body since
+       ha-button slot rendering is unreliable in the standalone card context. */
     .dialog-content {
-        min-width: 300px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
         padding: 0 8px;
+        min-width: 320px;
     }
 
     .dialog-description {
         color: var(--secondary-text-color);
         font-size: 13px;
         line-height: 1.5;
-        margin: 0 0 16px;
+        margin: 0;
     }
 
     .dialog-content ha-entity-picker {
         display: block;
     }
 
-    ha-button.destructive {
-        --mdc-theme-primary: var(--warning-color, #ffa726);
-    }
-
-    /* Make dialog buttons more obviously interactive */
-    ha-dialog ha-button {
+    .dialog-remove-btn {
+        align-items: center;
+        align-self: flex-start;
+        background: transparent;
+        border: 1px solid var(--warning-color, #ffa726);
+        border-radius: 4px;
+        color: var(--warning-color, #ffa726);
         cursor: pointer;
+        display: inline-flex;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 6px 14px;
+        transition: background 0.15s ease;
+    }
+    .dialog-remove-btn:hover:not(:disabled) {
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.1);
+    }
+    .dialog-remove-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+    .dialog-remove-btn:focus-visible {
+        outline: 2px solid var(--warning-color, #ffa726);
+        outline-offset: 2px;
     }
 
-    ha-dialog ha-button:hover {
-        opacity: 0.8;
+    .dialog-saving {
+        align-self: center;
+        color: var(--secondary-text-color);
+        font-size: 12px;
+        font-style: italic;
     }
 `;
 
