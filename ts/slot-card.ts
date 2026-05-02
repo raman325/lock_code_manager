@@ -177,7 +177,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Set initial collapsed state from config. Accept both 'condition'
         // (the new canonical singular) and 'conditions' (the original plural)
         // for backward compatibility with YAML written before the rename.
-        const collapsed = config.collapsed_sections ?? ['condition', 'lock_status'];
+        const collapsed: ReadonlyArray<string> = config.collapsed_sections ?? [
+            'condition',
+            'lock_status'
+        ];
         this._conditionsExpanded = !(
             collapsed.includes('condition') || collapsed.includes('conditions')
         );
