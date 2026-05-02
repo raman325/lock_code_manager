@@ -82,31 +82,31 @@ const lockCodesCardComponentStyles = css`
         position: relative;
     }
 
-    /* Active Lock Code Manager Managed: Primary blue with tinted background */
-    .slot-chip.active.managed {
-        background: var(--lcm-active-bg-gradient);
-    }
+    /* Active Lock Code Manager Managed: no special tint (inherits the
+       chip's --lcm-section-bg). The state badge inside the chip carries
+       the "active" signal — color the exception, not the norm. */
 
-    /* Active Unmanaged (not Lock Code Manager): Neutral gray, plain background */
+    /* Active Unmanaged (not Lock Code Manager): subtle warm-gray accent
+       so an occupied unmanaged slot reads as different from an Empty
+       chip (which uses the same --lcm-section-bg at 3%). 5% sits between
+       the empty 3% and the inactive/disabled 6% tints. */
     .slot-chip.active.unmanaged {
-        background: linear-gradient(
-            135deg,
-            rgba(var(--rgb-primary-text-color), 0.06),
-            rgba(var(--rgb-primary-text-color), 0.02)
-        );
+        background: rgba(var(--rgb-primary-text-color), 0.05);
     }
 
-    /* Inactive Lock Code Manager Managed: dulled warning tint to match the
-       slot card's inactive state chip color (orange) — communicates "blocked
-       by conditions" without shouting. */
+    /* Inactive Lock Code Manager Managed: warning tint (orange) to match
+       the slot card's inactive treatment — communicates "blocked by
+       conditions" without shouting. 6% follows the canonical background
+       opacity stop. */
     .slot-chip.inactive.managed {
         background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
         opacity: 0.9;
     }
 
-    /* Disabled Lock Code Manager Managed: Very muted, clear disabled state */
+    /* Disabled Lock Code Manager Managed: muted neutral tint, clear
+       disabled state. 6% follows the canonical background opacity stop. */
     .slot-chip.disabled.managed {
-        background: rgba(var(--rgb-primary-text-color), 0.04);
+        background: rgba(var(--rgb-primary-text-color), 0.06);
         opacity: 0.65;
     }
 

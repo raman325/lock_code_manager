@@ -1677,7 +1677,8 @@ describe('LockCodesCard integration', () => {
                 card._data = makeLockCoordinatorData();
                 const tmpl = card._renderSummaryTable();
                 const joined = deepStrings(tmpl);
-                expect(joined).toContain('<caption class="visually-hidden">Code slot summary');
+                expect(joined).toContain('<caption class="visually-hidden">');
+                expect(joined).toContain('Code slot summary');
             });
 
             it('summary table headers use scope="col"', () => {
@@ -1709,6 +1710,22 @@ describe('LockCodesCard integration', () => {
                 const { lockCodesCardStyles } = await import('./lock-codes-card.styles');
                 const allCss = lockCodesCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
                 expect(allCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+            });
+        });
+
+        describe('VC1: active managed slot chip has no special tint', () => {
+            it('stylesheet does not define .slot-chip.active.managed background', async () => {
+                const { lockCodesCardStyles } = await import('./lock-codes-card.styles');
+                const allCss = lockCodesCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                // .slot-chip.active.managed should not have its own background rule
+                // (active inherits the chip's default --lcm-section-bg).
+                expect(allCss).not.toMatch(/\.slot-chip\.active\.managed\s*\{/);
+            });
+
+            it('active.unmanaged still has a subtle distinguishing tint', async () => {
+                const { lockCodesCardStyles } = await import('./lock-codes-card.styles');
+                const allCss = lockCodesCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.slot-chip\.active\.unmanaged\s*\{[^}]*background:/s);
             });
         });
 

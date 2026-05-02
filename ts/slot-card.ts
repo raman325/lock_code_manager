@@ -1,12 +1,15 @@
 import {
+    mdiCheck,
     mdiChevronDown,
     mdiChevronRight,
     mdiChevronUp,
     mdiClockOutline,
+    mdiClose,
     mdiDelete,
     mdiEye,
     mdiEyeOff,
     mdiKey,
+    mdiLockOff,
     mdiPencil,
     mdiPlus
 } from '@mdi/js';
@@ -338,7 +341,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           </button>
                       </div>`
                     : nothing}
-                ${this._renderHeader()}
+                ${this._renderHeader(stateClass)}
                 <div class="content">
                     ${this._renderHero(pin, pinLength, enabled, mode)}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
@@ -422,15 +425,32 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this.dispatchEvent(event);
     }
 
-    private _renderHeader(): TemplateResult {
+    private _renderHeader(
+        stateClass: 'active' | 'inactive' | 'disabled' = 'active'
+    ): TemplateResult {
         const slotKicker = this._renderSlotKicker();
         const stateChip = this._renderStateChip();
+
+        // Surface state on the icon bubble: key when active, clock when
+        // blocked by condition (matches the lock card's pending-clock
+        // motif), lock-off when the user has explicitly disabled the slot.
+        let iconPath: string;
+        switch (stateClass) {
+            case 'inactive':
+                iconPath = mdiClockOutline;
+                break;
+            case 'disabled':
+                iconPath = mdiLockOff;
+                break;
+            default:
+                iconPath = mdiKey;
+        }
 
         return html`
             <div class="header">
                 <div class="header-top">
                     <div class="header-icon" aria-hidden="true">
-                        <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
+                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
                     </div>
                     <h2 class="header-title">${slotKicker}</h2>
                     ${stateChip}
@@ -578,6 +598,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     </div>
                     <div class="hero-toggle">
                         <ha-switch
+                            aria-label="Enabled"
                             .checked=${enabled === true}
                             .disabled=${enabled === null}
                             @change=${this._handleEnabledToggle}
@@ -655,15 +676,21 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
         const isAllowing = entity.state === 'on';
         const name = entity.friendly_name ?? entity.condition_entity_id;
+        // Allowing reads as success (green); blocking reads as warning so the
+        // color family carries meaning in addition to the icon.
+        const modifier = isAllowing ? 'success' : 'warning';
         // aria-label overrides what screen readers announce so they get
         // "Allowing access: Vacation" instead of "check mark Vacation"
         // (screen readers vocalize ✓/✗ as "check mark" / "ballot X").
         const ariaLabel = `${isAllowing ? 'Allowing access' : 'Blocking access'}: ${name}`;
-        return html`<span
-            class="collapsible-badge ${isAllowing ? '' : 'warning'}"
-            aria-label=${ariaLabel}
-        >
-            ${isAllowing ? '✓' : '✗'} ${name}
+        const iconPath = isAllowing ? mdiCheck : mdiClose;
+        return html`<span class="collapsible-badge ${modifier}" aria-label=${ariaLabel}>
+            <ha-svg-icon
+                class="collapsible-badge-icon"
+                .path=${iconPath}
+                aria-hidden="true"
+            ></ha-svg-icon>
+            ${name}
         </span>`;
     }
 
@@ -1151,8 +1178,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             <ha-dialog open @closed=${this._closeConditionDialog} .heading=${'Add condition'}>
                 <div class="dialog-content">
                     <p class="dialog-description">
-                        PIN is active only when this entity is on. Pick a calendar, schedule, binary
-                        sensor, switch, or input boolean.
+                        PIN is active only when this entity is on. Pick a calendar, schedule,
+                        helper, or any on/off entity.
                     </p>
                     <ha-entity-picker
                         .hass=${this._hass}

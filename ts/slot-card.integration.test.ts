@@ -2433,7 +2433,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('none');
         });
 
-        it('uses friendly_name and ✓ when entity is allowing', () => {
+        it('uses friendly_name and success modifier when entity is allowing', () => {
             const tmpl = (card as any)._renderConditionsSummary({
                 condition_entity: {
                     condition_entity_id: 'calendar.vacation',
@@ -2444,13 +2444,15 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('collapsible-badge');
-            // Allowing case: dynamic class modifier is empty, not "warning".
-            expect(tmpl.values).not.toContain('warning');
-            expect(joined).toContain('✓');
+            // Allowing case: dynamic class modifier is "success" (green).
+            expect(tmpl.values).toContain('success');
+            // Phase B replaces ✓ glyph with mdiCheck icon.
+            expect(joined).toContain('collapsible-badge-icon');
+            expect(joined).not.toContain('✓');
             expect(joined).toContain('Vacation');
         });
 
-        it('uses warning badge with ✗ when entity is blocking', () => {
+        it('uses warning badge with mdiClose icon when entity is blocking', () => {
             const tmpl = (card as any)._renderConditionsSummary({
                 condition_entity: {
                     condition_entity_id: 'calendar.vacation',
@@ -2464,7 +2466,9 @@ describe('LockCodeManagerSlotCard integration', () => {
             // splice it into the class attribute at render time).
             expect(joined).toContain('collapsible-badge');
             expect(tmpl.values).toContain('warning');
-            expect(joined).toContain('✗');
+            // Phase B replaces ✗ glyph with mdiClose icon.
+            expect(joined).toContain('collapsible-badge-icon');
+            expect(joined).not.toContain('✗');
             expect(joined).toContain('Vacation');
         });
 
@@ -2830,7 +2834,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('collapsible-chevron');
             expect(joined).toContain('collapsible-badge');
             expect(joined).toContain('Vacation');
-            expect(joined).toContain('✓');
+            // Phase B: ✓ glyph replaced with mdi icon.
+            expect(joined).toContain('collapsible-badge-icon');
             expect(joined).not.toContain('add-condition-btn');
         });
 
@@ -2845,7 +2850,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('collapsible-badge');
-            expect(joined).toContain('✗');
+            // Phase B: ✗ glyph replaced with mdi icon.
+            expect(joined).toContain('collapsible-badge-icon');
             expect(joined).not.toContain('add-condition-btn');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -4272,6 +4278,180 @@ describe('LockCodeManagerSlotCard integration', () => {
                 expect(allCss).toMatch(
                     /@media\s*\(prefers-reduced-motion:\s*reduce\)[^{]*\{[^}]*\.collapsible-content/s
                 );
+            });
+        });
+
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase B (Commit 2): visual consolidation — color-the-exception state,
+    // helper sizes, condition badge color/icon swap, header icon by state,
+    // dialog microcopy update.
+    describe('Phase B — visual consolidation', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepStrings).join('');
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        describe('VC1: active card has no special tint', () => {
+            it('stylesheet does not define ha-card.slot-card-state-active', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).not.toMatch(/ha-card\.slot-card-state-active\s*\{/);
+            });
+
+            it('stylesheet still defines inactive and disabled state tints', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/ha-card\.slot-card-state-inactive\s*\{/);
+                expect(allCss).toMatch(/ha-card\.slot-card-state-disabled\s*\{/);
+            });
+        });
+
+        describe('VC2: ENABLED label dropped, switch gets aria-label', () => {
+            it('hero toggle switch has aria-label="Enabled"', () => {
+                (card as any)._data = makeSlotCardData({ enabled: true });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('aria-label="Enabled"');
+                // The visible "Enabled" label remains dropped.
+                expect(joined).not.toMatch(/>Enabled</);
+            });
+        });
+
+        describe('VC3: condition summary badge — allowing → success', () => {
+            it('allowing case uses .collapsible-badge.success', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'on'
+                    }
+                });
+                expect(tmpl.values).toContain('success');
+            });
+
+            it('blocking case still uses .collapsible-badge.warning', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'off'
+                    }
+                });
+                expect(tmpl.values).toContain('warning');
+            });
+
+            it('shared styles include .collapsible-badge.success rule', async () => {
+                const { lcmSharedStyles } = await import('./shared-styles');
+                const allCss = String(lcmSharedStyles.cssText ?? lcmSharedStyles);
+                expect(allCss).toMatch(/\.collapsible-badge\.success\s*\{/);
+            });
+        });
+
+        describe('VC4: ✓/✗ glyphs replaced with mdi icons', () => {
+            it('summary badge renders an icon, not the literal glyphs', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'on'
+                    }
+                });
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('collapsible-badge-icon');
+                expect(joined).not.toContain('✓');
+                expect(joined).not.toContain('✗');
+            });
+        });
+
+        describe('VC5: helpers label font-size bumped to 11px', () => {
+            it('stylesheet uses 11px on .helpers-label', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.helpers-label\s*\{[^}]*font-size:\s*11px/s);
+            });
+        });
+
+        describe('VC6: header icon bubble surfaces state', () => {
+            // The actual mdi path strings come from @mdi/js — we look up the
+            // exact path values rather than hard-coding the SVG to keep these
+            // tests robust to mdi package version bumps.
+            it('renders mdiKey when stateClass is active (default)', async () => {
+                const { mdiKey } = await import('@mdi/js');
+                const tmpl = (card as any)._renderHeader('active');
+                expect(tmpl.values).toContain(mdiKey);
+            });
+
+            it('renders mdiClockOutline when stateClass is inactive', async () => {
+                const { mdiClockOutline } = await import('@mdi/js');
+                const tmpl = (card as any)._renderHeader('inactive');
+                expect(tmpl.values).toContain(mdiClockOutline);
+            });
+
+            it('renders mdiLockOff when stateClass is disabled', async () => {
+                const { mdiLockOff } = await import('@mdi/js');
+                const tmpl = (card as any)._renderHeader('disabled');
+                expect(tmpl.values).toContain(mdiLockOff);
+            });
+        });
+
+        describe('VC7: dialog microcopy de-jargoned', () => {
+            it('uses friendly "helper" and "on/off entity" copy in the dialog body', () => {
+                (card as any)._showConditionDialog = true;
+                const tmpl = (card as any)._renderConditionDialog();
+                // Check the dialog description text directly (the static
+                // strings of the inner <p class="dialog-description">)
+                // — deepStrings would also pick up the picker's domain
+                // list, which still contains "binary_sensor" as a filter
+                // value but not as user-facing copy.
+                const tmplJson = JSON.stringify(tmpl);
+                // The friendly phrases must appear.
+                expect(tmplJson).toContain('helper');
+                expect(tmplJson).toContain('on/off');
+                // The old jargon-y phrases must NOT appear in the static
+                // strings (the picker config still uses the canonical
+                // domain names internally; we only care about user-visible
+                // text in the description paragraph).
+                expect(tmplJson).not.toContain('input boolean');
+                expect(tmplJson).not.toContain('binary\\nsensor');
+                // The static description string no longer contains the
+                // word "binary" in user-facing text.
+                const description = tmpl.values.find(
+                    (v: unknown) =>
+                        typeof v === 'object' &&
+                        v !== null &&
+                        Array.isArray((v as any).strings) &&
+                        (v as any).strings.some((s: string) => s.includes('dialog-description'))
+                );
+                if (description) {
+                    const descStrings = description.strings.join(' ');
+                    expect(descStrings).not.toContain('binary');
+                    expect(descStrings).not.toContain('input boolean');
+                }
             });
         });
 

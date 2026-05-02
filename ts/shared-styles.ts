@@ -282,11 +282,23 @@ export const lcmCollapsibleStyles = css`
     }
 
     .collapsible-badge {
+        align-items: center;
         background: var(--lcm-active-bg);
         border-radius: 10px;
         color: var(--primary-color);
+        display: inline-flex;
         font-size: var(--lcm-badge-font-size);
+        gap: 4px;
         padding: 2px 8px;
+    }
+
+    /* Icon prefix on a collapsible badge — sized down to 12px so it pairs
+       with the 10px badge text without dominating it. Color inherits from
+       the badge color so success/warning modifiers carry through. */
+    .collapsible-badge-icon {
+        --mdc-icon-size: 12px;
+        color: inherit;
+        flex-shrink: 0;
     }
 
     .collapsible-badge.primary {
@@ -297,6 +309,14 @@ export const lcmCollapsibleStyles = css`
     .collapsible-badge.warning {
         background: var(--warning-color, #ffa600);
         color: var(--text-primary-color, #fff);
+    }
+
+    /* Success modifier — used for the "allowing" condition summary so that
+       allowing reads as green and blocking reads as warning everywhere
+       across the cards. 16% follows the canonical chip/badge opacity stop. */
+    .collapsible-badge.success {
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.16);
+        color: var(--success-color, #43a047);
     }
 
     .collapsible-badge.muted {

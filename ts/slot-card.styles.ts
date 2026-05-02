@@ -48,20 +48,16 @@ const slotCardComponentStyles = css`
         display: block;
     }
 
-    /* Card-level state tinting — mirrors the lock card's slot-chip backgrounds
-       so a slot reads the same regardless of which card you see it on.
-       Active = primary tint, Inactive = warning (blocked), Disabled = muted. */
-    ha-card.slot-card-state-active {
-        background: var(
-            --lcm-active-bg-gradient,
-            var(--ha-card-background, var(--card-background-color))
-        );
-    }
+    /* Card-level state tinting — color the exception, not the norm. Active
+       slots get no special tint (the default ha-card background); inactive
+       (blocked by condition) and disabled-by-user states get a subtle tint
+       so the exception reads at a glance. Opacity stops follow the
+       3-stop system: 6% backgrounds / 12% surfaces / 16% chips. */
     ha-card.slot-card-state-inactive {
         background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
     }
     ha-card.slot-card-state-disabled {
-        background: rgba(var(--rgb-primary-text-color), 0.04);
+        background: rgba(var(--rgb-primary-text-color), 0.06);
         opacity: 0.9;
     }
 
@@ -332,11 +328,11 @@ const slotCardComponentStyles = css`
     }
 
     .lcm-overlay.allowing {
-        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.08);
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.06);
     }
 
     .lcm-overlay.blocking {
-        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.1);
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
     }
 
     .lcm-overlay-status {
@@ -433,7 +429,7 @@ const slotCardComponentStyles = css`
 
     .helpers-label {
         color: var(--secondary-text-color);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.08em;
         margin: 14px 0 4px 4px;
