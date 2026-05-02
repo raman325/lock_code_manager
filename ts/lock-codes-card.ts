@@ -452,6 +452,13 @@ class LockCodesCard extends LockCodesCardBase {
         const showName = !!slotName || managed !== false;
         const isClickable = managed === true && !!slot.config_entry_id;
 
+        // Pending: slot has a configured code but the lock doesn't have it yet.
+        // Mirrors the .lcm-code.pending detection on the PIN — out-of-sync,
+        // syncing, etc. Defensive default when enabled is unknown (undefined
+        // doesn't mean "off").
+        const lockHasCode = !isSlotEmpty(slot.code) || !!slot.code_length;
+        const isPending = hasConfiguredCode && !lockHasCode && slot.enabled !== false;
+
         // Determine state for LCM-managed slots:
         // - Active: active=true (code on lock, conditions met)
         // - Inactive: enabled=true + active=false (enabled but conditions blocking)
@@ -495,10 +502,11 @@ class LockCodesCard extends LockCodesCardBase {
         // Determine managed class for styling
         const managedClass = managed === true ? 'managed' : managed === false ? 'unmanaged' : '';
         const clickableClass = isClickable ? 'clickable' : '';
+        const pendingClass = isPending ? 'pending' : '';
 
         return html`
             <div
-                class="slot-chip ${stateClass} ${managedClass} ${clickableClass} ${isAlone
+                class="slot-chip ${stateClass} ${pendingClass} ${managedClass} ${clickableClass} ${isAlone
                     ? 'full-width'
                     : ''}"
                 title=${isClickable ? 'Click to manage this slot' : nothing}
@@ -516,8 +524,16 @@ class LockCodesCard extends LockCodesCardBase {
                     </div>
                 </div>
                 ${showName
-                    ? html`<span class="slot-name ${slotName ? '' : 'unnamed'}">
-                          ${slotName ?? 'Unnamed'}
+                    ? html`<span class="slot-name-row">
+                          ${isPending
+                              ? html`<ha-svg-icon
+                                    class="slot-name-pending-icon"
+                                    .path=${mdiClockOutline}
+                                ></ha-svg-icon>`
+                              : nothing}
+                          <span class="slot-name ${slotName ? '' : 'unnamed'}">
+                              ${slotName ?? 'Unnamed'}
+                          </span>
                       </span>`
                     : nothing}
                 ${this._renderCodeSection(slot, hasCode, mode)}

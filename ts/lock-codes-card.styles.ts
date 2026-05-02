@@ -165,10 +165,37 @@ const lockCodesCardComponentStyles = css`
         font-weight: 400;
     }
 
-    /* Disabled slot: strikethrough name */
+    /* Wrapper around the slot name; lays out the optional pending icon
+       alongside the name with a small gap. Inline-flex so the row only takes
+       the space it needs and the chip's column layout still controls width. */
+    .slot-name-row {
+        align-items: center;
+        display: inline-flex;
+        gap: 4px;
+        max-width: 100%;
+        min-width: 0;
+    }
+
+    /* Slot disabled by user — name shown in a muted pill, no strikethrough.
+       Mirrors the .lcm-code.off treatment for visual consistency. */
     .slot-chip.disabled .slot-name {
+        background: var(--lcm-section-bg, rgba(127, 127, 127, 0.05));
+        border-radius: 6px;
+        color: var(--disabled-text-color);
+        padding: 2px 8px;
+    }
+
+    /* Slot enabled but lock doesn't have the code yet — clock-icon prefix on
+       the name. Mirrors the .lcm-code.pending treatment. The disabled rule's
+       pill background takes precedence if a slot is somehow both. */
+    .slot-chip.pending .slot-name-pending-icon {
+        --mdc-icon-size: 12px;
         color: var(--secondary-text-color);
-        text-decoration: line-through;
+        flex-shrink: 0;
+    }
+
+    .slot-chip.pending .slot-name {
+        color: var(--secondary-text-color);
     }
 
     .slot-code-row {

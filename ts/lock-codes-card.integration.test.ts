@@ -994,6 +994,123 @@ describe('LockCodesCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
+    describe('_renderSlotChip pending state on slot name', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // Recursively collect template-literal strings, including nested
+        // sub-templates, so we can assert presence of conditional markup
+        // and class modifiers on the rendered chip.
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const parts: string[] = [];
+            if (tmpl.strings) parts.push(tmpl.strings.join(''));
+            for (const v of tmpl.values ?? []) {
+                if (v && typeof v === 'object' && (v.strings || v.values)) {
+                    parts.push(collectAllStrings(v));
+                } else if (typeof v === 'string') {
+                    parts.push(v);
+                }
+            }
+            return parts.join(' ');
+        };
+
+        // Split a rendered template's collected text into whitespace-separated
+        // tokens. The chip's interpolated class modifiers ('active', 'pending',
+        // 'disabled', etc.) appear as their own tokens, distinct from the
+        // hyphenated 'slot-name-pending-icon' class on the icon element.
+        const tokenize = (rendered: string): string[] =>
+            rendered.split(/\s+/).filter((s) => s.length > 0);
+
+        it('marks chip as pending when slot is enabled and lock has no code', () => {
+            const slot = {
+                active: true,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const tokens = tokenize(collectAllStrings(result));
+            expect(tokens).toContain('pending');
+        });
+
+        it('does not mark chip as pending when slot is disabled', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            const tokens = tokenize(rendered);
+            // Chip should be 'disabled' but not 'pending'.
+            expect(tokens).toContain('disabled');
+            expect(tokens).not.toContain('pending');
+            expect(rendered).not.toContain('slot-name-pending-icon');
+        });
+
+        it('does not mark chip as pending when lock has the code', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            const tokens = tokenize(rendered);
+            expect(tokens).not.toContain('pending');
+            expect(rendered).not.toContain('slot-name-pending-icon');
+        });
+
+        it('renders clock-icon prefix on slot-name for pending slots', () => {
+            const slot = {
+                active: true,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            expect(collectAllStrings(result)).toContain('slot-name-pending-icon');
+        });
+
+        it('does not render clock-icon prefix on slot-name for disabled slots', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Test User',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            expect(collectAllStrings(result)).not.toContain('slot-name-pending-icon');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('_formatCode', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: LockCodesCardElement & Record<string, unknown>;
