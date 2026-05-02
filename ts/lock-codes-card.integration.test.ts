@@ -819,36 +819,177 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: '1234' })).toBe('');
         });
 
-        it('returns disabled masked for configured_code when masked', () => {
+        it('returns "off masked" when slot disabled and code masked', () => {
             (card as any)._config = {
                 code_display: 'masked',
                 lock_entity_id: 'lock.test_1',
                 type: 'custom:lcm-lock-codes'
             };
             expect(
-                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
-            ).toBe('disabled masked');
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    enabled: false
+                })
+            ).toBe('off masked');
         });
 
-        it('returns disabled for configured_code when unmasked', () => {
+        it('returns "off" when slot disabled and code unmasked', () => {
             (card as any)._config = {
                 code_display: 'unmasked',
                 lock_entity_id: 'lock.test_1',
                 type: 'custom:lcm-lock-codes'
             };
             expect(
-                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
-            ).toBe('disabled');
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    enabled: false
+                })
+            ).toBe('off');
         });
 
-        it('returns disabled masked for configured_code_length', () => {
+        it('returns "pending masked" when slot enabled and code masked', () => {
+            (card as any)._config = {
+                code_display: 'masked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
             expect(
                 (card as any)._getCodeClass({
                     slot: 1,
                     code: 'empty',
-                    configured_code_length: 4
+                    configured_code: '1234',
+                    enabled: true
                 })
-            ).toBe('disabled masked');
+            ).toBe('pending masked');
+        });
+
+        it('returns "pending" when slot enabled and code unmasked', () => {
+            (card as any)._config = {
+                code_display: 'unmasked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    enabled: true
+                })
+            ).toBe('pending');
+        });
+
+        it('returns "pending masked" when enabled state is unknown (defensive default)', () => {
+            (card as any)._config = {
+                code_display: 'masked',
+                lock_entity_id: 'lock.test_1',
+                type: 'custom:lcm-lock-codes'
+            };
+            // Undefined enabled does not mean "off"; treat as pending.
+            expect(
+                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
+            ).toBe('pending masked');
+        });
+
+        it('returns "off masked" for configured_code_length when slot disabled', () => {
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code_length: 4,
+                    enabled: false
+                })
+            ).toBe('off masked');
+        });
+
+        it('returns "pending masked" for configured_code_length when slot enabled', () => {
+            expect(
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code_length: 4,
+                    enabled: true
+                })
+            ).toBe('pending masked');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderCodeDisplayMode pending icon', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // Recursively collect all template-literal strings, including nested
+        // sub-templates passed via ${...}. Used to assert presence of conditional
+        // markup like the pending icon.
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const parts: string[] = [];
+            if (tmpl.strings) parts.push(tmpl.strings.join(''));
+            for (const v of tmpl.values ?? []) {
+                if (v && typeof v === 'object' && (v.strings || v.values)) {
+                    parts.push(collectAllStrings(v));
+                }
+            }
+            return parts.join(' ');
+        };
+
+        it('renders clock-icon prefix for pending state', () => {
+            const slot = {
+                slot: 1,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: true,
+                managed: true
+            };
+            const result = (card as any)._renderCodeDisplayMode(
+                slot,
+                false,
+                'masked_with_reveal',
+                false
+            );
+            expect(collectAllStrings(result)).toContain('lcm-code-pending-icon');
+        });
+
+        it('does not render clock-icon prefix for off state', () => {
+            const slot = {
+                slot: 1,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true
+            };
+            const result = (card as any)._renderCodeDisplayMode(
+                slot,
+                false,
+                'masked_with_reveal',
+                false
+            );
+            expect(collectAllStrings(result)).not.toContain('lcm-code-pending-icon');
+        });
+
+        it('does not render clock-icon prefix when lock has the code', () => {
+            const slot = { slot: 1, code: '1234', enabled: true, managed: true };
+            const result = (card as any)._renderCodeDisplayMode(
+                slot,
+                true,
+                'masked_with_reveal',
+                false
+            );
+            expect(collectAllStrings(result)).not.toContain('lcm-code-pending-icon');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

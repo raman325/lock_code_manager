@@ -132,7 +132,7 @@ export const lcmStatusIndicatorStyles = css`
 
 /**
  * Shared PIN/code display styles.
- * Classes: .lcm-code, .lcm-code.masked, .lcm-code.disabled, .lcm-code.no-code
+ * Classes: .lcm-code, .lcm-code.masked, .lcm-code.off, .lcm-code.pending, .lcm-code.no-code
  */
 export const lcmCodeStyles = css`
     .lcm-code {
@@ -147,9 +147,28 @@ export const lcmCodeStyles = css`
         color: var(--secondary-text-color);
     }
 
-    .lcm-code.disabled {
+    /* Slot disabled by user — PIN exists in config but is intentionally not on
+       the lock. Heavily dimmed dots in a muted pill, no strikethrough. */
+    .lcm-code.off {
+        background: var(--lcm-section-bg, rgba(127, 127, 127, 0.05));
+        border-radius: 6px;
+        color: var(--disabled-text-color);
+        padding: 2px 8px;
+    }
+
+    /* Slot enabled but lock doesn't have the code yet (out-of-sync, syncing, etc.).
+       Dim dots with a clock-icon prefix. No strikethrough. */
+    .lcm-code.pending {
+        align-items: center;
         color: var(--secondary-text-color);
-        text-decoration: line-through;
+        display: inline-flex;
+        gap: 4px;
+    }
+
+    .lcm-code.pending .lcm-code-pending-icon {
+        --mdc-icon-size: 12px;
+        color: var(--secondary-text-color);
+        flex-shrink: 0;
     }
 
     .lcm-code.no-code {

@@ -1,4 +1,4 @@
-import { mdiCheck, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js';
+import { mdiCheck, mdiClockOutline, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
@@ -583,13 +583,21 @@ class LockCodesCard extends LockCodesCardBase {
         isEditable: boolean
     ): TemplateResult {
         const editableClass = isEditable ? 'editable' : '';
+        const codeClass = this._getCodeClass(slot);
+        const isPending = codeClass.split(' ').includes('pending');
         return html`
             <div class="slot-code-row">
                 <span
-                    class="lcm-code ${this._getCodeClass(slot)} ${editableClass}"
+                    class="lcm-code ${codeClass} ${editableClass}"
                     title=${isEditable ? 'Click to edit' : nothing}
                     @click=${isEditable ? (e: Event) => this._startEditing(e, slot) : nothing}
                 >
+                    ${isPending
+                        ? html`<ha-svg-icon
+                              class="lcm-code-pending-icon"
+                              .path=${mdiClockOutline}
+                          ></ha-svg-icon>`
+                        : nothing}
                     ${this._formatCode(slot)}
                 </span>
                 ${mode === 'masked_with_reveal' && hasCode
@@ -609,17 +617,18 @@ class LockCodesCard extends LockCodesCardBase {
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
+        const maskSuffix = shouldMask ? ' masked' : '';
 
         if (slot.code === SLOT_CODE_UNREADABLE || slot.code_length) return 'masked';
         if (!isSlotEmpty(slot.code)) return '';
 
-        // Empty/null code on the lock — check for a configured PIN
-        // (disabled LCM slot where the code hasn't been pushed yet).
-        if (slot.configured_code) {
-            return shouldMask ? 'disabled masked' : 'disabled';
-        }
-        if (slot.configured_code_length) {
-            return 'disabled masked';
+        // Empty/null code on the lock — distinguish "off" (user disabled the slot)
+        // from "pending" (slot enabled but code not yet on the lock). Pending is the
+        // defensive default when the enabled state is unknown — undefined doesn't
+        // mean "off".
+        if (slot.configured_code || slot.configured_code_length) {
+            const cause = slot.enabled === false ? 'off' : 'pending';
+            return `${cause}${maskSuffix}`;
         }
         return 'no-code';
     }
