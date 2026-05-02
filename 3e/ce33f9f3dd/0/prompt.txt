@@ -254,3 +254,465 @@ found a bug. When the PIN is hidden by default, then you click to edit, you can 
 ---
 
 oh, there are no buttons right now, that's the problem
+
+---
+
+Element ha-sidebar scheduled an update (generally because a property was set) after an update completed, causing a new update to be scheduled. This is inefficient and should be avoided unless the next update can only be scheduled as a side effect of the previous update. See https://lit.dev/msg/change-in-update for more information.
+issueWarning @ reactive-element.js:97
+_$didUpdate @ reactive-element.js:912
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ scrollable-fade-mixin.ts:24
+(anonymous) @ subscribe-mixin.ts:13
+constructor @ ha-sidebar.ts:167
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ ha-sidebar.ts:651
+__webpack_require__.a @ app.js:2592
+eval @ ha-sidebar.ts:1
+./src/components/ha-sidebar.ts @ src_components_ha-sidebar_ts.js:45
+__webpack_require__ @ app.js:2492
+Promise.then
+firstUpdated @ home-assistant-main.ts:80
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ home-assistant-main.ts:40
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+update @ home-assistant.ts:94
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:293
+eval @ VM15007 collection.js:112
+setTimeout
+subscribe @ VM15007 collection.js:112
+subscribeServices @ services.js:57
+hassConnected @ connection-mixin.ts:293
+hassConnected @ state-display-mixin.ts:10
+hassConnected @ translations-mixin.ts:117
+hassConnected @ themes-mixin.ts:69
+hassConnected @ auth-mixin.ts:24
+hassConnected @ home-assistant.ts:169
+initializeHass @ connection-mixin.ts:227
+_initializeHass @ home-assistant.ts:255
+await in _initializeHass
+firstUpdated @ home-assistant.ts:99
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ hass-base-mixin.ts:6
+constructor @ context-mixin.ts:43
+(anonymous) @ logging-mixin.ts:24
+(anonymous) @ panel-title-mixin.ts:18
+(anonymous) @ haptic-mixin.ts:38
+constructor @ url-sync-mixin.ts:18
+(anonymous) @ dialog-manager-mixin.ts:28
+(anonymous) @ notification-mixin.ts:5
+(anonymous) @ connection-mixin.ts:49
+(anonymous) @ disconnect-toast-mixin.ts:16
+(anonymous) @ sidebar-mixin.ts:24
+(anonymous) @ action-mixin.ts:16
+(anonymous) @ automation-editor-mixin.ts:21
+(anonymous) @ more-info-mixin.ts:19
+constructor @ state-display-mixin.ts:8
+constructor @ translations-mixin.ts:65
+constructor @ themes-mixin.ts:26
+(anonymous) @ auth-mixin.ts:14
+(anonymous) @ hass-element.ts:24
+constructor @ quick-bar-mixin.ts:35
+constructor @ home-assistant.ts:52
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ home-assistant.ts:44
+await in (anonymous)
+__webpack_require__.a @ app.js:2592
+eval @ home-assistant.ts:1
+./src/layouts/home-assistant.ts @ app.js:455
+__webpack_require__ @ app.js:2492
+eval @ app.ts:5
+__webpack_require__.a @ app.js:2592
+eval @ app.ts:1
+./src/entrypoints/app.ts @ app.js:439
+__webpack_require__ @ app.js:2492
+(anonymous) @ app.js:2759Understand this warning
+ha-button.ts:37 Element ha-button scheduled an update (generally because a property was set) after an update completed, causing a new update to be scheduled. This is inefficient and should be avoided unless the next update can only be scheduled as a side effect of the previous update. See https://lit.dev/msg/change-in-update for more information.
+issueWarning @ reactive-element.js:97
+_$didUpdate @ reactive-element.js:912
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+WebAwesomeElement @ webawesome-element.js:113
+WebAwesomeFormAssociatedElement @ webawesome-form-associated-element.js:265
+WaButton @ button.js:189
+constructor @ ha-button.ts:37
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ ha-icon-button.ts:9
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:953
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:953
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ scrollable-fade-mixin.ts:24
+(anonymous) @ subscribe-mixin.ts:13
+constructor @ ha-sidebar.ts:167
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ ha-sidebar.ts:651
+__webpack_require__.a @ app.js:2592
+eval @ ha-sidebar.ts:1
+./src/components/ha-sidebar.ts @ src_components_ha-sidebar_ts.js:45
+__webpack_require__ @ app.js:2492
+Promise.then
+firstUpdated @ home-assistant-main.ts:80
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ home-assistant-main.ts:40
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+update @ home-assistant.ts:94
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:293
+eval @ VM15007 collection.js:112
+setTimeout
+subscribe @ VM15007 collection.js:112
+subscribeServices @ services.js:57
+hassConnected @ connection-mixin.ts:293
+hassConnected @ state-display-mixin.ts:10
+hassConnected @ translations-mixin.ts:117
+hassConnected @ themes-mixin.ts:69
+hassConnected @ auth-mixin.ts:24
+hassConnected @ home-assistant.ts:169
+initializeHass @ connection-mixin.ts:227
+_initializeHass @ home-assistant.ts:255
+await in _initializeHass
+firstUpdated @ home-assistant.ts:99
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ hass-base-mixin.ts:6
+constructor @ context-mixin.ts:43
+(anonymous) @ logging-mixin.ts:24
+(anonymous) @ panel-title-mixin.ts:18
+(anonymous) @ haptic-mixin.ts:38
+constructor @ url-sync-mixin.ts:18
+(anonymous) @ dialog-manager-mixin.ts:28
+(anonymous) @ notification-mixin.ts:5
+(anonymous) @ connection-mixin.ts:49
+(anonymous) @ disconnect-toast-mixin.ts:16
+(anonymous) @ sidebar-mixin.ts:24
+(anonymous) @ action-mixin.ts:16
+(anonymous) @ automation-editor-mixin.ts:21
+(anonymous) @ more-info-mixin.ts:19
+constructor @ state-display-mixin.ts:8
+constructor @ translations-mixin.ts:65
+constructor @ themes-mixin.ts:26
+(anonymous) @ auth-mixin.ts:14
+(anonymous) @ hass-element.ts:24
+constructor @ quick-bar-mixin.ts:35
+constructor @ home-assistant.ts:52
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ home-assistant.ts:44
+await in (anonymous)
+__webpack_require__.a @ app.js:2592
+eval @ home-assistant.ts:1
+./src/layouts/home-assistant.ts @ app.js:455
+__webpack_require__ @ app.js:2492
+eval @ app.ts:5
+__webpack_require__.a @ app.js:2592
+eval @ app.ts:1
+./src/entrypoints/app.ts @ app.js:439
+__webpack_require__ @ app.js:2492
+(anonymous) @ app.js:2759Understand this warning
+load_resource.ts:32  GET http://localhost:8123/lock_code_manager_files/generated/lock-code-manager.js net::ERR_ABORTED 404 (Not Found)
+(anonymous) @ load_resource.ts:32
+(anonymous) @ load_resource.ts:6
+(anonymous) @ load_resource.ts:37
+(anonymous) @ load-resources.ts:40
+(anonymous) @ load-resources.ts:54
+(anonymous) @ load-resources.ts:53
+(anonymous) @ ha-panel-lovelace.ts:351
+Promise.then
+_fetchConfig @ ha-panel-lovelace.ts:351
+willUpdate @ ha-panel-lovelace.ts:174
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ ha-panel-lovelace.ts:60
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+createElement @ hass-router-page.ts:294
+_createPanel @ hass-router-page.ts:314
+(anonymous) @ hass-router-page.ts:212
+Promise.then
+update @ hass-router-page.ts:203
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+rebuild @ hass-router-page.ts:282
+await in rebuild
+_updateRoutes @ partial-panel-resolver.ts:217
+willUpdate @ partial-panel-resolver.ts:87
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+constructor @ hass-router-page.ts:47
+constructor @ partial-panel-resolver.ts:42
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_commitValue @ lit-html.js:1199
+_$setValue @ lit-html.js:1138
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:297
+eval @ connection.js:244
+Connection._handleMessage @ connection.js:236Understand this error
+load_resource.ts:13 Uncaught (in promise) http://localhost:8123/lock_code_manager_files/generated/lock-code-manager.js
+(anonymous) @ load_resource.ts:13
+script
+(anonymous) @ load_resource.ts:7
+(anonymous) @ load_resource.ts:6
+(anonymous) @ load_resource.ts:37
+(anonymous) @ load-resources.ts:40
+(anonymous) @ load-resources.ts:54
+(anonymous) @ load-resources.ts:53
+(anonymous) @ ha-panel-lovelace.ts:351
+Promise.then
+_fetchConfig @ ha-panel-lovelace.ts:351
+willUpdate @ ha-panel-lovelace.ts:174
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ ha-panel-lovelace.ts:60
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+createElement @ hass-router-page.ts:294
+_createPanel @ hass-router-page.ts:314
+(anonymous) @ hass-router-page.ts:212
+Promise.then
+update @ hass-router-page.ts:203
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+rebuild @ hass-router-page.ts:282
+await in rebuild
+_updateRoutes @ partial-panel-resolver.ts:217
+willUpdate @ partial-panel-resolver.ts:87
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+constructor @ hass-router-page.ts:47
+constructor @ partial-panel-resolver.ts:42
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_commitValue @ lit-html.js:1199
+_$setValue @ lit-html.js:1138
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:297
+eval @ connection.js:244
+Connection._handleMessage @ connection.js:236Understand this error
+connection-mixin.ts:107 Calling service system_log write {logger: 'frontend.js_dev.modern.202603250', message: 'Unhandled promise rejection from Chrome 147.0.0.0 …ode_manager_files/generated/lock-code-manager.js"', level: 'debug'} undefined
+get-strategy.ts:160 Error: Timeout waiting for strategy element ll-strategy-dashboard-lock-code-manager to be registered
+    at getLovelaceStrategy (get-strategy.ts:113:1)
+    at async generateStrategy (get-strategy.ts:135:1)
+    at async generateLovelaceDashboardStrategy (get-strategy.ts:172:1)
+    at async LovelacePanel._fetchConfig (ha-panel-lovelace.ts:379:1)
+
+---
+
+still not working after a restart
+
+---
+
+ok everything looks good now. One thing I noticed though - why are some of the PINs crossed out on the lock card?
+
+---
+
+I wonder if it should get some other type of treatment. What would a designer recommend
+
+---
+
+no I like the two distinct treatments, apply those
