@@ -10,7 +10,6 @@ import {
     mdiEyeOff,
     mdiKey,
     mdiLockOff,
-    mdiPencil,
     mdiPlus
 } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
@@ -560,28 +559,22 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   @keydown=${this._handleEditKeydown}
                               />`
                             : html`<span
-                                      class="hero-name-value editable"
-                                      role="button"
-                                      tabindex="0"
-                                      aria-label="Edit name"
-                                      @click=${() => this._startEditing('name')}
-                                      @keydown=${(e: KeyboardEvent) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                              e.preventDefault();
-                                              this._startEditing('name');
-                                          }
-                                      }}
-                                  >
-                                      ${name
-                                          ? html`${name}`
-                                          : html`<em class="placeholder">Not named</em>`}
-                                  </span>
-                                  <ha-icon-button
-                                      class="hero-name-pencil"
-                                      .path=${mdiPencil}
-                                      @click=${() => this._startEditing('name')}
-                                      .label=${'Edit name'}
-                                  ></ha-icon-button>`}
+                                  class="hero-name-value editable"
+                                  role="button"
+                                  tabindex="0"
+                                  aria-label="Edit name"
+                                  @click=${() => this._startEditing('name')}
+                                  @keydown=${(e: KeyboardEvent) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                          e.preventDefault();
+                                          this._startEditing('name');
+                                      }
+                                  }}
+                              >
+                                  ${name
+                                      ? html`${name}`
+                                      : html`<em class="placeholder">Not named</em>`}
+                              </span>`}
                     </div>
                 </div>
                 <div class="hero-row">

@@ -482,18 +482,19 @@ describe('LockCodeManagerSlotCard integration', () => {
             const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
             // The NAME label was dropped (typography self-describes); the
-            // editable name span and pencil button are still present and
-            // accessible (role/tabindex/aria-label).
+            // editable name span is the only edit affordance (the redundant
+            // pencil icon was removed). The span is keyboard-accessible
+            // (role/tabindex/aria-label) and click-activated.
             expect(heroJson).toContain('hero-name-value');
             expect(heroJson).toContain('Edit name');
             expect(heroJson).toContain('Alice');
-            // Pencil button for editing the name.
-            expect(heroJson).toContain('hero-name-pencil');
+            // No pencil button — the editable name span is the sole affordance.
+            expect(heroJson).not.toContain('hero-name-pencil');
             // PIN row keeps its label since "••••" isn't self-evident.
             expect(heroJson).toContain('hero-field-label');
         });
 
-        it('hero name pencil click invokes _startEditing("name")', () => {
+        it('hero name span click invokes _startEditing("name")', () => {
             (card as any)._data = makeSlotCardData({ name: 'Alice' });
             const calls: string[] = [];
             (card as any)._startEditing = (field: string) => calls.push(field);
@@ -4430,14 +4431,6 @@ describe('LockCodeManagerSlotCard integration', () => {
         });
 
         describe('DF2: touch targets bumped to 32px', () => {
-            it('hero pencil uses 32px button size', async () => {
-                const { slotCardStyles } = await import('./slot-card.styles');
-                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
-                expect(allCss).toMatch(
-                    /\.hero-name-pencil\s*\{[^}]*--mdc-icon-button-size:\s*32px/s
-                );
-            });
-
             it('hero PIN reveal uses 32px button size', async () => {
                 const { slotCardStyles } = await import('./slot-card.styles');
                 const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');

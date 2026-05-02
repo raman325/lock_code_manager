@@ -221,13 +221,6 @@ const slotCardComponentStyles = css`
         outline-offset: 2px;
     }
 
-    .hero-name-pencil {
-        /* 32px hit target — see .lcm-reveal-button rationale. */
-        --mdc-icon-button-size: 32px;
-        --mdc-icon-size: 14px;
-        color: var(--disabled-text-color);
-    }
-
     .hero-pin {
         align-items: center;
         display: flex;
@@ -271,7 +264,7 @@ const slotCardComponentStyles = css`
     }
 
     .hero-pin .reveal {
-        /* 32px hit target — matches .hero-name-pencil and .lcm-reveal-button. */
+        /* 32px hit target — matches .lcm-reveal-button. */
         --mdc-icon-button-size: 32px;
         --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
