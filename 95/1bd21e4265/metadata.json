@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "951bd21e4265",
+  "strategy": "manual-commit",
+  "branch": "phase-b/card-polish",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/1bd21e4265/0/metadata.json",
+      "transcript": "/95/1bd21e4265/0/full.jsonl",
+      "content_hash": "/95/1bd21e4265/0/content_hash.txt",
+      "prompt": "/95/1bd21e4265/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1055,
+    "cache_creation_tokens": 1659443,
+    "cache_read_tokens": 258440443,
+    "output_tokens": 490928,
+    "api_call_count": 500
+  }
+}
