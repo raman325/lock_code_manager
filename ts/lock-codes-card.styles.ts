@@ -144,7 +144,13 @@ const lockCodesCardComponentStyles = css`
     }
 
     .slot-top {
-        align-items: center;
+        /* Align both children to the top so the slot label sits in a stable
+           position regardless of how tall the badge stack grows. With
+           align-items: center, a 2-badge stack would push the label down
+           to sit between the badges; flex-start keeps it aligned with the
+           first (top) badge — matching the empty-chip layout where the
+           label and the single Empty badge share one row. */
+        align-items: flex-start;
         display: flex;
         gap: 12px;
         justify-content: space-between;
