@@ -59,6 +59,8 @@ export const lcmCssVars = css`
  * Classes: .lcm-badge, .lcm-badge.active, .lcm-badge.inactive, .lcm-badge.disabled, .lcm-badge.empty
  */
 export const lcmBadgeStyles = css`
+    /* Base badge — used by identity tags (Managed/Unmanaged/Empty).
+       Compact uppercase for category labels. */
     .lcm-badge {
         border-radius: var(--lcm-badge-radius);
         font-size: var(--lcm-badge-font-size);
@@ -68,19 +70,52 @@ export const lcmBadgeStyles = css`
         text-transform: uppercase;
     }
 
+    /* State badges (active/inactive/disabled) align visually with the slot
+       card's .state-chip: pill shape, sentence-case, optional colored dot
+       prefix, 16% color tint. Same colors as the slot card so a state reads
+       the same regardless of which card you're on. */
+    .lcm-badge.active,
+    .lcm-badge.inactive,
+    .lcm-badge.disabled {
+        align-items: center;
+        border-radius: 12px;
+        display: inline-flex;
+        font-size: 10px;
+        font-weight: 600;
+        gap: 5px;
+        letter-spacing: normal;
+        padding: 3px 8px;
+        text-transform: none;
+    }
+    .lcm-badge .dot {
+        border-radius: 50%;
+        flex-shrink: 0;
+        height: 5px;
+        width: 5px;
+    }
+
     .lcm-badge.active {
-        background: rgba(var(--rgb-primary-color), 0.16);
-        color: var(--primary-color);
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.16);
+        color: var(--success-color, #43a047);
+    }
+    .lcm-badge.active .dot {
+        background: var(--success-color, #43a047);
     }
 
     .lcm-badge.inactive {
-        background: rgba(var(--rgb-primary-color), 0.12);
-        color: var(--primary-color);
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.16);
+        color: var(--warning-color, #ffa726);
+    }
+    .lcm-badge.inactive .dot {
+        background: var(--warning-color, #ffa726);
     }
 
     .lcm-badge.disabled {
-        background: rgba(var(--rgb-disabled-text-color, 158, 158, 158), 0.15);
-        color: var(--lcm-disabled-color);
+        background: rgba(var(--rgb-disabled-color, 117, 117, 117), 0.2);
+        color: var(--secondary-text-color);
+    }
+    .lcm-badge.disabled .dot {
+        background: var(--disabled-color, #757575);
     }
 
     .lcm-badge.empty {

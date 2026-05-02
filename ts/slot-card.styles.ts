@@ -24,26 +24,64 @@ const slotCardComponentStyles = css`
         overflow: hidden;
     }
 
-    /* Header Section */
+    /* Card-level state tinting — mirrors the lock card's slot-chip backgrounds
+       so a slot reads the same regardless of which card you see it on.
+       Active = primary tint, Inactive = warning (blocked), Disabled = muted. */
+    ha-card.slot-card-state-active {
+        background: var(
+            --lcm-active-bg-gradient,
+            var(--ha-card-background, var(--card-background-color))
+        );
+    }
+    ha-card.slot-card-state-inactive {
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
+    }
+    ha-card.slot-card-state-disabled {
+        background: rgba(var(--rgb-primary-text-color), 0.04);
+        opacity: 0.9;
+    }
+
+    /* Header Section — matches the lock card pattern: icon bubble + title + state chip on the right. */
     .header {
-        padding: 14px 16px 8px;
+        align-items: center;
+        border-bottom: 1px solid var(--lcm-border-color);
+        display: flex;
+        gap: 12px;
+        padding: 16px;
     }
 
     .header-top {
         align-items: center;
         display: flex;
+        flex: 1;
         gap: 12px;
-        justify-content: space-between;
-        margin-bottom: 6px;
-        min-height: 22px;
+        min-width: 0;
     }
 
-    .slot-kicker {
-        color: var(--secondary-text-color);
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+    .header-icon {
+        align-items: center;
+        background: var(--lcm-active-bg);
+        border-radius: 50%;
+        color: var(--primary-color);
+        display: flex;
+        flex-shrink: 0;
+        height: 40px;
+        justify-content: center;
+        width: 40px;
+    }
+    .header-icon ha-svg-icon {
+        --mdc-icon-size: 24px;
+    }
+
+    .header-title {
+        color: var(--primary-text-color);
+        flex: 1;
+        font-size: 18px;
+        font-weight: 500;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .state-chip {
@@ -95,45 +133,69 @@ const slotCardComponentStyles = css`
         background: var(--disabled-color, #757575);
     }
 
-    .name {
-        align-items: baseline;
-        color: var(--primary-text-color);
-        display: flex;
-        font-size: 22px;
-        font-weight: 600;
-        gap: 6px;
-        letter-spacing: -0.01em;
-        line-height: 1.2;
-    }
-
-    .name .placeholder {
-        color: var(--disabled-text-color);
-        font-style: italic;
-        font-weight: 500;
-    }
-
-    .name .pencil {
-        --mdc-icon-button-size: 28px;
-        --mdc-icon-size: 14px;
-        color: var(--disabled-text-color);
-    }
-
     /* Content Sections */
     .content {
         display: flex;
         flex-direction: column;
         gap: 12px;
-        padding: 0 16px 16px;
+        padding: 12px 16px 16px;
     }
 
-    /* Hero row (PIN + Enable) — tinted always-visible band at the top of .content */
+    /* Hero band — Name row on top, PIN + Enable row below. Form-like
+       layout where every editable field has a label, including the name. */
     .hero {
-        align-items: center;
         background: var(--lcm-section-bg);
         border-radius: 12px;
         display: flex;
-        gap: 16px;
+        flex-direction: column;
+        gap: 10px;
         padding: 12px 16px;
+    }
+
+    .hero-row {
+        align-items: center;
+        display: flex;
+        gap: 16px;
+    }
+
+    .hero-field {
+        align-items: center;
+        display: flex;
+        flex: 1;
+        gap: 12px;
+        min-width: 0;
+    }
+
+    .hero-field-label {
+        color: var(--secondary-text-color);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        min-width: 56px;
+        text-transform: uppercase;
+    }
+
+    .hero-name-value {
+        color: var(--primary-text-color);
+        font-size: 16px;
+        font-weight: 500;
+    }
+
+    .hero-name-value.editable {
+        border-radius: 4px;
+        margin: 0 -4px;
+        padding: 0 4px;
+        text-decoration: none;
+        transition: background 0.15s ease;
+    }
+    .hero-name-value.editable:hover {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+    }
+
+    .hero-name-pencil {
+        --mdc-icon-button-size: 28px;
+        --mdc-icon-size: 14px;
+        color: var(--disabled-text-color);
     }
 
     .hero-pin {
@@ -142,14 +204,6 @@ const slotCardComponentStyles = css`
         flex: 1;
         gap: 12px;
         min-width: 0;
-    }
-
-    .hero-pin-label {
-        color: var(--secondary-text-color);
-        font-size: 11px;
-        font-weight: 600;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
     }
 
     .hero-pin-value {
@@ -269,9 +323,12 @@ const slotCardComponentStyles = css`
         white-space: nowrap;
     }
 
-    .manage-link {
+    /* Remove condition link — sits below the condition block. Warning color
+       since it's destructive (clears the condition); user can re-Add via
+       the empty-state button if they want to switch entities. */
+    .remove-link {
         align-items: center;
-        color: var(--secondary-text-color);
+        color: var(--warning-color, #ffa726);
         cursor: pointer;
         display: inline-flex;
         font-size: 12px;
@@ -280,17 +337,17 @@ const slotCardComponentStyles = css`
         padding: 4px 0;
     }
 
-    .manage-link:hover {
-        color: var(--primary-text-color);
+    .remove-link:hover {
+        color: var(--error-color, #ef5350);
     }
 
-    .manage-link:focus-visible {
+    .remove-link:focus-visible {
         border-radius: 4px;
-        outline: 2px solid var(--primary-color);
+        outline: 2px solid var(--warning-color, #ffa726);
         outline-offset: 2px;
     }
 
-    .manage-link ha-svg-icon {
+    .remove-link ha-svg-icon {
         --mdc-icon-size: 14px;
     }
 
@@ -552,33 +609,6 @@ const slotCardComponentStyles = css`
 
     .dialog-content ha-entity-picker {
         display: block;
-    }
-
-    .dialog-remove-btn {
-        align-items: center;
-        align-self: flex-start;
-        background: transparent;
-        border: 1px solid var(--warning-color, #ffa726);
-        border-radius: 4px;
-        color: var(--warning-color, #ffa726);
-        cursor: pointer;
-        display: inline-flex;
-        font-family: inherit;
-        font-size: 13px;
-        font-weight: 500;
-        padding: 6px 14px;
-        transition: background 0.15s ease;
-    }
-    .dialog-remove-btn:hover:not(:disabled) {
-        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.1);
-    }
-    .dialog-remove-btn:disabled {
-        cursor: not-allowed;
-        opacity: 0.5;
-    }
-    .dialog-remove-btn:focus-visible {
-        outline: 2px solid var(--warning-color, #ffa726);
-        outline-offset: 2px;
     }
 
     .dialog-saving {

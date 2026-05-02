@@ -258,7 +258,7 @@ describe('LockCodeManagerSlotCard logic', () => {
                 return {
                     statusClass: 'inactive',
                     statusText: 'Inactive',
-                    statusDetail: 'Blocked by conditions'
+                    statusDetail: 'Blocked by condition'
                 };
             }
             return {
@@ -296,7 +296,7 @@ describe('LockCodeManagerSlotCard logic', () => {
             expect(getStatus(true, false)).toEqual({
                 statusClass: 'inactive',
                 statusText: 'Inactive',
-                statusDetail: 'Blocked by conditions'
+                statusDetail: 'Blocked by condition'
             });
         });
 
@@ -314,7 +314,7 @@ describe('LockCodeManagerSlotCard logic', () => {
             expect(getStatus(null, false)).toEqual({
                 statusClass: 'inactive',
                 statusText: 'Inactive',
-                statusDetail: 'Blocked by conditions'
+                statusDetail: 'Blocked by condition'
             });
         });
 

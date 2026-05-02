@@ -88,10 +88,12 @@ const lockCodesCardComponentStyles = css`
         );
     }
 
-    /* Inactive Lock Code Manager Managed: Muted blue, slightly faded */
+    /* Inactive Lock Code Manager Managed: dulled warning tint to match the
+       slot card's inactive state chip color (orange) — communicates "blocked
+       by conditions" without shouting. */
     .slot-chip.inactive.managed {
-        background: rgba(var(--rgb-primary-color), 0.05);
-        opacity: 0.85;
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
+        opacity: 0.9;
     }
 
     /* Disabled Lock Code Manager Managed: Very muted, clear disabled state */
@@ -129,26 +131,53 @@ const lockCodesCardComponentStyles = css`
     }
 
     .slot-top {
-        align-items: flex-start;
+        align-items: center;
         display: flex;
-        flex-direction: column;
-        gap: 6px;
+        gap: 12px;
+        justify-content: space-between;
     }
 
     .slot-badges {
-        align-items: center;
+        align-items: flex-end;
         display: inline-flex;
-        flex-wrap: wrap;
-        gap: 6px;
+        flex-direction: column;
+        flex-shrink: 0;
+        gap: 4px;
     }
 
     .slot-label {
         color: var(--secondary-text-color);
+        flex: 1;
         font-size: var(--lcm-section-header-size);
         font-weight: 500;
         letter-spacing: 0.03em;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
         text-transform: uppercase;
-        width: 100%;
+        white-space: nowrap;
+    }
+
+    /* Config entry title appended to "Slot N · {entry}" — matches the slot-card kicker style. */
+    .slot-entry-title {
+        color: var(--secondary-text-color);
+        font-weight: 500;
+    }
+
+    /* Single content row per chip: name on the left, PIN on the right.
+       No labels — position + typography (bold name, monospace PIN dots)
+       carry meaning. Drops a row vs the labeled-field layout. */
+    .slot-content-row {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-top: 6px;
+        min-width: 0;
+    }
+    .slot-content-row .slot-name-row {
+        flex: 1;
+        min-width: 0;
     }
 
     .slot-name {

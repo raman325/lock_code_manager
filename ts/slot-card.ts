@@ -3,9 +3,10 @@ import {
     mdiChevronRight,
     mdiChevronUp,
     mdiClockOutline,
-    mdiCog,
+    mdiDelete,
     mdiEye,
     mdiEyeOff,
+    mdiKey,
     mdiPencil,
     mdiPlus
 } from '@mdi/js';
@@ -102,7 +103,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     // Condition dialog state
     @state() private _showConditionDialog = false;
-    @state() private _dialogMode: 'manage' | 'add' = 'manage';
     @state() private _dialogEntityId: string | null = null;
     @state() private _dialogSaving = false;
 
@@ -281,8 +281,21 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderFromData(data: SlotCardData): TemplateResult {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        const { pin, enabled, conditions, locks } = data;
+        const { pin, enabled, active, conditions, locks } = data;
         const pinLength = data.pin_length;
+
+        // State class for the card background — matches the lock card's
+        // slot-chip state tinting (active = primary blue, inactive =
+        // warning orange, disabled = muted) so a slot looks the same
+        // regardless of which card you're viewing it on.
+        let stateClass: 'active' | 'inactive' | 'disabled';
+        if (enabled === false) {
+            stateClass = 'disabled';
+        } else if (active === false) {
+            stateClass = 'inactive';
+        } else {
+            stateClass = 'active';
+        }
 
         // Transform locks to the expected format
         const lockStatuses = locks.map((lock) => {
@@ -305,7 +318,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const showConditions = this._config.show_conditions !== false;
 
         return html`
-            <ha-card>
+            <ha-card class="slot-card-state-${stateClass}">
                 ${this._actionError
                     ? html`<div class="action-error">
                           <span>${this._actionError}</span>
@@ -405,35 +418,15 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _renderHeader(): TemplateResult {
         const slotKicker = this._renderSlotKicker();
         const stateChip = this._renderStateChip();
-        const name = this._data?.name;
-        const editingName = this._editingField === 'name';
 
         return html`
             <div class="header">
                 <div class="header-top">
-                    <span class="slot-kicker">${slotKicker}</span>
+                    <div class="header-icon">
+                        <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
+                    </div>
+                    <span class="header-title">${slotKicker}</span>
                     ${stateChip}
-                </div>
-                <div class="name">
-                    ${editingName
-                        ? html`<input
-                              class="edit-input name-edit-input"
-                              type="text"
-                              .value=${name ?? ''}
-                              @blur=${this._handleEditBlur}
-                              @keydown=${this._handleEditKeydown}
-                          />`
-                        : html`
-                              ${name
-                                  ? html`${name}`
-                                  : html`<em class="placeholder">&lt;No Name&gt;</em>`}
-                              <ha-icon-button
-                                  class="pencil"
-                                  .path=${mdiPencil}
-                                  @click=${() => this._startEditing('name')}
-                                  .label=${'Edit name'}
-                              ></ha-icon-button>
-                          `}
                 </div>
             </div>
         `;
@@ -467,7 +460,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             text = 'Active';
         } else if (active === false) {
             cls = 'inactive';
-            text = 'Blocked by conditions';
+            text = 'Blocked by condition';
         } else {
             cls = 'disabled';
             text = 'Unknown';
@@ -491,44 +484,76 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
               ? '•'.repeat(pinLength)
               : null;
 
+        const name = this._data?.name;
+        const editingName = this._editingField === 'name';
+
         return html`
             <div class="hero">
-                <div class="hero-pin">
-                    <span class="hero-pin-label">PIN</span>
-                    ${this._editingField === 'pin'
-                        ? html`<input
-                              class="edit-input pin-edit-input"
-                              type="text"
-                              inputmode="numeric"
-                              pattern="[0-9]*"
-                              .value=${pin ?? ''}
-                              @blur=${this._handleEditBlur}
-                              @keydown=${this._handleEditKeydown}
-                          />`
-                        : html`<span
-                              class="hero-pin-value editable ${shouldMask && hasPin
-                                  ? 'masked'
-                                  : ''}"
-                              @click=${() => this._startEditing('pin')}
-                          >
-                              ${displayPin ?? html`<em class="placeholder">&lt;No PIN&gt;</em>`}
-                          </span>`}
-                    ${mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
-                        ? html`<ha-icon-button
-                              class="reveal"
-                              .path=${this._revealed ? mdiEyeOff : mdiEye}
-                              @click=${this._toggleReveal}
-                              .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
-                          ></ha-icon-button>`
-                        : nothing}
+                <div class="hero-row">
+                    <div class="hero-field">
+                        <span class="hero-field-label">Name</span>
+                        ${editingName
+                            ? html`<input
+                                  class="edit-input name-edit-input"
+                                  type="text"
+                                  .value=${name ?? ''}
+                                  @blur=${this._handleEditBlur}
+                                  @keydown=${this._handleEditKeydown}
+                              />`
+                            : html`<span
+                                      class="hero-name-value editable"
+                                      @click=${() => this._startEditing('name')}
+                                  >
+                                      ${name
+                                          ? html`${name}`
+                                          : html`<em class="placeholder">&lt;No Name&gt;</em>`}
+                                  </span>
+                                  <ha-icon-button
+                                      class="hero-name-pencil"
+                                      .path=${mdiPencil}
+                                      @click=${() => this._startEditing('name')}
+                                      .label=${'Edit name'}
+                                  ></ha-icon-button>`}
+                    </div>
                 </div>
-                <div class="hero-toggle">
-                    <span class="hero-toggle-label">Enabled</span>
-                    <ha-switch
-                        .checked=${enabled === true}
-                        .disabled=${enabled === null}
-                        @change=${this._handleEnabledToggle}
-                    ></ha-switch>
+                <div class="hero-row">
+                    <div class="hero-field hero-pin">
+                        <span class="hero-field-label">PIN</span>
+                        ${this._editingField === 'pin'
+                            ? html`<input
+                                  class="edit-input pin-edit-input"
+                                  type="text"
+                                  inputmode="numeric"
+                                  pattern="[0-9]*"
+                                  .value=${pin ?? ''}
+                                  @blur=${this._handleEditBlur}
+                                  @keydown=${this._handleEditKeydown}
+                              />`
+                            : html`<span
+                                  class="hero-pin-value editable ${shouldMask && hasPin
+                                      ? 'masked'
+                                      : ''}"
+                                  @click=${() => this._startEditing('pin')}
+                              >
+                                  ${displayPin ?? html`<em class="placeholder">&lt;No PIN&gt;</em>`}
+                              </span>`}
+                        ${mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
+                            ? html`<ha-icon-button
+                                  class="reveal"
+                                  .path=${this._revealed ? mdiEyeOff : mdiEye}
+                                  @click=${this._toggleReveal}
+                                  .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
+                              ></ha-icon-button>`
+                            : nothing}
+                    </div>
+                    <div class="hero-toggle">
+                        <span class="hero-field-label">Enabled</span>
+                        <ha-switch
+                            .checked=${enabled === true}
+                            .disabled=${enabled === null}
+                            @change=${this._handleEnabledToggle}
+                        ></ha-switch>
+                    </div>
                 </div>
             </div>
         `;
@@ -555,7 +580,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             return html`
                 <div class="collapsible-section">
                     <div class="collapsible-header static">
-                        <div class="collapsible-title">Conditions</div>
+                        <div class="collapsible-title">Condition</div>
                         ${this._renderAddConditionButton()}
                     </div>
                 </div>
@@ -570,7 +595,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             : this._renderAddConditionButton();
 
         return this._renderCollapsible(
-            'Conditions',
+            'Condition',
             this._conditionsExpanded,
             this._toggleConditions,
             this._renderConditionsBody(conditions, hasEntity, hasHelpers),
@@ -584,7 +609,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 class="add-condition-btn"
                 @click=${(e: Event) => {
                     e.stopPropagation();
-                    this._openConditionDialog('add');
+                    this._openConditionDialog();
                 }}
                 aria-label="Add condition"
             >
@@ -615,20 +640,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             ${hasEntity
                 ? html`${this._renderConditionBlock(conditions.condition_entity!)}
                       <span
-                          class="manage-link"
+                          class="remove-link"
                           role="button"
                           tabindex="0"
-                          aria-label="Manage condition"
-                          @click=${() => this._openConditionDialog('manage')}
+                          aria-label="Remove condition"
+                          @click=${() => this._removeCondition()}
                           @keydown=${(e: KeyboardEvent) => {
                               if (e.key === 'Enter' || e.key === ' ') {
                                   e.preventDefault();
-                                  this._openConditionDialog('manage');
+                                  this._removeCondition();
                               }
                           }}
                       >
-                          <ha-svg-icon .path=${mdiCog}></ha-svg-icon>
-                          Manage condition
+                          <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
+                          Remove condition
                       </span>`
                 : nothing}
             ${hasHelpers ? this._renderHelpers() : nothing}
@@ -966,22 +991,19 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     /**
-     * Open the condition dialog. Mode `'manage'` pre-fills the entity picker
-     * with the slot's current condition entity (so the user can replace it,
-     * or click the destructive Remove button to clear it). Mode `'add'` opens
-     * with an empty picker and no Remove button.
+     * Open the condition dialog. Always opens in add mode with an empty
+     * picker — to swap conditions, the user removes the existing one via
+     * the inline Remove link and then re-adds. Keeping the dialog Add-only
+     * removes the destructive Remove button from the dialog body and means
+     * a successful pick can commit immediately on selection.
      */
-    private _openConditionDialog(mode: 'manage' | 'add'): void {
+    private _openConditionDialog(): void {
         // Defensive: connectedCallback already kicks the picker load, but
         // re-trigger here in case the card connected in a state where the
         // global helper wasn't yet available. Idempotent — short-circuits
         // once the element is registered.
         void this._ensureEntityPickerLoaded();
-        this._dialogMode = mode;
-        this._dialogEntityId =
-            mode === 'manage'
-                ? (this._data?.conditions?.condition_entity?.condition_entity_id ?? null)
-                : null;
+        this._dialogEntityId = null;
         this._showConditionDialog = true;
     }
 
@@ -998,20 +1020,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _closeConditionDialog(): void {
         this._showConditionDialog = false;
         this._dialogEntityId = null;
-        this._dialogMode = 'manage';
     }
 
     /**
-     * Clear the condition entity from the slot (destructive Remove action in
-     * the Manage dialog). The dialog's destructive styling is the visual
-     * safety here — there is no extra confirmation step. The early
-     * `_dialogSaving` guard plus the disabled state on the Remove button
-     * together prevent double-firing `clear_slot_condition` from rapid clicks
-     * while a commit/remove is already in flight, and prevent the user from
-     * closing-then-reopening the dialog to bypass the guard. The subscribe
-     * happens via `await` so a resubscribe failure surfaces in the
-     * user-visible error banner instead of being lost as a fire-and-forget
-     * rejection after the dialog has closed.
+     * Clear the condition entity from the slot. Triggered by the inline
+     * Remove condition link below the condition block (the dialog itself is
+     * Add-only). The link's warning color is the visual safety — there is
+     * no extra confirmation step. The early `_dialogSaving` guard prevents
+     * double-firing `clear_slot_condition` from rapid clicks while a
+     * remove/commit is already in flight. The subscribe happens via `await`
+     * so a resubscribe failure surfaces in the user-visible error banner
+     * instead of being lost as a fire-and-forget rejection.
      */
     private async _removeCondition(): Promise<void> {
         if (this._dialogSaving) return;
@@ -1066,12 +1085,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     }
 
     private _renderConditionDialog(): TemplateResult {
-        const isManage = this._dialogMode === 'manage';
-        const title = isManage ? 'Manage condition' : 'Add a condition';
-        const currentEntityId = this._data?.conditions?.condition_entity?.condition_entity_id;
-
         return html`
-            <ha-dialog open @closed=${this._closeConditionDialog} .heading=${title}>
+            <ha-dialog open @closed=${this._closeConditionDialog} .heading=${'Add condition'}>
                 <div class="dialog-content">
                     <p class="dialog-description">
                         PIN is active only when this entity is on. Pick a calendar, schedule, binary
@@ -1086,30 +1101,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             (CONDITION_DOMAINS as readonly string[]).includes(
                                 state.entity_id.split('.')[0]
                             )}
-                        @value-changed=${(e: CustomEvent) =>
-                            this._handlePickerChange(e, currentEntityId)}
+                        @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>
-                    ${isManage
-                        ? html`<button
-                              class="dialog-remove-btn"
-                              .disabled=${this._dialogSaving}
-                              @click=${() => this._removeCondition()}
-                          >
-                              Remove condition
-                          </button>`
-                        : nothing}
                     ${this._dialogSaving ? html`<div class="dialog-saving">Saving…</div>` : nothing}
                 </div>
             </ha-dialog>
         `;
     }
 
-    private _handlePickerChange(e: CustomEvent, currentEntityId?: string): void {
+    private _handlePickerChange(e: CustomEvent): void {
         const newValue = (e.detail?.value as string) || null;
         this._dialogEntityId = newValue;
         if (!newValue) return;
-        // No-op when the picker re-selected the entity that's already set.
-        if (newValue === currentEntityId) return;
         // Re-entry guard while a previous commit is in flight.
         if (this._dialogSaving) return;
         void this._commitConditionPick(newValue);

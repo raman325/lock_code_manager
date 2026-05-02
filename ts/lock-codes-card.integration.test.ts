@@ -1111,6 +1111,182 @@ describe('LockCodesCard integration', () => {
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
+    describe('_renderSlotChip — slot label and state badge dot', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // Variant of collectAllStrings that also folds numeric values into
+        // the rendered string so we can assert on slot numbers and similar
+        // primitive interpolations. Interleaves strings + values in the
+        // same order the template renders so adjacent text reads naturally.
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const strings: string[] = (tmpl.strings ?? []) as string[];
+            const values: unknown[] = (tmpl.values ?? []) as unknown[];
+            const parts: string[] = [];
+            for (let i = 0; i < strings.length; i++) {
+                parts.push(strings[i]);
+                if (i < values.length) {
+                    const v = values[i];
+                    if (v && typeof v === 'object' && ((v as any).strings || (v as any).values)) {
+                        parts.push(collectAllStrings(v));
+                    } else if (Array.isArray(v)) {
+                        for (const item of v) {
+                            if (item && typeof item === 'object') {
+                                parts.push(collectAllStrings(item));
+                            }
+                        }
+                    } else if (
+                        typeof v === 'string' ||
+                        typeof v === 'number' ||
+                        typeof v === 'boolean'
+                    ) {
+                        parts.push(String(v));
+                    }
+                }
+            }
+            return parts.join('');
+        };
+
+        it('renders "Slot N · {entry_title}" when config_entry_title is set', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                config_entry_title: 'House Locks',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 3
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('slot-entry-title');
+            expect(rendered).toContain('House Locks');
+            // The slot number should still be present.
+            expect(rendered).toMatch(/Slot\s*3/);
+        });
+
+        it('renders just "Slot N" when config_entry_title is absent', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 3
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            // No entry-title span when no title is provided.
+            expect(rendered).not.toContain('slot-entry-title');
+            expect(rendered).toMatch(/Slot\s*3/);
+        });
+
+        it('renders a colored dot prefix on the state badge for active slots', () => {
+            const slot = {
+                active: true,
+                code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            // The dot span sits inside the lcm-badge for state badges.
+            expect(rendered).toContain('class="dot"');
+        });
+
+        it('renders a dot prefix on inactive (blocked) state badges', () => {
+            const slot = {
+                active: false,
+                code: '1234',
+                configured_code: '1234',
+                enabled: true,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('class="dot"');
+        });
+
+        it('renders a dot prefix on disabled state badges', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('class="dot"');
+        });
+
+        it('does NOT render a dot on Managed/External identity badges', () => {
+            // External slot: status badge is 'empty' (no dot), managed badge is 'external' (no dot).
+            const slot = {
+                code: '9999',
+                managed: false,
+                slot: 5
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            // The status badge for an external slot is 'active' (has code), so it gets a dot,
+            // but the identity badge (external) must not.
+            // Count dot spans — only the state badge should have one.
+            const dotMatches = rendered.match(/class="dot"/g) ?? [];
+            expect(dotMatches.length).toBe(1);
+        });
+
+        it('renders the eye reveal button for disabled slots with configured_code', () => {
+            // A disabled managed slot whose lock has no code, but LCM has the
+            // configured PIN — eye reveal should render so the user can see
+            // the masked configured PIN.
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code: '1234',
+                enabled: false,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('lcm-reveal-button');
+        });
+
+        it('renders the eye reveal button for slots with only configured_code_length', () => {
+            const slot = {
+                active: false,
+                code: 'empty',
+                configured_code_length: 4,
+                enabled: false,
+                managed: true,
+                name: 'Alice',
+                slot: 1
+            };
+            const result = (card as any)._renderSlotChip(slot, false);
+            const rendered = collectAllStrings(result);
+            expect(rendered).toContain('lcm-reveal-button');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('_formatCode', () => {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         let card: LockCodesCardElement & Record<string, unknown>;

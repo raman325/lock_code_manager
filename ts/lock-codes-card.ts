@@ -513,9 +513,22 @@ class LockCodesCard extends LockCodesCardBase {
                 @click=${isClickable ? () => this._navigateToSlot(slot.config_entry_id) : nothing}
             >
                 <div class="slot-top">
-                    <span class="slot-label">Slot ${slot.slot}</span>
+                    <span class="slot-label">
+                        Slot
+                        ${slot.slot}${slot.config_entry_title
+                            ? html` ·
+                                  <span class="slot-entry-title">${slot.config_entry_title}</span>`
+                            : nothing}
+                    </span>
                     <div class="slot-badges">
-                        <span class="lcm-badge ${statusClass}"> ${statusText} </span>
+                        <span class="lcm-badge ${statusClass}">
+                            ${statusClass === 'active' ||
+                            statusClass === 'inactive' ||
+                            statusClass === 'disabled'
+                                ? html`<span class="dot"></span>`
+                                : nothing}
+                            ${statusText}
+                        </span>
                         ${managed === undefined
                             ? nothing
                             : html`<span class="lcm-badge ${managed ? 'managed' : 'external'}">
@@ -523,20 +536,22 @@ class LockCodesCard extends LockCodesCardBase {
                               </span>`}
                     </div>
                 </div>
-                ${showName
-                    ? html`<span class="slot-name-row">
-                          ${isPending
-                              ? html`<ha-svg-icon
-                                    class="slot-name-pending-icon"
-                                    .path=${mdiClockOutline}
-                                ></ha-svg-icon>`
-                              : nothing}
-                          <span class="slot-name ${slotName ? '' : 'unnamed'}">
-                              ${slotName ?? 'Unnamed'}
-                          </span>
-                      </span>`
-                    : nothing}
-                ${this._renderCodeSection(slot, hasCode, mode)}
+                <div class="slot-content-row">
+                    ${showName
+                        ? html`<span class="slot-name-row">
+                              ${isPending
+                                  ? html`<ha-svg-icon
+                                        class="slot-name-pending-icon"
+                                        .path=${mdiClockOutline}
+                                    ></ha-svg-icon>`
+                                  : nothing}
+                              <span class="slot-name ${slotName ? '' : 'unnamed'}">
+                                  ${slotName ?? 'Unnamed'}
+                              </span>
+                          </span>`
+                        : html`<span class="slot-name-row"></span>`}
+                    ${this._renderCodeSection(slot, hasCode, mode)}
+                </div>
             </div>
         `;
     }
@@ -616,7 +631,8 @@ class LockCodesCard extends LockCodesCardBase {
                         : nothing}
                     ${this._formatCode(slot)}
                 </span>
-                ${mode === 'masked_with_reveal' && hasCode
+                ${mode === 'masked_with_reveal' &&
+                (hasCode || !!slot.configured_code || !!slot.configured_code_length)
                     ? html`<span class="slot-code-actions">
                           <ha-icon-button
                               class="lcm-reveal-button"
