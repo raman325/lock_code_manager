@@ -2194,30 +2194,13 @@ describe('LockCodeManagerSlotCard integration', () => {
             return handlers;
         }
 
-        it('renders the empty state with + Add a condition link when no entity', () => {
+        it('renders no empty-state callout when no entity (Add affordance is on the header)', () => {
             const tmpl = (card as any)._renderConditionsBody({}, false, false);
             const joined = deepTemplateStrings(tmpl);
-            expect(joined).toContain('empty-state');
-            expect(joined).toContain('No condition has been set');
-            expect(joined).toContain('add-link');
-            expect(joined).toContain('+ Add a condition');
-            // The empty state's manage-link variant should NOT be present.
+            expect(joined).not.toContain('empty-state');
+            expect(joined).not.toContain('add-link');
+            expect(joined).not.toContain('No condition has been set');
             expect(joined).not.toContain('Manage condition');
-        });
-
-        it('add-link click opens the condition dialog in add mode', () => {
-            const tmpl = (card as any)._renderConditionsBody({}, false, false);
-            const handlers = collectHandlers(tmpl);
-            const opened: string[] = [];
-            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
-            for (const h of handlers) {
-                try {
-                    h();
-                } catch {
-                    // ignore; handlers may call into other internals
-                }
-            }
-            expect(opened).toContain('add');
         });
 
         it('renders the condition block + Manage condition link when entity exists', () => {
@@ -2264,14 +2247,6 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(opened).toContain('manage');
         });
 
-        it('add-link is keyboard-accessible (role=button, tabindex, aria-label)', () => {
-            const tmpl = (card as any)._renderConditionsBody({}, false, false);
-            const joined = deepTemplateStrings(tmpl);
-            expect(joined).toContain('role="button"');
-            expect(joined).toContain('tabindex="0"');
-            expect(joined).toContain('aria-label="Add a condition"');
-        });
-
         it('manage-link is keyboard-accessible (role=button, tabindex, aria-label)', () => {
             const tmpl = (card as any)._renderConditionsBody(
                 {
@@ -2288,23 +2263,6 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('role="button"');
             expect(joined).toContain('tabindex="0"');
             expect(joined).toContain('aria-label="Manage condition"');
-        });
-
-        it('add-link Enter/Space keys open the condition dialog in add mode', () => {
-            const tmpl = (card as any)._renderConditionsBody({}, false, false);
-            const handlers = collectHandlers(tmpl);
-            const opened: string[] = [];
-            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
-            // Pick the keydown handler by arity (one arg) — the @click
-            // handler is zero-arity and would fire indiscriminately.
-            const keydown = handlers.find((h) => h.length === 1);
-            expect(keydown).toBeDefined();
-            keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
-            expect(opened).toHaveLength(0);
-            keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
-            expect(opened).toEqual(['add']);
-            keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
-            expect(opened).toEqual(['add', 'add']);
         });
 
         it('manage-link Enter/Space keys open the condition dialog in manage mode', () => {
@@ -2357,6 +2315,179 @@ describe('LockCodeManagerSlotCard integration', () => {
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('helpers-label');
             expect(joined).toContain('helpers-list');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('_renderConditionsSection (Add affordance promotion)', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: SlotCardElement & Record<string, unknown>;
+
+        /** Recursively join all template strings (incl. dynamic primitive values) */
+        function deepTemplateStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepTemplateStrings).join('');
+            if (typeof result !== 'object') return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepTemplateStrings).join('');
+            return own + nested;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        function collectHandlers(result: any): Array<(...args: any[]) => void> {
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        it('renders a static, non-collapsible header row with Add button when no condition and no helpers', () => {
+            const tmpl = (card as any)._renderConditionsSection({});
+            const joined = deepTemplateStrings(tmpl);
+            // Static-header marker present, no chevron, no badge.
+            expect(joined).toContain('collapsible-header static');
+            expect(joined).toContain('add-condition-btn');
+            expect(joined).toContain('Add condition');
+            expect(joined).toContain('aria-label="Add condition"');
+            expect(joined).not.toContain('collapsible-chevron');
+            expect(joined).not.toContain('collapsible-badge');
+            // The empty-state callout in the body should be gone too.
+            expect(joined).not.toContain('empty-state');
+            expect(joined).not.toContain('add-link');
+        });
+
+        it('static-header Add button click opens the dialog in add mode and stops propagation', () => {
+            const tmpl = (card as any)._renderConditionsSection({});
+            const handlers = collectHandlers(tmpl);
+            const opened: string[] = [];
+            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
+            let stopPropCalls = 0;
+            const fakeEvent = {
+                stopPropagation: () => {
+                    stopPropCalls += 1;
+                }
+            } as unknown as Event;
+            // The button click handler takes the Event arg; the only arity-1
+            // handler in this template is the @click on the add button.
+            const click = handlers.find((h) => h.length === 1);
+            expect(click).toBeDefined();
+            click!(fakeEvent);
+            expect(opened).toEqual(['add']);
+            expect(stopPropCalls).toBe(1);
+        });
+
+        it('renders a collapsible row with Add button as headerExtra when no condition but helpers exist', async () => {
+            (card as any)._config = {
+                ...(card as any)._config,
+                condition_helpers: ['input_boolean.h1']
+            };
+            (card as any)._hass = {
+                ...(card as any)._hass,
+                states: {
+                    'input_boolean.h1': { attributes: { friendly_name: 'H1' }, state: 'on' }
+                }
+            };
+            const tmpl = (card as any)._renderConditionsSection({});
+            const joined = deepTemplateStrings(tmpl);
+            // Standard collapsible (chevron present, NOT static).
+            expect(joined).not.toContain('collapsible-header static');
+            expect(joined).toContain('collapsible-chevron');
+            // Add button is the headerExtra (no muted "none" badge).
+            expect(joined).toContain('add-condition-btn');
+            expect(joined).toContain('Add condition');
+            expect(joined).not.toContain('collapsible-badge muted');
+            // Body has helpers but NOT the empty-state callout.
+            expect(joined).toContain('helpers-list');
+            expect(joined).not.toContain('empty-state');
+            expect(joined).not.toContain('No condition has been set');
+        });
+
+        it('header Add button click stops propagation so the section does not toggle', () => {
+            (card as any)._config = {
+                ...(card as any)._config,
+                condition_helpers: ['input_boolean.h1']
+            };
+            (card as any)._hass = {
+                ...(card as any)._hass,
+                states: {
+                    'input_boolean.h1': { attributes: { friendly_name: 'H1' }, state: 'on' }
+                }
+            };
+            const expandedBefore = (card as any)._conditionsExpanded;
+            const tmpl = (card as any)._renderConditionsSection({});
+            const handlers = collectHandlers(tmpl);
+            const opened: string[] = [];
+            (card as any)._openConditionDialog = (mode: 'manage' | 'add') => opened.push(mode);
+            let stopPropCalls = 0;
+            const fakeEvent = {
+                stopPropagation: () => {
+                    stopPropCalls += 1;
+                }
+            } as unknown as Event;
+            // The Add button is the only arity-1 click handler; the section
+            // toggle handler is arity-0.
+            const click = handlers.find((h) => h.length === 1);
+            expect(click).toBeDefined();
+            click!(fakeEvent);
+            expect(opened).toEqual(['add']);
+            expect(stopPropCalls).toBe(1);
+            // Section did NOT toggle (button stopped propagation).
+            expect((card as any)._conditionsExpanded).toBe(expandedBefore);
+        });
+
+        it('renders the standard collapsible with summary badge when a condition entity is set', () => {
+            const tmpl = (card as any)._renderConditionsSection({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'on'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).not.toContain('collapsible-header static');
+            expect(joined).toContain('collapsible-chevron');
+            expect(joined).toContain('collapsible-badge');
+            expect(joined).toContain('Vacation');
+            expect(joined).toContain('✓');
+            expect(joined).not.toContain('add-condition-btn');
+        });
+
+        it('renders the warning summary badge when the condition entity is blocking', () => {
+            const tmpl = (card as any)._renderConditionsSection({
+                condition_entity: {
+                    condition_entity_id: 'calendar.vacation',
+                    domain: 'calendar',
+                    friendly_name: 'Vacation',
+                    state: 'off'
+                }
+            });
+            const joined = deepTemplateStrings(tmpl);
+            expect(joined).toContain('collapsible-badge');
+            expect(joined).toContain('✗');
+            expect(joined).not.toContain('add-condition-btn');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

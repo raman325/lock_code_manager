@@ -270,8 +270,7 @@ const slotCardComponentStyles = css`
         color: var(--primary-text-color);
     }
 
-    .manage-link:focus-visible,
-    .add-link:focus-visible {
+    .manage-link:focus-visible {
         border-radius: 4px;
         outline: 2px solid var(--primary-color);
         outline-offset: 2px;
@@ -279,6 +278,46 @@ const slotCardComponentStyles = css`
 
     .manage-link ha-svg-icon {
         --mdc-icon-size: 14px;
+    }
+
+    /* Add condition button — sits in the headerExtra slot of the Conditions
+       section (collapsed row) when no condition is set. Replaces the muted
+       "none" badge with a directly-actionable button. */
+    .add-condition-btn {
+        align-items: center;
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+        border: none;
+        border-radius: 12px;
+        color: var(--primary-color);
+        cursor: pointer;
+        display: inline-flex;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        gap: 4px;
+        padding: 4px 10px;
+    }
+    .add-condition-btn:hover {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+    }
+    .add-condition-btn ha-svg-icon {
+        --mdc-icon-size: 14px;
+    }
+    .add-condition-btn:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    /* Static (non-collapsible) variant of .collapsible-header used when the
+       Conditions section has no content to expand to — no chevron, no hover,
+       no toggle handler. Same outer chrome (.collapsible-section) so it
+       visually aligns with sibling sections. */
+    .collapsible-header.static {
+        cursor: default;
+    }
+    .collapsible-header.static:hover {
+        background: transparent;
     }
 
     .helpers-label {
@@ -298,25 +337,6 @@ const slotCardComponentStyles = css`
 
     .helpers-list > * + * {
         border-top: 1px solid var(--lcm-border-color);
-    }
-
-    .empty-state {
-        background: var(--lcm-section-bg);
-        border-radius: 8px;
-        color: var(--secondary-text-color);
-        font-size: 12px;
-        line-height: 1.5;
-        padding: 12px;
-        text-align: center;
-    }
-
-    .add-link {
-        color: var(--primary-color);
-        cursor: pointer;
-        display: inline-block;
-        font-size: 12px;
-        font-weight: 500;
-        margin-top: 6px;
     }
 
     .entity-row-loading {

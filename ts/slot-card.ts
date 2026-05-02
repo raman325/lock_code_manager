@@ -6,7 +6,8 @@ import {
     mdiCog,
     mdiEye,
     mdiEyeOff,
-    mdiPencil
+    mdiPencil,
+    mdiPlus
 } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, html, nothing } from 'lit';
@@ -530,13 +531,50 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             (this._config?.condition_helpers?.length ?? 0) > 0 &&
             this._config!.condition_helpers!.some((eid: string) => this._hass?.states[eid]);
 
+        // No condition + no helpers: nothing to expand to. Render a static
+        // header row with the Add button on the right; skip the chevron
+        // entirely so the row doesn't read as collapsible.
+        if (!hasEntity && !hasHelpers) {
+            return html`
+                <div class="collapsible-section">
+                    <div class="collapsible-header static">
+                        <div class="collapsible-title">Conditions</div>
+                        ${this._renderAddConditionButton()}
+                    </div>
+                </div>
+            `;
+        }
+
+        // No condition + helpers exist: collapsible (helpers are content),
+        // but the Add affordance is on the collapsed row instead of inside
+        // the body. With a condition set, the summary badge takes the slot.
+        const headerExtra = hasEntity
+            ? this._renderConditionsSummary(conditions)
+            : this._renderAddConditionButton();
+
         return this._renderCollapsible(
             'Conditions',
             this._conditionsExpanded,
             this._toggleConditions,
             this._renderConditionsBody(conditions, hasEntity, hasHelpers),
-            this._renderConditionsSummary(conditions)
+            headerExtra
         );
+    }
+
+    private _renderAddConditionButton(): TemplateResult {
+        return html`
+            <button
+                class="add-condition-btn"
+                @click=${(e: Event) => {
+                    e.stopPropagation();
+                    this._openConditionDialog('add');
+                }}
+                aria-label="Add condition"
+            >
+                <ha-svg-icon .path=${mdiPlus}></ha-svg-icon>
+                Add condition
+            </button>
+        `;
     }
 
     private _renderConditionsSummary(conditions: SlotCardConditions): TemplateResult {
@@ -575,24 +613,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           <ha-svg-icon .path=${mdiCog}></ha-svg-icon>
                           Manage condition
                       </span>`
-                : html`<div class="empty-state">
-                      No condition has been set.<br />
-                      <span
-                          class="add-link"
-                          role="button"
-                          tabindex="0"
-                          aria-label="Add a condition"
-                          @click=${() => this._openConditionDialog('add')}
-                          @keydown=${(e: KeyboardEvent) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  this._openConditionDialog('add');
-                              }
-                          }}
-                      >
-                          + Add a condition
-                      </span>
-                  </div>`}
+                : nothing}
             ${hasHelpers ? this._renderHelpers() : nothing}
         `;
     }
