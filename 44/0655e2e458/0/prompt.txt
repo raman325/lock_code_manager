@@ -1230,3 +1230,7 @@ merged. now ff main and let's start on phase b
 ---
 
 does this address everything listed in the TODO? We should remove it then
+
+---
+
+noticed a bug. The location of the slot # in an empty slot (not managed or unmanaged) doesn't match the location of the slot # in a managed/unmanaged slot. I think I like the empty slot location better, what does your designer mind think?
