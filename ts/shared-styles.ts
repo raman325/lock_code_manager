@@ -241,7 +241,10 @@ export const lcmSectionStyles = css`
  */
 export const lcmRevealButtonStyles = css`
     .lcm-reveal-button {
-        --mdc-icon-button-size: 28px;
+        /* 32px hit target — bumped from 28px to be a comfortable middle
+           between the WCAG 2.5.5 AA minimum (24px) and the AAA
+           recommendation (44px). */
+        --mdc-icon-button-size: 32px;
         --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
     }
@@ -342,7 +345,11 @@ export const lcmCollapsibleStyles = css`
     }
 
     .collapsible-content.expanded {
-        max-height: 500px;
+        /* 1000px ceiling — was 500px, which clipped when many helpers +
+           a calendar entity row stacked. A grid-rows transition to auto
+           is the proper fix but more invasive; bumping the ceiling is
+           the lower-risk shim. */
+        max-height: 1000px;
         opacity: 1;
         padding: 0 16px 16px;
     }

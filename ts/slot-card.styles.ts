@@ -222,7 +222,8 @@ const slotCardComponentStyles = css`
     }
 
     .hero-name-pencil {
-        --mdc-icon-button-size: 28px;
+        /* 32px hit target — see .lcm-reveal-button rationale. */
+        --mdc-icon-button-size: 32px;
         --mdc-icon-size: 14px;
         color: var(--disabled-text-color);
     }
@@ -270,7 +271,8 @@ const slotCardComponentStyles = css`
     }
 
     .hero-pin .reveal {
-        --mdc-icon-button-size: 28px;
+        /* 32px hit target — matches .hero-name-pencil and .lcm-reveal-button. */
+        --mdc-icon-button-size: 32px;
         --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
     }
@@ -569,7 +571,17 @@ const slotCardComponentStyles = css`
         padding: 12px 16px;
     }
 
-    .event-row:hover {
+    /* Static (non-interactive) event row — used when there's no usage
+       history to navigate to. Drops the cursor and hover affordances so
+       the row doesn't read as clickable. */
+    .event-row.event-row-static {
+        cursor: default;
+    }
+    .event-row.event-row-static:hover {
+        background: transparent;
+    }
+
+    .event-row:not(.event-row-static):hover {
         background: rgba(var(--rgb-primary-text-color), 0.06);
     }
 
@@ -614,26 +626,36 @@ const slotCardComponentStyles = css`
         color: var(--error-color);
     }
 
-    /* Action error banner */
+    /* Action error banner — font-weight 600 promotes the text to "bold"
+       per WCAG 1.4.3, which lowers the contrast threshold from 4.5:1 to
+       3:1. White-on-#db4437 is ~4.21:1, which fails AA for normal text
+       but passes the bold threshold. */
     .action-error {
         align-items: center;
         background: var(--error-color, #db4437);
         color: white;
         display: flex;
         font-size: 14px;
+        font-weight: 600;
         gap: 8px;
         justify-content: space-between;
         padding: 8px 16px;
     }
 
     .action-error-dismiss {
+        /* 28x28 minimum hit target via padding — pads from the previous
+           4px to 6px so the button is comfortably tappable on touch
+           devices. */
         background: none;
         border: none;
         color: white;
         cursor: pointer;
         font-size: 16px;
+        line-height: 1;
+        min-height: 28px;
+        min-width: 28px;
         opacity: 0.8;
-        padding: 4px;
+        padding: 6px 8px;
     }
 
     .action-error-dismiss:hover {

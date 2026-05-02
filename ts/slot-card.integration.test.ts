@@ -4419,6 +4419,106 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
         });
 
+        describe('DF1: collapsible content max-height bumped', () => {
+            it('shared styles use 1000px max-height on .collapsible-content.expanded', async () => {
+                const { lcmSharedStyles } = await import('./shared-styles');
+                const allCss = String(lcmSharedStyles.cssText ?? lcmSharedStyles);
+                expect(allCss).toMatch(
+                    /\.collapsible-content\.expanded\s*\{[^}]*max-height:\s*1000px/s
+                );
+            });
+        });
+
+        describe('DF2: touch targets bumped to 32px', () => {
+            it('hero pencil uses 32px button size', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /\.hero-name-pencil\s*\{[^}]*--mdc-icon-button-size:\s*32px/s
+                );
+            });
+
+            it('hero PIN reveal uses 32px button size', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /\.hero-pin\s+\.reveal\s*\{[^}]*--mdc-icon-button-size:\s*32px/s
+                );
+            });
+
+            it('lcm-reveal-button shared style uses 32px button size', async () => {
+                const { lcmSharedStyles } = await import('./shared-styles');
+                const allCss = String(lcmSharedStyles.cssText ?? lcmSharedStyles);
+                expect(allCss).toMatch(
+                    /\.lcm-reveal-button\s*\{[^}]*--mdc-icon-button-size:\s*32px/s
+                );
+            });
+
+            it('action-error-dismiss has min 28px hit target', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.action-error-dismiss\s*\{[^}]*min-height:\s*28px/s);
+                expect(allCss).toMatch(/\.action-error-dismiss\s*\{[^}]*min-width:\s*28px/s);
+            });
+        });
+
+        describe('DF3: Last used "Never used" suppresses navigation affordance', () => {
+            it('renders a non-interactive row when last_used is null', () => {
+                (card as any)._data = makeSlotCardData({
+                    event_entity_id: 'event.slot_1',
+                    last_used: null
+                });
+                (card as any)._hass = {
+                    ...(card as any)._hass,
+                    states: {
+                        'event.slot_1': {
+                            entity_id: 'event.slot_1',
+                            state: 'idle'
+                        }
+                    }
+                };
+                const tmpl = (card as any)._renderEventRow();
+                const joined = deepStrings(tmpl);
+                // Static rows do NOT carry the role=button affordance.
+                expect(joined).not.toContain('role="button"');
+                expect(joined).not.toContain('aria-label="View activity history"');
+                // The arrow chevron is suppressed.
+                expect(joined).not.toContain('class="event-arrow"');
+                // The static class is applied so cursor/hover affordances drop.
+                expect(joined).toContain('event-row-static');
+            });
+
+            it('keeps the interactive affordances when last_used is set', () => {
+                (card as any)._data = makeSlotCardData({
+                    event_entity_id: 'event.slot_1',
+                    last_used: '2024-01-01T00:00:00Z',
+                    last_used_lock: 'Front Door'
+                });
+                (card as any)._hass = {
+                    ...(card as any)._hass,
+                    states: {
+                        'event.slot_1': {
+                            entity_id: 'event.slot_1',
+                            state: '2024-01-01T00:00:00Z'
+                        }
+                    }
+                };
+                const tmpl = (card as any)._renderEventRow();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('aria-label="View activity history"');
+                expect(joined).toContain('class="event-arrow"');
+            });
+        });
+
+        describe('DF4: action-error contrast — bold weight', () => {
+            it('action-error uses font-weight 600 to satisfy WCAG bold-text contrast', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.action-error\s*\{[^}]*font-weight:\s*600/s);
+            });
+        });
+
         describe('VC7: dialog microcopy de-jargoned', () => {
             it('uses friendly "helper" and "on/off entity" copy in the dialog body', () => {
                 (card as any)._showConditionDialog = true;

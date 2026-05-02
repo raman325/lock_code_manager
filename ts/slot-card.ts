@@ -377,10 +377,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const eventState = this._hass?.states[eventEntityId];
         if (!eventState || eventState.state === 'unavailable') return nothing;
 
+        // When there's no usage history, the row is purely informational —
+        // drop the chevron arrow and click handler so it doesn't claim
+        // navigability when the more-info dialog has nothing useful to
+        // show. Otherwise it remains a click-through into HA's full event
+        // firing history.
+        const isInteractive = !!lastUsed;
         const meta = lastUsed
             ? html`${lastUsedLock ?? 'Used'} ·
                   <ha-relative-time .hass=${this._hass} .datetime=${lastUsed}></ha-relative-time>`
             : html`Never used`;
+
+        if (!isInteractive) {
+            return html`
+                <div class="event-row event-row-static">
+                    <ha-svg-icon
+                        class="event-icon"
+                        .path=${mdiClockOutline}
+                        aria-hidden="true"
+                    ></ha-svg-icon>
+                    <span class="event-name">Last used</span>
+                    <span class="event-meta">${meta}</span>
+                </div>
+            `;
+        }
 
         return html`
             <div
@@ -396,10 +416,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     }
                 }}
             >
-                <ha-svg-icon class="event-icon" .path=${mdiClockOutline}></ha-svg-icon>
+                <ha-svg-icon
+                    class="event-icon"
+                    .path=${mdiClockOutline}
+                    aria-hidden="true"
+                ></ha-svg-icon>
                 <span class="event-name">Last used</span>
                 <span class="event-meta">${meta}</span>
-                <ha-svg-icon class="event-arrow" .path=${mdiChevronRight}></ha-svg-icon>
+                <ha-svg-icon
+                    class="event-arrow"
+                    .path=${mdiChevronRight}
+                    aria-hidden="true"
+                ></ha-svg-icon>
             </div>
         `;
     }
