@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9931f0b85615",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-02T03:09:52.295959Z",
+  "branch": "phase2/slot-card-redesign",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "ts/lock-codes-card.styles.ts",
+    "ts/lock-codes-card.ts",
+    "ts/shared-styles.ts",
+    "ts/slot-card.styles.ts",
+    "ts/slot-card.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "7fd318167070",
+  "token_usage": {
+    "input_tokens": 924,
+    "cache_creation_tokens": 1542291,
+    "cache_read_tokens": 206306494,
+    "output_tokens": 443602,
+    "api_call_count": 439
+  },
+  "session_metrics": {
+    "turn_count": 55
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-02T03:09:51.495408Z",
+    "agent_lines": 334,
+    "human_added": 420,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 754,
+    "agent_percentage": 44.297082228116714
+  }
+}
