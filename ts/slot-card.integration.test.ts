@@ -1164,6 +1164,46 @@ describe('LockCodeManagerSlotCard integration', () => {
             );
             expect((card as any)._showConditionDialog).toBe(false);
         });
+
+        it('picker has both .includeDomains and .entityFilter that restrict to allowed domains', () => {
+            (card as any)._openConditionDialog('add');
+            const tmpl = (card as any)._renderConditionDialog();
+
+            // Walk the static strings to find the value paired with each
+            // property binding. Lit splits a template into strings + values,
+            // so the substring before a `${...}` interpolation tells us
+            // which property the next value belongs to.
+            const strings: string[] = (tmpl.strings ?? []) as string[];
+            const values: unknown[] = (tmpl.values ?? []) as unknown[];
+
+            const findValueFor = (propName: string): unknown => {
+                const marker = `.${propName}=`;
+                for (let i = 0; i < values.length; i++) {
+                    if (strings[i] && strings[i].includes(marker)) return values[i];
+                }
+                return undefined;
+            };
+
+            const includeDomains = findValueFor('includeDomains') as readonly string[];
+            const entityFilter = findValueFor('entityFilter') as (s: {
+                entity_id: string;
+            }) => boolean;
+
+            expect(Array.isArray(includeDomains)).toBe(true);
+            expect([...includeDomains].sort()).toEqual(
+                ['binary_sensor', 'calendar', 'input_boolean', 'schedule', 'switch'].sort()
+            );
+
+            expect(typeof entityFilter).toBe('function');
+            // Allowed domains should pass the filter
+            expect(entityFilter({ entity_id: 'calendar.vacation' })).toBe(true);
+            expect(entityFilter({ entity_id: 'schedule.business_hours' })).toBe(true);
+            expect(entityFilter({ entity_id: 'binary_sensor.door' })).toBe(true);
+            expect(entityFilter({ entity_id: 'switch.porch' })).toBe(true);
+            expect(entityFilter({ entity_id: 'input_boolean.guest_mode' })).toBe(true);
+            // Disallowed domain should be filtered out
+            expect(entityFilter({ entity_id: 'light.foo' })).toBe(false);
+        });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 

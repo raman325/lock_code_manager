@@ -30,6 +30,15 @@ import {
 
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
+/** Domains the Manage Condition entity picker is restricted to. */
+const CONDITION_DOMAINS = [
+    'calendar',
+    'schedule',
+    'binary_sensor',
+    'switch',
+    'input_boolean'
+] as const;
+
 /** Internal interface for lock sync status display */
 interface LockSyncStatus {
     /** Current code on the lock (actual or masked) */
@@ -1070,13 +1079,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         .hass=${this._hass}
                         .value=${this._dialogEntityId ?? ''}
                         .label=${'Condition entity'}
-                        .includeDomains=${[
-                            'calendar',
-                            'schedule',
-                            'binary_sensor',
-                            'switch',
-                            'input_boolean'
-                        ]}
+                        .includeDomains=${CONDITION_DOMAINS}
+                        .entityFilter=${(state: { entity_id: string }) =>
+                            (CONDITION_DOMAINS as readonly string[]).includes(
+                                state.entity_id.split('.')[0]
+                            )}
                         @value-changed=${(e: CustomEvent) => {
                             this._dialogEntityId = e.detail.value || null;
                         }}
