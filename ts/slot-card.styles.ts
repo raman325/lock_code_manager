@@ -26,7 +26,7 @@ const slotCardComponentStyles = css`
 
     /* Header Section */
     .header {
-        padding: 14px 16px 16px;
+        padding: 14px 16px 12px;
     }
 
     .header-top {
@@ -122,8 +122,8 @@ const slotCardComponentStyles = css`
     .content {
         display: flex;
         flex-direction: column;
-        gap: 16px;
-        padding: 16px;
+        gap: 12px;
+        padding: 12px 16px 16px;
     }
 
     /* Hero row (PIN + Enable) — tinted always-visible band at the top of .content */
@@ -133,7 +133,7 @@ const slotCardComponentStyles = css`
         border-top: 1px solid var(--lcm-border-color);
         display: flex;
         gap: 16px;
-        padding: 18px 16px;
+        padding: 14px 16px;
     }
 
     .hero-pin {
@@ -163,6 +163,21 @@ const slotCardComponentStyles = css`
 
     .hero-pin-value.masked {
         color: var(--secondary-text-color);
+    }
+
+    /* Override the shared .editable dashed-underline affordance for the PIN.
+       At 22px monospace with letter-spacing, the dashed underline renders as
+       broken dashes that look like a bug. Use a subtle hover background instead. */
+    .hero-pin-value.editable {
+        border-radius: 4px;
+        margin: 0 -4px;
+        padding: 0 4px;
+        text-decoration: none;
+        transition: background 0.15s ease;
+    }
+
+    .hero-pin-value.editable:hover {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
     }
 
     .hero-pin .reveal {

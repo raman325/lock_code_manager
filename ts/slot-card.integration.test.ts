@@ -457,6 +457,17 @@ describe('LockCodeManagerSlotCard integration', () => {
             // Switch disabled flag is bound as a property; verify the switch template has `.disabled` binding present.
             expect(heroStrings).toContain('.disabled=');
         });
+
+        it('hero PIN value does not inherit the dashed-underline editable affordance', async () => {
+            // The shared .editable rule applies `text-decoration: underline dashed`,
+            // which renders as broken dashes under a 22px monospace PIN. The slot
+            // card's stylesheet must override it for .hero-pin-value.editable.
+            // jsdom does not resolve adopted stylesheets through getComputedStyle,
+            // so we assert the override rule is present in the stylesheet source.
+            const { slotCardStyles } = await import('./slot-card.styles');
+            const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+            expect(allCss).toMatch(/\.hero-pin-value\.editable\s*\{[^}]*text-decoration:\s*none/);
+        });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 
