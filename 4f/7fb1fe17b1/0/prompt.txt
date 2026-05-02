@@ -800,3 +800,7 @@ I wonder, is there any value in having the condition be collapsed if the conditi
 ---
 
 no that's ok. Let's take the remove condition button from the modal and replace the "Manage condition" button with it. If you want to switch between conditions, it's just an extra click, remove, then add
+
+---
+
+let's do a review of the unstaged changes first to see if there's anything we missed, then commit, push, and update the PR title/description as needed. Then lets launch code reviews for the PR. Let's get a design perspective on this. We want to make sure the information architecture is clear, that it's assisstive friendly, etc
