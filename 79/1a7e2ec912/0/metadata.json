@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "791a7e2ec912",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-02T01:48:09.131033Z",
+  "branch": "phase2/slot-card-redesign",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "8ad5c655ff89",
+  "token_usage": {
+    "input_tokens": 645,
+    "cache_creation_tokens": 1404004,
+    "cache_read_tokens": 105184653,
+    "output_tokens": 370766,
+    "api_call_count": 300
+  },
+  "session_metrics": {
+    "turn_count": 31
+  }
+}
