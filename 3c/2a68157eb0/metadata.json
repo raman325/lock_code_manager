@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "3c2a68157eb0",
+  "strategy": "manual-commit",
+  "branch": "fix/ts-attribute-typing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "ts/lock-codes-card.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3c/2a68157eb0/0/metadata.json",
+      "transcript": "/3c/2a68157eb0/0/full.jsonl",
+      "content_hash": "/3c/2a68157eb0/0/content_hash.txt",
+      "prompt": "/3c/2a68157eb0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1192,
+    "cache_creation_tokens": 1806456,
+    "cache_read_tokens": 337951365,
+    "output_tokens": 540096,
+    "api_call_count": 612
+  }
+}
