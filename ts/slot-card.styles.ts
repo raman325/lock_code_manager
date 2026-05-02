@@ -26,7 +26,7 @@ const slotCardComponentStyles = css`
 
     /* Header Section */
     .header {
-        padding: 14px 16px 12px;
+        padding: 14px 16px 8px;
     }
 
     .header-top {
@@ -123,17 +123,17 @@ const slotCardComponentStyles = css`
         display: flex;
         flex-direction: column;
         gap: 12px;
-        padding: 12px 16px 16px;
+        padding: 0 16px 16px;
     }
 
     /* Hero row (PIN + Enable) — tinted always-visible band at the top of .content */
     .hero {
         align-items: center;
         background: var(--lcm-section-bg);
-        border-top: 1px solid var(--lcm-border-color);
+        border-radius: 12px;
         display: flex;
         gap: 16px;
-        padding: 14px 16px;
+        padding: 12px 16px;
     }
 
     .hero-pin {
@@ -158,7 +158,6 @@ const slotCardComponentStyles = css`
         font-family: var(--lcm-code-font);
         font-size: 22px;
         letter-spacing: 4px;
-        min-height: 1.5em;
     }
 
     .hero-pin-value.masked {
