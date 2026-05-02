@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f89f70cebd49",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-02T04:49:04.388989Z",
+  "branch": "feat/generate-pin-service",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "37e809f1cb44",
+  "token_usage": {
+    "input_tokens": 1173,
+    "cache_creation_tokens": 1793459,
+    "cache_read_tokens": 336297857,
+    "output_tokens": 533532,
+    "api_call_count": 593
+  },
+  "session_metrics": {
+    "turn_count": 68
+  }
+}
