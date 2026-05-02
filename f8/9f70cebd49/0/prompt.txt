@@ -1234,3 +1234,15 @@ does this address everything listed in the TODO? We should remove it then
 ---
 
 noticed a bug. The location of the slot # in an empty slot (not managed or unmanaged) doesn't match the location of the slot # in a managed/unmanaged slot. I think I like the empty slot location better, what does your designer mind think?
+
+---
+
+merged, ff main and clean stale branches
+
+---
+
+create a new branch to create a new service/action generate_pin. It optionally accepts a number of characters (we can default to 4) and returns a random PIN value? We should skip "unsafe" values like repeat numbers, consecutivie, etc.
+
+---
+
+don't do this in a worktree, just do it in this main thread
