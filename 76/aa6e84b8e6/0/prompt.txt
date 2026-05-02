@@ -230,3 +230,11 @@ let's do A, I started the devcontainer in the main repo so checking out should t
 ---
 
 all of the spacing is really messy. It doesn't match the mockup at all
+
+---
+
+before we get to that, I think we should go back to the design for the condition section where we had an add condition button directly on the collapsed view. There's no point in expanding the container just to click add, and there's only value in expanding if there's an item there
+
+---
+
+yes, continue
