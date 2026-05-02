@@ -141,8 +141,10 @@ const slotCardComponentStyles = css`
         padding: 12px 16px 16px;
     }
 
-    /* Hero band — Name row on top, PIN + Enable row below. Form-like
-       layout where every editable field has a label, including the name. */
+    /* Hero band — Name row on top, PIN + Enable row below. The name acts as
+       the visual anchor of the card (matching the PIN's weight) and the
+       form-like row labels are dropped — typography self-describes. The PIN
+       row keeps its label since "••••" isn't self-evident. */
     .hero {
         background: var(--lcm-section-bg);
         border-radius: 12px;
@@ -166,23 +168,25 @@ const slotCardComponentStyles = css`
         min-width: 0;
     }
 
+    /* Only the PIN row uses .hero-field-label now; the name and switch
+       self-describe. No min-width column-alignment is needed. */
     .hero-field-label {
         color: var(--secondary-text-color);
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.08em;
-        min-width: 56px;
         text-transform: uppercase;
     }
 
     .hero-name-value {
         color: var(--primary-text-color);
-        font-size: 16px;
-        font-weight: 500;
+        font-size: 22px;
+        font-weight: 600;
     }
 
     .hero-name-value.editable {
         border-radius: 4px;
+        cursor: pointer;
         margin: 0 -4px;
         padding: 0 4px;
         text-decoration: none;
@@ -190,6 +194,11 @@ const slotCardComponentStyles = css`
     }
     .hero-name-value.editable:hover {
         background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+    }
+    .hero-name-value:focus-visible {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
     }
 
     .hero-name-pencil {
@@ -231,6 +240,13 @@ const slotCardComponentStyles = css`
 
     .hero-pin-value.editable:hover {
         background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+    }
+
+    .hero-pin-value:focus-visible {
+        background: var(--lcm-section-bg-hover, rgba(127, 127, 127, 0.08));
+        border-radius: 4px;
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
     }
 
     .hero-pin .reveal {
@@ -461,6 +477,20 @@ const slotCardComponentStyles = css`
     .lock-name:hover {
         color: var(--primary-color);
         text-decoration: underline;
+    }
+
+    .lock-name:focus-visible {
+        border-radius: 4px;
+        color: var(--primary-color);
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
+    /* Collapsible-header focus ring — the section already has rounded
+       corners, so use an inset outline so it doesn't bleed past them. */
+    .collapsible-header:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
     }
 
     .lock-info {

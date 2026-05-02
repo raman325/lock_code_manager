@@ -437,10 +437,10 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(pinBlock).toBeTruthy();
         });
 
-        it('shows No PIN placeholder when both pin and pin_length are absent', () => {
+        it('shows "No PIN set" placeholder when both pin and pin_length are absent', () => {
             const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
-            expect(heroJson).toContain('No PIN');
+            expect(heroJson).toContain('No PIN set');
         });
 
         it('renders an input field for PIN when editing', () => {
@@ -480,13 +480,16 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
-            // Name field uses the shared hero-field-label and hero-name-value classes.
-            expect(heroJson).toContain('hero-field-label');
-            expect(heroJson).toContain('Name');
+            // The NAME label was dropped (typography self-describes); the
+            // editable name span and pencil button are still present and
+            // accessible (role/tabindex/aria-label).
             expect(heroJson).toContain('hero-name-value');
+            expect(heroJson).toContain('Edit name');
             expect(heroJson).toContain('Alice');
             // Pencil button for editing the name.
             expect(heroJson).toContain('hero-name-pencil');
+            // PIN row keeps its label since "••••" isn't self-evident.
+            expect(heroJson).toContain('hero-field-label');
         });
 
         it('hero name pencil click invokes _startEditing("name")', () => {
@@ -532,12 +535,12 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(heroJson).toContain('name-edit-input');
         });
 
-        it('renders <No Name> placeholder in the hero name row when name is empty', () => {
+        it('renders the "Not named" placeholder in the hero name row when name is empty', () => {
             (card as any)._data = makeSlotCardData({ name: '' });
             const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
             expect(heroJson).toContain('placeholder');
-            expect(heroJson).toContain('No Name');
+            expect(heroJson).toContain('Not named');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -2786,19 +2789,28 @@ describe('LockCodeManagerSlotCard integration', () => {
             (card as any)._openConditionDialog = () => {
                 openCalls += 1;
             };
-            let stopPropCalls = 0;
+            // Run every arity-1 handler with a synthetic click-shaped Event;
+            // the Add button calls stopPropagation + opens the dialog while
+            // the collapsible keydown handler short-circuits on missing key.
+            // Both behaviors are exercised; only the Add button counts as a
+            // successful match.
+            let totalStopPropCalls = 0;
             const fakeEvent = {
+                key: 'NotAKey',
+                preventDefault: () => undefined,
                 stopPropagation: () => {
-                    stopPropCalls += 1;
+                    totalStopPropCalls += 1;
                 }
             } as unknown as Event;
-            // The Add button is the only arity-1 click handler; the section
-            // toggle handler is arity-0.
-            const click = handlers.find((h) => h.length === 1);
-            expect(click).toBeDefined();
-            click!(fakeEvent);
+            for (const h of handlers.filter((fn) => fn.length === 1)) {
+                try {
+                    h(fakeEvent);
+                } catch {
+                    // ignore — some handlers may expect different shapes
+                }
+            }
+            expect(totalStopPropCalls).toBeGreaterThanOrEqual(1);
             expect(openCalls).toBe(1);
-            expect(stopPropCalls).toBe(1);
             // Section did NOT toggle (button stopped propagation).
             expect((card as any)._conditionsExpanded).toBe(expandedBefore);
         });
@@ -3675,6 +3687,401 @@ describe('LockCodeManagerSlotCard integration', () => {
                 expect((card as any)._dialogMode).toBeUndefined();
             });
         });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase A: design hierarchy + a11y critical fixes (PR #1116 Phase A).
+    describe('Phase A — design + a11y fix-up', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        /** Recursively join all template strings (deep) */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        /**
+         * Render a TemplateResult to a flat string by interleaving its static
+         * strings with its scalar (string/number/boolean) values, recursing
+         * into nested templates. Functions and other non-scalars are
+         * substituted with an empty string. Useful for asserting on
+         * attributes whose values come from interpolated expressions.
+         */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function renderToString(result: any): string {
+            if (!result || typeof result !== 'object' || !result.strings) return '';
+            const strings: string[] = result.strings;
+            const values: unknown[] = result.values ?? [];
+            let out = '';
+            for (let i = 0; i < strings.length; i++) {
+                out += strings[i];
+                if (i < values.length) {
+                    const v = values[i];
+                    if (v === null || v === undefined || typeof v === 'function') {
+                        // skip
+                    } else if (typeof v === 'object') {
+                        out += renderToString(v);
+                    } else {
+                        out += String(v);
+                    }
+                }
+            }
+            return out;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function collectAllHandlers(result: any): Array<(...args: any[]) => void> {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectAllHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectAllHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        // D1 — name typography promotion + label drops
+        describe('D1: name typography', () => {
+            it('drops the NAME label from the hero name row', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                // The NAME label was dropped — the editable name span and
+                // pencil are still present, but no "NAME" text label.
+                expect(joined).not.toMatch(/>Name</);
+            });
+
+            it('drops the ENABLED label from the hero toggle row', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice', enabled: true });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).not.toMatch(/>Enabled</);
+            });
+
+            it('keeps the PIN label since "••••" is not self-evident', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toMatch(/>PIN</);
+            });
+
+            it('promotes .hero-name-value to 22px / 600 weight in the stylesheet', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /\.hero-name-value\s*\{[^}]*font-size:\s*22px[^}]*font-weight:\s*600/s
+                );
+            });
+        });
+
+        // D3 — collapsed_sections backward compat
+        describe('D3: collapsed_sections backward compat', () => {
+            function makeCard(
+                collapsed?: ('condition' | 'conditions' | 'lock_status')[]
+            ): SlotCardElement & Record<string, unknown> {
+                const c = document.createElement('lcm-slot') as SlotCardElement &
+                    Record<string, unknown>;
+                c.setConfig({
+                    collapsed_sections: collapsed,
+                    config_entry_id: 'abc',
+                    slot: 1,
+                    type: 'custom:lcm-slot'
+                });
+                c.hass = createMockHassWithConnection();
+                container.appendChild(c);
+                return c;
+            }
+
+            it('collapses condition section when canonical "condition" is set', () => {
+                const c = makeCard(['condition']);
+                expect((c as any)._conditionsExpanded).toBe(false);
+            });
+
+            it('collapses condition section when legacy "conditions" is set', () => {
+                const c = makeCard(['conditions']);
+                expect((c as any)._conditionsExpanded).toBe(false);
+            });
+
+            it('expands condition section when neither key is in the list', () => {
+                const c = makeCard(['lock_status']);
+                expect((c as any)._conditionsExpanded).toBe(true);
+            });
+
+            it('uses the singular "condition" as the default when nothing is configured', () => {
+                const c = makeCard();
+                // Default of ['condition', 'lock_status'] keeps both collapsed.
+                expect((c as any)._conditionsExpanded).toBe(false);
+                expect((c as any)._lockStatusExpanded).toBe(false);
+            });
+        });
+
+        // D4 — placeholder copy
+        describe('D4: placeholder copy', () => {
+            it('uses "Not named" instead of "<No Name>" for the empty name placeholder', () => {
+                (card as any)._data = makeSlotCardData({ name: '' });
+                const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('Not named');
+                expect(joined).not.toContain('No Name');
+                expect(joined).not.toContain('&lt;No Name&gt;');
+            });
+
+            it('uses "No PIN set" instead of "<No PIN>" for the empty PIN placeholder', () => {
+                const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('No PIN set');
+                expect(joined).not.toContain('No PIN<');
+                expect(joined).not.toContain('&lt;No PIN&gt;');
+            });
+        });
+
+        // C1 — name-edit auto-focus selector regression test
+        describe('C1: name-edit auto-focus selector', () => {
+            it('uses ".name-edit-input" (no .name ancestor) so the focus selector resolves', async () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                (card as any)._startEditing('name');
+                // updated() runs on the next microtask. Awaiting updateComplete
+                // commits the render and triggers updated(), which is what
+                // needs to find the input via the selector.
+                await (card as unknown as { updateComplete: Promise<unknown> }).updateComplete;
+                const input = card.shadowRoot?.querySelector('.name-edit-input');
+                expect(input).not.toBeNull();
+            });
+        });
+
+        // A1 — hero PIN value a11y
+        describe('A1: hero PIN value a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-label on the editable PIN value', () => {
+                (card as any)._data = makeSlotCardData({ pin: '1234' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                // The editable PIN span declares all three a11y attributes.
+                expect(joined).toContain('class="hero-pin-value editable');
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('tabindex="0"');
+                expect(joined).toContain('aria-label="Edit PIN"');
+            });
+
+            it('Enter and Space on the PIN value invoke _startEditing("pin")', () => {
+                (card as any)._data = makeSlotCardData({ pin: '1234' });
+                const calls: string[] = [];
+                (card as any)._startEditing = (field: string) => calls.push(field);
+                // Stub the enable-toggle handler so accidentally-invoked
+                // handlers from our broad arity-1 sweep don't reject async
+                // Promises and leak as unhandled rejections.
+                (card as any)._handleEnabledToggle = () => undefined;
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const handlers = collectAllHandlers(hero);
+                // Try every keydown-shaped (arity 1) handler with Enter/Space;
+                // the PIN-value keydown will fire startEditing('pin').
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore — some handlers expect different shapes
+                    }
+                }
+                // Should have been called twice for pin (Enter + Space).
+                const pinCalls = calls.filter((c) => c === 'pin').length;
+                expect(pinCalls).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A2 — hero name value a11y
+        describe('A2: hero name value a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-label on the editable name value', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('class="hero-name-value editable"');
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('tabindex="0"');
+                expect(joined).toContain('aria-label="Edit name"');
+            });
+
+            it('Enter and Space on the name value invoke _startEditing("name")', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                const calls: string[] = [];
+                (card as any)._startEditing = (field: string) => calls.push(field);
+                (card as any)._handleEnabledToggle = () => undefined;
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const handlers = collectAllHandlers(hero);
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined,
+                            target: { checked: false }
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore
+                    }
+                }
+                const nameCalls = calls.filter((c) => c === 'name').length;
+                expect(nameCalls).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A4 — lock-name a11y
+        describe('A4: lock-name a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-label on the navigable lock name', () => {
+                const tmpl = (card as any)._renderLockRow({
+                    code: '1234',
+                    entityId: 'lock.front',
+                    inSync: true,
+                    lockEntityId: 'lock.front',
+                    name: 'Front Door',
+                    syncStatus: 'in_sync'
+                });
+                const rendered = renderToString(tmpl);
+                expect(rendered).toContain('role="button"');
+                expect(rendered).toContain('tabindex="0"');
+                expect(rendered).toContain('aria-label="View Front Door more info"');
+            });
+
+            it('Enter and Space on the lock name dispatch hass-more-info', () => {
+                let dispatched = 0;
+                (card as any)._navigateToLock = () => {
+                    dispatched += 1;
+                };
+                const tmpl = (card as any)._renderLockRow({
+                    code: '1234',
+                    entityId: 'lock.front',
+                    inSync: true,
+                    lockEntityId: 'lock.front',
+                    name: 'Front Door',
+                    syncStatus: 'in_sync'
+                });
+                const handlers = collectAllHandlers(tmpl);
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore
+                    }
+                }
+                expect(dispatched).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A5 — collapsible header a11y
+        describe('A5: collapsible header a11y', () => {
+            it('exposes role=button, tabindex=0 and aria-expanded on the collapsible header', () => {
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    true,
+                    () => undefined,
+                    null
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="collapsible-header"');
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('tabindex="0"');
+                // aria-expanded is bound; the joined static strings keep the
+                // attribute name even though the value is interpolated.
+                expect(joined).toContain('aria-expanded=');
+            });
+
+            it('Enter and Space on the collapsible header invoke onToggle', () => {
+                let toggled = 0;
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    true,
+                    () => {
+                        toggled += 1;
+                    },
+                    null
+                );
+                const handlers = collectAllHandlers(tmpl);
+                for (const h of handlers.filter((fn) => fn.length === 1)) {
+                    try {
+                        h({
+                            key: 'Enter',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                        h({
+                            key: ' ',
+                            preventDefault: () => undefined
+                        } as unknown as KeyboardEvent);
+                    } catch {
+                        // ignore
+                    }
+                }
+                // Enter + Space → 2 toggles.
+                expect(toggled).toBeGreaterThanOrEqual(2);
+            });
+        });
+
+        // A6 — action error banner role=alert
+        describe('A6: action error banner role=alert', () => {
+            it('renders role="alert" on the .action-error banner', () => {
+                (card as any)._actionError = 'Boom';
+                (card as any)._data = makeSlotCardData({});
+                const tmpl = (card as any)._renderFromData((card as any)._data);
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="action-error"');
+                expect(joined).toContain('role="alert"');
+            });
+        });
+
+        // A7 — Saving… indicator aria-live
+        describe('A7: dialog Saving indicator aria-live', () => {
+            it('renders aria-live="polite" on the Saving… indicator', () => {
+                (card as any)._showConditionDialog = true;
+                (card as any)._dialogSaving = true;
+                const tmpl = (card as any)._renderConditionDialog();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="dialog-saving"');
+                expect(joined).toContain('aria-live="polite"');
+            });
+        });
+
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
 });

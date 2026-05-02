@@ -510,7 +510,20 @@ class LockCodesCard extends LockCodesCardBase {
                     ? 'full-width'
                     : ''}"
                 title=${isClickable ? 'Click to manage this slot' : nothing}
+                role=${isClickable ? 'button' : nothing}
+                tabindex=${isClickable ? '0' : nothing}
+                aria-label=${isClickable
+                    ? `Manage slot ${slot.slot}${slot.config_entry_title ? ` · ${slot.config_entry_title}` : ''}`
+                    : nothing}
                 @click=${isClickable ? () => this._navigateToSlot(slot.config_entry_id) : nothing}
+                @keydown=${isClickable
+                    ? (e: KeyboardEvent) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              this._navigateToSlot(slot.config_entry_id);
+                          }
+                      }
+                    : nothing}
             >
                 <div class="slot-top">
                     <span class="slot-label">
@@ -637,7 +650,13 @@ class LockCodesCard extends LockCodesCardBase {
                           <ha-icon-button
                               class="lcm-reveal-button"
                               .path=${this._revealed ? mdiEyeOff : mdiEye}
-                              @click=${this._toggleReveal}
+                              @click=${(e: Event) => {
+                                  // Stop propagation so the click doesn't also
+                                  // trigger the parent slot-chip's navigation
+                                  // when the chip is clickable (managed slots).
+                                  e.stopPropagation();
+                                  this._toggleReveal();
+                              }}
                               .label=${this._revealed ? 'Hide codes' : 'Reveal codes'}
                           ></ha-icon-button>
                       </span>`

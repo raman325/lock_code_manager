@@ -1382,4 +1382,168 @@ describe('LockCodesCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    // Phase A — A3 + A8: keyboard a11y on managed slot chips and the
+    // reveal-button click no longer bubbles into chip navigation.
+    describe('Phase A — slot-chip a11y + reveal stopPropagation', () => {
+        /** Recursively join all template strings (deep) */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        /** Recursively collect all function values from a TemplateResult */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function collectAllHandlers(result: any): Array<(...args: any[]) => void> {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const handlers: Array<(...args: any[]) => void> = [];
+            if (!result?.values) return handlers;
+            for (const v of result.values) {
+                if (typeof v === 'function') {
+                    handlers.push(v);
+                } else if (v?.strings && v?.values) {
+                    handlers.push(...collectAllHandlers(v));
+                } else if (Array.isArray(v)) {
+                    for (const item of v) {
+                        if (item?.strings && item?.values) {
+                            handlers.push(...collectAllHandlers(item));
+                        }
+                    }
+                }
+            }
+            return handlers;
+        }
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        // A3 — slot-chip a11y when clickable. The a11y attributes are bound
+        // as dynamic Lit values (ternary on isClickable), so they appear in
+        // the template's `values` array rather than in the static `strings`.
+        // We assert against the raw template fragment values for the chip.
+        it('exposes role=button, tabindex=0 and aria-label on a clickable managed slot chip', () => {
+            const tmpl = (card as any)._renderSlotChip(
+                {
+                    active: true,
+                    code: '1234',
+                    config_entry_id: 'entry-id',
+                    config_entry_title: 'Front Door',
+                    enabled: true,
+                    managed: true,
+                    name: 'Alice',
+                    slot: 3
+                },
+                false
+            );
+            const values = tmpl.values ?? [];
+            // The chip's static strings include "role=", "tabindex=" and
+            // "aria-label=" attribute names; the dynamic values fill in the
+            // attribute values. When clickable, those values are populated.
+            expect(values).toContain('button');
+            expect(values).toContain('0');
+            expect(values).toContain('Manage slot 3 · Front Door');
+        });
+
+        it('does NOT expose button role on a non-clickable (unmanaged) slot chip', () => {
+            const tmpl = (card as any)._renderSlotChip(
+                {
+                    code: '5678',
+                    managed: false,
+                    slot: 4
+                },
+                false
+            );
+            const values = tmpl.values ?? [];
+            // When not clickable, the ternaries fall through to `nothing`,
+            // so the dynamic role/tabindex/aria-label values are removed.
+            expect(values).not.toContain('button');
+            // 'Manage slot 4' must NOT appear as an aria-label value.
+            expect(
+                values.some((v: unknown) => typeof v === 'string' && v.startsWith('Manage slot'))
+            ).toBe(false);
+        });
+
+        it('Enter and Space on a clickable slot chip navigate to the slot', () => {
+            let navTo: string | undefined;
+            (card as any)._navigateToSlot = (id: string) => {
+                navTo = id;
+            };
+            const tmpl = (card as any)._renderSlotChip(
+                {
+                    active: true,
+                    code: '1234',
+                    config_entry_id: 'entry-id',
+                    enabled: true,
+                    managed: true,
+                    name: 'Alice',
+                    slot: 3
+                },
+                false
+            );
+            const handlers = collectAllHandlers(tmpl);
+            // Find a keydown-shaped handler that responds to Enter.
+            for (const h of handlers.filter((fn) => fn.length === 1)) {
+                if (navTo === 'entry-id') break;
+                try {
+                    h({
+                        key: 'Enter',
+                        preventDefault: () => undefined
+                    } as unknown as KeyboardEvent);
+                } catch {
+                    // ignore — some handlers expect different shapes
+                }
+            }
+            expect(navTo).toBe('entry-id');
+        });
+
+        // A8 — reveal click stops propagation so chip navigation doesn't fire
+        it('reveal-button click on a clickable slot calls stopPropagation', () => {
+            let stopped = 0;
+            const tmpl = (card as any)._renderCodeDisplayMode(
+                {
+                    active: true,
+                    code: '1234',
+                    config_entry_id: 'entry-id',
+                    enabled: true,
+                    managed: true,
+                    name: 'Alice',
+                    slot: 3
+                },
+                true,
+                'masked_with_reveal',
+                false
+            );
+            const handlers = collectAllHandlers(tmpl);
+            // The reveal click handler is the arity-1 handler that calls
+            // stopPropagation on the synthetic Event. Lift the fakeEvent out
+            // of the loop so the no-loop-func ESLint rule is satisfied.
+            const fakeEvent = {
+                stopPropagation: () => {
+                    stopped += 1;
+                }
+            } as unknown as Event;
+            for (const h of handlers.filter((fn) => fn.length === 1)) {
+                try {
+                    h(fakeEvent);
+                } catch {
+                    // ignore
+                }
+            }
+            expect(stopped).toBeGreaterThanOrEqual(1);
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });

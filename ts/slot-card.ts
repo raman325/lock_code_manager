@@ -174,9 +174,13 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
         this._config = config;
 
-        // Set initial collapsed state from config
-        const collapsed = config.collapsed_sections ?? ['conditions', 'lock_status'];
-        this._conditionsExpanded = !collapsed.includes('conditions');
+        // Set initial collapsed state from config. Accept both 'condition'
+        // (the new canonical singular) and 'conditions' (the original plural)
+        // for backward compatibility with YAML written before the rename.
+        const collapsed = config.collapsed_sections ?? ['condition', 'lock_status'];
+        this._conditionsExpanded = !(
+            collapsed.includes('condition') || collapsed.includes('conditions')
+        );
         this._lockStatusExpanded = !collapsed.includes('lock_status');
         this._isStub = config.config_entry_id === 'stub';
         if (!this._isStub) {
@@ -239,8 +243,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         // Focus the appropriate input when entering edit mode
         if (this._editingField) {
             const selectors: Record<string, string> = {
-                name: '.name .name-edit-input',
-                pin: '.hero-pin .pin-edit-input'
+                name: '.name-edit-input',
+                pin: '.pin-edit-input'
             };
             const input = this.shadowRoot?.querySelector<HTMLInputElement>(
                 selectors[this._editingField]
@@ -320,7 +324,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return html`
             <ha-card class="slot-card-state-${stateClass}">
                 ${this._actionError
-                    ? html`<div class="action-error">
+                    ? html`<div class="action-error" role="alert">
                           <span>${this._actionError}</span>
                           <button
                               class="action-error-dismiss"
@@ -491,7 +495,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             <div class="hero">
                 <div class="hero-row">
                     <div class="hero-field">
-                        <span class="hero-field-label">Name</span>
                         ${editingName
                             ? html`<input
                                   class="edit-input name-edit-input"
@@ -502,11 +505,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                               />`
                             : html`<span
                                       class="hero-name-value editable"
+                                      role="button"
+                                      tabindex="0"
+                                      aria-label="Edit name"
                                       @click=${() => this._startEditing('name')}
+                                      @keydown=${(e: KeyboardEvent) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault();
+                                              this._startEditing('name');
+                                          }
+                                      }}
                                   >
                                       ${name
                                           ? html`${name}`
-                                          : html`<em class="placeholder">&lt;No Name&gt;</em>`}
+                                          : html`<em class="placeholder">Not named</em>`}
                                   </span>
                                   <ha-icon-button
                                       class="hero-name-pencil"
@@ -533,9 +545,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   class="hero-pin-value editable ${shouldMask && hasPin
                                       ? 'masked'
                                       : ''}"
+                                  role="button"
+                                  tabindex="0"
+                                  aria-label="Edit PIN"
                                   @click=${() => this._startEditing('pin')}
+                                  @keydown=${(e: KeyboardEvent) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                          e.preventDefault();
+                                          this._startEditing('pin');
+                                      }
+                                  }}
                               >
-                                  ${displayPin ?? html`<em class="placeholder">&lt;No PIN&gt;</em>`}
+                                  ${displayPin ?? html`<em class="placeholder">No PIN set</em>`}
                               </span>`}
                         ${mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
                             ? html`<ha-icon-button
@@ -547,7 +568,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             : nothing}
                     </div>
                     <div class="hero-toggle">
-                        <span class="hero-field-label">Enabled</span>
                         <ha-switch
                             .checked=${enabled === true}
                             .disabled=${enabled === null}
@@ -916,7 +936,16 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     <span
                         class="lock-name"
                         title="View lock codes"
+                        role="button"
+                        tabindex="0"
+                        aria-label="View ${lock.name} more info"
                         @click=${() => this._navigateToLock(lock.lockEntityId)}
+                        @keydown=${(e: KeyboardEvent) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                this._navigateToLock(lock.lockEntityId);
+                            }
+                        }}
                     >
                         ${lock.name}
                     </span>
@@ -970,7 +999,19 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     ): TemplateResult {
         return html`
             <div class="collapsible-section">
-                <div class="collapsible-header" @click=${onToggle}>
+                <div
+                    class="collapsible-header"
+                    role="button"
+                    tabindex="0"
+                    aria-expanded=${expanded ? 'true' : 'false'}
+                    @click=${onToggle}
+                    @keydown=${(e: KeyboardEvent) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            onToggle();
+                        }
+                    }}
+                >
                     <div class="collapsible-title">${title} ${headerExtra ?? nothing}</div>
                     <ha-svg-icon
                         class="collapsible-chevron"
@@ -1103,7 +1144,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             )}
                         @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>
-                    ${this._dialogSaving ? html`<div class="dialog-saving">Saving…</div>` : nothing}
+                    ${this._dialogSaving
+                        ? html`<div class="dialog-saving" aria-live="polite">Saving…</div>`
+                        : nothing}
                 </div>
             </ha-dialog>
         `;

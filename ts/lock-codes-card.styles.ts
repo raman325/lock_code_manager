@@ -130,6 +130,11 @@ const lockCodesCardComponentStyles = css`
         transform: translateY(0);
     }
 
+    .slot-chip.clickable:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+
     .slot-top {
         align-items: center;
         display: flex;
