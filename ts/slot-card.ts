@@ -320,11 +320,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             };
         });
 
-        const showLockStatus = this._config.show_lock_status !== false;
+        const showLockStatus = this._config!.show_lock_status !== false;
         // The conditions section now always renders when enabled. The empty
         // state (no condition entity, no helpers) is handled inside the
         // collapsible body so users can add a condition from there.
-        const showConditions = this._config.show_conditions !== false;
+        const showConditions = this._config!.show_conditions !== false;
 
         return html`
             <ha-card class="slot-card-state-${stateClass}">
@@ -1215,9 +1215,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         .value=${this._dialogEntityId ?? ''}
                         .label=${'Condition entity'}
                         .includeDomains=${CONDITION_DOMAINS}
-                        .entityFilter=${(state: { entity_id: string }) =>
+                        .entityFilter=${(_state: { entity_id: string }) =>
                             (CONDITION_DOMAINS as readonly string[]).includes(
-                                state.entity_id.split('.')[0]
+                                _state.entity_id.split('.')[0]
                             )}
                         @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>

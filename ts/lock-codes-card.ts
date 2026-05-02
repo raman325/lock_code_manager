@@ -2,6 +2,7 @@ import { mdiCheck, mdiClockOutline, mdiClose, mdiEye, mdiEyeOff } from '@mdi/js'
 import { MessageBase } from 'home-assistant-js-websocket';
 import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
+import { ifDefined } from 'lit/directives/if-defined.js';
 
 import { HomeAssistant } from './ha_type_stubs';
 import { lockCodesCardStyles } from './lock-codes-card.styles';
@@ -511,9 +512,9 @@ class LockCodesCard extends LockCodesCardBase {
                 class="slot-chip ${stateClass} ${pendingClass} ${managedClass} ${clickableClass} ${isAlone
                     ? 'full-width'
                     : ''}"
-                title=${isClickable ? 'Click to manage this slot' : nothing}
-                role=${isClickable ? 'button' : nothing}
-                tabindex=${isClickable ? '0' : nothing}
+                title=${ifDefined(isClickable ? 'Click to manage this slot' : undefined)}
+                role=${ifDefined(isClickable ? 'button' : undefined)}
+                tabindex=${ifDefined(isClickable ? '0' : undefined)}
                 aria-label=${isClickable
                     ? `Manage slot ${slot.slot}${slot.config_entry_title ? ` · ${slot.config_entry_title}` : ''}`
                     : nothing}
@@ -638,7 +639,7 @@ class LockCodesCard extends LockCodesCardBase {
             <div class="slot-code-row">
                 <span
                     class="lcm-code ${codeClass} ${editableClass}"
-                    title=${isEditable ? 'Click to edit' : nothing}
+                    title=${ifDefined(isEditable ? 'Click to edit' : undefined)}
                     @click=${isEditable ? (e: Event) => this._startEditing(e, slot) : nothing}
                 >
                     ${isPending

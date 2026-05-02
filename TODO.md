@@ -12,16 +12,12 @@
   across slots, format violations against lock requirements, and slot conflicts
   across config entries.
 - **Service actions:**
-  - `set_temporary_code` — time-limited PIN
   - `generate_pin` — auto-generate secure PIN
-  - `bulk_enable` / `bulk_disable`
 - **Custom Jinja templates** — Ship `.jinja` macros for LCM entity resolution
   (e.g. `lcm_slot_entities(config_entry_id, slot_num)`). Auto-install to
   `custom_templates/` during setup.
 
 ## Providers
-
-**Current:** Akuvox, Matter, Schlage, Z-Wave JS, ZHA, Zigbee2MQTT (MQTT), Virtual (testing)
 
 **Future:** Nuki, SimpliSafe (has `async_get_pins()` in simplipy — full
 read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
@@ -82,31 +78,6 @@ read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
 ## Frontend
 
 - Test visual editor for both cards (post-redesign).
-- **Enhance sync_status display** — The slot card and lock-codes card now show
-  granular sync states (in_sync, out_of_sync, syncing, suspended) with distinct
-  icons and colors. Future work: spinner animation for syncing state, richer
-  suspended state details (e.g., show the repair issue reason).
-
-### Slot/lock card — manual color contrast verification (deferred from PR #1117)
-
-The only Phase B item that couldn't be resolved in code: WCAG color
-contrast checks against HA default light and dark themes need to be done
-manually in a browser with a contrast tool. Combinations to verify:
-
-- `.hero-field-label` on the hero tinted background (11px uppercase).
-- `.lcm-code.off` (`disabled-text-color`) on `--lcm-section-bg` — likely
-  the worst case.
-- `.lock-synced-time` (11px secondary-text).
-- `.summary-cell-zero` on numeric "0" cells — these convey data, not
-  just decoration.
-- `.action-error` was bumped to `font-weight: 600` to clear AA at 3:1
-  for bold text; verify this still holds in light theme where
-  `--error-color` may differ.
-
-Note also: the `Slot N · {entry_title}` rendering remains intentionally
-inconsistent between the slot card (18px title) and the lock card
-(11px uppercase kicker). The two contexts (focused single-slot vs
-compact multi-slot list) call for different visual weights.
 
 ## Process
 
