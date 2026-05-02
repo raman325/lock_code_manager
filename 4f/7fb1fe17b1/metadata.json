@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "4f7fb1fe17b1",
+  "strategy": "manual-commit",
+  "branch": "phase2/slot-card-redesign",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "ts/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4f/7fb1fe17b1/0/metadata.json",
+      "transcript": "/4f/7fb1fe17b1/0/full.jsonl",
+      "content_hash": "/4f/7fb1fe17b1/0/content_hash.txt",
+      "prompt": "/4f/7fb1fe17b1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 924,
+    "cache_creation_tokens": 1542291,
+    "cache_read_tokens": 206306494,
+    "output_tokens": 443602,
+    "api_call_count": 439
+  }
+}

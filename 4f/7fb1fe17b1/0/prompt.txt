@@ -1,0 +1,802 @@
+the status section of the slot card has a lot of white space. I wonder if, instead of having a title, status row, and substatus row, if we collapsed it into one? Act as an HA designer when evaluating the current design
+
+---
+
+mock up option B, both with and without C flavored thinking
+
+---
+
+I like B+C, but why can't we adopt the secondary statuses from B only in B+C?
+
+---
+
+I guess we can get rid of blocked by conditions in B+C - didn't realize we moved it into the condition but I get it now
+
+---
+
+nevermind I like solution B, it's easier to read
+
+---
+
+what if we instead replaced the circular logo with the pill, and then used Active/inactive/disabled as a secondary status underneath the title? Inactive = Blocked by condiitons. Disabled = Slot is disabled by user, so we can use them interchangeably
+
+---
+
+yes
+
+---
+
+1. maybe we just move the SLOT 1 header to the left and put Alice's name immediately to the right?
+2. it should also fire when locks are out of sync
+3. yes
+
+two more things:
+1. let's see what conditions looks like when it's only the one condition - we are going to get rid of number of uses, might as well do it as part of this redesign
+2. can you show me the expanded states of the cards too?
+
+---
+
+1. maybe we just move the SLOT 1 header to the left, have status underneath it, and put name to the right? Feel free to adjust if you have a better idea
+2. it should also fire when locks are out of sync
+3. yes
+
+two more things:
+1. let's see what conditions looks like when it's only the one condition - we are going to get rid of number of uses, might as well do it as part of this redesign
+2. can you show me the expanded states of the cards too?
+
+---
+
+1. maybe we just move the SLOT 1 header to the left, have status underneath it, and put name to the right? Feel free to adjust if you have a better idea
+2. let's get rid of the scope. It's a lot of space for effectively one of four states (all is good, slot is disabled, slot is enabled but condition is active, slot is eanbled but not all locks are in sync)
+3. yes
+
+two more things:
+1. let's see what conditions looks like when it's only the one condition - we are going to get rid of number of uses, might as well do it as part of this redesign
+2. can you show me the expanded states of the cards too?
+
+---
+
+you misunderstood my intent on the header. The styling from before should have been kept with SLOT 1 and Alice in primary. To me the slot # is the organizational index that lives to the top left. And then the name and status become the most secondarily important things
+
+---
+
+why do they all have to be to the left is my point? there is so much white space now to the right. How would a designer leverage that full section knowing that we have these three pieces of information and their relative improtance. Youc an make styling adjustments, but make it make sense
+
+---
+
+SO much better
+
+to answer your questions:
+1. yes
+2. sure, put the config entry title after it. That'll make it more useful on its own
+
+OK now, how do we display condition helpers? We render them as entity rows correct? Do we do that for locks too? If so, we should do that for the condition entity
+
+---
+
+I think Path A compromise probably makes the most sense. Can you mock it?
+
+---
+
+1. it's just a config option on the entity row? keep it
+2. let's rethink actions here and this space in general. It's not conditions, it's condition singular. Replace and delete are in two different areas and affect the config entry while editing edits the entities state. We need to rethink where we are putting what. Perhaps we need ot simplify what we offer here instead of trying to offer all of the editing capabilities. The nice thing about the UI approach is admins can give it to users to mess with
+3. yes mock with both
+
+---
+
+1. manage condition is good but can we move it directly below the condition above the helpers themselves? Can you also mock up what that would open to?
+2. actually it's a configuration on the card/strategy. There is no easy way to manage that via the frontend
+3. that's fine. it's weird to have helpers without a condition, but I suppose users can do it that way if they want, what's the harm.
+
+Finally, for the activity log, all we have is the entity event state and history. We should probably simplify what this does as cool as it looks
+
+---
+
+this is perfect. I would say when implementing that we want to use HA components where we can. Where we have to compose ourselves, let's be deliberate about what we compose versus what we don't. Do you want to create an implementation plan based on this mock? I foresee this happening as part 2 of this whole operation, with part 1 being to migrate config entries to remove number of uses, possibly create a repair issue, but otherwise clean up the code around number of uses
+
+---
+
+this is perfect. I would say when implementing that we want to use HA components where we can. Where we have to compose ourselves, let's be deliberate about what we compose versus what we don't - as an example, if we could, the condition entity picker should be an entity selector. Do you want to create an implementation plan based on this mock? I foresee this happening as part 2 of this whole operation, with part 1 being to migrate config entries to remove number of uses, possibly create a repair issue, but otherwise clean up the code around number of uses
+
+---
+
+1. Each phase should result in a PR but let's pause until we are good with phase 1 before moving onto phase 2 as it simplifies 2 grealty
+
+---
+
+also note that we will destory these plans and mocks when done, nothing is to be committed to the repo
+
+---
+
+yes you can move forward. don't worry about scheduling, we will take care of it when done
+
+---
+
+check copilot review
+
+---
+
+ok merged. let's go to phase 2
+
+---
+
+see review comments
+
+---
+
+run code review
+
+---
+
+yes, but check if there are any other copilot comments to review as well
+
+---
+
+what is the command to create a tunnel from a local port x to remote port x on an ssh remote host
+
+---
+
+ssh -L X:localhost:X user@remote-host
+
+---
+
+rollup v4.60.2
+bundles ts/main.ts → custom_components/lock_code_manager/www/generated/lock-code-manager.js...
+Browserslist: caniuse-lite is outdated. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+(!) [plugin typescript] ts/generate-view.ts (134:9): @rollup/plugin-typescript TS18048: 'entityA.lockEntityId' is possibly 'undefined'.
+/workspaces/lock_code_manager/ts/generate-view.ts:134:9
+
+134         entityA.lockEntityId < entityB.lockEntityId
+            ~~~~~~~~~~~~~~~~~~~~
+
+(!) [plugin typescript] ts/generate-view.ts (134:32): @rollup/plugin-typescript TS18048: 'entityB.lockEntityId' is possibly 'undefined'.
+/workspaces/lock_code_manager/ts/generate-view.ts:134:32
+
+134         entityA.lockEntityId < entityB.lockEntityId
+                                   ~~~~~~~~~~~~~~~~~~~~
+
+(!) [plugin typescript] ts/generate-view.ts (164:33): @rollup/plugin-typescript TS2538: Type 'undefined' cannot be used as an index type.
+/workspaces/lock_code_manager/ts/generate-view.ts:164:33
+
+164                     hass.states[entity.lockEntityId]?.attributes?.friendly_name ??
+                                    ~~~~~~~~~~~~~~~~~~~
+
+(!) [plugin typescript] ts/generate-view.ts (313:9): @rollup/plugin-typescript TS2322: Type 'LockCodeManagerEntityEntry | undefined' is not assignable to type 'LockCodeManagerEntityEntry'.
+  Type 'undefined' is not assignable to type 'LockCodeManagerEntityEntry'.
+/workspaces/lock_code_manager/ts/generate-view.ts:313:9
+
+313         codeEventEntity,
+            ~~~~~~~~~~~~~~~
+
+  ts/types.ts:64:5
+    64     codeEventEntity: LockCodeManagerEntityEntry;
+           ~~~~~~~~~~~~~~~
+    The expected type comes from property 'codeEventEntity' which is declared here on type 'SlotMapping'
+
+(!) [plugin typescript] ts/generate-view.ts (318:9): @rollup/plugin-typescript TS2322: Type 'LockCodeManagerEntityEntry | undefined' is not assignable to type 'LockCodeManagerEntityEntry'.
+  Type 'undefined' is not assignable to type 'LockCodeManagerEntityEntry'.
+/workspaces/lock_code_manager/ts/generate-view.ts:318:9
+
+318         pinActiveEntity,
+            ~~~~~~~~~~~~~~~
+
+  ts/types.ts:69:5
+    69     pinActiveEntity: LockCodeManagerEntityEntry;
+           ~~~~~~~~~~~~~~~
+    The expected type comes from property 'pinActiveEntity' which is declared here on type 'SlotMapping'
+
+(!) [plugin typescript] ts/slot-card.ts (283:32): @rollup/plugin-typescript TS2532: Object is possibly 'undefined'.
+/workspaces/lock_code_manager/ts/slot-card.ts:283:32
+
+283         const showLockStatus = this._config.show_lock_status !== false;
+                                   ~~~~~~~~~~~~
+
+(!) [plugin typescript] ts/slot-card.ts (293:32): @rollup/plugin-typescript TS2532: Object is possibly 'undefined'.
+/workspaces/lock_code_manager/ts/slot-card.ts:293:32
+
+293         const showConditions = this._config.show_conditions !== false && hasConditions;
+                                   ~~~~~~~~~~~~
+
+(!) [plugin typescript] ts/slot-card.ts (295:38): @rollup/plugin-typescript TS2532: Object is possibly 'undefined'.
+/workspaces/lock_code_manager/ts/slot-card.ts:295:38
+
+295         const showManageConditions = this._config.show_conditions !== false && !hasConditions;
+                                         ~~~~~~~~~~~~
+
+(!) [plugin typescript] ts/slot-card.ts (1147:60): @rollup/plugin-typescript TS2532: Object is possibly 'undefined'.
+/workspaces/lock_code_manager/ts/slot-card.ts:1147:60
+
+1147                                                   label="${this._hass.states[eid]?.attributes
+                                                                ~~~~~~~~~~
+
+created custom_components/lock_code_manager/www/generated/lock-code-manager.js in 1.4s
+
+[2026-05-02 00:59:17] waiting for changes...
+
+---
+
+we need to switch to the right branch so that the frontend rebuilds
+
+---
+
+can we unlock it from the worktree? It's been pushed to remote
+
+---
+
+let's do A, I started the devcontainer in the main repo so checking out should take care of it
+
+---
+
+all of the spacing is really messy. It doesn't match the mockup at all
+
+---
+
+before we get to that, I think we should go back to the design for the condition section where we had an add condition button directly on the collapsed view. There's no point in expanding the container just to click add, and there's only value in expanding if there's an item there
+
+---
+
+yes, continue
+
+---
+
+entity selector is shown now but it doesn't limit to the domains we want it to
+
+---
+
+actually it may have been working before, I can't tell. Now for spacing. Look at ~/new.png and old.png for the after and before
+
+---
+
+found a bug. When the PIN is hidden by default, then you click to edit, you can see the PIN, then if you escape, the PIN stays unhidden even though it isn't selected
+
+---
+
+oh, there are no buttons right now, that's the problem
+
+---
+
+Element ha-sidebar scheduled an update (generally because a property was set) after an update completed, causing a new update to be scheduled. This is inefficient and should be avoided unless the next update can only be scheduled as a side effect of the previous update. See https://lit.dev/msg/change-in-update for more information.
+issueWarning @ reactive-element.js:97
+_$didUpdate @ reactive-element.js:912
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ scrollable-fade-mixin.ts:24
+(anonymous) @ subscribe-mixin.ts:13
+constructor @ ha-sidebar.ts:167
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ ha-sidebar.ts:651
+__webpack_require__.a @ app.js:2592
+eval @ ha-sidebar.ts:1
+./src/components/ha-sidebar.ts @ src_components_ha-sidebar_ts.js:45
+__webpack_require__ @ app.js:2492
+Promise.then
+firstUpdated @ home-assistant-main.ts:80
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ home-assistant-main.ts:40
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+update @ home-assistant.ts:94
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:293
+eval @ VM15007 collection.js:112
+setTimeout
+subscribe @ VM15007 collection.js:112
+subscribeServices @ services.js:57
+hassConnected @ connection-mixin.ts:293
+hassConnected @ state-display-mixin.ts:10
+hassConnected @ translations-mixin.ts:117
+hassConnected @ themes-mixin.ts:69
+hassConnected @ auth-mixin.ts:24
+hassConnected @ home-assistant.ts:169
+initializeHass @ connection-mixin.ts:227
+_initializeHass @ home-assistant.ts:255
+await in _initializeHass
+firstUpdated @ home-assistant.ts:99
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ hass-base-mixin.ts:6
+constructor @ context-mixin.ts:43
+(anonymous) @ logging-mixin.ts:24
+(anonymous) @ panel-title-mixin.ts:18
+(anonymous) @ haptic-mixin.ts:38
+constructor @ url-sync-mixin.ts:18
+(anonymous) @ dialog-manager-mixin.ts:28
+(anonymous) @ notification-mixin.ts:5
+(anonymous) @ connection-mixin.ts:49
+(anonymous) @ disconnect-toast-mixin.ts:16
+(anonymous) @ sidebar-mixin.ts:24
+(anonymous) @ action-mixin.ts:16
+(anonymous) @ automation-editor-mixin.ts:21
+(anonymous) @ more-info-mixin.ts:19
+constructor @ state-display-mixin.ts:8
+constructor @ translations-mixin.ts:65
+constructor @ themes-mixin.ts:26
+(anonymous) @ auth-mixin.ts:14
+(anonymous) @ hass-element.ts:24
+constructor @ quick-bar-mixin.ts:35
+constructor @ home-assistant.ts:52
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ home-assistant.ts:44
+await in (anonymous)
+__webpack_require__.a @ app.js:2592
+eval @ home-assistant.ts:1
+./src/layouts/home-assistant.ts @ app.js:455
+__webpack_require__ @ app.js:2492
+eval @ app.ts:5
+__webpack_require__.a @ app.js:2592
+eval @ app.ts:1
+./src/entrypoints/app.ts @ app.js:439
+__webpack_require__ @ app.js:2492
+(anonymous) @ app.js:2759Understand this warning
+ha-button.ts:37 Element ha-button scheduled an update (generally because a property was set) after an update completed, causing a new update to be scheduled. This is inefficient and should be avoided unless the next update can only be scheduled as a side effect of the previous update. See https://lit.dev/msg/change-in-update for more information.
+issueWarning @ reactive-element.js:97
+_$didUpdate @ reactive-element.js:912
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+WebAwesomeElement @ webawesome-element.js:113
+WebAwesomeFormAssociatedElement @ webawesome-form-associated-element.js:265
+WaButton @ button.js:189
+constructor @ ha-button.ts:37
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ ha-icon-button.ts:9
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:953
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:953
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ scrollable-fade-mixin.ts:24
+(anonymous) @ subscribe-mixin.ts:13
+constructor @ ha-sidebar.ts:167
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ ha-sidebar.ts:651
+__webpack_require__.a @ app.js:2592
+eval @ ha-sidebar.ts:1
+./src/components/ha-sidebar.ts @ src_components_ha-sidebar_ts.js:45
+__webpack_require__ @ app.js:2492
+Promise.then
+firstUpdated @ home-assistant-main.ts:80
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ home-assistant-main.ts:40
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+update @ home-assistant.ts:94
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:293
+eval @ VM15007 collection.js:112
+setTimeout
+subscribe @ VM15007 collection.js:112
+subscribeServices @ services.js:57
+hassConnected @ connection-mixin.ts:293
+hassConnected @ state-display-mixin.ts:10
+hassConnected @ translations-mixin.ts:117
+hassConnected @ themes-mixin.ts:69
+hassConnected @ auth-mixin.ts:24
+hassConnected @ home-assistant.ts:169
+initializeHass @ connection-mixin.ts:227
+_initializeHass @ home-assistant.ts:255
+await in _initializeHass
+firstUpdated @ home-assistant.ts:99
+_$didUpdate @ reactive-element.js:908
+performUpdate @ reactive-element.js:877
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ hass-base-mixin.ts:6
+constructor @ context-mixin.ts:43
+(anonymous) @ logging-mixin.ts:24
+(anonymous) @ panel-title-mixin.ts:18
+(anonymous) @ haptic-mixin.ts:38
+constructor @ url-sync-mixin.ts:18
+(anonymous) @ dialog-manager-mixin.ts:28
+(anonymous) @ notification-mixin.ts:5
+(anonymous) @ connection-mixin.ts:49
+(anonymous) @ disconnect-toast-mixin.ts:16
+(anonymous) @ sidebar-mixin.ts:24
+(anonymous) @ action-mixin.ts:16
+(anonymous) @ automation-editor-mixin.ts:21
+(anonymous) @ more-info-mixin.ts:19
+constructor @ state-display-mixin.ts:8
+constructor @ translations-mixin.ts:65
+constructor @ themes-mixin.ts:26
+(anonymous) @ auth-mixin.ts:14
+(anonymous) @ hass-element.ts:24
+constructor @ quick-bar-mixin.ts:35
+constructor @ home-assistant.ts:52
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+I.define @ scoped-custom-element-registry.min.js:241
+eval @ custom-element.js:28
+__decorate @ tslib.es6.mjs:105
+(anonymous) @ home-assistant.ts:44
+await in (anonymous)
+__webpack_require__.a @ app.js:2592
+eval @ home-assistant.ts:1
+./src/layouts/home-assistant.ts @ app.js:455
+__webpack_require__ @ app.js:2492
+eval @ app.ts:5
+__webpack_require__.a @ app.js:2592
+eval @ app.ts:1
+./src/entrypoints/app.ts @ app.js:439
+__webpack_require__ @ app.js:2492
+(anonymous) @ app.js:2759Understand this warning
+load_resource.ts:32  GET http://localhost:8123/lock_code_manager_files/generated/lock-code-manager.js net::ERR_ABORTED 404 (Not Found)
+(anonymous) @ load_resource.ts:32
+(anonymous) @ load_resource.ts:6
+(anonymous) @ load_resource.ts:37
+(anonymous) @ load-resources.ts:40
+(anonymous) @ load-resources.ts:54
+(anonymous) @ load-resources.ts:53
+(anonymous) @ ha-panel-lovelace.ts:351
+Promise.then
+_fetchConfig @ ha-panel-lovelace.ts:351
+willUpdate @ ha-panel-lovelace.ts:174
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ ha-panel-lovelace.ts:60
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+createElement @ hass-router-page.ts:294
+_createPanel @ hass-router-page.ts:314
+(anonymous) @ hass-router-page.ts:212
+Promise.then
+update @ hass-router-page.ts:203
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+rebuild @ hass-router-page.ts:282
+await in rebuild
+_updateRoutes @ partial-panel-resolver.ts:217
+willUpdate @ partial-panel-resolver.ts:87
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+constructor @ hass-router-page.ts:47
+constructor @ partial-panel-resolver.ts:42
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_commitValue @ lit-html.js:1199
+_$setValue @ lit-html.js:1138
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:297
+eval @ connection.js:244
+Connection._handleMessage @ connection.js:236Understand this error
+load_resource.ts:13 Uncaught (in promise) http://localhost:8123/lock_code_manager_files/generated/lock-code-manager.js
+(anonymous) @ load_resource.ts:13
+script
+(anonymous) @ load_resource.ts:7
+(anonymous) @ load_resource.ts:6
+(anonymous) @ load_resource.ts:37
+(anonymous) @ load-resources.ts:40
+(anonymous) @ load-resources.ts:54
+(anonymous) @ load-resources.ts:53
+(anonymous) @ ha-panel-lovelace.ts:351
+Promise.then
+_fetchConfig @ ha-panel-lovelace.ts:351
+willUpdate @ ha-panel-lovelace.ts:174
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+LitElement @ lit-element.js:217
+constructor @ ha-panel-lovelace.ts:60
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+createElement @ hass-router-page.ts:294
+_createPanel @ hass-router-page.ts:314
+(anonymous) @ hass-router-page.ts:212
+Promise.then
+update @ hass-router-page.ts:203
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+rebuild @ hass-router-page.ts:282
+await in rebuild
+_updateRoutes @ partial-panel-resolver.ts:217
+willUpdate @ partial-panel-resolver.ts:87
+performUpdate @ reactive-element.js:861
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+__initialize @ reactive-element.js:500
+ReactiveElement @ reactive-element.js:1038
+constructor @ hass-router-page.ts:47
+constructor @ partial-panel-resolver.ts:42
+J @ scoped-custom-element-registry.min.js:423
+b @ scoped-custom-element-registry.min.js:300
+_clone @ lit-html.js:685
+_commitTemplateResult @ lit-html.js:943
+_$setValue @ lit-html.js:825
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_commitValue @ lit-html.js:1199
+_$setValue @ lit-html.js:1138
+_update @ lit-html.js:734
+_commitTemplateResult @ lit-html.js:940
+_$setValue @ lit-html.js:825
+render @ lit-html.js:1393
+update @ lit-element.js:157
+performUpdate @ reactive-element.js:863
+(anonymous) @ storage.ts:172
+scheduleUpdate @ reactive-element.js:784
+__enqueueUpdate @ reactive-element.js:757
+await in __enqueueUpdate
+requestUpdate @ reactive-element.js:702
+set @ reactive-element.js:346
+_updateHass @ hass-base-mixin.ts:50
+_updateHass @ context-mixin.ts:207
+(anonymous) @ connection-mixin.ts:297
+eval @ connection.js:244
+Connection._handleMessage @ connection.js:236Understand this error
+connection-mixin.ts:107 Calling service system_log write {logger: 'frontend.js_dev.modern.202603250', message: 'Unhandled promise rejection from Chrome 147.0.0.0 …ode_manager_files/generated/lock-code-manager.js"', level: 'debug'} undefined
+get-strategy.ts:160 Error: Timeout waiting for strategy element ll-strategy-dashboard-lock-code-manager to be registered
+    at getLovelaceStrategy (get-strategy.ts:113:1)
+    at async generateStrategy (get-strategy.ts:135:1)
+    at async generateLovelaceDashboardStrategy (get-strategy.ts:172:1)
+    at async LovelacePanel._fetchConfig (ha-panel-lovelace.ts:379:1)
+
+---
+
+still not working after a restart
+
+---
+
+ok everything looks good now. One thing I noticed though - why are some of the PINs crossed out on the lock card?
+
+---
+
+I wonder if it should get some other type of treatment. What would a designer recommend
+
+---
+
+no I like the two distinct treatments, apply those
+
+---
+
+we should apply the same styling to the name
+
+---
+
+there is still too much space below the header of the slot card. Additionally, the PIN section appears to have too much vertical space, and the corners are unrounded. See new2.png
+
+---
+
+should the name get a title NAME?
+
+---
+
+should the name get a title NAME, everything else on the card seems to
+
+---
+
+everything right now is committed thus far right? Try moving it out of the title position back into the hero row. Keep it unstaged though, just build it so I can see it live
+
+---
+
+OK now slot 10 . test has to be the title right?
+
+---
+
+the title should probably look like the one in the lock card right? So I guess we have to bring our icon back. This basically reverts the actual title changes from before this branch
+
+---
+
+ok I think this is good. Now I think the lock card slots need to match the slot cards, in that name and pin should have corresponding small caps titles next to them for both managed and unmanaged slots. We should probably also include the config entry title for managed slots
+
+---
+
+eye icons are missing next to PINs on managed disabled slots
+
+---
+
+eye icons are missing next to PINs on managed disabled slots on the lock card
+
+---
+
+as a designer, how would you reduce the vertical size of the slots in the lock card while maintaining fidelity of information?
+
+---
+
+yes
+
+---
+
+the pils still move to the second row
+
+---
+
+inactive state in the lock card should be the same as inactive/blocked in the slot card
+
+---
+
+inactive state in the lock card should be the same as inactive/blocked in the slot card from a color standpoint.
+
+---
+
+should we change the background state of an inactive managed slot to be the warning color too? just a dulled version?
+
+---
+
+ok, now, the slot card should have the same background styling applied as the lock card slots right? for consistency?
+
+---
+
+ok, now the pill for active, inactive, and disabled should probably match across the two cards right? As a designer, use your best judgement on how to align the two
+
+---
+
+it should be blocked by condition not conditions right? I think it should just be condition in the main part of the card too. The helpers are helpers to the main condition since there is only one entity you can link to the slot
+
+---
+
+I wonder, is there any value in having the condition be collapsed if the condition is applied? What would you tell me as a designer?
+
+---
+
+no that's ok. Let's take the remove condition button from the modal and replace the "Manage condition" button with it. If you want to switch between conditions, it's just an extra click, remove, then add
