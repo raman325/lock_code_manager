@@ -241,7 +241,10 @@ export const lcmSectionStyles = css`
  */
 export const lcmRevealButtonStyles = css`
     .lcm-reveal-button {
-        --mdc-icon-button-size: 28px;
+        /* 32px hit target — bumped from 28px to be a comfortable middle
+           between the WCAG 2.2 SC 2.5.8 AA minimum (24px) and the
+           SC 2.5.5 AAA recommendation (44px). */
+        --mdc-icon-button-size: 32px;
         --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
     }
@@ -282,11 +285,23 @@ export const lcmCollapsibleStyles = css`
     }
 
     .collapsible-badge {
+        align-items: center;
         background: var(--lcm-active-bg);
         border-radius: 10px;
         color: var(--primary-color);
+        display: inline-flex;
         font-size: var(--lcm-badge-font-size);
+        gap: 4px;
         padding: 2px 8px;
+    }
+
+    /* Icon prefix on a collapsible badge — sized down to 12px so it pairs
+       with the 10px badge text without dominating it. Color inherits from
+       the badge color so success/warning modifiers carry through. */
+    .collapsible-badge-icon {
+        --mdc-icon-size: 12px;
+        color: inherit;
+        flex-shrink: 0;
     }
 
     .collapsible-badge.primary {
@@ -297,6 +312,14 @@ export const lcmCollapsibleStyles = css`
     .collapsible-badge.warning {
         background: var(--warning-color, #ffa600);
         color: var(--text-primary-color, #fff);
+    }
+
+    /* Success modifier — used for the "allowing" condition summary so that
+       allowing reads as green and blocking reads as warning everywhere
+       across the cards. 16% follows the canonical chip/badge opacity stop. */
+    .collapsible-badge.success {
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.16);
+        color: var(--success-color, #43a047);
     }
 
     .collapsible-badge.muted {
@@ -322,7 +345,11 @@ export const lcmCollapsibleStyles = css`
     }
 
     .collapsible-content.expanded {
-        max-height: 500px;
+        /* 1000px ceiling — was 500px, which clipped when many helpers +
+           a calendar entity row stacked. A grid-rows transition to auto
+           is the proper fix but more invasive; bumping the ceiling is
+           the lower-risk shim. */
+        max-height: 1000px;
         opacity: 1;
         padding: 0 16px 16px;
     }
@@ -371,6 +398,46 @@ export const lcmEditableStyles = css`
 `;
 
 /**
+ * Visually-hidden utility — content is removed from the visual flow but stays
+ * in the accessibility tree for screen readers. Used for things like the
+ * summary table caption and pending-state labels where the icon carries the
+ * meaning visually but a sighted-only label would be inaccessible.
+ */
+export const lcmVisuallyHiddenStyles = css`
+    .visually-hidden {
+        border: 0;
+        clip: rect(0 0 0 0);
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        padding: 0;
+        position: absolute;
+        width: 1px;
+    }
+`;
+
+/**
+ * `prefers-reduced-motion: reduce` opt-out for transitions used by the cards.
+ * Users who request reduced motion get an instant state change instead of a
+ * fade/slide. Defined once here so both cards inherit by composing
+ * `lcmReducedMotionStyles` (or `lcmSharedStyles`).
+ */
+export const lcmReducedMotionStyles = css`
+    @media (prefers-reduced-motion: reduce) {
+        .collapsible-content,
+        .collapsible-chevron,
+        .slot-chip.clickable,
+        .editable,
+        .hero-name-value.editable,
+        .hero-pin-value.editable,
+        .lcm-code.editable,
+        .event-row {
+            transition: none !important;
+        }
+    }
+`;
+
+/**
  * Combined shared styles - import this for all common styles.
  */
 export const lcmSharedStyles = css`
@@ -382,4 +449,6 @@ export const lcmSharedStyles = css`
     ${lcmRevealButtonStyles}
     ${lcmCollapsibleStyles}
     ${lcmEditableStyles}
+    ${lcmVisuallyHiddenStyles}
+    ${lcmReducedMotionStyles}
 `;

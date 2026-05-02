@@ -1,4 +1,5 @@
 /* eslint-disable no-underscore-dangle, prefer-destructuring */
+import { html } from 'lit';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
@@ -481,18 +482,19 @@ describe('LockCodeManagerSlotCard integration', () => {
             const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
             // The NAME label was dropped (typography self-describes); the
-            // editable name span and pencil button are still present and
-            // accessible (role/tabindex/aria-label).
+            // editable name span is the only edit affordance (the redundant
+            // pencil icon was removed). The span is keyboard-accessible
+            // (role/tabindex/aria-label) and click-activated.
             expect(heroJson).toContain('hero-name-value');
             expect(heroJson).toContain('Edit name');
             expect(heroJson).toContain('Alice');
-            // Pencil button for editing the name.
-            expect(heroJson).toContain('hero-name-pencil');
+            // No pencil button — the editable name span is the sole affordance.
+            expect(heroJson).not.toContain('hero-name-pencil');
             // PIN row keeps its label since "••••" isn't self-evident.
             expect(heroJson).toContain('hero-field-label');
         });
 
-        it('hero name pencil click invokes _startEditing("name")', () => {
+        it('hero name span click invokes _startEditing("name")', () => {
             (card as any)._data = makeSlotCardData({ name: 'Alice' });
             const calls: string[] = [];
             (card as any)._startEditing = (field: string) => calls.push(field);
@@ -2432,7 +2434,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('none');
         });
 
-        it('uses friendly_name and ✓ when entity is allowing', () => {
+        it('uses friendly_name and success modifier when entity is allowing', () => {
             const tmpl = (card as any)._renderConditionsSummary({
                 condition_entity: {
                     condition_entity_id: 'calendar.vacation',
@@ -2443,13 +2445,15 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('collapsible-badge');
-            // Allowing case: dynamic class modifier is empty, not "warning".
-            expect(tmpl.values).not.toContain('warning');
-            expect(joined).toContain('✓');
+            // Allowing case: dynamic class modifier is "success" (green).
+            expect(tmpl.values).toContain('success');
+            // Phase B replaces ✓ glyph with mdiCheck icon.
+            expect(joined).toContain('collapsible-badge-icon');
+            expect(joined).not.toContain('✓');
             expect(joined).toContain('Vacation');
         });
 
-        it('uses warning badge with ✗ when entity is blocking', () => {
+        it('uses warning badge with mdiClose icon when entity is blocking', () => {
             const tmpl = (card as any)._renderConditionsSummary({
                 condition_entity: {
                     condition_entity_id: 'calendar.vacation',
@@ -2463,7 +2467,9 @@ describe('LockCodeManagerSlotCard integration', () => {
             // splice it into the class attribute at render time).
             expect(joined).toContain('collapsible-badge');
             expect(tmpl.values).toContain('warning');
-            expect(joined).toContain('✗');
+            // Phase B replaces ✗ glyph with mdiClose icon.
+            expect(joined).toContain('collapsible-badge-icon');
+            expect(joined).not.toContain('✗');
             expect(joined).toContain('Vacation');
         });
 
@@ -2829,7 +2835,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('collapsible-chevron');
             expect(joined).toContain('collapsible-badge');
             expect(joined).toContain('Vacation');
-            expect(joined).toContain('✓');
+            // Phase B: ✓ glyph replaced with mdi icon.
+            expect(joined).toContain('collapsible-badge-icon');
             expect(joined).not.toContain('add-condition-btn');
         });
 
@@ -2844,7 +2851,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('collapsible-badge');
-            expect(joined).toContain('✗');
+            // Phase B: ✗ glyph replaced with mdi icon.
+            expect(joined).toContain('collapsible-badge-icon');
             expect(joined).not.toContain('add-condition-btn');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -2883,7 +2891,10 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('condition-block');
             expect(joined).toContain('lcm-overlay');
             expect(joined).toContain('allowing');
-            expect(joined).toContain('✓ Allowing access');
+            // Status text is plain "Allowing access"; the visual indicator
+            // is a separate aria-hidden mdi icon (mdiCheck).
+            expect(joined).toContain('Allowing access');
+            expect(joined).toContain('lcm-overlay-status-icon');
         });
 
         it('renders the LCM overlay strip with blocking class when entity is off', () => {
@@ -2894,7 +2905,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('blocking');
-            expect(joined).toContain('✗ Blocking access');
+            expect(joined).toContain('Blocking access');
+            expect(joined).toContain('lcm-overlay-status-icon');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -4079,6 +4091,464 @@ describe('LockCodeManagerSlotCard integration', () => {
                 const joined = deepStrings(tmpl);
                 expect(joined).toContain('class="dialog-saving"');
                 expect(joined).toContain('aria-live="polite"');
+            });
+        });
+
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase B: a11y polish — semantic HTML, ARIA labels, reduced motion (PR #1116 Phase B).
+    describe('Phase B — a11y polish', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepStrings).join('');
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        describe('B1: semantic headings', () => {
+            it('header title is rendered as <h2>, not <span>', () => {
+                const tmpl = (card as any)._renderHeader();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h2 class="header-title"');
+                expect(joined).not.toContain('<span class="header-title"');
+            });
+
+            it('collapsible section title is rendered as <h3>', () => {
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    false,
+                    () => undefined,
+                    html`<div></div>`
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h3 class="collapsible-title"');
+            });
+
+            it('static condition header (no entity, no helpers) uses <h3>', () => {
+                (card as any)._data = makeSlotCardData({ conditions: {} });
+                const tmpl = (card as any)._renderConditionsSection({});
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h3 class="collapsible-title"');
+            });
+        });
+
+        describe('B2: aria-hidden on decorative icons and dots', () => {
+            it('header icon bubble has aria-hidden', () => {
+                const tmpl = (card as any)._renderHeader();
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/<div class="header-icon" aria-hidden="true"/);
+            });
+
+            it('state-chip dot has aria-hidden', () => {
+                (card as any)._data = makeSlotCardData({ enabled: true, active: true });
+                const tmpl = (card as any)._renderStateChip();
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/<span class="dot" aria-hidden="true"/);
+            });
+
+            it('collapsible chevron has aria-hidden', () => {
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    true,
+                    () => undefined,
+                    html`<div></div>`
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="collapsible-chevron"');
+                // chevron is always followed by aria-hidden in the same element
+                expect(joined).toMatch(/class="collapsible-chevron"[\s\S]*?aria-hidden="true"/);
+            });
+        });
+
+        describe('B3: edit input accessible names', () => {
+            it('name edit input has aria-label="Edit name"', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                (card as any)._editingField = 'name';
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('class="edit-input name-edit-input"');
+                expect(joined).toContain('aria-label="Edit name"');
+            });
+
+            it('PIN edit input has aria-label="Edit PIN"', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice', pin: '1234' });
+                (card as any)._editingField = 'pin';
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('class="edit-input pin-edit-input"');
+                expect(joined).toContain('aria-label="Edit PIN"');
+            });
+        });
+
+        describe('B4: condition summary badge accessible name', () => {
+            it('allowing entity badge gets "Allowing access" aria-label', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'on'
+                    }
+                });
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('Allowing access: Vacation');
+            });
+
+            it('blocking entity badge gets "Blocking access" aria-label', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'off'
+                    }
+                });
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('Blocking access: Vacation');
+            });
+        });
+
+        describe('B5: helpers and lock lists are <ul>/<li>', () => {
+            it('helpers list renders as <ul> with <li> children', async () => {
+                card.setConfig({
+                    condition_helpers: ['binary_sensor.foo'],
+                    config_entry_id: 'abc',
+                    slot: 1,
+                    type: 'custom:lcm-slot'
+                });
+                card.hass = {
+                    ...createMockHassWithConnection(),
+                    states: {
+                        'binary_sensor.foo': {
+                            attributes: { friendly_name: 'Foo' },
+                            entity_id: 'binary_sensor.foo',
+                            state: 'on'
+                        }
+                    }
+                } as any;
+                const tmpl = (card as any)._renderHelpers();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<ul class="helpers-list"');
+                expect(joined).toContain('<li>');
+            });
+
+            it('lock list renders as <ul> with <li> children', () => {
+                const tmpl = (card as any)._renderLockStatusSection([
+                    {
+                        code: '1234',
+                        codeLength: 4,
+                        entityId: 'binary_sensor.front',
+                        inSync: true,
+                        lastSynced: '2024-01-01T00:00:00Z',
+                        lockEntityId: 'lock.front_door',
+                        name: 'Front Door',
+                        syncStatus: 'in_sync'
+                    }
+                ]);
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<ul class="lock-list"');
+                expect(joined).toContain('<li>');
+            });
+        });
+
+        describe('B6: prefers-reduced-motion CSS rule is bundled', () => {
+            it('slot card stylesheet contains a prefers-reduced-motion: reduce media query', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+            });
+
+            it('reduced-motion rule disables transition on collapsible content', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /@media\s*\(prefers-reduced-motion:\s*reduce\)[^{]*\{[^}]*\.collapsible-content/s
+                );
+            });
+        });
+
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase B (Commit 2): visual consolidation — color-the-exception state,
+    // helper sizes, condition badge color/icon swap, header icon by state,
+    // dialog microcopy update.
+    describe('Phase B — visual consolidation', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepStrings).join('');
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        describe('VC1: active card has no special tint', () => {
+            it('stylesheet does not define ha-card.slot-card-state-active', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).not.toMatch(/ha-card\.slot-card-state-active\s*\{/);
+            });
+
+            it('stylesheet still defines inactive and disabled state tints', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/ha-card\.slot-card-state-inactive\s*\{/);
+                expect(allCss).toMatch(/ha-card\.slot-card-state-disabled\s*\{/);
+            });
+        });
+
+        describe('VC2: ENABLED label dropped, switch gets aria-label', () => {
+            it('hero toggle switch has aria-label="Enabled"', () => {
+                (card as any)._data = makeSlotCardData({ enabled: true });
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('aria-label="Enabled"');
+                // The visible "Enabled" label remains dropped.
+                expect(joined).not.toMatch(/>Enabled</);
+            });
+        });
+
+        describe('VC3: condition summary badge — allowing → success', () => {
+            it('allowing case uses .collapsible-badge.success', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'on'
+                    }
+                });
+                expect(tmpl.values).toContain('success');
+            });
+
+            it('blocking case still uses .collapsible-badge.warning', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'off'
+                    }
+                });
+                expect(tmpl.values).toContain('warning');
+            });
+
+            it('shared styles include .collapsible-badge.success rule', async () => {
+                const { lcmSharedStyles } = await import('./shared-styles');
+                const allCss = String(lcmSharedStyles.cssText ?? lcmSharedStyles);
+                expect(allCss).toMatch(/\.collapsible-badge\.success\s*\{/);
+            });
+        });
+
+        describe('VC4: ✓/✗ glyphs replaced with mdi icons', () => {
+            it('summary badge renders an icon, not the literal glyphs', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'on'
+                    }
+                });
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('collapsible-badge-icon');
+                expect(joined).not.toContain('✓');
+                expect(joined).not.toContain('✗');
+            });
+        });
+
+        describe('VC5: helpers label font-size bumped to 11px', () => {
+            it('stylesheet uses 11px on .helpers-label', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.helpers-label\s*\{[^}]*font-size:\s*11px/s);
+            });
+        });
+
+        describe('VC6: header icon bubble surfaces state', () => {
+            // The actual mdi path strings come from @mdi/js — we look up the
+            // exact path values rather than hard-coding the SVG to keep these
+            // tests robust to mdi package version bumps.
+            it('renders mdiKey when stateClass is active (default)', async () => {
+                const { mdiKey } = await import('@mdi/js');
+                const tmpl = (card as any)._renderHeader('active');
+                expect(tmpl.values).toContain(mdiKey);
+            });
+
+            it('renders mdiClockOutline when stateClass is inactive', async () => {
+                const { mdiClockOutline } = await import('@mdi/js');
+                const tmpl = (card as any)._renderHeader('inactive');
+                expect(tmpl.values).toContain(mdiClockOutline);
+            });
+
+            it('renders mdiLockOff when stateClass is disabled', async () => {
+                const { mdiLockOff } = await import('@mdi/js');
+                const tmpl = (card as any)._renderHeader('disabled');
+                expect(tmpl.values).toContain(mdiLockOff);
+            });
+        });
+
+        describe('DF1: collapsible content max-height bumped', () => {
+            it('shared styles use 1000px max-height on .collapsible-content.expanded', async () => {
+                const { lcmSharedStyles } = await import('./shared-styles');
+                const allCss = String(lcmSharedStyles.cssText ?? lcmSharedStyles);
+                expect(allCss).toMatch(
+                    /\.collapsible-content\.expanded\s*\{[^}]*max-height:\s*1000px/s
+                );
+            });
+        });
+
+        describe('DF2: touch targets bumped to 32px', () => {
+            it('hero PIN reveal uses 32px button size', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /\.hero-pin\s+\.reveal\s*\{[^}]*--mdc-icon-button-size:\s*32px/s
+                );
+            });
+
+            it('lcm-reveal-button shared style uses 32px button size', async () => {
+                const { lcmSharedStyles } = await import('./shared-styles');
+                const allCss = String(lcmSharedStyles.cssText ?? lcmSharedStyles);
+                expect(allCss).toMatch(
+                    /\.lcm-reveal-button\s*\{[^}]*--mdc-icon-button-size:\s*32px/s
+                );
+            });
+
+            it('action-error-dismiss has min 28px hit target', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.action-error-dismiss\s*\{[^}]*min-height:\s*28px/s);
+                expect(allCss).toMatch(/\.action-error-dismiss\s*\{[^}]*min-width:\s*28px/s);
+            });
+        });
+
+        describe('DF3: Last used "Never used" suppresses navigation affordance', () => {
+            it('renders a non-interactive row when last_used is null', () => {
+                (card as any)._data = makeSlotCardData({
+                    event_entity_id: 'event.slot_1',
+                    last_used: null
+                });
+                (card as any)._hass = {
+                    ...(card as any)._hass,
+                    states: {
+                        'event.slot_1': {
+                            entity_id: 'event.slot_1',
+                            state: 'idle'
+                        }
+                    }
+                };
+                const tmpl = (card as any)._renderEventRow();
+                const joined = deepStrings(tmpl);
+                // Static rows do NOT carry the role=button affordance.
+                expect(joined).not.toContain('role="button"');
+                expect(joined).not.toContain('aria-label="View activity history"');
+                // The arrow chevron is suppressed.
+                expect(joined).not.toContain('class="event-arrow"');
+                // The static class is applied so cursor/hover affordances drop.
+                expect(joined).toContain('event-row-static');
+            });
+
+            it('keeps the interactive affordances when last_used is set', () => {
+                (card as any)._data = makeSlotCardData({
+                    event_entity_id: 'event.slot_1',
+                    last_used: '2024-01-01T00:00:00Z',
+                    last_used_lock: 'Front Door'
+                });
+                (card as any)._hass = {
+                    ...(card as any)._hass,
+                    states: {
+                        'event.slot_1': {
+                            entity_id: 'event.slot_1',
+                            state: '2024-01-01T00:00:00Z'
+                        }
+                    }
+                };
+                const tmpl = (card as any)._renderEventRow();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('role="button"');
+                expect(joined).toContain('aria-label="View activity history"');
+                expect(joined).toContain('class="event-arrow"');
+            });
+        });
+
+        describe('DF4: action-error contrast — bold weight', () => {
+            it('action-error uses font-weight 600 to satisfy WCAG bold-text contrast', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/\.action-error\s*\{[^}]*font-weight:\s*600/s);
+            });
+        });
+
+        describe('VC7: dialog microcopy de-jargoned', () => {
+            it('uses friendly "helper" and "on/off entity" copy in the dialog body', () => {
+                (card as any)._showConditionDialog = true;
+                const tmpl = (card as any)._renderConditionDialog();
+                // Check the dialog description text directly (the static
+                // strings of the inner <p class="dialog-description">)
+                // — deepStrings would also pick up the picker's domain
+                // list, which still contains "binary_sensor" as a filter
+                // value but not as user-facing copy.
+                const tmplJson = JSON.stringify(tmpl);
+                // The friendly phrases must appear.
+                expect(tmplJson).toContain('helper');
+                expect(tmplJson).toContain('on/off');
+                // The old jargon-y phrases must NOT appear in the static
+                // strings (the picker config still uses the canonical
+                // domain names internally; we only care about user-visible
+                // text in the description paragraph).
+                expect(tmplJson).not.toContain('input boolean');
+                expect(tmplJson).not.toContain('binary\\nsensor');
+                // The static description string no longer contains the
+                // word "binary" in user-facing text.
+                const description = tmpl.values.find(
+                    (v: unknown) =>
+                        typeof v === 'object' &&
+                        v !== null &&
+                        Array.isArray((v as any).strings) &&
+                        (v as any).strings.some((s: string) => s.includes('dialog-description'))
+                );
+                if (description) {
+                    const descStrings = description.strings.join(' ');
+                    expect(descStrings).not.toContain('binary');
+                    expect(descStrings).not.toContain('input boolean');
+                }
             });
         });
 

@@ -6,7 +6,14 @@
  */
 import { css } from 'lit';
 
-import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from './shared-styles';
+import {
+    lcmBadgeStyles,
+    lcmCodeStyles,
+    lcmCssVars,
+    lcmReducedMotionStyles,
+    lcmRevealButtonStyles,
+    lcmVisuallyHiddenStyles
+} from './shared-styles';
 
 const lockCodesCardComponentStyles = css`
     :host {
@@ -44,6 +51,7 @@ const lockCodesCardComponentStyles = css`
         color: var(--primary-text-color);
         font-size: 18px;
         font-weight: 500;
+        margin: 0;
     }
 
     .card-content {
@@ -74,31 +82,31 @@ const lockCodesCardComponentStyles = css`
         position: relative;
     }
 
-    /* Active Lock Code Manager Managed: Primary blue with tinted background */
-    .slot-chip.active.managed {
-        background: var(--lcm-active-bg-gradient);
-    }
+    /* Active Lock Code Manager Managed: no special tint (inherits the
+       chip's --lcm-section-bg). The state badge inside the chip carries
+       the "active" signal — color the exception, not the norm. */
 
-    /* Active Unmanaged (not Lock Code Manager): Neutral gray, plain background */
+    /* Active Unmanaged (not Lock Code Manager): subtle warm-gray accent
+       so an occupied unmanaged slot reads as different from an Empty
+       chip (which uses the same --lcm-section-bg at 3%). 5% sits between
+       the empty 3% and the inactive/disabled 6% tints. */
     .slot-chip.active.unmanaged {
-        background: linear-gradient(
-            135deg,
-            rgba(var(--rgb-primary-text-color), 0.06),
-            rgba(var(--rgb-primary-text-color), 0.02)
-        );
+        background: rgba(var(--rgb-primary-text-color), 0.05);
     }
 
-    /* Inactive Lock Code Manager Managed: dulled warning tint to match the
-       slot card's inactive state chip color (orange) — communicates "blocked
-       by conditions" without shouting. */
+    /* Inactive Lock Code Manager Managed: warning tint (orange) to match
+       the slot card's inactive treatment — communicates "blocked by
+       conditions" without shouting. 6% follows the canonical background
+       opacity stop. */
     .slot-chip.inactive.managed {
         background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
         opacity: 0.9;
     }
 
-    /* Disabled Lock Code Manager Managed: Very muted, clear disabled state */
+    /* Disabled Lock Code Manager Managed: muted neutral tint, clear
+       disabled state. 6% follows the canonical background opacity stop. */
     .slot-chip.disabled.managed {
-        background: rgba(var(--rgb-primary-text-color), 0.04);
+        background: rgba(var(--rgb-primary-text-color), 0.06);
         opacity: 0.65;
     }
 
@@ -136,7 +144,13 @@ const lockCodesCardComponentStyles = css`
     }
 
     .slot-top {
-        align-items: center;
+        /* Align both children to the top so the slot label sits in a stable
+           position regardless of how tall the badge stack grows. With
+           align-items: center, a 2-badge stack would push the label down
+           to sit between the badges; flex-start keeps it aligned with the
+           first (top) badge — matching the empty-chip layout where the
+           label and the single Empty badge share one row. */
+        align-items: flex-start;
         display: flex;
         gap: 12px;
         justify-content: space-between;
@@ -382,13 +396,14 @@ const lockCodesCardComponentStyles = css`
         border-radius: 0 6px 0 0;
     }
 
-    .summary-table td {
+    .summary-table td,
+    .summary-table tbody th {
         border-top: 1px solid var(--lcm-border-color);
         color: var(--primary-text-color);
         font-weight: 500;
     }
 
-    .summary-table td:first-child {
+    .summary-table tbody th[scope='row'] {
         color: var(--secondary-text-color);
         font-size: var(--lcm-section-header-size);
         font-weight: 600;
@@ -397,15 +412,16 @@ const lockCodesCardComponentStyles = css`
         text-transform: uppercase;
     }
 
-    .summary-table tr:last-child td:first-child {
+    .summary-table tbody tr:last-child th[scope='row'] {
         border-radius: 0 0 0 6px;
     }
 
-    .summary-table tr:last-child td:last-child {
+    .summary-table tbody tr:last-child td:last-child {
         border-radius: 0 0 6px 0;
     }
 
-    .summary-table .total-row td {
+    .summary-table .total-row td,
+    .summary-table .total-row th {
         background: rgba(var(--rgb-primary-text-color), 0.02);
         border-top: 2px solid var(--lcm-border-color-strong);
         font-weight: 600;
@@ -443,5 +459,7 @@ export const lockCodesCardStyles = [
     lcmBadgeStyles,
     lcmCodeStyles,
     lcmRevealButtonStyles,
+    lcmVisuallyHiddenStyles,
+    lcmReducedMotionStyles,
     lockCodesCardComponentStyles
 ];

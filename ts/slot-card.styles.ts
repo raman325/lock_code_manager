@@ -10,9 +10,11 @@ import {
     lcmCollapsibleStyles,
     lcmCssVars,
     lcmEditableStyles,
+    lcmReducedMotionStyles,
     lcmRevealButtonStyles,
     lcmSectionStyles,
-    lcmStatusIndicatorStyles
+    lcmStatusIndicatorStyles,
+    lcmVisuallyHiddenStyles
 } from './shared-styles';
 
 const slotCardComponentStyles = css`
@@ -24,20 +26,38 @@ const slotCardComponentStyles = css`
         overflow: hidden;
     }
 
-    /* Card-level state tinting — mirrors the lock card's slot-chip backgrounds
-       so a slot reads the same regardless of which card you see it on.
-       Active = primary tint, Inactive = warning (blocked), Disabled = muted. */
-    ha-card.slot-card-state-active {
-        background: var(
-            --lcm-active-bg-gradient,
-            var(--ha-card-background, var(--card-background-color))
-        );
+    /* Lit's reset is minimal — neutralize default heading margins so the
+       newly-promoted h2/h3 elements (card title, collapsible section
+       titles) keep the same visual rhythm as the prior <span>/<div>. */
+    .header-title,
+    .collapsible-title {
+        margin: 0;
     }
+
+    /* Helper and lock lists use ul/li for screen reader item-count
+       announcements. Reset default list chrome so they render visually
+       identical to the prior <div> wrappers. */
+    .helpers-list,
+    .lock-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .helpers-list > li,
+    .lock-list > li {
+        display: block;
+    }
+
+    /* Card-level state tinting — color the exception, not the norm. Active
+       slots get no special tint (the default ha-card background); inactive
+       (blocked by condition) and disabled-by-user states get a subtle tint
+       so the exception reads at a glance. Opacity stops follow the
+       3-stop system: 6% backgrounds / 12% surfaces / 16% chips. */
     ha-card.slot-card-state-inactive {
         background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
     }
     ha-card.slot-card-state-disabled {
-        background: rgba(var(--rgb-primary-text-color), 0.04);
+        background: rgba(var(--rgb-primary-text-color), 0.06);
         opacity: 0.9;
     }
 
@@ -201,12 +221,6 @@ const slotCardComponentStyles = css`
         outline-offset: 2px;
     }
 
-    .hero-name-pencil {
-        --mdc-icon-button-size: 28px;
-        --mdc-icon-size: 14px;
-        color: var(--disabled-text-color);
-    }
-
     .hero-pin {
         align-items: center;
         display: flex;
@@ -250,7 +264,8 @@ const slotCardComponentStyles = css`
     }
 
     .hero-pin .reveal {
-        --mdc-icon-button-size: 28px;
+        /* 32px hit target — matches .lcm-reveal-button. */
+        --mdc-icon-button-size: 32px;
         --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
     }
@@ -308,17 +323,25 @@ const slotCardComponentStyles = css`
     }
 
     .lcm-overlay.allowing {
-        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.08);
+        background: rgba(var(--rgb-success-color, 67, 160, 71), 0.06);
     }
 
     .lcm-overlay.blocking {
-        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.1);
+        background: rgba(var(--rgb-warning-color, 255, 167, 38), 0.06);
     }
 
     .lcm-overlay-status {
+        align-items: center;
+        display: inline-flex;
         flex-shrink: 0;
         font-size: 12px;
         font-weight: 600;
+        gap: 4px;
+    }
+
+    .lcm-overlay-status-icon {
+        --mdc-icon-size: 14px;
+        color: inherit;
     }
 
     .lcm-overlay.allowing .lcm-overlay-status {
@@ -409,7 +432,7 @@ const slotCardComponentStyles = css`
 
     .helpers-label {
         color: var(--secondary-text-color);
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.08em;
         margin: 14px 0 4px 4px;
@@ -454,12 +477,12 @@ const slotCardComponentStyles = css`
         padding: 10px 0;
     }
 
-    .lock-row:last-child {
+    .lock-list > li:last-child .lock-row {
         border-bottom: none;
         padding-bottom: 0;
     }
 
-    .lock-row:first-child {
+    .lock-list > li:first-child .lock-row {
         padding-top: 0;
     }
 
@@ -549,7 +572,17 @@ const slotCardComponentStyles = css`
         padding: 12px 16px;
     }
 
-    .event-row:hover {
+    /* Static (non-interactive) event row — used when there's no usage
+       history to navigate to. Drops the cursor and hover affordances so
+       the row doesn't read as clickable. */
+    .event-row.event-row-static {
+        cursor: default;
+    }
+    .event-row.event-row-static:hover {
+        background: transparent;
+    }
+
+    .event-row:not(.event-row-static):hover {
         background: rgba(var(--rgb-primary-text-color), 0.06);
     }
 
@@ -594,26 +627,37 @@ const slotCardComponentStyles = css`
         color: var(--error-color);
     }
 
-    /* Action error banner */
+    /* Action error banner — uses --lcm-error-color (#b00020 fallback)
+       which gives white text ~7.6:1 contrast, comfortably above WCAG
+       1.4.3 AA (4.5:1) for normal text. The default --error-color is
+       lighter (#db4437 ≈ 4.21:1) and would fail AA at this 14px size,
+       so we explicitly use the darker LCM token. */
     .action-error {
         align-items: center;
-        background: var(--error-color, #db4437);
+        background: var(--lcm-error-color, #b00020);
         color: white;
         display: flex;
         font-size: 14px;
+        font-weight: 600;
         gap: 8px;
         justify-content: space-between;
         padding: 8px 16px;
     }
 
     .action-error-dismiss {
+        /* 28x28 minimum hit target via padding — pads from the previous
+           4px to 6px so the button is comfortably tappable on touch
+           devices. */
         background: none;
         border: none;
         color: white;
         cursor: pointer;
         font-size: 16px;
+        line-height: 1;
+        min-height: 28px;
+        min-width: 28px;
         opacity: 0.8;
-        padding: 4px;
+        padding: 6px 8px;
     }
 
     .action-error-dismiss:hover {
@@ -656,5 +700,7 @@ export const slotCardStyles = [
     lcmRevealButtonStyles,
     lcmCollapsibleStyles,
     lcmEditableStyles,
+    lcmVisuallyHiddenStyles,
+    lcmReducedMotionStyles,
     slotCardComponentStyles
 ];

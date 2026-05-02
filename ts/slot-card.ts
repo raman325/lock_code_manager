@@ -1,13 +1,15 @@
 import {
+    mdiCheck,
     mdiChevronDown,
     mdiChevronRight,
     mdiChevronUp,
     mdiClockOutline,
+    mdiClose,
     mdiDelete,
     mdiEye,
     mdiEyeOff,
     mdiKey,
-    mdiPencil,
+    mdiLockOff,
     mdiPlus
 } from '@mdi/js';
 import { MessageBase } from 'home-assistant-js-websocket';
@@ -338,7 +340,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           </button>
                       </div>`
                     : nothing}
-                ${this._renderHeader()}
+                ${this._renderHeader(stateClass)}
                 <div class="content">
                     ${this._renderHero(pin, pinLength, enabled, mode)}
                     ${showConditions ? this._renderConditionsSection(conditions) : nothing}
@@ -374,10 +376,30 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         const eventState = this._hass?.states[eventEntityId];
         if (!eventState || eventState.state === 'unavailable') return nothing;
 
+        // When there's no usage history, the row is purely informational —
+        // drop the chevron arrow and click handler so it doesn't claim
+        // navigability when the more-info dialog has nothing useful to
+        // show. Otherwise it remains a click-through into HA's full event
+        // firing history.
+        const isInteractive = !!lastUsed;
         const meta = lastUsed
             ? html`${lastUsedLock ?? 'Used'} ·
                   <ha-relative-time .hass=${this._hass} .datetime=${lastUsed}></ha-relative-time>`
             : html`Never used`;
+
+        if (!isInteractive) {
+            return html`
+                <div class="event-row event-row-static">
+                    <ha-svg-icon
+                        class="event-icon"
+                        .path=${mdiClockOutline}
+                        aria-hidden="true"
+                    ></ha-svg-icon>
+                    <span class="event-name">Last used</span>
+                    <span class="event-meta">${meta}</span>
+                </div>
+            `;
+        }
 
         return html`
             <div
@@ -393,10 +415,18 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     }
                 }}
             >
-                <ha-svg-icon class="event-icon" .path=${mdiClockOutline}></ha-svg-icon>
+                <ha-svg-icon
+                    class="event-icon"
+                    .path=${mdiClockOutline}
+                    aria-hidden="true"
+                ></ha-svg-icon>
                 <span class="event-name">Last used</span>
                 <span class="event-meta">${meta}</span>
-                <ha-svg-icon class="event-arrow" .path=${mdiChevronRight}></ha-svg-icon>
+                <ha-svg-icon
+                    class="event-arrow"
+                    .path=${mdiChevronRight}
+                    aria-hidden="true"
+                ></ha-svg-icon>
             </div>
         `;
     }
@@ -422,17 +452,34 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         this.dispatchEvent(event);
     }
 
-    private _renderHeader(): TemplateResult {
+    private _renderHeader(
+        stateClass: 'active' | 'inactive' | 'disabled' = 'active'
+    ): TemplateResult {
         const slotKicker = this._renderSlotKicker();
         const stateChip = this._renderStateChip();
+
+        // Surface state on the icon bubble: key when active, clock when
+        // blocked by condition (matches the lock card's pending-clock
+        // motif), lock-off when the user has explicitly disabled the slot.
+        let iconPath: string;
+        switch (stateClass) {
+            case 'inactive':
+                iconPath = mdiClockOutline;
+                break;
+            case 'disabled':
+                iconPath = mdiLockOff;
+                break;
+            default:
+                iconPath = mdiKey;
+        }
 
         return html`
             <div class="header">
                 <div class="header-top">
-                    <div class="header-icon">
-                        <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
+                    <div class="header-icon" aria-hidden="true">
+                        <ha-svg-icon .path=${iconPath}></ha-svg-icon>
                     </div>
-                    <span class="header-title">${slotKicker}</span>
+                    <h2 class="header-title">${slotKicker}</h2>
                     ${stateChip}
                 </div>
             </div>
@@ -472,7 +519,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             cls = 'disabled';
             text = 'Unknown';
         }
-        return html` <span class="state-chip ${cls}"> <span class="dot"></span>${text} </span> `;
+        return html`
+            <span class="state-chip ${cls}">
+                <span class="dot" aria-hidden="true"></span>${text}
+            </span>
+        `;
     }
 
     private _renderHero(
@@ -502,33 +553,28 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             ? html`<input
                                   class="edit-input name-edit-input"
                                   type="text"
+                                  aria-label="Edit name"
                                   .value=${name ?? ''}
                                   @blur=${this._handleEditBlur}
                                   @keydown=${this._handleEditKeydown}
                               />`
                             : html`<span
-                                      class="hero-name-value editable"
-                                      role="button"
-                                      tabindex="0"
-                                      aria-label="Edit name"
-                                      @click=${() => this._startEditing('name')}
-                                      @keydown=${(e: KeyboardEvent) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                              e.preventDefault();
-                                              this._startEditing('name');
-                                          }
-                                      }}
-                                  >
-                                      ${name
-                                          ? html`${name}`
-                                          : html`<em class="placeholder">Not named</em>`}
-                                  </span>
-                                  <ha-icon-button
-                                      class="hero-name-pencil"
-                                      .path=${mdiPencil}
-                                      @click=${() => this._startEditing('name')}
-                                      .label=${'Edit name'}
-                                  ></ha-icon-button>`}
+                                  class="hero-name-value editable"
+                                  role="button"
+                                  tabindex="0"
+                                  aria-label="Edit name"
+                                  @click=${() => this._startEditing('name')}
+                                  @keydown=${(e: KeyboardEvent) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                          e.preventDefault();
+                                          this._startEditing('name');
+                                      }
+                                  }}
+                              >
+                                  ${name
+                                      ? html`${name}`
+                                      : html`<em class="placeholder">Not named</em>`}
+                              </span>`}
                     </div>
                 </div>
                 <div class="hero-row">
@@ -540,6 +586,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   type="text"
                                   inputmode="numeric"
                                   pattern="[0-9]*"
+                                  aria-label="Edit PIN"
                                   .value=${pin ?? ''}
                                   @blur=${this._handleEditBlur}
                                   @keydown=${this._handleEditKeydown}
@@ -572,6 +619,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     </div>
                     <div class="hero-toggle">
                         <ha-switch
+                            aria-label="Enabled"
                             .checked=${enabled === true}
                             .disabled=${enabled === null}
                             @change=${this._handleEnabledToggle}
@@ -603,7 +651,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             return html`
                 <div class="collapsible-section">
                     <div class="collapsible-header static">
-                        <div class="collapsible-title">Condition</div>
+                        <h3 class="collapsible-title">Condition</h3>
                         ${this._renderAddConditionButton()}
                     </div>
                 </div>
@@ -649,8 +697,21 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
         const isAllowing = entity.state === 'on';
         const name = entity.friendly_name ?? entity.condition_entity_id;
-        return html`<span class="collapsible-badge ${isAllowing ? '' : 'warning'}">
-            ${isAllowing ? '✓' : '✗'} ${name}
+        // Allowing reads as success (green); blocking reads as warning so the
+        // color family carries meaning in addition to the icon.
+        const modifier = isAllowing ? 'success' : 'warning';
+        // aria-label overrides what screen readers announce so they get
+        // "Allowing access: Vacation" instead of "check mark Vacation"
+        // (screen readers vocalize ✓/✗ as "check mark" / "ballot X").
+        const ariaLabel = `${isAllowing ? 'Allowing access' : 'Blocking access'}: ${name}`;
+        const iconPath = isAllowing ? mdiCheck : mdiClose;
+        return html`<span class="collapsible-badge ${modifier}" aria-label=${ariaLabel}>
+            <ha-svg-icon
+                class="collapsible-badge-icon"
+                .path=${iconPath}
+                aria-hidden="true"
+            ></ha-svg-icon>
+            ${name}
         </span>`;
     }
 
@@ -692,7 +753,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _renderConditionBlock(entity: ConditionEntityInfo): TemplateResult {
         const isAllowing = entity.state === 'on';
         const overlayClass = isAllowing ? 'allowing' : 'blocking';
-        const statusText = isAllowing ? '✓ Allowing access' : '✗ Blocking access';
+        const statusIconPath = isAllowing ? mdiCheck : mdiClose;
+        const statusLabel = isAllowing ? 'Allowing access' : 'Blocking access';
         const context = this._renderOverlayContext(entity, isAllowing);
 
         return html`
@@ -702,7 +764,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     html`<div class="entity-row-loading">Loading…</div>`
                 )}
                 <div class="lcm-overlay ${overlayClass}">
-                    <span class="lcm-overlay-status">${statusText}</span>
+                    <span class="lcm-overlay-status">
+                        <ha-svg-icon
+                            class="lcm-overlay-status-icon"
+                            aria-hidden="true"
+                            .path=${statusIconPath}
+                        ></ha-svg-icon>
+                        ${statusLabel}
+                    </span>
                     <span class="lcm-overlay-context">${context}</span>
                 </div>
             </div>
@@ -750,15 +819,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         );
         return html`
             <div class="helpers-label">Helpers</div>
-            <div class="helpers-list">
+            <ul class="helpers-list">
                 ${helpers.map(
                     (eid) =>
-                        html`${until(
-                            this._getEntityRow(eid),
-                            html`<div class="entity-row-loading">Loading…</div>`
-                        )}`
+                        html`<li>
+                            ${until(
+                                this._getEntityRow(eid),
+                                html`<div class="entity-row-loading">Loading…</div>`
+                            )}
+                        </li>`
                 )}
-            </div>
+            </ul>
         `;
     }
 
@@ -867,7 +938,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         const content =
             lockStatuses.length > 0
-                ? html`${lockStatuses.map((lock) => this._renderLockRow(lock))}`
+                ? html`<ul class="lock-list">
+                      ${lockStatuses.map((lock) => html`<li>${this._renderLockRow(lock)}</li>`)}
+                  </ul>`
                 : html`<div class="no-conditions">No locks found</div>`;
 
         return this._renderCollapsible(
@@ -1015,10 +1088,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         }
                     }}
                 >
-                    <div class="collapsible-title">${title} ${headerExtra ?? nothing}</div>
+                    <h3 class="collapsible-title">${title} ${headerExtra ?? nothing}</h3>
                     <ha-svg-icon
                         class="collapsible-chevron"
                         .path=${expanded ? mdiChevronUp : mdiChevronDown}
+                        aria-hidden="true"
                     ></ha-svg-icon>
                 </div>
                 <div class="collapsible-content ${expanded ? 'expanded' : ''}">${content}</div>
@@ -1133,8 +1207,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             <ha-dialog open @closed=${this._closeConditionDialog} .heading=${'Add condition'}>
                 <div class="dialog-content">
                     <p class="dialog-description">
-                        PIN is active only when this entity is on. Pick a calendar, schedule, binary
-                        sensor, switch, or input boolean.
+                        PIN is active only when this entity is on. Pick a calendar, schedule,
+                        helper, or any on/off entity.
                     </p>
                     <ha-entity-picker
                         .hass=${this._hass}

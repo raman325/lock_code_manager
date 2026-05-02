@@ -134,8 +134,10 @@ class LockCodesCard extends LockCodesCardBase {
         if (this._isStub) {
             return html`<ha-card>
                 <div class="card-header">
-                    <div class="header-icon"><ha-icon icon="mdi:lock-smart"></ha-icon></div>
-                    <span class="card-header-title">Lock Code Manager Lock Codes</span>
+                    <div class="header-icon" aria-hidden="true">
+                        <ha-icon icon="mdi:lock-smart"></ha-icon>
+                    </div>
+                    <h2 class="card-header-title">Lock Code Manager Lock Codes</h2>
                 </div>
             </ha-card>`;
         }
@@ -151,14 +153,14 @@ class LockCodesCard extends LockCodesCardBase {
         return html`
             <ha-card class="${isSuspended ? 'suspended' : ''}">
                 <div class="card-header">
-                    <div class="header-icon">
+                    <div class="header-icon" aria-hidden="true">
                         <ha-icon icon="mdi:lock-smart"></ha-icon>
                     </div>
-                    <span class="card-header-title">${headerTitle}</span>
+                    <h2 class="card-header-title">${headerTitle}</h2>
                 </div>
                 ${isSuspended
-                    ? html`<div class="suspended-banner">
-                          <ha-icon icon="mdi:alert-circle"></ha-icon>
+                    ? html`<div class="suspended-banner" role="status">
+                          <ha-icon icon="mdi:alert-circle" aria-hidden="true"></ha-icon>
                           <span>Sync suspended — lock is unreachable</span>
                       </div>`
                     : nothing}
@@ -538,7 +540,7 @@ class LockCodesCard extends LockCodesCardBase {
                             ${statusClass === 'active' ||
                             statusClass === 'inactive' ||
                             statusClass === 'disabled'
-                                ? html`<span class="dot"></span>`
+                                ? html`<span class="dot" aria-hidden="true"></span>`
                                 : nothing}
                             ${statusText}
                         </span>
@@ -554,9 +556,11 @@ class LockCodesCard extends LockCodesCardBase {
                         ? html`<span class="slot-name-row">
                               ${isPending
                                   ? html`<ha-svg-icon
-                                        class="slot-name-pending-icon"
-                                        .path=${mdiClockOutline}
-                                    ></ha-svg-icon>`
+                                            class="slot-name-pending-icon"
+                                            .path=${mdiClockOutline}
+                                            aria-hidden="true"
+                                        ></ha-svg-icon>
+                                        <span class="visually-hidden">Pending sync</span>`
                                   : nothing}
                               <span class="slot-name ${slotName ? '' : 'unnamed'}">
                                   ${slotName ?? 'Unnamed'}
@@ -593,6 +597,7 @@ class LockCodesCard extends LockCodesCardBase {
                         inputmode="numeric"
                         pattern="[0-9]*"
                         placeholder="PIN"
+                        aria-label="Slot ${slot.slot} PIN"
                         .value=${this._editValue}
                         @input=${this._handleEditInput}
                         @keydown=${this._handleEditKeydown}
@@ -638,9 +643,11 @@ class LockCodesCard extends LockCodesCardBase {
                 >
                     ${isPending
                         ? html`<ha-svg-icon
-                              class="lcm-code-pending-icon"
-                              .path=${mdiClockOutline}
-                          ></ha-svg-icon>`
+                                  class="lcm-code-pending-icon"
+                                  .path=${mdiClockOutline}
+                                  aria-hidden="true"
+                              ></ha-svg-icon>
+                              <span class="visually-hidden">Pending sync</span>`
                         : nothing}
                     ${this._formatCode(slot)}
                 </span>
@@ -777,32 +784,35 @@ class LockCodesCard extends LockCodesCardBase {
 
         return html`
             <table class="summary-table">
+                <caption class="visually-hidden">
+                    Code slot summary
+                </caption>
                 <thead>
                     <tr>
-                        <th></th>
-                        <th>Active</th>
-                        <th>Inactive</th>
-                        <th>Disabled</th>
-                        <th>Total</th>
+                        <th scope="col"></th>
+                        <th scope="col">Active</th>
+                        <th scope="col">Inactive</th>
+                        <th scope="col">Disabled</th>
+                        <th scope="col">Total</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td>Managed</td>
+                        <th scope="row">Managed</th>
                         <td class="${cellClass(managedActive)}">${managedActive}</td>
                         <td class="${cellClass(managedInactive)}">${managedInactive}</td>
                         <td class="${cellClass(managedDisabled)}">${managedDisabled}</td>
                         <td>${managedTotal}</td>
                     </tr>
                     <tr>
-                        <td>Unmanaged</td>
+                        <th scope="row">Unmanaged</th>
                         <td class="${cellClass(unmanagedActive)}">${unmanagedActive}</td>
                         <td class="${cellClass(unmanagedInactive)}">${unmanagedInactive}</td>
                         <td class="${cellClass(0)}">–</td>
                         <td>${unmanagedTotal}</td>
                     </tr>
                     <tr class="total-row">
-                        <td>Total</td>
+                        <th scope="row">Total</th>
                         <td class="${cellClass(totalActive)}">${totalActive}</td>
                         <td class="${cellClass(totalInactive)}">${totalInactive}</td>
                         <td class="${cellClass(totalDisabled)}">${totalDisabled}</td>
