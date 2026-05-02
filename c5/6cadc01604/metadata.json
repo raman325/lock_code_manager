@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c56cadc01604",
+  "strategy": "manual-commit",
+  "branch": "phase2/slot-card-redesign",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "TODO.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c5/6cadc01604/0/metadata.json",
+      "transcript": "/c5/6cadc01604/0/full.jsonl",
+      "content_hash": "/c5/6cadc01604/0/content_hash.txt",
+      "prompt": "/c5/6cadc01604/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 998,
+    "cache_creation_tokens": 1616628,
+    "cache_read_tokens": 226192473,
+    "output_tokens": 469007,
+    "api_call_count": 463
+  }
+}
