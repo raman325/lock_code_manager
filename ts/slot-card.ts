@@ -753,7 +753,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private _renderConditionBlock(entity: ConditionEntityInfo): TemplateResult {
         const isAllowing = entity.state === 'on';
         const overlayClass = isAllowing ? 'allowing' : 'blocking';
-        const statusText = isAllowing ? '✓ Allowing access' : '✗ Blocking access';
+        const statusIconPath = isAllowing ? mdiCheck : mdiClose;
+        const statusLabel = isAllowing ? 'Allowing access' : 'Blocking access';
         const context = this._renderOverlayContext(entity, isAllowing);
 
         return html`
@@ -763,7 +764,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     html`<div class="entity-row-loading">Loading…</div>`
                 )}
                 <div class="lcm-overlay ${overlayClass}">
-                    <span class="lcm-overlay-status" aria-label=${statusText}>${statusText}</span>
+                    <span class="lcm-overlay-status">
+                        <ha-svg-icon
+                            class="lcm-overlay-status-icon"
+                            aria-hidden="true"
+                            .path=${statusIconPath}
+                        ></ha-svg-icon>
+                        ${statusLabel}
+                    </span>
                     <span class="lcm-overlay-context">${context}</span>
                 </div>
             </div>

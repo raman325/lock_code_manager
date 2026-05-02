@@ -331,9 +331,17 @@ const slotCardComponentStyles = css`
     }
 
     .lcm-overlay-status {
+        align-items: center;
+        display: inline-flex;
         flex-shrink: 0;
         font-size: 12px;
         font-weight: 600;
+        gap: 4px;
+    }
+
+    .lcm-overlay-status-icon {
+        --mdc-icon-size: 14px;
+        color: inherit;
     }
 
     .lcm-overlay.allowing .lcm-overlay-status {
@@ -619,13 +627,14 @@ const slotCardComponentStyles = css`
         color: var(--error-color);
     }
 
-    /* Action error banner — font-weight 600 promotes the text to "bold"
-       per WCAG 1.4.3, which lowers the contrast threshold from 4.5:1 to
-       3:1. White-on-#db4437 is ~4.21:1, which fails AA for normal text
-       but passes the bold threshold. */
+    /* Action error banner — uses --lcm-error-color (#b00020 fallback)
+       which gives white text ~7.6:1 contrast, comfortably above WCAG
+       1.4.3 AA (4.5:1) for normal text. The default --error-color is
+       lighter (#db4437 ≈ 4.21:1) and would fail AA at this 14px size,
+       so we explicitly use the darker LCM token. */
     .action-error {
         align-items: center;
-        background: var(--error-color, #db4437);
+        background: var(--lcm-error-color, #b00020);
         color: white;
         display: flex;
         font-size: 14px;

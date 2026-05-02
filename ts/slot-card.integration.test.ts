@@ -2891,7 +2891,10 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(joined).toContain('condition-block');
             expect(joined).toContain('lcm-overlay');
             expect(joined).toContain('allowing');
-            expect(joined).toContain('✓ Allowing access');
+            // Status text is plain "Allowing access"; the visual indicator
+            // is a separate aria-hidden mdi icon (mdiCheck).
+            expect(joined).toContain('Allowing access');
+            expect(joined).toContain('lcm-overlay-status-icon');
         });
 
         it('renders the LCM overlay strip with blocking class when entity is off', () => {
@@ -2902,7 +2905,8 @@ describe('LockCodeManagerSlotCard integration', () => {
             });
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('blocking');
-            expect(joined).toContain('✗ Blocking access');
+            expect(joined).toContain('Blocking access');
+            expect(joined).toContain('lcm-overlay-status-icon');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

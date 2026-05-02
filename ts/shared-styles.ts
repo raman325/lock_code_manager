@@ -242,8 +242,8 @@ export const lcmSectionStyles = css`
 export const lcmRevealButtonStyles = css`
     .lcm-reveal-button {
         /* 32px hit target — bumped from 28px to be a comfortable middle
-           between the WCAG 2.5.5 AA minimum (24px) and the AAA
-           recommendation (44px). */
+           between the WCAG 2.2 SC 2.5.8 AA minimum (24px) and the
+           SC 2.5.5 AAA recommendation (44px). */
         --mdc-icon-button-size: 32px;
         --mdc-icon-size: 16px;
         color: var(--secondary-text-color);
