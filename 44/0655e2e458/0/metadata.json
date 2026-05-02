@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "440655e2e458",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-02T04:27:51.838156Z",
+  "branch": "phase-b/card-polish",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "ts/lock-codes-card.styles.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "7ed261514d9a",
+  "token_usage": {
+    "input_tokens": 1088,
+    "cache_creation_tokens": 1683238,
+    "cache_read_tokens": 283817033,
+    "output_tokens": 503069,
+    "api_call_count": 528
+  },
+  "session_metrics": {
+    "turn_count": 66
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-02T04:27:50.859908Z",
+    "agent_lines": 0,
+    "human_added": 7,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 0
+  }
+}
