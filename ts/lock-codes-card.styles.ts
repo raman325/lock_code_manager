@@ -6,7 +6,14 @@
  */
 import { css } from 'lit';
 
-import { lcmBadgeStyles, lcmCodeStyles, lcmCssVars, lcmRevealButtonStyles } from './shared-styles';
+import {
+    lcmBadgeStyles,
+    lcmCodeStyles,
+    lcmCssVars,
+    lcmReducedMotionStyles,
+    lcmRevealButtonStyles,
+    lcmVisuallyHiddenStyles
+} from './shared-styles';
 
 const lockCodesCardComponentStyles = css`
     :host {
@@ -44,6 +51,7 @@ const lockCodesCardComponentStyles = css`
         color: var(--primary-text-color);
         font-size: 18px;
         font-weight: 500;
+        margin: 0;
     }
 
     .card-content {
@@ -382,13 +390,14 @@ const lockCodesCardComponentStyles = css`
         border-radius: 0 6px 0 0;
     }
 
-    .summary-table td {
+    .summary-table td,
+    .summary-table tbody th {
         border-top: 1px solid var(--lcm-border-color);
         color: var(--primary-text-color);
         font-weight: 500;
     }
 
-    .summary-table td:first-child {
+    .summary-table tbody th[scope='row'] {
         color: var(--secondary-text-color);
         font-size: var(--lcm-section-header-size);
         font-weight: 600;
@@ -397,15 +406,16 @@ const lockCodesCardComponentStyles = css`
         text-transform: uppercase;
     }
 
-    .summary-table tr:last-child td:first-child {
+    .summary-table tbody tr:last-child th[scope='row'] {
         border-radius: 0 0 0 6px;
     }
 
-    .summary-table tr:last-child td:last-child {
+    .summary-table tbody tr:last-child td:last-child {
         border-radius: 0 0 6px 0;
     }
 
-    .summary-table .total-row td {
+    .summary-table .total-row td,
+    .summary-table .total-row th {
         background: rgba(var(--rgb-primary-text-color), 0.02);
         border-top: 2px solid var(--lcm-border-color-strong);
         font-weight: 600;
@@ -443,5 +453,7 @@ export const lockCodesCardStyles = [
     lcmBadgeStyles,
     lcmCodeStyles,
     lcmRevealButtonStyles,
+    lcmVisuallyHiddenStyles,
+    lcmReducedMotionStyles,
     lockCodesCardComponentStyles
 ];

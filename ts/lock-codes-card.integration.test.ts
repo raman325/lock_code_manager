@@ -1546,4 +1546,172 @@ describe('LockCodesCard integration', () => {
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
+
+    // Phase B: a11y polish — semantic HTML, ARIA labels, reduced motion (PR #1116 Phase B).
+    describe('Phase B — a11y polish', () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let card: any;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepStrings).join('');
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes');
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await new Promise((r) => setTimeout(r, 0));
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        describe('B1: card title is rendered as <h2>', () => {
+            it('main render renders card-header-title as <h2>', () => {
+                card._data = makeLockCoordinatorData();
+                const tmpl = card.render();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h2 class="card-header-title"');
+                expect(joined).not.toContain('<span class="card-header-title"');
+            });
+
+            it('stub render renders card-header-title as <h2>', () => {
+                card._isStub = true;
+                const tmpl = card.render();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h2 class="card-header-title"');
+            });
+        });
+
+        describe('B2: aria-hidden on decorative dots and icons', () => {
+            it('header icon bubble has aria-hidden', () => {
+                card._data = makeLockCoordinatorData();
+                const tmpl = card.render();
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/<div class="header-icon" aria-hidden="true"/);
+            });
+
+            it('state badge dot has aria-hidden', () => {
+                const tmpl = card._renderSlotChip(
+                    {
+                        active: true,
+                        code: '1234',
+                        enabled: true,
+                        managed: true,
+                        name: 'Alice',
+                        slot: 1
+                    },
+                    false
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/<span class="dot" aria-hidden="true"/);
+            });
+
+            it('slot-name pending icon has aria-hidden + visually-hidden text', () => {
+                const tmpl = card._renderSlotChip(
+                    {
+                        active: false,
+                        code: null,
+                        configured_code: '1234',
+                        enabled: true,
+                        managed: true,
+                        name: 'Alice',
+                        slot: 1
+                    },
+                    false
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="slot-name-pending-icon"');
+                expect(joined).toMatch(/class="slot-name-pending-icon"[\s\S]*?aria-hidden="true"/);
+                expect(joined).toContain('class="visually-hidden">Pending sync');
+            });
+
+            it('lcm-code pending icon has aria-hidden + visually-hidden text', () => {
+                const tmpl = card._renderCodeDisplayMode(
+                    {
+                        code: null,
+                        configured_code: '1234',
+                        enabled: true,
+                        managed: true,
+                        slot: 1
+                    },
+                    false,
+                    'masked_with_reveal',
+                    false
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="lcm-code-pending-icon"');
+                expect(joined).toMatch(/class="lcm-code-pending-icon"[\s\S]*?aria-hidden="true"/);
+                expect(joined).toContain('class="visually-hidden">Pending sync');
+            });
+        });
+
+        describe('B3: edit input accessible name', () => {
+            it('slot-code-input has aria-label', () => {
+                const tmpl = card._renderCodeEditMode({ slot: 5 });
+                // deepStrings only returns the static template strings, not
+                // interpolated values, so check both: static aria-label
+                // attribute, and the slot number rendered as a value.
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/class="slot-code-input"/);
+                // The static fragment containing the aria-label attribute is
+                // sliced into two parts by `${slot.slot}`, so the literal
+                // "aria-label=" prefix and the static "Slot " / " PIN"
+                // tokens are present in the joined static strings.
+                expect(joined).toContain('aria-label="Slot ');
+                expect(joined).toContain(' PIN"');
+            });
+        });
+
+        describe('B4: summary table semantics', () => {
+            it('summary table has visually-hidden caption', () => {
+                card._data = makeLockCoordinatorData();
+                const tmpl = card._renderSummaryTable();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<caption class="visually-hidden">Code slot summary');
+            });
+
+            it('summary table headers use scope="col"', () => {
+                card._data = makeLockCoordinatorData();
+                const tmpl = card._renderSummaryTable();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('scope="col"');
+            });
+
+            it('summary table row labels use scope="row"', () => {
+                card._data = makeLockCoordinatorData();
+                const tmpl = card._renderSummaryTable();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('scope="row"');
+            });
+        });
+
+        describe('B5: suspended banner role=status', () => {
+            it('suspended banner gets role="status"', () => {
+                card._data = makeLockCoordinatorData({ sync_status: 'suspended' });
+                const tmpl = card.render();
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/class="suspended-banner" role="status"/);
+            });
+        });
+
+        describe('B6: prefers-reduced-motion CSS rule', () => {
+            it('lock card stylesheet contains a prefers-reduced-motion: reduce media query', async () => {
+                const { lockCodesCardStyles } = await import('./lock-codes-card.styles');
+                const allCss = lockCodesCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+            });
+        });
+
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
 });

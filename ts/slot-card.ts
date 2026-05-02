@@ -429,10 +429,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         return html`
             <div class="header">
                 <div class="header-top">
-                    <div class="header-icon">
+                    <div class="header-icon" aria-hidden="true">
                         <ha-svg-icon .path=${mdiKey}></ha-svg-icon>
                     </div>
-                    <span class="header-title">${slotKicker}</span>
+                    <h2 class="header-title">${slotKicker}</h2>
                     ${stateChip}
                 </div>
             </div>
@@ -472,7 +472,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             cls = 'disabled';
             text = 'Unknown';
         }
-        return html` <span class="state-chip ${cls}"> <span class="dot"></span>${text} </span> `;
+        return html`
+            <span class="state-chip ${cls}">
+                <span class="dot" aria-hidden="true"></span>${text}
+            </span>
+        `;
     }
 
     private _renderHero(
@@ -502,6 +506,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             ? html`<input
                                   class="edit-input name-edit-input"
                                   type="text"
+                                  aria-label="Edit name"
                                   .value=${name ?? ''}
                                   @blur=${this._handleEditBlur}
                                   @keydown=${this._handleEditKeydown}
@@ -540,6 +545,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                   type="text"
                                   inputmode="numeric"
                                   pattern="[0-9]*"
+                                  aria-label="Edit PIN"
                                   .value=${pin ?? ''}
                                   @blur=${this._handleEditBlur}
                                   @keydown=${this._handleEditKeydown}
@@ -603,7 +609,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             return html`
                 <div class="collapsible-section">
                     <div class="collapsible-header static">
-                        <div class="collapsible-title">Condition</div>
+                        <h3 class="collapsible-title">Condition</h3>
                         ${this._renderAddConditionButton()}
                     </div>
                 </div>
@@ -649,7 +655,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
         const isAllowing = entity.state === 'on';
         const name = entity.friendly_name ?? entity.condition_entity_id;
-        return html`<span class="collapsible-badge ${isAllowing ? '' : 'warning'}">
+        // aria-label overrides what screen readers announce so they get
+        // "Allowing access: Vacation" instead of "check mark Vacation"
+        // (screen readers vocalize ✓/✗ as "check mark" / "ballot X").
+        const ariaLabel = `${isAllowing ? 'Allowing access' : 'Blocking access'}: ${name}`;
+        return html`<span
+            class="collapsible-badge ${isAllowing ? '' : 'warning'}"
+            aria-label=${ariaLabel}
+        >
             ${isAllowing ? '✓' : '✗'} ${name}
         </span>`;
     }
@@ -702,7 +715,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     html`<div class="entity-row-loading">Loading…</div>`
                 )}
                 <div class="lcm-overlay ${overlayClass}">
-                    <span class="lcm-overlay-status">${statusText}</span>
+                    <span class="lcm-overlay-status" aria-label=${statusText}>${statusText}</span>
                     <span class="lcm-overlay-context">${context}</span>
                 </div>
             </div>
@@ -750,15 +763,17 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         );
         return html`
             <div class="helpers-label">Helpers</div>
-            <div class="helpers-list">
+            <ul class="helpers-list">
                 ${helpers.map(
                     (eid) =>
-                        html`${until(
-                            this._getEntityRow(eid),
-                            html`<div class="entity-row-loading">Loading…</div>`
-                        )}`
+                        html`<li>
+                            ${until(
+                                this._getEntityRow(eid),
+                                html`<div class="entity-row-loading">Loading…</div>`
+                            )}
+                        </li>`
                 )}
-            </div>
+            </ul>
         `;
     }
 
@@ -867,7 +882,9 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         const content =
             lockStatuses.length > 0
-                ? html`${lockStatuses.map((lock) => this._renderLockRow(lock))}`
+                ? html`<ul class="lock-list">
+                      ${lockStatuses.map((lock) => html`<li>${this._renderLockRow(lock)}</li>`)}
+                  </ul>`
                 : html`<div class="no-conditions">No locks found</div>`;
 
         return this._renderCollapsible(
@@ -1015,10 +1032,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                         }
                     }}
                 >
-                    <div class="collapsible-title">${title} ${headerExtra ?? nothing}</div>
+                    <h3 class="collapsible-title">${title} ${headerExtra ?? nothing}</h3>
                     <ha-svg-icon
                         class="collapsible-chevron"
                         .path=${expanded ? mdiChevronUp : mdiChevronDown}
+                        aria-hidden="true"
                     ></ha-svg-icon>
                 </div>
                 <div class="collapsible-content ${expanded ? 'expanded' : ''}">${content}</div>

@@ -10,9 +10,11 @@ import {
     lcmCollapsibleStyles,
     lcmCssVars,
     lcmEditableStyles,
+    lcmReducedMotionStyles,
     lcmRevealButtonStyles,
     lcmSectionStyles,
-    lcmStatusIndicatorStyles
+    lcmStatusIndicatorStyles,
+    lcmVisuallyHiddenStyles
 } from './shared-styles';
 
 const slotCardComponentStyles = css`
@@ -22,6 +24,28 @@ const slotCardComponentStyles = css`
 
     ha-card {
         overflow: hidden;
+    }
+
+    /* Lit's reset is minimal — neutralize default heading margins so the
+       newly-promoted h2/h3 elements (card title, collapsible section
+       titles) keep the same visual rhythm as the prior <span>/<div>. */
+    .header-title,
+    .collapsible-title {
+        margin: 0;
+    }
+
+    /* Helper and lock lists use ul/li for screen reader item-count
+       announcements. Reset default list chrome so they render visually
+       identical to the prior <div> wrappers. */
+    .helpers-list,
+    .lock-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    .helpers-list > li,
+    .lock-list > li {
+        display: block;
     }
 
     /* Card-level state tinting — mirrors the lock card's slot-chip backgrounds
@@ -454,12 +478,12 @@ const slotCardComponentStyles = css`
         padding: 10px 0;
     }
 
-    .lock-row:last-child {
+    .lock-list > li:last-child .lock-row {
         border-bottom: none;
         padding-bottom: 0;
     }
 
-    .lock-row:first-child {
+    .lock-list > li:first-child .lock-row {
         padding-top: 0;
     }
 
@@ -656,5 +680,7 @@ export const slotCardStyles = [
     lcmRevealButtonStyles,
     lcmCollapsibleStyles,
     lcmEditableStyles,
+    lcmVisuallyHiddenStyles,
+    lcmReducedMotionStyles,
     slotCardComponentStyles
 ];

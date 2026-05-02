@@ -1,4 +1,5 @@
 /* eslint-disable no-underscore-dangle, prefer-destructuring */
+import { html } from 'lit';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { HomeAssistant } from './ha_type_stubs';
@@ -4079,6 +4080,198 @@ describe('LockCodeManagerSlotCard integration', () => {
                 const joined = deepStrings(tmpl);
                 expect(joined).toContain('class="dialog-saving"');
                 expect(joined).toContain('aria-live="polite"');
+            });
+        });
+
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    // Phase B: a11y polish — semantic HTML, ARIA labels, reduced motion (PR #1116 Phase B).
+    describe('Phase B — a11y polish', () => {
+        let card: SlotCardElement & Record<string, unknown>;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        function deepStrings(result: any): string {
+            if (result === null || result === undefined) return '';
+            if (typeof result === 'string') return result;
+            if (typeof result === 'number' || typeof result === 'boolean') return String(result);
+            if (Array.isArray(result)) return result.map(deepStrings).join('');
+            if (!result || typeof result !== 'object') return '';
+            if (!result.strings) return '';
+            const own = (result.strings ?? []).join('');
+            const nested = (result.values ?? []).map(deepStrings).join('');
+            return own + nested;
+        }
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
+            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+
+        describe('B1: semantic headings', () => {
+            it('header title is rendered as <h2>, not <span>', () => {
+                const tmpl = (card as any)._renderHeader();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h2 class="header-title"');
+                expect(joined).not.toContain('<span class="header-title"');
+            });
+
+            it('collapsible section title is rendered as <h3>', () => {
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    false,
+                    () => undefined,
+                    html`<div></div>`
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h3 class="collapsible-title"');
+            });
+
+            it('static condition header (no entity, no helpers) uses <h3>', () => {
+                (card as any)._data = makeSlotCardData({ conditions: {} });
+                const tmpl = (card as any)._renderConditionsSection({});
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<h3 class="collapsible-title"');
+            });
+        });
+
+        describe('B2: aria-hidden on decorative icons and dots', () => {
+            it('header icon bubble has aria-hidden', () => {
+                const tmpl = (card as any)._renderHeader();
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/<div class="header-icon" aria-hidden="true"/);
+            });
+
+            it('state-chip dot has aria-hidden', () => {
+                (card as any)._data = makeSlotCardData({ enabled: true, active: true });
+                const tmpl = (card as any)._renderStateChip();
+                const joined = deepStrings(tmpl);
+                expect(joined).toMatch(/<span class="dot" aria-hidden="true"/);
+            });
+
+            it('collapsible chevron has aria-hidden', () => {
+                const tmpl = (card as any)._renderCollapsible(
+                    'Lock Status',
+                    true,
+                    () => undefined,
+                    html`<div></div>`
+                );
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('class="collapsible-chevron"');
+                // chevron is always followed by aria-hidden in the same element
+                expect(joined).toMatch(/class="collapsible-chevron"[\s\S]*?aria-hidden="true"/);
+            });
+        });
+
+        describe('B3: edit input accessible names', () => {
+            it('name edit input has aria-label="Edit name"', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice' });
+                (card as any)._editingField = 'name';
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('class="edit-input name-edit-input"');
+                expect(joined).toContain('aria-label="Edit name"');
+            });
+
+            it('PIN edit input has aria-label="Edit PIN"', () => {
+                (card as any)._data = makeSlotCardData({ name: 'Alice', pin: '1234' });
+                (card as any)._editingField = 'pin';
+                const hero = (card as any)._renderHero('1234', 4, true, 'masked_with_reveal');
+                const joined = deepStrings(hero);
+                expect(joined).toContain('class="edit-input pin-edit-input"');
+                expect(joined).toContain('aria-label="Edit PIN"');
+            });
+        });
+
+        describe('B4: condition summary badge accessible name', () => {
+            it('allowing entity badge gets "Allowing access" aria-label', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'on'
+                    }
+                });
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('Allowing access: Vacation');
+            });
+
+            it('blocking entity badge gets "Blocking access" aria-label', () => {
+                const tmpl = (card as any)._renderConditionsSummary({
+                    condition_entity: {
+                        condition_entity_id: 'calendar.vacation',
+                        domain: 'calendar',
+                        friendly_name: 'Vacation',
+                        state: 'off'
+                    }
+                });
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('Blocking access: Vacation');
+            });
+        });
+
+        describe('B5: helpers and lock lists are <ul>/<li>', () => {
+            it('helpers list renders as <ul> with <li> children', async () => {
+                card.setConfig({
+                    condition_helpers: ['binary_sensor.foo'],
+                    config_entry_id: 'abc',
+                    slot: 1,
+                    type: 'custom:lcm-slot'
+                });
+                card.hass = {
+                    ...createMockHassWithConnection(),
+                    states: {
+                        'binary_sensor.foo': {
+                            attributes: { friendly_name: 'Foo' },
+                            entity_id: 'binary_sensor.foo',
+                            state: 'on'
+                        }
+                    }
+                } as any;
+                const tmpl = (card as any)._renderHelpers();
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<ul class="helpers-list"');
+                expect(joined).toContain('<li>');
+            });
+
+            it('lock list renders as <ul> with <li> children', () => {
+                const tmpl = (card as any)._renderLockStatusSection([
+                    {
+                        code: '1234',
+                        codeLength: 4,
+                        entityId: 'binary_sensor.front',
+                        inSync: true,
+                        lastSynced: '2024-01-01T00:00:00Z',
+                        lockEntityId: 'lock.front_door',
+                        name: 'Front Door',
+                        syncStatus: 'in_sync'
+                    }
+                ]);
+                const joined = deepStrings(tmpl);
+                expect(joined).toContain('<ul class="lock-list"');
+                expect(joined).toContain('<li>');
+            });
+        });
+
+        describe('B6: prefers-reduced-motion CSS rule is bundled', () => {
+            it('slot card stylesheet contains a prefers-reduced-motion: reduce media query', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+            });
+
+            it('reduced-motion rule disables transition on collapsible content', async () => {
+                const { slotCardStyles } = await import('./slot-card.styles');
+                const allCss = slotCardStyles.map((s) => String(s.cssText ?? s)).join('\n');
+                expect(allCss).toMatch(
+                    /@media\s*\(prefers-reduced-motion:\s*reduce\)[^{]*\{[^}]*\.collapsible-content/s
+                );
             });
         });
 

@@ -371,6 +371,46 @@ export const lcmEditableStyles = css`
 `;
 
 /**
+ * Visually-hidden utility — content is removed from the visual flow but stays
+ * in the accessibility tree for screen readers. Used for things like the
+ * summary table caption and pending-state labels where the icon carries the
+ * meaning visually but a sighted-only label would be inaccessible.
+ */
+export const lcmVisuallyHiddenStyles = css`
+    .visually-hidden {
+        border: 0;
+        clip: rect(0 0 0 0);
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        padding: 0;
+        position: absolute;
+        width: 1px;
+    }
+`;
+
+/**
+ * `prefers-reduced-motion: reduce` opt-out for transitions used by the cards.
+ * Users who request reduced motion get an instant state change instead of a
+ * fade/slide. Defined once here so both cards inherit by composing
+ * `lcmReducedMotionStyles` (or `lcmSharedStyles`).
+ */
+export const lcmReducedMotionStyles = css`
+    @media (prefers-reduced-motion: reduce) {
+        .collapsible-content,
+        .collapsible-chevron,
+        .slot-chip.clickable,
+        .editable,
+        .hero-name-value.editable,
+        .hero-pin-value.editable,
+        .lcm-code.editable,
+        .event-row {
+            transition: none !important;
+        }
+    }
+`;
+
+/**
  * Combined shared styles - import this for all common styles.
  */
 export const lcmSharedStyles = css`
@@ -382,4 +422,6 @@ export const lcmSharedStyles = css`
     ${lcmRevealButtonStyles}
     ${lcmCollapsibleStyles}
     ${lcmEditableStyles}
+    ${lcmVisuallyHiddenStyles}
+    ${lcmReducedMotionStyles}
 `;
