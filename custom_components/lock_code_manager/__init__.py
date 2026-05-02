@@ -37,6 +37,8 @@ from homeassistant.core import (
     Event,
     HomeAssistant,
     ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
     callback,
 )
 from homeassistant.core_config import Config
@@ -58,6 +60,7 @@ from homeassistant.helpers.issue_registry import (
 
 from .const import (
     ATTR_CODE_SLOT,
+    ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
     ATTR_USERCODE,
@@ -71,6 +74,7 @@ from .const import (
     PLATFORMS,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
+    SERVICE_GENERATE_PIN,
     SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
@@ -88,6 +92,12 @@ from .helpers import (
     get_locks_from_targets,
 )
 from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryRuntimeData
+from .pin_generator import (
+    DEFAULT_PIN_LENGTH,
+    MAX_PIN_LENGTH,
+    MIN_PIN_LENGTH,
+    generate_pin,
+)
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -394,6 +404,26 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 ),
             }
         ),
+    )
+
+    # Generate a random PIN that avoids known unsafe patterns. Returns the
+    # value via response_variable since the service has no side effects.
+    async def _generate_pin(call: ServiceCall) -> ServiceResponse:
+        """Generate a random PIN that avoids known unsafe patterns."""
+        return {"pin": generate_pin(call.data[ATTR_LENGTH])}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GENERATE_PIN,
+        _generate_pin,
+        schema=vol.Schema(
+            {
+                vol.Optional(ATTR_LENGTH, default=DEFAULT_PIN_LENGTH): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_PIN_LENGTH, max=MAX_PIN_LENGTH)
+                ),
+            }
+        ),
+        supports_response=SupportsResponse.ONLY,
     )
 
     return True

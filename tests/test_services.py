@@ -13,6 +13,7 @@ from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
+    ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
     ATTR_USERCODE,
@@ -20,9 +21,11 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
+    SERVICE_GENERATE_PIN,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
 )
+from custom_components.lock_code_manager.pin_generator import is_unsafe_pin
 
 from .common import LOCK_1_ENTITY_ID
 
@@ -307,4 +310,63 @@ async def test_get_loaded_config_entry_wrong_domain(
                 CONF_ENTITY_ID: "binary_sensor.test_condition",
             },
             blocking=True,
+        )
+
+
+async def test_generate_pin_service_default_length(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """generate_pin returns a 4-digit PIN by default."""
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_GENERATE_PIN,
+        {},
+        blocking=True,
+        return_response=True,
+    )
+    assert response is not None
+    assert "pin" in response
+    pin = response["pin"]
+    assert len(pin) == 4
+    assert pin.isdigit()
+    assert not is_unsafe_pin(pin)
+
+
+async def test_generate_pin_service_custom_length(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """generate_pin honours the length field."""
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_GENERATE_PIN,
+        {ATTR_LENGTH: 6},
+        blocking=True,
+        return_response=True,
+    )
+    assert response is not None
+    pin = response["pin"]
+    assert len(pin) == 6
+    assert pin.isdigit()
+    assert not is_unsafe_pin(pin)
+
+
+@pytest.mark.parametrize("length", [3, 13, 0])
+async def test_generate_pin_service_rejects_invalid_length(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    length: int,
+) -> None:
+    """generate_pin rejects out-of-range length values at the schema layer."""
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_GENERATE_PIN,
+            {ATTR_LENGTH: length},
+            blocking=True,
+            return_response=True,
         )

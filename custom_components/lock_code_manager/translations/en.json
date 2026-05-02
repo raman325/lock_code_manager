@@ -153,6 +153,16 @@
     "hard_refresh_usercodes": {
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
       "name": "Hard refresh usercodes"
+    },
+    "generate_pin": {
+      "description": "Generate a random PIN that avoids known unsafe patterns (all-same digits, sequential digits, repeating sub-sequences, and common weak PINs). Returns the PIN via response_variable.",
+      "name": "Generate PIN",
+      "fields": {
+        "length": {
+          "description": "Number of digits in the generated PIN (4-12). Defaults to 4.",
+          "name": "Length"
+        }
+      }
     }
   },
   "issues": {
