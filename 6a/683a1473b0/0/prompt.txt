@@ -1246,3 +1246,27 @@ create a new branch to create a new service/action generate_pin. It optionally a
 ---
 
 don't do this in a worktree, just do it in this main thread
+
+---
+
+both PRs are merged
+
+---
+
+is the wiki up to date with all of the features? We probably need to document services/actions somewhere
+
+---
+
+OK so first, let's update supported integrations to add zha and z2m. Then, let's remove the # of uses page. Finally, we can create a new services and actions page as you suggest. We'll come back to the card features
+
+---
+
+Add a UI for lock management is too big. We probably need to have a UI section and talk about strategies in one page and cards in another. Or even one page per strategy/card. What do you think?
+
+---
+
+do the split, and as part of the split we cna update the features list and configuration options available across all components
+
+---
+
+create a branch and PR with these changes. Feel free to edit for style and substance. The point I want to make at the top is that LCM scales down to a simple UI for managing PINs but scales up to so much more
