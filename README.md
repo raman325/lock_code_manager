@@ -1,9 +1,14 @@
 # Lock Code Manager
 
-Lock Code Manager is a Home Assistant integration that keeps PIN codes in sync
-across one or more locks, even across different lock providers (e.g. Z-Wave and
-Matter locks sharing the same codes). Define your codes once and Lock Code
-Manager handles setting, clearing, and monitoring them on every lock.
+**Lock Code Manager scales down to a simple UI for managing your lock's PIN
+codes — and scales up to a programmable, multi-lock, multi-provider PIN
+platform with scheduled access, condition-driven activation, and
+automation-ready services.** Define your codes once and LCM handles setting,
+clearing, and monitoring them on every lock, across providers (Z-Wave, ZHA,
+Matter, and more) without you wiring up the differences.
+
+Whether you just want a clean dashboard for your front door or you're rotating
+PINs across an Airbnb fleet on a nightly schedule, LCM has you covered.
 
 Features:
 
@@ -14,9 +19,14 @@ Features:
   - `calendar` — active during events
   - `binary_sensor` / `switch` / `input_boolean` — active when on
   - `schedule` — active during scheduled times
+- [Services and actions](https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions)
+  for setting/clearing PINs, attaching condition entities, hard-refreshing
+  from the lock, and generating safe random PINs from automations
 - [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
-  for usage limiting, calendar-driven PINs, and more
-- Dashboard cards for managing codes and viewing lock status
+  for advanced use cases like usage limiting, calendar-driven PINs, and more
+- Dashboard strategies and custom cards for managing codes and viewing lock
+  status — from one-line auto-generated dashboards to fully hand-composed
+  layouts
 
 Supported lock integrations:
 
@@ -109,9 +119,19 @@ documentation including configuration, troubleshooting, dashboard setup, and dev
 
 ## UI & Dashboards
 
-Lock Code Manager provides Lovelace strategies and custom cards for managing PINs.
-See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management)
-for configuration options and setup guidance.
+Lock Code Manager ships custom Lovelace **strategies** (which auto-generate UI
+from your config) and custom **cards** (which you compose yourself). Pick the
+one that matches how much control you want — from a two-line dashboard that
+just works to a hand-authored layout that places exactly what you want where
+you want it.
+
+- [UI overview & decision guide][wiki-ui-overview] — start here
+- [UI Strategies][wiki-ui-strategies] — dashboard, view, and section strategies
+- [Custom Cards][wiki-ui-cards] — slot card, lock-codes card, and code-display modes
+
+[wiki-ui-overview]: https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management
+[wiki-ui-strategies]: https://github.com/raman325/lock_code_manager/wiki/UI-Strategies
+[wiki-ui-cards]: https://github.com/raman325/lock_code_manager/wiki/Custom-Cards
 
 ## Inspiration
 

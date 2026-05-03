@@ -438,10 +438,10 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(pinBlock).toBeTruthy();
         });
 
-        it('shows "No PIN set" placeholder when both pin and pin_length are absent', () => {
+        it('shows "Unset" placeholder when both pin and pin_length are absent', () => {
             const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
-            expect(heroJson).toContain('No PIN set');
+            expect(heroJson).toContain('Unset');
         });
 
         it('renders an input field for PIN when editing', () => {
@@ -537,12 +537,12 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(heroJson).toContain('name-edit-input');
         });
 
-        it('renders the "Not named" placeholder in the hero name row when name is empty', () => {
+        it('renders the "Unnamed" placeholder in the hero name row when name is empty', () => {
             (card as any)._data = makeSlotCardData({ name: '' });
             const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
             const heroJson = JSON.stringify(hero);
             expect(heroJson).toContain('placeholder');
-            expect(heroJson).toContain('Not named');
+            expect(heroJson).toContain('Unnamed');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -3854,19 +3854,19 @@ describe('LockCodeManagerSlotCard integration', () => {
 
         // D4 — placeholder copy
         describe('D4: placeholder copy', () => {
-            it('uses "Not named" instead of "<No Name>" for the empty name placeholder', () => {
+            it('uses "Unnamed" instead of "<No Name>" for the empty name placeholder', () => {
                 (card as any)._data = makeSlotCardData({ name: '' });
                 const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
                 const joined = deepStrings(hero);
-                expect(joined).toContain('Not named');
+                expect(joined).toContain('Unnamed');
                 expect(joined).not.toContain('No Name');
                 expect(joined).not.toContain('&lt;No Name&gt;');
             });
 
-            it('uses "No PIN set" instead of "<No PIN>" for the empty PIN placeholder', () => {
+            it('uses "Unset" instead of "<No PIN>" for the empty PIN placeholder', () => {
                 const hero = (card as any)._renderHero(null, undefined, true, 'masked_with_reveal');
                 const joined = deepStrings(hero);
-                expect(joined).toContain('No PIN set');
+                expect(joined).toContain('Unset');
                 expect(joined).not.toContain('No PIN<');
                 expect(joined).not.toContain('&lt;No PIN&gt;');
             });
