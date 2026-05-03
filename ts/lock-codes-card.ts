@@ -567,7 +567,7 @@ class LockCodesCard extends LockCodesCardBase {
                                   ${slotName ?? 'Unnamed'}
                               </span>
                           </span>`
-                        : html`<span class="slot-name-row"></span>`}
+                        : nothing}
                     ${this._renderCodeSection(slot, hasCode, mode)}
                 </div>
             </div>
