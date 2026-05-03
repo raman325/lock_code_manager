@@ -573,7 +573,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                               >
                                   ${name
                                       ? html`${name}`
-                                      : html`<em class="placeholder">Not named</em>`}
+                                      : html`<em class="placeholder">Unnamed</em>`}
                               </span>`}
                     </div>
                 </div>
@@ -606,7 +606,7 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                                       }
                                   }}
                               >
-                                  ${displayPin ?? html`<em class="placeholder">No PIN set</em>`}
+                                  ${displayPin ?? html`<em class="placeholder">Unset</em>`}
                               </span>`}
                         ${mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
                             ? html`<ha-icon-button
