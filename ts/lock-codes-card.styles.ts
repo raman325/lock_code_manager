@@ -183,26 +183,25 @@ const lockCodesCardComponentStyles = css`
         font-weight: 500;
     }
 
-    /* Single content row per chip: name on the left, PIN on the right.
-       No labels — position + typography (bold name, monospace PIN dots)
-       carry meaning. Drops a row vs the labeled-field layout. */
+    /* Two stacked rows per chip: name on top, PIN on the bottom. The chip is
+       narrow enough that competing for one row truncated long names too
+       aggressively (e.g. "Raman" → "R."). Stacking gives the name the full
+       chip width and lets the PIN row anchor the eye icon to the right.
+       This intentionally diverges from the slot-card hero, which uses a
+       prominent single-line name; in the lock card the name is a label, not
+       the focal point. */
     .slot-content-row {
-        align-items: center;
         display: flex;
-        gap: 12px;
-        justify-content: space-between;
+        flex-direction: column;
+        gap: 4px;
         margin-top: 6px;
-        min-width: 0;
-    }
-    .slot-content-row .slot-name-row {
-        flex: 1;
         min-width: 0;
     }
 
     .slot-name {
         color: var(--primary-text-color);
-        font-size: 15px;
-        font-weight: 500;
+        font-size: 14px;
+        font-weight: 400;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
