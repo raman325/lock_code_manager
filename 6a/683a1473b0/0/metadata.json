@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6a683a1473b0",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-03T14:25:51.156801Z",
+  "branch": "docs/readme-positioning",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "0a77b3d6285b",
+  "token_usage": {
+    "input_tokens": 1290,
+    "cache_creation_tokens": 2077365,
+    "cache_read_tokens": 346128319,
+    "output_tokens": 576986,
+    "api_call_count": 680
+  },
+  "session_metrics": {
+    "turn_count": 74
+  }
+}
