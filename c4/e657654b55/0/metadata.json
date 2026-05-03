@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c4e657654b55",
+  "session_id": "71c16e9b-de1a-419b-a20c-1b5f51ff2253",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-03T18:11:09.876795Z",
+  "branch": "fix/lock-card-slot-stack",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "15fd4f5eb4ba",
+  "token_usage": {
+    "input_tokens": 1360,
+    "cache_creation_tokens": 2258033,
+    "cache_read_tokens": 354126145,
+    "output_tokens": 597022,
+    "api_call_count": 725
+  },
+  "session_metrics": {
+    "turn_count": 79
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c4e657654b55",
+  "strategy": "manual-commit",
+  "branch": "fix/lock-card-slot-stack",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c4/e657654b55/0/metadata.json",
+      "transcript": "/c4/e657654b55/0/full.jsonl",
+      "content_hash": "/c4/e657654b55/0/content_hash.txt",
+      "prompt": "/c4/e657654b55/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1360,
+    "cache_creation_tokens": 2258033,
+    "cache_read_tokens": 354126145,
+    "output_tokens": 597022,
+    "api_call_count": 725
+  }
+}
