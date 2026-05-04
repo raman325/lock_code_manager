@@ -121,9 +121,10 @@ documentation including configuration, troubleshooting, dashboard setup, and dev
 
 Lock Code Manager ships custom Lovelace **strategies** (which auto-generate UI
 from your config) and custom **cards** (which you compose yourself). Pick the
-one that matches how much control you want — from a two-line dashboard that
-just works to a hand-authored layout that places exactly what you want where
-you want it.
+one that matches how much control you want — from a one-click dashboard that
+just works (selectable directly from **Settings → Dashboards → Add Dashboard**
+on Home Assistant 2026.5+) to a hand-authored layout that places exactly what
+you want where you want it.
 
 - [UI overview & decision guide][wiki-ui-overview] — start here
 - [UI Strategies][wiki-ui-strategies] — dashboard, view, and section strategies
