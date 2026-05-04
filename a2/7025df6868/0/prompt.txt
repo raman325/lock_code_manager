@@ -1,0 +1,5 @@
+We should update our implementation of strategies to enable this: https://developers.home-assistant.io/blog/2026/04/21/registering-custom-dashboard-strategies and update wiki and README documentation accordingly
+
+---
+
+I agree with #2
