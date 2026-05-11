@@ -1,0 +1,1 @@
+Re-check CI on PR #1127. Run `gh pr checks 1127` and report on Python/Pytest (3.14). If passing: summarize the green state. If failing: pull the failure log with `gh run view <id> --log-failed | grep -E "FAILED|short test summary|Error" | head -20`. Latest commit on the branch should be 9ef9a366 (zwave test + mqtt teardown fixes).

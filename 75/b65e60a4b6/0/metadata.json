@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "75b65e60a4b6",
+  "session_id": "ece33d9e-e94c-406a-9430-8aa787cb15c5",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-11T15:15:53.714407Z",
+  "branch": "dependabot/pip/homeassistant-6319076cf5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "a1537074321a",
+  "checkpoint_transcript_start": 829,
+  "transcript_lines_at_start": 829,
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 21986,
+    "cache_read_tokens": 6367739,
+    "output_tokens": 8089,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-11T15:15:53.36484Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}
