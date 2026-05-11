@@ -76,9 +76,12 @@ for details.
 
 ## Condition Entity Integrations Not Supported
 
-Some condition entity integrations are not compatible. See the
+Some integrations create entities whose states don't map to LCM condition entity
+semantics ("access allowed" / "access denied"). The integration may still be usable
+with LCM by driving slot Enabled switches from its own automation logic instead of
+attaching its entities as condition entities. See the
 [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations)
-for details.
+for details and the scheduler-component workaround.
 
 ## Installation
 
