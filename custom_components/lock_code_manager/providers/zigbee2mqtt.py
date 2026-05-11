@@ -278,8 +278,8 @@ class Zigbee2MQTTLock(BaseLock):
         # Handle response to get request with pin_code data
         pin_code_data = payload.get("pin_code")
         if pin_code_data and isinstance(pin_code_data, dict):
-            user_id = pin_code_data.get("user")
-            if user_id is None:
+            raw_user = pin_code_data.get("user")
+            if raw_user is None:
                 LOGGER.debug(
                     "Ignoring pin_code payload without user field for %s",
                     self.lock.entity_id,
@@ -287,7 +287,7 @@ class Zigbee2MQTTLock(BaseLock):
                 return
 
             try:
-                user_id = int(user_id)
+                user_id = int(raw_user)
             except ValueError, TypeError:
                 LOGGER.warning(
                     "Ignoring pin_code payload with non-numeric user for %s",
