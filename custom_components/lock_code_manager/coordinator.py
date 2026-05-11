@@ -69,6 +69,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                 hass,
                 self._async_drift_check,
                 lock.hard_refresh_interval,
+                cancel_on_shutdown=True,
             )
 
         if lock.connection_check_interval:
@@ -77,6 +78,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                 hass,
                 self._async_connection_check,
                 lock.connection_check_interval,
+                cancel_on_shutdown=True,
             )
 
     @property
