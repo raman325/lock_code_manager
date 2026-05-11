@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2c74526cff55",
+  "session_id": "ece33d9e-e94c-406a-9430-8aa787cb15c5",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-11T14:50:37.908206Z",
+  "branch": "dependabot/npm_and_yarn/babel/preset-env-7.29.5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "2ed0a6903f73",
+  "checkpoint_transcript_start": 389,
+  "transcript_lines_at_start": 389,
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 8095,
+    "cache_read_tokens": 1236864,
+    "output_tokens": 1640,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-11T14:50:37.715821Z",
+    "agent_lines": 1,
+    "human_added": 28,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 3.4482758620689653
+  }
+}

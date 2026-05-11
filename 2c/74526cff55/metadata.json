@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2c74526cff55",
+  "strategy": "manual-commit",
+  "branch": "dependabot/npm_and_yarn/babel/preset-env-7.29.5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2c/74526cff55/0/metadata.json",
+      "transcript": "/2c/74526cff55/0/full.jsonl",
+      "content_hash": "/2c/74526cff55/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 8095,
+    "cache_read_tokens": 1236864,
+    "output_tokens": 1640,
+    "api_call_count": 7
+  }
+}
