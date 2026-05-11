@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f9d9a3427b56",
+  "session_id": "ece33d9e-e94c-406a-9430-8aa787cb15c5",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-11T15:00:19.328144Z",
+  "branch": "dependabot/pip/homeassistant-6319076cf5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "hacs.json",
+    "requirements_dev.txt"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "65cab212a7de",
+  "checkpoint_transcript_start": 556,
+  "transcript_lines_at_start": 556,
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 22145,
+    "cache_read_tokens": 6251062,
+    "output_tokens": 12505,
+    "api_call_count": 29
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-11T15:00:19.101656Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}

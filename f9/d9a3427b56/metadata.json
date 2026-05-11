@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f9d9a3427b56",
+  "strategy": "manual-commit",
+  "branch": "dependabot/pip/homeassistant-6319076cf5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "hacs.json",
+    "requirements_dev.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f9/d9a3427b56/0/metadata.json",
+      "transcript": "/f9/d9a3427b56/0/full.jsonl",
+      "content_hash": "/f9/d9a3427b56/0/content_hash.txt",
+      "prompt": "/f9/d9a3427b56/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 22145,
+    "cache_read_tokens": 6251062,
+    "output_tokens": 12505,
+    "api_call_count": 29
+  }
+}

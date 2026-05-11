@@ -1,0 +1,29 @@
+did we install it locally too?
+
+---
+
+Run pytest ./tests/ --cov=custom_components/lock_code_manager/ --cov-report=xml --junitxml=junit.xml
+ImportError while loading conftest '/home/runner/work/lock_code_manager/lock_code_manager/tests/conftest.py'.
+tests/conftest.py:28: in <module>
+    from custom_components.lock_code_manager.const import DOMAIN
+custom_components/lock_code_manager/__init__.py:86: in <module>
+    from .helpers import (
+custom_components/lock_code_manager/helpers.py:27: in <module>
+    from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
+custom_components/lock_code_manager/providers/__init__.py:10: in <module>
+    from .zha import ZHALock
+custom_components/lock_code_manager/providers/zha.py:21: in <module>
+    from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
+/opt/hostedtoolcache/Python/3.14.4/x64/lib/python3.14/site-packages/homeassistant/components/zha/__init__.py:15: in <module>
+    from homeassistant.components.homeassistant_hardware.helpers import (
+/opt/hostedtoolcache/Python/3.14.4/x64/lib/python3.14/site-packages/homeassistant/components/homeassistant_hardware/__init__.py:10: in <module>
+    from .helpers import HardwareInfoDispatcher
+/opt/hostedtoolcache/Python/3.14.4/x64/lib/python3.14/site-packages/homeassistant/components/homeassistant_hardware/helpers.py:11: in <module>
+    from homeassistant.components.usb import (
+/opt/hostedtoolcache/Python/3.14.4/x64/lib/python3.14/site-packages/homeassistant/components/usb/__init__.py:38: in <module>
+    from .serial_proxy_stub import register_serialx_transport
+/opt/hostedtoolcache/Python/3.14.4/x64/lib/python3.14/site-packages/homeassistant/components/usb/serial_proxy_stub.py:8: in <module>
+    from serialx.platforms.serial_esphome import ESPHomeSerial, ESPHomeSerialTransport
+/opt/hostedtoolcache/Python/3.14.4/x64/lib/python3.14/site-packages/serialx/platforms/serial_esphome.py:36: in <module>
+    import aioesphomeapi
+E   ModuleNotFoundError: No module named 'aioesphomeapi'
