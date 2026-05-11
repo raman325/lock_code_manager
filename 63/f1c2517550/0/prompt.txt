@@ -1,0 +1,5 @@
+Check CI status on PR #1127 (HA group dependency bump) — run `gh pr checks 1127` and report whether the Python/Pytest (3.14) job passes after the matter-python-client swap. If it failed, fetch the failure log with `gh run view --log-failed` and decide next step.
+
+---
+
+Re-check CI on PR #1127 with `gh pr checks 1127`. Specifically look at the Python/Pytest (3.14) step on the latest commit (should be 8b92704b which added aioesphomeapi). If passing, summarize the now-green state. If failing, fetch the failure log with `gh run view <id> --log-failed` and decide next action.
