@@ -227,6 +227,7 @@ async def lcm_config_entry(
     yield lcm_entry
 
     await hass.config_entries.async_unload(lcm_entry.entry_id)
+    await hass.async_block_till_done()
 
 
 def get_z2m_lock(lcm_entry: MockConfigEntry) -> Zigbee2MQTTLock:

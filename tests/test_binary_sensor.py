@@ -1883,6 +1883,7 @@ async def test_multiple_slots_sync_sequentially_not_concurrently(
     )
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
 
 
 async def test_slot_disabled_during_sync_resolves_correctly(
