@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 import json
 from types import SimpleNamespace
@@ -157,12 +157,17 @@ def mqtt_patches(mqtt_bus: MqttMessageBus):
 
 
 @pytest.fixture
-async def mqtt_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
+async def mqtt_lock_entity(
+    hass: HomeAssistant,
+) -> AsyncGenerator[er.RegistryEntry]:
     """
     Create an MQTT config entry, Z2M device, and lock entity.
 
     Sets the MQTT config entry to LOADED state so the provider's
-    async_is_integration_connected check passes.
+    async_is_integration_connected check passes. Resets the state to
+    NOT_LOADED on teardown because HA 2026.5.0's mqtt.async_unload_entry
+    does an unguarded ``hass.data[DATA_MQTT]`` lookup that this fake
+    setup never populates.
     """
     mqtt_entry = MockConfigEntry(domain="mqtt")
     mqtt_entry.add_to_hass(hass)
@@ -188,7 +193,9 @@ async def mqtt_lock_entity(hass: HomeAssistant) -> er.RegistryEntry:
 
     hass.states.async_set(lock_entity.entity_id, "locked")
 
-    return lock_entity
+    yield lock_entity
+
+    mqtt_entry._async_set_state(hass, ConfigEntryState.NOT_LOADED, None)
 
 
 @pytest.fixture

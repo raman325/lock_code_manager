@@ -139,6 +139,9 @@ async def test_usercode_cc_version_missing(
     endpoint.data["commandClasses"] = [
         cc for cc in original_ccs if cc["id"] != CommandClass.USER_CODE.value
     ]
+    # zwave-js-server-python 0.70+ added @cached_property on endpoint.command_classes
+    # so direct endpoint.data mutation needs cache invalidation here too.
+    endpoint.__dict__.pop("command_classes", None)
     # Clear cached property so it re-evaluates
     zwave_js_lock.__dict__.pop("_usercode_cc_version", None)
 
