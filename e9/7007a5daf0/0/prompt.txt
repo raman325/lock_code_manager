@@ -1,0 +1,5 @@
+run the full test suite
+
+---
+
+pull latest from origin thenc ontinue
