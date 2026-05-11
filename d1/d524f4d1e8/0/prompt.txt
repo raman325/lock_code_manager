@@ -1,0 +1,1 @@
+Final CI check on PR #1127. Run `gh pr checks 1127` and report the Python/Pytest (3.14) outcome on commit 91418b04 (cancel_on_shutdown=True fix). Hassfest may need re-running if it was flaky. If pytest passes: declare the PR ready. If failing: show `gh run view <id> --log-failed | grep -oE "(ERROR|FAILED) tests/[^ ]+" | sort -u` to see remaining failures and decide next step.

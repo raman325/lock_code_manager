@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d1d524f4d1e8",
+  "strategy": "manual-commit",
+  "branch": "dependabot/pip/homeassistant-6319076cf5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/providers/test_base.py",
+    "tests/providers/zigbee2mqtt/conftest.py",
+    "tests/test_binary_sensor.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d1/d524f4d1e8/0/metadata.json",
+      "transcript": "/d1/d524f4d1e8/0/full.jsonl",
+      "content_hash": "/d1/d524f4d1e8/0/content_hash.txt",
+      "prompt": "/d1/d524f4d1e8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 43856,
+    "cache_read_tokens": 10155500,
+    "output_tokens": 20683,
+    "api_call_count": 33
+  }
+}

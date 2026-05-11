@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d1d524f4d1e8",
+  "session_id": "ece33d9e-e94c-406a-9430-8aa787cb15c5",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-11T15:25:45.446144Z",
+  "branch": "dependabot/pip/homeassistant-6319076cf5",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/providers/zigbee2mqtt/conftest.py",
+    "tests/providers/test_base.py",
+    "tests/test_binary_sensor.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "2c8a7e22da54",
+  "checkpoint_transcript_start": 918,
+  "transcript_lines_at_start": 918,
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 43856,
+    "cache_read_tokens": 10155500,
+    "output_tokens": 20683,
+    "api_call_count": 33
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-11T15:25:45.066048Z",
+    "agent_lines": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 100
+  }
+}
