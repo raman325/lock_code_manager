@@ -1,0 +1,21 @@
+the README and wiki note that the scheduler component is not supported, but there's a nuance. The entity used for each scheduler entity can't be used as a condition entity - this is the real limitation. People **can** use scheduler component in combination with LCM if they just wire it up to flip the enabled toggle on each slot. So they don't use built in conditions at all, all of their logic, including the business of flipping, is done within their scheduler configuration. Can we clarify this in both places? for the README we need a PR
+
+---
+
+go look up the scheduler component which is a customer HA integration so you can understand how the component works. Then revise the drafts
+
+---
+
+#1 is fine
+
+---
+
+catch up to main first
+
+---
+
+check the open PRs and see why CI failed. If we can resolve them for the dependency bump, let's do it and fix the PR in that branch. Otherwise lets close the PR
+
+---
+
+you can also use serena to explore
