@@ -1,0 +1,1 @@
+are we sure we can't bump the version? See what version ships with the latest version of homeassistant. You can find the code and requirements in ../home-assistant, we may just have to pull upstream from dev to catch up
