@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.models import SlotCode
@@ -18,6 +20,14 @@ from .conftest import (
     MqttMessageBus,
     get_z2m_lock,
 )
+
+# Full LCM setup briefly holds the coordinator's debounced refresh lock while
+# the initial sync runs. Concurrent async_request_refresh calls during that
+# window hit the HA Debouncer regression introduced in home-assistant/core
+# commit 7203cffbd73 (#153596), which orphans an extra call_later TimerHandle
+# that Debouncer.async_shutdown does not cancel. Accept the lingering timer
+# until the upstream fix lands.
+pytestmark = pytest.mark.parametrize("expected_lingering_timers", [True])
 
 
 class TestFullSetupLifecycle:

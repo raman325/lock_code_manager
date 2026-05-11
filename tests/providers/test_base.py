@@ -688,6 +688,11 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
     with patch.object(lock, "async_setup", return_value=None):
         await lock._async_on_integration_loaded()
 
+    # Coordinator was created via async_setup_internal directly (no full LCM
+    # entry to unload). Shut it down explicitly so HA 2026.5.0's
+    # verify_cleanup does not flag the debouncer timer as lingering.
+    await lock.coordinator.async_shutdown()
+
     assert lock._setup_succeeded is True
 
 

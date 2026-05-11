@@ -6,6 +6,7 @@ from datetime import timedelta
 import logging
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -1790,6 +1791,12 @@ async def test_coordinator_refresh_failure_after_sync_retries_on_next_tick(
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
+# Full LCM setup briefly holds the coordinator's debounced refresh lock while
+# the initial sync runs; the HA Debouncer regression from core commit
+# 7203cffbd73 (#153596) then orphans an extra call_later TimerHandle that
+# Debouncer.async_shutdown does not cancel. Accept the lingering timer for
+# this single full-setup test until the upstream fix lands.
+@pytest.mark.parametrize("expected_lingering_timers", [True])
 async def test_multiple_slots_sync_sequentially_not_concurrently(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -1883,6 +1890,7 @@ async def test_multiple_slots_sync_sequentially_not_concurrently(
     )
 
     await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
 
 
 async def test_slot_disabled_during_sync_resolves_correctly(

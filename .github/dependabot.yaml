@@ -26,7 +26,7 @@ updates:
       homeassistant:
         patterns:
           - "homeassistant"
-          - "python-matter-server"
+          - "matter-python-client"
           - "pytest"
           - "pytest-homeassistant-custom-component"
           - "zeroconf"
