@@ -83,7 +83,7 @@ variables:
     {{ trigger.to_state.attributes.code_slot
        | default('?') }}
   lock_name: >-
-    {{ state_attr(trigger.to_state.state, 'friendly_name')
+    {{ state_attr(trigger.to_state.attributes.event_type, 'friendly_name')
        | default('Unknown lock') }}
   timestamp: >-
     {{ trigger.to_state.last_updated | as_local
