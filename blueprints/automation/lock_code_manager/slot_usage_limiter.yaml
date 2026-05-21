@@ -117,9 +117,10 @@ variables:
   _config_entry: >-
     {{ config_entry_id(pin_used_entity_id) }}
   _config_entry_title: >-
-    {{ config_entry_attr(_config_entry, 'title') | default('Lock Code Manager') }}
+    {{ config_entry_attr(_config_entry, 'title')
+       | default('Lock Code Manager', true) }}
   _slot_number: >-
-    {{ state_attr(pin_used_entity_id, 'code_slot') | default('?') }}
+    {{ state_attr(pin_used_entity_id, 'code_slot') | default('?', true) }}
 
 actions:
   - choose:
