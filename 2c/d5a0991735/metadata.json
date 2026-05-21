@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2cd5a0991735",
+  "strategy": "manual-commit",
+  "branch": "refactor/limiter-derive-from-event-entity",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/2c/d5a0991735/0/metadata.json",
+      "transcript": "/2c/d5a0991735/0/full.jsonl",
+      "content_hash": "/2c/d5a0991735/0/content_hash.txt",
+      "prompt": "/2c/d5a0991735/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 283929,
+    "cache_read_tokens": 7442908,
+    "output_tokens": 46868,
+    "api_call_count": 75
+  }
+}
