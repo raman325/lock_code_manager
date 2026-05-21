@@ -35,22 +35,6 @@ blueprint:
   # yamllint disable-line rule:line-length
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_limiter.yaml
   input:
-    config_entry:
-      name: Lock Code Manager config entry
-      description: >
-        The Lock Code Manager config entry that manages your lock(s).
-        Used to identify the setup in notifications.
-      selector:
-        config_entry:
-          integration: lock_code_manager
-    slot_number:
-      name: Code slot number
-      description: The Lock Code Manager code slot number.
-      selector:
-        number:
-          min: 1
-          max: 999
-          mode: box
     pin_used_entity:
       name: PIN used event entity
       description: >
@@ -129,10 +113,13 @@ variables:
   uses_counter: !input uses_counter
   notify_target: !input notify_target
   locks: !input locks
-  _config_entry: !input config_entry
-  _config_entry_title: >
-    {{ config_entry_attr(_config_entry, 'title') }}
-  _slot_number: !input slot_number
+  pin_used_entity_id: !input pin_used_entity
+  _config_entry: >-
+    {{ config_entry_id(pin_used_entity_id) }}
+  _config_entry_title: >-
+    {{ config_entry_attr(_config_entry, 'title') | default('Lock Code Manager') }}
+  _slot_number: >-
+    {{ state_attr(pin_used_entity_id, 'code_slot') | default('?') }}
 
 actions:
   - choose:
