@@ -50,7 +50,7 @@ blueprint:
       description: >
         One or more Lock Code Manager event entities that fire when a
         PIN is used. These are named like "Code slot X PIN used". The
-        automation runs whenever any of the selected entities fires.
+        automation runs whenever any of the selected entities fire.
       selector:
         entity:
           domain: event
