@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "82fcd553a92a",
+  "session_id": "52b41563-f94d-430e-b2f6-e80ddc043843",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-21T13:24:05.590497Z",
+  "branch": "chore/dependabot-trim-homeassistant-group",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/dependabot.yaml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "4aa5930ecd97",
+  "checkpoint_transcript_start": 219,
+  "transcript_lines_at_start": 219,
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 29075,
+    "cache_read_tokens": 1834272,
+    "output_tokens": 6962,
+    "api_call_count": 16
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-21T13:24:05.466417Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
