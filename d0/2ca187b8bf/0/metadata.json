@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d02ca187b8bf",
+  "session_id": "52b41563-f94d-430e-b2f6-e80ddc043843",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-21T22:38:19.525845Z",
+  "branch": "feat/notifier-multi-event-entity",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "203863970d84",
+  "token_usage": {
+    "input_tokens": 129,
+    "cache_creation_tokens": 268023,
+    "cache_read_tokens": 5988040,
+    "output_tokens": 38906,
+    "api_call_count": 65
+  },
+  "session_metrics": {
+    "turn_count": 9
+  }
+}

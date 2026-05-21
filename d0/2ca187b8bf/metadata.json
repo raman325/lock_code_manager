@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d02ca187b8bf",
+  "strategy": "manual-commit",
+  "branch": "feat/notifier-multi-event-entity",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d0/2ca187b8bf/0/metadata.json",
+      "transcript": "/d0/2ca187b8bf/0/full.jsonl",
+      "content_hash": "/d0/2ca187b8bf/0/content_hash.txt",
+      "prompt": "/d0/2ca187b8bf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 129,
+    "cache_creation_tokens": 268023,
+    "cache_read_tokens": 5988040,
+    "output_tokens": 38906,
+    "api_call_count": 65
+  }
+}
