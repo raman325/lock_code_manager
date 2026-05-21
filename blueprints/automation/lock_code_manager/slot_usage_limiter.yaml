@@ -114,12 +114,12 @@ variables:
   notify_target: !input notify_target
   locks: !input locks
   pin_used_entity_id: !input pin_used_entity
-  _config_entry: >
+  _config_entry: >-
     {{ config_entry_id(pin_used_entity_id) }}
-  _config_entry_title: >
-    {{ config_entry_attr(_config_entry, 'title') }}
-  _slot_number: >
-    {{ state_attr(pin_used_entity_id, 'code_slot') }}
+  _config_entry_title: >-
+    {{ config_entry_attr(_config_entry, 'title') | default('Lock Code Manager') }}
+  _slot_number: >-
+    {{ state_attr(pin_used_entity_id, 'code_slot') | default('?') }}
 
 actions:
   - choose:
