@@ -91,7 +91,7 @@ variables:
   event_entity_id: !input event_entity
   locks: !input locks
   lock_entity_id: >-
-    {{ trigger.to_state.attributes.event_type }}
+    {{ state_attr(trigger.entity_id, 'event_type') }}
   slot_name: >-
     {{ trigger.to_state.attributes.code_slot_name
        | default('Unknown slot') }}
