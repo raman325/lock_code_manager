@@ -23,3 +23,7 @@ yes
 ---
 
 we don't have tests for our blueprints. See how blueprints are tested in ../home-assistant. It would be great to have tests for these to make sure our inputs and outputs work as expected
+
+---
+
+merged, ff then move on to PR B
