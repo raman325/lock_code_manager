@@ -38,7 +38,7 @@ blueprint:
 
     1. Import this blueprint and create an automation from it.
 
-    2. Select the code slot event entity to monitor.
+    2. Select one or more code slot event entities to monitor.
 
     3. Configure the actions to run when the PIN is used.
   domain: automation
@@ -46,14 +46,16 @@ blueprint:
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/automation/lock_code_manager/slot_usage_notifier.yaml
   input:
     event_entity:
-      name: Code slot event entity
+      name: Code slot event entities
       description: >
-        The Lock Code Manager event entity that fires when a PIN
-        is used. These are named like "Code slot X PIN used".
+        One or more Lock Code Manager event entities that fire when a
+        PIN is used. These are named like "Code slot X PIN used". The
+        automation runs whenever any of the selected entities fires.
       selector:
         entity:
           domain: event
           integration: lock_code_manager
+          multiple: true
     locks:
       name: Locks (optional)
       description: >
