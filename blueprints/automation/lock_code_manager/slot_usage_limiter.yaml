@@ -142,7 +142,7 @@ actions:
           - condition: template
             value_template: >-
               {{ locks | count == 0
-                 or trigger.to_state.attributes.event_type in locks }}
+                 or state_attr(trigger.entity_id, 'event_type') in locks }}
         sequence:
           - variables:
               current: >
