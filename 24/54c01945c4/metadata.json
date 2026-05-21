@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2454c01945c4",
+  "strategy": "manual-commit",
+  "branch": "fix/blueprint-lock-lookup-state-attr",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "blueprints/automation/lock_code_manager/slot_usage_limiter.yaml",
+    "blueprints/automation/lock_code_manager/slot_usage_notifier.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/54c01945c4/0/metadata.json",
+      "transcript": "/24/54c01945c4/0/full.jsonl",
+      "content_hash": "/24/54c01945c4/0/content_hash.txt",
+      "prompt": "/24/54c01945c4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 13941,
+    "cache_read_tokens": 901046,
+    "output_tokens": 8319,
+    "api_call_count": 10
+  }
+}
