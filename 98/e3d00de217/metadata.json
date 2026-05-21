@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "98e3d00de217",
+  "strategy": "manual-commit",
+  "branch": "feat/slot-notifier-lock-filter",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "blueprints/automation/lock_code_manager/slot_usage_notifier.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/98/e3d00de217/0/metadata.json",
+      "transcript": "/98/e3d00de217/0/full.jsonl",
+      "content_hash": "/98/e3d00de217/0/content_hash.txt",
+      "prompt": "/98/e3d00de217/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 68012,
+    "cache_read_tokens": 806878,
+    "output_tokens": 7783,
+    "api_call_count": 14
+  }
+}

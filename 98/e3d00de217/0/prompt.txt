@@ -1,0 +1,5 @@
+update the slot notifier blueprint to accept an optional lock (or list of locks) as an input. When the lock is specified, the number should only decrement when that lock is used
+
+---
+
+sorry I meant the notification should only fire when that lock or a lock in that list is used
