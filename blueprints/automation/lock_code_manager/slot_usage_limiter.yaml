@@ -5,7 +5,8 @@ blueprint:
     Decrements an `input_number` helper each time a Lock Code Manager code
     slot PIN is used on the lock. When the counter reaches 0, the Lock Code
     Manager slot is automatically disabled. Optionally resets the counter
-    when the slot is re-enabled in Lock Code Manager.
+    when the slot is re-enabled in Lock Code Manager. Optionally restricts
+    the limit to a specific lock or set of locks.
 
 
     **Special values**
@@ -59,6 +60,18 @@ blueprint:
         entity:
           domain: event
           integration: lock_code_manager
+    locks:
+      name: Locks (optional)
+      description: >
+        Restrict the limit to a specific lock or set of locks. When empty,
+        PIN uses on any lock count toward the limit. When one or more locks
+        are selected, only uses on those locks decrement the counter — uses
+        on other locks are ignored.
+      default: []
+      selector:
+        entity:
+          domain: lock
+          multiple: true
     enabled_switch:
       name: Slot enabled switch
       description: >
@@ -115,6 +128,7 @@ variables:
   initial_uses: !input initial_uses
   uses_counter: !input uses_counter
   notify_target: !input notify_target
+  locks: !input locks
   _config_entry: !input config_entry
   _config_entry_title: >
     {{ config_entry_attr(_config_entry, 'title') }}
@@ -125,6 +139,10 @@ actions:
       - conditions:
           - condition: trigger
             id: pin_used
+          - condition: template
+            value_template: >-
+              {{ locks | count == 0
+                 or trigger.to_state.attributes.event_type in locks }}
         sequence:
           - variables:
               current: >
