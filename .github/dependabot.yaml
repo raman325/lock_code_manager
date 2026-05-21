@@ -26,9 +26,7 @@ updates:
       homeassistant:
         patterns:
           - "homeassistant"
-          - "pytest"
           - "pytest-homeassistant-custom-component"
-          - "zwave-js-server-python"
   - package-ecosystem: npm
     directory: "/" # Location of package manifests
     schedule:
