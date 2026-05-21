@@ -54,6 +54,19 @@ blueprint:
         entity:
           domain: event
           integration: lock_code_manager
+    locks:
+      name: Locks (optional)
+      description: >
+        Restrict the automation to a specific lock or set of locks.
+        When empty, the actions run for any lock the event entity
+        reports. When one or more locks are selected, the actions
+        only run when one of those locks is the lock that used the
+        PIN.
+      default: []
+      selector:
+        entity:
+          domain: lock
+          multiple: true
     notify_actions:
       name: Actions
       description: >
@@ -76,6 +89,9 @@ triggers:
 
 variables:
   event_entity_id: !input event_entity
+  locks: !input locks
+  lock_entity_id: >-
+    {{ trigger.to_state.attributes.event_type }}
   slot_name: >-
     {{ trigger.to_state.attributes.code_slot_name
        | default('Unknown slot') }}
@@ -83,10 +99,15 @@ variables:
     {{ trigger.to_state.attributes.code_slot
        | default('?') }}
   lock_name: >-
-    {{ state_attr(trigger.to_state.attributes.event_type, 'friendly_name')
+    {{ state_attr(lock_entity_id, 'friendly_name')
        | default('Unknown lock') }}
   timestamp: >-
     {{ trigger.to_state.last_updated | as_local
        | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ locks | count == 0 or lock_entity_id in locks }}
 
 actions: !input notify_actions
