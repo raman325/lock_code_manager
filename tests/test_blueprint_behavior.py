@@ -12,17 +12,24 @@ import contextlib
 import pathlib
 from unittest.mock import patch
 
-from pytest_homeassistant_custom_component.common import async_mock_service
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_mock_service,
+    mock_restore_cache_with_extra_data,
+)
 
 from homeassistant.components import automation
 from homeassistant.components.blueprint import models
-from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
+from homeassistant.const import ATTR_FRIENDLY_NAME
+from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
 from homeassistant.setup import async_setup_component
 from homeassistant.util import yaml as yaml_util
 
+from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import (
+    BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     SLOT_1_ENABLED_ENTITY,
@@ -207,6 +214,330 @@ async def test_notifier_lock_filter_blocks_non_match(
     await hass.async_block_till_done()
 
     assert captured == []
+
+
+async def test_notifier_fires_on_first_pin_use(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The very first PIN use on a fresh slot fires the notifier.
+
+    Case: `'unknown' -> <timestamp>`. A freshly-registered LCM event
+    entity sits at `unknown` until its first event. The condition
+    only blocks `from_state is None` and
+    `from_state.state == 'unavailable'`, so this transition is
+    allowed.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).state == "unknown"
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+
+    assert len(captured) == 1
+
+
+async def test_notifier_fires_on_subsequent_pin_use(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Subsequent PIN uses fire the notifier.
+
+    Case: `<old_timestamp> -> <new_timestamp>`. The second fire
+    transitions between two valid timestamps; the condition passes
+    on both legs.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(captured) == 1
+    first_state = hass.states.get(SLOT_1_EVENT_ENTITY).state
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(captured) == 2
+    # Sanity check: the second fire genuinely came from a timestamp
+    # state, not from `unknown` (i.e. case 8, not a repeat of case 4).
+    assert first_state != "unknown"
+
+
+async def test_notifier_skips_unavailable_to_timestamp(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Recovery from `unavailable` does not fire the notifier.
+
+    When LCM or its underlying lock integration reloads while HA is
+    running, the event entity can briefly drop to `unavailable` before
+    its supporting lock comes back online. Without the condition that
+    rejects `from_state.state == 'unavailable'`, the transition back
+    to a real timestamp would spuriously fire the trigger.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    # Force the entity into `unavailable` so the next state write
+    # produces an `unavailable -> timestamp` transition.
+    hass.states.async_set(SLOT_1_EVENT_ENTITY, "unavailable")
+    await hass.async_block_till_done()
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).state == "unavailable"
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+
+    assert captured == []
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).state != "unavailable"
+
+
+async def test_notifier_skips_entity_appearance_with_restored_state(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Entity appearing with a restored value does not fire the notifier.
+
+    This is the LCM-reload / fast-restart scenario: HA's recorder
+    restores the slot's last-fired timestamp before LCM finishes
+    setting up, and the automation listener happens to be registered
+    before the entity reappears. The resulting `state_changed` event
+    has `old_state = None` (Python None, not the string 'unknown') —
+    which `not_from: [unknown, unavailable]` could never block, and
+    which the from_state condition explicitly catches.
+
+    We construct the scenario by priming the restore cache before LCM,
+    then registering the automation before LCM's config entry is set
+    up so the listener is in place when the entity appears.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    restored_ts = "2026-01-01T12:00:00.000+00:00"
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (
+                State(
+                    SLOT_1_EVENT_ENTITY,
+                    restored_ts,
+                    {
+                        "event_type": LOCK_1_ENTITY_ID,
+                        "code_slot": 1,
+                        "code_slot_name": "test1",
+                        ATTR_FRIENDLY_NAME: "Code slot 1",
+                    },
+                ),
+                {
+                    "last_event_type": LOCK_1_ENTITY_ID,
+                    "last_event_attributes": {
+                        "code_slot": 1,
+                        "code_slot_name": "test1",
+                    },
+                },
+            )
+        ],
+    )
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).state == restored_ts
+    assert captured == []
+
+
+async def test_notifier_skips_fresh_entity_appearance(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Entity appearing fresh (no restored data) does not fire the notifier.
+
+    Case: `None -> 'unknown'`. The state-trigger's `not_to: unknown`
+    short-circuits before the condition even runs, but verifying this
+    transition is silent is important — if a future refactor drops
+    `not_to`, the `from_state is None` condition would still need to
+    catch it (which it does).
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    # Register the automation BEFORE LCM so the listener is active
+    # when the entity first appears. The `event_entity` selector
+    # accepts an entity_id even if the entity doesn't exist yet —
+    # blueprint setup wires up a state-change listener regardless.
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).state == "unknown"
+    assert captured == []
+
+
+async def test_notifier_skips_transition_to_unavailable(
+    hass: HomeAssistant,
+    caplog,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Going offline does not fire the notifier.
+
+    Case: `<timestamp> -> 'unavailable'`. Blocked at the trigger
+    level by `not_to: unavailable`. Without that filter the trigger
+    would fire and the action's variable rendering would crash on
+    the now-empty attributes — `captured == []` alone would still
+    hold (silent failure), so we also assert no rendering errors
+    were logged.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(captured) == 1
+    captured.clear()
+    caplog.clear()
+
+    # Force the entity to `unavailable`, simulating the lock going
+    # offline after a real PIN use.
+    hass.states.async_set(SLOT_1_EVENT_ENTITY, "unavailable")
+    await hass.async_block_till_done()
+
+    assert captured == []
+    assert "Error rendering variables" not in caplog.text
+
+
+async def test_notifier_skips_transition_to_unknown(
+    hass: HomeAssistant,
+    caplog,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Losing state does not fire the notifier.
+
+    Case: `<timestamp> -> 'unknown'`. Symmetric to the unavailable
+    case — blocked at the trigger level by `not_to: unknown`.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(captured) == 1
+    captured.clear()
+    caplog.clear()
+
+    hass.states.async_set(SLOT_1_EVENT_ENTITY, "unknown")
+    await hass.async_block_till_done()
+
+    assert captured == []
+    assert "Error rendering variables" not in caplog.text
+
+
+async def test_notifier_skips_entity_removal(
+    hass: HomeAssistant,
+    caplog,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Entity removal does not fire the notifier (and does not crash).
+
+    Case: `<timestamp> -> None`. The `not_to` filter does NOT block
+    this (Python None is not the string 'unknown' or 'unavailable'),
+    so the `trigger.to_state is not none` condition is what catches
+    it. Without that guard the trigger would fire and the action
+    would crash trying to read `trigger.to_state.attributes` — the
+    service still wouldn't be called (so `captured == []` alone
+    can't detect a regression), but the log would carry a template
+    error. We assert both: no service call AND no template error.
+    """
+    captured = async_mock_service(hass, "test", "captured")
+
+    await _setup_blueprint_automation(
+        hass,
+        NOTIFIER_PATH,
+        {
+            "event_entity": [SLOT_1_EVENT_ENTITY],
+            "notify_actions": [{"service": "test.captured"}],
+        },
+    )
+
+    _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1)
+    await hass.async_block_till_done()
+    assert len(captured) == 1
+    captured.clear()
+    caplog.clear()
+
+    hass.states.async_remove(SLOT_1_EVENT_ENTITY)
+    await hass.async_block_till_done()
+
+    assert captured == []
+    assert hass.states.get(SLOT_1_EVENT_ENTITY) is None
+    assert "Error rendering variables" not in caplog.text
 
 
 # --------------------------------------------------------------------------- #
