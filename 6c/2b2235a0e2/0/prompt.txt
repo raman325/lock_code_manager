@@ -1,0 +1,9 @@
+update tests for these changes which are to prevent notifications from firing on restart
+
+---
+
+do 2
+
+---
+
+wait so when we restore it goes from none to the restored state? None is represented as unknown by HA so the bug still exists

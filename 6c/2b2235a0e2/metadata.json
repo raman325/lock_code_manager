@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6c2b2235a0e2",
+  "strategy": "manual-commit",
+  "branch": "blueprint",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "blueprints/automation/lock_code_manager/slot_usage_notifier.yaml",
+    "tests/test_blueprint_behavior.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/2b2235a0e2/0/metadata.json",
+      "transcript": "/6c/2b2235a0e2/0/full.jsonl",
+      "content_hash": "/6c/2b2235a0e2/0/content_hash.txt",
+      "prompt": "/6c/2b2235a0e2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 475,
+    "cache_creation_tokens": 454845,
+    "cache_read_tokens": 17432536,
+    "output_tokens": 143756,
+    "api_call_count": 107
+  }
+}
