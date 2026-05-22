@@ -92,22 +92,45 @@ triggers:
 variables:
   event_entity_id: !input event_entity
   locks: !input locks
+  # Variables are computed before conditions run, so guard every
+  # `trigger.to_state` access against the entity-removal case
+  # (`to_state is None`) — otherwise the variable rendering errors
+  # out before the conditions below can block the action.
   lock_entity_id: >-
     {{ state_attr(trigger.entity_id, 'event_type') }}
   slot_name: >-
-    {{ trigger.to_state.attributes.code_slot_name
-       | default('Unknown slot') }}
+    {{ trigger.to_state.attributes.code_slot_name | default('Unknown slot')
+       if trigger.to_state is not none else 'Unknown slot' }}
   slot_num: >-
-    {{ trigger.to_state.attributes.code_slot
-       | default('?') }}
+    {{ trigger.to_state.attributes.code_slot | default('?')
+       if trigger.to_state is not none else '?' }}
   lock_name: >-
-    {{ state_attr(lock_entity_id, 'friendly_name')
-       | default('Unknown lock') }}
+    {{ state_attr(lock_entity_id, 'friendly_name') | default('Unknown lock')
+       if lock_entity_id is not none else 'Unknown lock' }}
   timestamp: >-
-    {{ trigger.to_state.last_updated | as_local
-       | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
+    {{ (trigger.to_state.last_updated | as_local
+        | as_timestamp | timestamp_custom('%Y-%m-%d %H:%M:%S'))
+       if trigger.to_state is not none else '' }}
 
 conditions:
+  # Block transitions that aren't real PIN uses:
+  #   - `from_state is None`     -> entity first-appearance after a
+  #                                 config-entry reload or restart
+  #                                 (Python None != the string
+  #                                 'unknown', so `not_from` can't see
+  #                                 this).
+  #   - `to_state is None`       -> entity removal (LCM unload); the
+  #                                 action's variables read
+  #                                 `trigger.to_state.attributes` and
+  #                                 would crash without this guard.
+  #   - `from_state.state ==
+  #      'unavailable'`           -> underlying lock dropped offline
+  #                                 and recovered.
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state is not none
+         and trigger.to_state is not none
+         and trigger.from_state.state != 'unavailable' }}
   - condition: template
     value_template: >-
       {{ locks | count == 0 or lock_entity_id in locks }}
