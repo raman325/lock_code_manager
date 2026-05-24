@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ac87234dbd33",
+  "session_id": "d6a610db-1fa5-4bc0-8776-f6066210f1ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-24T21:29:56.327826Z",
+  "branch": "add-blueprints-label",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/labeler.yml",
+    ".github/release-drafter.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "9daae96809d5",
+  "checkpoint_transcript_start": 660,
+  "transcript_lines_at_start": 660,
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 295250,
+    "cache_read_tokens": 6135798,
+    "output_tokens": 16846,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-24T21:29:56.133914Z",
+    "agent_lines": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "agent_percentage": 100
+  }
+}
