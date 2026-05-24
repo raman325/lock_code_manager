@@ -34,6 +34,10 @@ github-config:
   - changed-files:
       - any-glob-to-any-file: '.github/**/*'
 
+blueprints:
+  - changed-files:
+      - any-glob-to-any-file: 'blueprints/**/*'
+
 dependencies:
   - changed-files:
       - any-glob-to-any-file:

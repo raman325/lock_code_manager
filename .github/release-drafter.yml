@@ -50,6 +50,7 @@ categories:
     collapse-after: 1
     labels:
       - "github-config"
+      - "blueprints"
     exclude-labels:
       - "python"
       - "javascript"
