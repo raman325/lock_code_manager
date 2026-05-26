@@ -1,0 +1,9 @@
+what entity names are lower case?
+
+---
+
+I mean in the integration, not the blueprint. All of the entities we create. I see that active, name, and enabled are lowercase but I am not sure why. Is it a missing state/name translation?
+
+---
+
+yes, and any others that have casing issues
