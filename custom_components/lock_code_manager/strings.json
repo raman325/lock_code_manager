@@ -74,7 +74,7 @@
   "entity": {
     "binary_sensor": {
       "active": {
-        "name": "active"
+        "name": "Active"
       },
       "in_sync": {
         "name": "Code slot {slot_num} in sync",
@@ -108,13 +108,12 @@
     },
     "switch": {
       "enabled": {
-        "name": "enabled"
-
+        "name": "Enabled"
       }
     },
     "text": {
       "name": {
-        "name": "name"
+        "name": "Name"
       },
       "pin": {
         "name": "PIN"
