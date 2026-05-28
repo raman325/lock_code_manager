@@ -258,9 +258,6 @@ class EntryConfigDiff:
     - **By axis** (slot dict + lock list): used by the update listener,
       which adds/removes slot entities and lock providers along independent
       axes.
-    - **By unchanged set**: ``slots_unchanged`` enumerates slot numbers
-      present in both configs, used by the listener to reconcile per-slot
-      configuration changes.
     - **By cartesian pair**: ``pairs_added`` / ``pairs_removed`` give
       ``(lock, slot)`` tuples that are new or gone, which the options flow
       uses to detect existing-codes hazards on newly-added pairs (catches
@@ -275,7 +272,6 @@ class EntryConfigDiff:
     # Computed in __post_init__ from old/new
     slots_added: Mapping[int, Mapping[str, Any]] = field(init=False)
     slots_removed: Mapping[int, Mapping[str, Any]] = field(init=False)
-    slots_unchanged: frozenset[int] = field(init=False)
     locks_added: tuple[str, ...] = field(init=False)
     locks_removed: tuple[str, ...] = field(init=False)
     pairs_added: frozenset[tuple[str, int]] = field(init=False)
@@ -321,7 +317,6 @@ class EntryConfigDiff:
                 }
             ),
         )
-        set_field(self, "slots_unchanged", frozenset(old_keys & new_keys))
         set_field(
             self,
             "locks_added",

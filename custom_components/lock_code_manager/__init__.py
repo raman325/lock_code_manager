@@ -23,11 +23,8 @@ from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
-    CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_ID,
-    CONF_NAME,
-    CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
     EVENT_LOVELACE_UPDATED,
@@ -69,7 +66,6 @@ from .const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_PIN_USED,
     PLATFORM_MAP,
     PLATFORMS,
     SERVICE_CLEAR_SLOT_CONDITION,
@@ -862,32 +858,13 @@ async def async_update_listener(
     # add slot sensors for existing locks only since new locks were already set up
     # above.
     for slot_num in slots_to_add:
-        # First we store the set of entities we are adding so we can track when they
-        # are done
-        entities_to_add: set[str] = {
-            CONF_ENABLED,
-            CONF_NAME,
-            CONF_PIN,
-            EVENT_PIN_USED,
-        }
-
         _LOGGER.debug(
-            "%s (%s): Adding PIN enabled binary sensor for slot %s",
+            "%s (%s): Adding standard entities for slot %s",
             entry_id,
             entry_title,
             slot_num,
         )
         callbacks.invoke_standard_adders(slot_num, ent_reg)
-        for key in entities_to_add:
-            _LOGGER.debug(
-                "%s (%s): Adding %s entity for slot %s",
-                entry_id,
-                entry_title,
-                key,
-                slot_num,
-            )
-            if key in callbacks.add_keyed_entity:
-                callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:

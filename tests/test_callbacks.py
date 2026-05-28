@@ -80,30 +80,6 @@ def test_invoke_lock_slot_adders_exception_handling(
     )
 
 
-def test_invoke_keyed_adders_exception_handling(
-    registry: EntityCallbackRegistry,
-    mock_ent_reg: MagicMock,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Test that exceptions in keyed adder callbacks are logged."""
-
-    def failing_callback(slot_num, ent_reg):
-        raise ValueError("Test error")
-
-    call_tracker = MagicMock()
-
-    def successful_callback(slot_num, ent_reg):
-        call_tracker(slot_num)
-
-    registry.register_keyed_adder("test_key", failing_callback)
-    registry.register_keyed_adder("test_key", successful_callback)
-
-    registry.invoke_keyed_adders("test_key", 3, mock_ent_reg)
-
-    call_tracker.assert_called_once_with(3)
-    assert "Error in optional entity callback for key test_key slot 3" in caplog.text
-
-
 async def test_invoke_entity_removers_for_slot_exception_handling(
     registry: EntityCallbackRegistry, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -122,26 +98,6 @@ async def test_invoke_entity_removers_for_slot_exception_handling(
     # Both should be removed from registry even with error
     assert "1|failing" not in registry.remove_entity
     assert "1|success" not in registry.remove_entity
-
-
-async def test_invoke_entity_removers_for_key_exception_handling(
-    registry: EntityCallbackRegistry, caplog: pytest.LogCaptureFixture
-) -> None:
-    """Test that exceptions in entity remover callbacks for key are logged."""
-    failing_remover = AsyncMock(side_effect=ValueError("Test error"))
-    successful_remover = AsyncMock()
-
-    registry.register_entity_remover("2|test_key", failing_remover)
-    registry.register_entity_remover("2|test_key|lock.test", successful_remover)
-
-    await registry.invoke_entity_removers_for_key(2, "test_key")
-
-    failing_remover.assert_called_once()
-    successful_remover.assert_called_once()
-    assert "Error removing entity with uid 2|test_key" in caplog.text
-    # Both should be removed from registry even with error
-    assert "2|test_key" not in registry.remove_entity
-    assert "2|test_key|lock.test" not in registry.remove_entity
 
 
 def test_invoke_lock_added_handlers_exception_handling(

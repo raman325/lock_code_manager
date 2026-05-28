@@ -34,7 +34,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import EntryConfig, get_entry_config
-from .exceptions import LockCodeManagerError, LockCodeManagerProviderError
+from .exceptions import LockCodeManagerError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -171,13 +171,6 @@ async def _async_get_all_codes(
             )
             usercodes = await lock_instance.async_internal_get_usercodes()
         except _LockQuerySkipped:
-            continue
-        except LockCodeManagerProviderError as err:
-            _LOGGER.warning(
-                "Failed to get usercodes from %s: %s",
-                lock_entity_id,
-                err,
-            )
             continue
         except LockCodeManagerError as err:
             _LOGGER.warning(
