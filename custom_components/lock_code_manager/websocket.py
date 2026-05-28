@@ -120,6 +120,77 @@ CALENDAR_ATTR_END_TIME = "end_time"
 # =============================================================================
 
 
+def _slot_code_payload(
+    code: str | SlotCode | None,
+    *,
+    reveal: bool,
+    code_key: str = ATTR_CODE,
+    length_key: str = ATTR_CODE_LENGTH,
+) -> dict[str, Any]:
+    """
+    Build the masked/revealed payload fields for a code on a lock.
+
+    SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
+    regular codes are revealed verbatim or masked to ``None`` plus a length,
+    and ``None`` stays ``None``.
+    """
+    if isinstance(code, SlotCode):
+        return {code_key: str(code)}
+    if reveal or code is None:
+        return {code_key: code}
+    return {code_key: None, length_key: len(code)}
+
+
+def _slot_unique_id(entry_id: str, slot_num: int, key: str) -> str:
+    """Build the unique ID for a per-slot LCM entity."""
+    return f"{entry_id}|{slot_num}|{key}"
+
+
+def _setup_dynamic_state_tracking(
+    hass: HomeAssistant,
+    compute_ids: Callable[[], set[str]],
+    on_change: Callable[[Event[EventStateChangedData]], None],
+) -> Callable[[], Callable[[], None]]:
+    """
+    Track state-change events for a dynamic set of entity IDs.
+
+    Returns a ``refresh`` callback. Each call recomputes the desired set of
+    entity IDs via ``compute_ids``; when that set differs from what is currently
+    tracked, the previous subscription is torn down and a new one is created so
+    that entities created or removed after the initial subscription are picked
+    up. The very first invocation establishes the initial subscription.
+
+    The returned ``refresh`` callback itself returns the current unsubscribe
+    callback, so callers can tear down the active subscription on cleanup.
+    """
+    unsub_state_ref: list[Callable[[], None]] = []
+    tracked_set: set[str] = set()
+
+    @callback
+    def _unsub_current() -> None:
+        if unsub_state_ref:
+            unsub_state_ref[0]()
+
+    @callback
+    def refresh() -> Callable[[], None]:
+        new_ids = compute_ids()
+        if new_ids != tracked_set:
+            tracked_set.clear()
+            tracked_set.update(new_ids)
+            # Unsubscribe from previous tracking
+            if unsub_state_ref:
+                unsub_state_ref[0]()
+                unsub_state_ref.clear()
+            # Subscribe to new set
+            if new_ids:
+                unsub_state_ref.append(
+                    async_track_state_change_event(hass, list(new_ids), on_change)
+                )
+        return _unsub_current
+
+    return refresh
+
+
 def _get_text_state(hass: HomeAssistant, entity_id: str | None) -> str | None:
     """Get text state from an entity, returning None if unavailable."""
     if not entity_id:
@@ -248,6 +319,38 @@ def async_get_entry(
     return async_get_entry_func
 
 
+def ws_handle_service_errors(
+    orig_func: Callable[..., Coroutine[Any, Any, None]],
+) -> Callable[..., Coroutine[Any, Any, None]]:
+    """
+    Decorate a websocket command to translate service errors into ws errors.
+
+    ``ServiceValidationError`` maps to ``ERR_NOT_FOUND`` and any other
+    exception maps to ``ERR_UNKNOWN_ERROR``, sending ``str(err)`` as the
+    message.
+    """
+
+    @wraps(orig_func)
+    async def wrapper(
+        hass: HomeAssistant,
+        connection: websocket_api.ActiveConnection,
+        msg: dict[str, Any],
+        *args: Any,
+    ) -> None:
+        try:
+            await orig_func(hass, connection, msg, *args)
+        except ServiceValidationError as err:
+            connection.send_error(
+                msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err)
+            )
+        except Exception as err:
+            connection.send_error(
+                msg["id"], websocket_api.const.ERR_UNKNOWN_ERROR, str(err)
+            )
+
+    return wrapper
+
+
 async def async_setup(hass: HomeAssistant) -> bool:
     """Enable the websocket_commands."""
     websocket_api.async_register_command(hass, get_config_entry_data)
@@ -333,16 +436,8 @@ def _serialize_slot(
     if config_entry_title:
         result[ATTR_CONFIG_ENTRY_TITLE] = config_entry_title
 
-    # Serialize code: SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
-    # regular codes are masked or revealed, None stays None.
-    if isinstance(code, SlotCode):
-        result[ATTR_CODE] = str(code)
-    elif reveal or code is None:
-        result[ATTR_CODE] = code
-    else:
-        # Masked: send code_length instead of actual code
-        result[ATTR_CODE] = None
-        result[ATTR_CODE_LENGTH] = len(code)
+    # Serialize code (SlotCode sentinels, masking, and length) via shared helper.
+    result.update(_slot_code_payload(code, reveal=reveal))
 
     # Configured code from LCM (desired state) - always include for managed slots
     if configured_code is not None:
@@ -404,27 +499,24 @@ def _get_slot_entity_ids(
             continue
 
         for slot_int in config.slots:
-            slot_num = slot_int
 
-            # Build unique IDs for each entity type
-            name_uid = f"{entry.entry_id}|{slot_num}|{CONF_NAME}"
-            pin_uid = f"{entry.entry_id}|{slot_num}|{CONF_PIN}"
-            active_uid = f"{entry.entry_id}|{slot_num}|{ATTR_ACTIVE}"
-            enabled_uid = f"{entry.entry_id}|{slot_num}|{CONF_ENABLED}"
+            def _entity_id(
+                domain: str,
+                key: str,
+                entry_id: str = entry.entry_id,
+                slot: int = slot_int,
+            ) -> str | None:
+                return ent_reg.async_get_entity_id(
+                    domain, DOMAIN, _slot_unique_id(entry_id, slot, key)
+                )
 
             slot_entities[slot_int] = SlotEntities(
                 slot_num=slot_int,
                 config_entry_id=entry.entry_id,
-                name_entity_id=ent_reg.async_get_entity_id(
-                    TEXT_DOMAIN, DOMAIN, name_uid
-                ),
-                pin_entity_id=ent_reg.async_get_entity_id(TEXT_DOMAIN, DOMAIN, pin_uid),
-                active_entity_id=ent_reg.async_get_entity_id(
-                    BINARY_SENSOR_DOMAIN, DOMAIN, active_uid
-                ),
-                enabled_entity_id=ent_reg.async_get_entity_id(
-                    SWITCH_DOMAIN, DOMAIN, enabled_uid
-                ),
+                name_entity_id=_entity_id(TEXT_DOMAIN, CONF_NAME),
+                pin_entity_id=_entity_id(TEXT_DOMAIN, CONF_PIN),
+                active_entity_id=_entity_id(BINARY_SENSOR_DOMAIN, ATTR_ACTIVE),
+                enabled_entity_id=_entity_id(SWITCH_DOMAIN, CONF_ENABLED),
             )
 
     return slot_entities
@@ -548,29 +640,6 @@ async def subscribe_lock_codes(
 
     coordinator = lock.coordinator
 
-    # Mutable container for the current state tracking unsubscribe callback,
-    # allowing it to be replaced when tracked entities change
-    unsub_state_ref: list[Callable[[], None]] = []
-    tracked_set: set[str] = set()
-
-    @callback
-    def _refresh_lock_state_tracking() -> None:
-        """Re-subscribe to state changes if the tracked entity set has changed."""
-        new_ids = set(_get_slot_state_entity_ids(hass, lock_entity_id))
-        if new_ids == tracked_set:
-            return
-        tracked_set.clear()
-        tracked_set.update(new_ids)
-        # Unsubscribe from previous tracking
-        if unsub_state_ref:
-            unsub_state_ref[0]()
-            unsub_state_ref.clear()
-        # Subscribe to new set
-        if new_ids:
-            unsub_state_ref.append(
-                async_track_state_change_event(hass, list(new_ids), _on_state_change)
-            )
-
     @callback
     def _send_update() -> None:
         connection.send_event(
@@ -578,7 +647,7 @@ async def subscribe_lock_codes(
         )
         # Re-resolve tracked entities to pick up entities created after
         # subscription was established
-        _refresh_lock_state_tracking()
+        _refresh_state_tracking()
 
     @callback
     def _on_state_change(event: Event[EventStateChangedData]) -> None:
@@ -590,23 +659,22 @@ async def subscribe_lock_codes(
         if old_state is None or new_state is None or old_state.state != new_state.state:
             _send_update()
 
+    # Track Lock Code Manager entity state changes (enabled, active, name, PIN)
+    _refresh_state_tracking = _setup_dynamic_state_tracking(
+        hass,
+        lambda: set(_get_slot_state_entity_ids(hass, lock_entity_id)),
+        _on_state_change,
+    )
+    unsub_state = _refresh_state_tracking()
+
     # Track coordinator updates (lock code changes).
     unsub_coordinator = (
         coordinator.async_add_listener(_send_update) if coordinator else lambda: None
     )
 
-    # Track Lock Code Manager entity state changes (enabled, active, name, PIN)
-    slot_entity_ids = _get_slot_state_entity_ids(hass, lock_entity_id)
-    tracked_set.update(slot_entity_ids)
-    if slot_entity_ids:
-        unsub_state_ref.append(
-            async_track_state_change_event(hass, slot_entity_ids, _on_state_change)
-        )
-
     def _unsub_all() -> None:
         unsub_coordinator()
-        if unsub_state_ref:
-            unsub_state_ref[0]()
+        unsub_state()
 
     connection.subscriptions[msg["id"]] = _unsub_all
     connection.send_result(msg["id"])
@@ -621,8 +689,9 @@ def _get_slot_entity_data(
     entry_id = config_entry.entry_id
 
     def _get_entity_id(domain: str, key: str) -> str | None:
-        unique_id = f"{entry_id}|{slot_num}|{key}"
-        return ent_reg.async_get_entity_id(domain, DOMAIN, unique_id)
+        return ent_reg.async_get_entity_id(
+            domain, DOMAIN, _slot_unique_id(entry_id, slot_num, key)
+        )
 
     return SlotEntities(
         slot_num=slot_num,
@@ -767,17 +836,9 @@ def _build_lock_status(
 
     # Get code from coordinator — SlotCode sentinels pass through as strings
     coordinator = lock.coordinator
-    code_on_lock: str | None = None
-    code_length: int | None = None
-    if coordinator and coordinator.data:
-        raw_code = coordinator.data.get(slot_num)
-        if isinstance(raw_code, SlotCode):
-            code_on_lock = str(raw_code)
-        elif raw_code is not None:
-            if reveal:
-                code_on_lock = raw_code
-            else:
-                code_length = len(raw_code)
+    raw_code = (
+        coordinator.data.get(slot_num) if coordinator and coordinator.data else None
+    )
 
     lock_status: dict[str, Any] = {
         ATTR_ENTITY_ID: lock_entity_id,
@@ -788,13 +849,7 @@ def _build_lock_status(
         lock_status[ATTR_SYNC_STATUS] = sync_status
     if last_synced:
         lock_status[ATTR_LAST_SYNCED] = last_synced
-    if code_on_lock is not None:
-        lock_status[ATTR_CODE] = code_on_lock
-    elif code_length is not None:
-        lock_status[ATTR_CODE] = None
-        lock_status[ATTR_CODE_LENGTH] = code_length
-    else:
-        lock_status[ATTR_CODE] = None
+    lock_status.update(_slot_code_payload(raw_code, reveal=reveal))
 
     return lock_status
 
@@ -916,13 +971,11 @@ def _serialize_slot_card_data(
             result[ATTR_LAST_USED_LOCK] = last_used_lock_name
 
     # PIN (masked or revealed)
-    if reveal:
-        result[CONF_PIN] = pin
-    elif pin:
-        result[CONF_PIN] = None
-        result[ATTR_PIN_LENGTH] = len(pin)
-    else:
-        result[CONF_PIN] = None
+    result.update(
+        _slot_code_payload(
+            pin, reveal=reveal, code_key=CONF_PIN, length_key=ATTR_PIN_LENGTH
+        )
+    )
 
     # Conditions
     # Include condition entity data (handles both calendar and non-calendar entities)
@@ -990,10 +1043,8 @@ async def subscribe_code_slot(
             _get_slot_condition_entity_id(config_entry, slot_num),
         )
 
-    # Initial resolution for state tracking setup
-    slot_entities, in_sync_map, condition_entity_id = _resolve_entity_ids()
-
     # Fetch next calendar event if condition is a calendar
+    condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
     calendar_next_event: dict[str, Any] | None = None
     if (
         condition_entity_id
@@ -1001,15 +1052,20 @@ async def subscribe_code_slot(
     ):
         calendar_next_event = await _get_next_calendar_event(hass, condition_entity_id)
 
-    # Mutable container for the current state tracking unsubscribe callback,
-    # allowing it to be replaced when tracked entities change
-    unsub_state_ref: list[Callable[[], None]] = []
+    @callback
+    def _compute_tracked_ids() -> set[str]:
+        """Resolve the entity IDs whose state changes should trigger updates."""
+        current_entities, current_in_sync, current_condition = _resolve_entity_ids()
+        new_ids = set(current_entities.all_entity_ids()) | set(current_in_sync.values())
+        if current_condition:
+            new_ids.add(current_condition)
+        return new_ids
 
     @callback
     def _send_update(next_event: dict[str, Any] | None = None) -> None:
         # Re-resolve entity IDs each time to pick up entities created after
         # subscription was established
-        current_entities, current_in_sync, current_condition = _resolve_entity_ids()
+        current_entities, current_in_sync, _ = _resolve_entity_ids()
         connection.send_event(
             msg["id"],
             _serialize_slot_card_data(
@@ -1023,7 +1079,7 @@ async def subscribe_code_slot(
             ),
         )
         # Update state tracking if the set of tracked entities has changed
-        _refresh_state_tracking(current_entities, current_in_sync, current_condition)
+        _refresh_state_tracking()
 
     async def _async_send_update_with_calendar() -> None:
         """Fetch next calendar event and send update (for state changes)."""
@@ -1053,38 +1109,11 @@ async def subscribe_code_slot(
             else:
                 _send_update()
 
-    # Keep track of which entity IDs are currently being tracked so we can
-    # detect when the set changes and re-subscribe
-    tracked_set: set[str] = set()
-
-    @callback
-    def _refresh_state_tracking(
-        current_entities: SlotEntities,
-        current_in_sync: dict[str, str],
-        current_condition: str | None = None,
-    ) -> None:
-        """Re-subscribe to state changes if the tracked entity set has changed."""
-        new_ids = set(current_entities.all_entity_ids()) | set(current_in_sync.values())
-        if current_condition:
-            new_ids.add(current_condition)
-
-        if new_ids == tracked_set:
-            return
-
-        tracked_set.clear()
-        tracked_set.update(new_ids)
-        # Unsubscribe from previous tracking
-        if unsub_state_ref:
-            unsub_state_ref[0]()
-            unsub_state_ref.clear()
-        # Subscribe to new set
-        if new_ids:
-            unsub_state_ref.append(
-                async_track_state_change_event(hass, list(new_ids), _on_state_change)
-            )
-
-    # Initial state tracking setup (reuse _refresh_state_tracking to avoid duplication)
-    _refresh_state_tracking(slot_entities, in_sync_map, condition_entity_id)
+    # Initial state tracking setup; recomputes and re-subscribes on each call
+    _refresh_state_tracking = _setup_dynamic_state_tracking(
+        hass, _compute_tracked_ids, _on_state_change
+    )
+    unsub_state = _refresh_state_tracking()
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
@@ -1097,8 +1126,7 @@ async def subscribe_code_slot(
             unsub_coordinators.append(lock.coordinator.async_add_listener(_send_update))
 
     def _unsub_all() -> None:
-        if unsub_state_ref:
-            unsub_state_ref[0]()
+        unsub_state()
         for unsub in unsub_coordinators:
             unsub()
 
@@ -1116,6 +1144,7 @@ async def subscribe_code_slot(
     }
 )
 @websocket_api.async_response
+@ws_handle_service_errors
 async def ws_set_usercode(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -1127,19 +1156,10 @@ async def ws_set_usercode(
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
     """
-    try:
-        await async_set_usercode(
-            hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT], msg[ATTR_USERCODE]
-        )
-        connection.send_result(msg["id"], {"success": True})
-    except ServiceValidationError as err:
-        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
-    except Exception as err:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_UNKNOWN_ERROR,
-            str(err),
-        )
+    await async_set_usercode(
+        hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT], msg[ATTR_USERCODE]
+    )
+    connection.send_result(msg["id"], {"success": True})
 
 
 @websocket_api.websocket_command(
@@ -1150,6 +1170,7 @@ async def ws_set_usercode(
     }
 )
 @websocket_api.async_response
+@ws_handle_service_errors
 async def ws_clear_usercode(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -1161,17 +1182,8 @@ async def ws_clear_usercode(
     This is intended for managing unmanaged slots directly on the lock.
     For LCM-managed slots, use the entity services instead.
     """
-    try:
-        await async_clear_usercode(hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT])
-        connection.send_result(msg["id"], {"success": True})
-    except ServiceValidationError as err:
-        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
-    except Exception as err:
-        connection.send_error(
-            msg["id"],
-            websocket_api.const.ERR_UNKNOWN_ERROR,
-            str(err),
-        )
+    await async_clear_usercode(hass, msg[ATTR_LOCK_ENTITY_ID], msg[ATTR_CODE_SLOT])
+    connection.send_result(msg["id"], {"success": True})
 
 
 @websocket_api.websocket_command(
@@ -1227,6 +1239,7 @@ async def ws_set_slot_condition(
 )
 @websocket_api.async_response
 @async_get_entry
+@ws_handle_service_errors
 async def ws_clear_slot_condition(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -1234,12 +1247,5 @@ async def ws_clear_slot_condition(
     config_entry: ConfigEntry,
 ) -> None:
     """Clear the condition entity from a slot."""
-    try:
-        await async_clear_slot_condition(hass, config_entry.entry_id, msg[ATTR_SLOT])
-        connection.send_result(msg["id"], {"success": True})
-    except ServiceValidationError as err:
-        connection.send_error(msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err))
-    except Exception as err:
-        connection.send_error(
-            msg["id"], websocket_api.const.ERR_UNKNOWN_ERROR, str(err)
-        )
+    await async_clear_slot_condition(hass, config_entry.entry_id, msg[ATTR_SLOT])
+    connection.send_result(msg["id"], {"success": True})
