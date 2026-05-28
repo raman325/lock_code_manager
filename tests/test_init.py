@@ -31,6 +31,7 @@ from homeassistant.helpers import (
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
+    BACKOFF_FAILURE_THRESHOLD,
     CONF_CALENDAR,
     CONF_LOCKS,
     CONF_SLOTS,
@@ -1062,12 +1063,13 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     lock_code_manager_config_entry,
 ):
     """
-    Suspension on one entry's slot affects another entry's out-of-sync slots on the same lock.
+    An unreachable lock blocks another entry's out-of-sync slots on the same lock.
 
-    Lock-level suspension is by design: when one slot's circuit breaker trips,
-    ALL sync managers on that lock are blocked from syncing. This prevents a
-    misbehaving lock from being hammered by multiple entries. When the coordinator
-    recovers, all entries' sync managers resume.
+    Lock-level suspension is by design: when the lock becomes unreachable
+    (its circuit breaker trips), ALL sync managers on that lock are blocked
+    from syncing. This prevents a misbehaving lock from being hammered by
+    multiple entries. When the coordinator recovers, all entries' sync
+    managers resume.
     """
     entry_a = lock_code_manager_config_entry
 
@@ -1106,7 +1108,9 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     assert entry_b_entity_obj._sync_manager._state == SyncState.IN_SYNC
 
     # Suspend the coordinator (simulating circuit breaker trip from entry A)
-    lock_a.coordinator.suspend_slot_sync_mgrs()
+    for _ in range(BACKOFF_FAILURE_THRESHOLD):
+        lock_a.coordinator._lock_breaker.record_failure()
+    lock_a.coordinator.async_update_listeners()
     await hass.async_block_till_done()
 
     # An IN_SYNC slot stays IN_SYNC during suspension (nothing to do), which
@@ -1118,18 +1122,19 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     lock_a.coordinator.push_update({3: "different"})
     await hass.async_block_till_done()
 
-    # The push_update call above clears the suspension flag (successful
-    # push proves lock is reachable). Re-suspend to test blocking, then
-    # let _request_sync_check detect the mismatch naturally.
-    lock_a.coordinator.suspend_slot_sync_mgrs()
+    # The push_update call above resets the lock breaker (successful push
+    # proves the lock is reachable). Re-trip it to test blocking, then let
+    # _request_sync_check detect the mismatch naturally.
+    for _ in range(BACKOFF_FAILURE_THRESHOLD):
+        lock_a.coordinator._lock_breaker.record_failure()
+    lock_a.coordinator.async_update_listeners()
     await hass.async_block_till_done()
 
     # The coordinator listener fires _request_sync_check. Since the code
     # changed ("different" != "0123"), the slot should be OUT_OF_SYNC.
-    # But wait — suspend_slot_sync_mgrs calls async_update_listeners,
-    # which fires _request_sync_check on all managers. For an IN_SYNC
-    # manager with a mismatch, it transitions to OUT_OF_SYNC. Then on
-    # the next tick, the suspension check blocks it into SUSPENDED.
+    # async_update_listeners fires _request_sync_check on all managers. For
+    # an IN_SYNC manager with a mismatch, it transitions to OUT_OF_SYNC.
+    # Then on the next tick, the unreachable check blocks it into SUSPENDED.
     await async_trigger_sync_tick(hass, entry_b_in_sync_entity, set_dirty=False)
     await hass.async_block_till_done()
     assert entry_b_entity_obj._sync_manager._state == SyncState.SUSPENDED, (
@@ -1141,7 +1146,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     await hass.async_block_till_done()
 
     # After recovery, entry B's sync manager should resume from SUSPENDED
-    # via _request_sync_check detecting the cleared suspension flag
+    # via _request_sync_check detecting the lock is reachable again
     assert entry_b_entity_obj._sync_manager._state == SyncState.OUT_OF_SYNC, (
         f"Entry B's sync manager should have resumed to OUT_OF_SYNC, "
         f"but state is {entry_b_entity_obj._sync_manager._state}"

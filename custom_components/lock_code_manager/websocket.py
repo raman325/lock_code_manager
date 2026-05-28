@@ -510,7 +510,7 @@ def _serialize_lock_coordinator(
         ATTR_LOCK_NAME: _get_lock_friendly_name(hass, lock),
         CONF_SLOTS: slots,
     }
-    if coordinator and coordinator.slot_sync_mgrs_suspended:
+    if coordinator and coordinator.unreachable:
         result[ATTR_SYNC_STATUS] = "suspended"
     return result
 

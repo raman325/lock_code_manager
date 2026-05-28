@@ -54,6 +54,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_SLOT_NUM,
     ATTR_SYNC_STATUS,
     ATTR_USERCODE,
+    BACKOFF_FAILURE_THRESHOLD,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
     CONF_ENABLED,
@@ -252,9 +253,11 @@ async def test_subscribe_lock_codes_sync_status(
     assert event["type"] == "event"
     assert ATTR_SYNC_STATUS not in event["event"]
 
-    # Suspend sync managers
+    # Make the lock unreachable (trips the lock breaker) and notify listeners
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator.suspend_slot_sync_mgrs()
+    for _ in range(BACKOFF_FAILURE_THRESHOLD):
+        lock.coordinator._lock_breaker.record_failure()
+    lock.coordinator.async_update_listeners()
     await hass.async_block_till_done()
 
     # Updated event should have sync_status == "suspended"

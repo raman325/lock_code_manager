@@ -72,8 +72,18 @@ class CircuitBreaker:
 
     @property
     def tripped(self) -> bool:
-        """Return whether the failure threshold has been reached."""
-        return self._failure_count >= self._threshold
+        """
+        Return whether the failure threshold has been reached.
+
+        For a windowed breaker the breaches must fall within the trailing
+        window; once the window elapses with no new failures the stale
+        breaches no longer count as tripped.
+        """
+        if self._failure_count < self._threshold:
+            return False
+        if self._window is not None and self._first_failure is not None:
+            return dt_util.utcnow() - self._first_failure <= self._window
+        return True
 
     @property
     def backoff_delay(self) -> timedelta:

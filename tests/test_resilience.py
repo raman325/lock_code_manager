@@ -97,14 +97,19 @@ class TestWindowedTripPolicy:
         breaker.record_failure()
         assert breaker.tripped
 
-    def test_tripped_latches_until_reset(self, freezer) -> None:
+    def test_tripped_clears_when_window_elapses(self, freezer) -> None:
         breaker = self._breaker()
         for _ in range(3):
             breaker.record_failure()
         assert breaker.tripped
-        # Even after the window elapses, tripped stays True until reset()
-        # (reads do not re-evaluate the window -- only record_failure does).
-        freezer.tick(timedelta(minutes=10))
+        # Once the window passes with no new failures, the stale breaches no
+        # longer count as tripped.
+        freezer.tick(timedelta(minutes=5, seconds=1))
+        assert not breaker.tripped
+        # reset() also clears the tripped state immediately.
+        breaker.record_failure()
+        breaker.record_failure()
+        breaker.record_failure()
         assert breaker.tripped
         breaker.reset()
         assert not breaker.tripped
