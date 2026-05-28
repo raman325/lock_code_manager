@@ -524,8 +524,8 @@ async def test_migration_v1_to_v2_calendar_to_entity_id(
     await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Verify migration happened
-    assert config_entry.version == 2
+    # Verify migration happened (v1 -> v2 calendar, then v2 -> v3 number_of_uses)
+    assert config_entry.version == 3
 
     # Get the migrated data (should be in .data after setup moves options to data)
     migrated_data = config_entry.data
