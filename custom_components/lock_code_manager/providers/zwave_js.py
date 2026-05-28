@@ -397,6 +397,29 @@ class ZWaveJSLock(BaseLock):
         await self._async_refresh_usercode_cache()
         return await self.async_get_usercodes()
 
+    async def _async_verify_write(
+        self, code_slot: int, operation: Literal["set", "clear"]
+    ) -> None:
+        """
+        Force-update the value cache after a set/clear on a V1 lock.
+
+        V1 locks don't reliably update the Z-Wave JS value cache after a write.
+        Poll the slot directly from the device to force-update the cache before
+        the coordinator reads it, preventing sync loops. Wrap failures as
+        LockDisconnected so they route to the retry path instead of leaking a
+        raw FailedZWaveCommand into the generic exception handler, which would
+        otherwise suspend the lock.
+        """
+        if self._usercode_cc_version >= 2:
+            return
+        try:
+            await get_usercode_from_node(self.node, code_slot)
+        except FailedZWaveCommand as err:
+            raise LockDisconnected(
+                f"Post-{operation} verification poll failed for "
+                f"{self.lock.entity_id} slot {code_slot}: {err}"
+            ) from err
+
     async def async_set_usercode(
         self,
         code_slot: int,
@@ -434,20 +457,7 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
         )
-        # V1 locks don't reliably update the Z-Wave JS value cache after set.
-        # Poll the slot directly from the device to force-update the cache
-        # before the coordinator reads it, preventing sync loops.
-        # Wrap as LockDisconnected so failures route to the retry path instead
-        # of leaking a raw FailedZWaveCommand into the generic exception handler,
-        # which would otherwise suspend the lock.
-        if self._usercode_cc_version < 2:
-            try:
-                await get_usercode_from_node(self.node, code_slot)
-            except FailedZWaveCommand as err:
-                raise LockDisconnected(
-                    f"Post-set verification poll failed for "
-                    f"{self.lock.entity_id} slot {code_slot}: {err}"
-                ) from err
+        await self._async_verify_write(code_slot, "set")
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
@@ -482,20 +492,7 @@ class ZWaveJSLock(BaseLock):
         await self.async_call_service(
             ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
         )
-        # V1 locks don't reliably update the Z-Wave JS value cache after clear.
-        # Poll the slot directly from the device to force-update the cache
-        # before the coordinator reads it, preventing sync loops.
-        # Wrap as LockDisconnected so failures route to the retry path instead
-        # of leaking a raw FailedZWaveCommand into the generic exception handler,
-        # which would otherwise suspend the lock.
-        if self._usercode_cc_version < 2:
-            try:
-                await get_usercode_from_node(self.node, code_slot)
-            except FailedZWaveCommand as err:
-                raise LockDisconnected(
-                    f"Post-clear verification poll failed for "
-                    f"{self.lock.entity_id} slot {code_slot}: {err}"
-                ) from err
+        await self._async_verify_write(code_slot, "clear")
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.

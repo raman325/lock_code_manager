@@ -12,6 +12,7 @@ from homeassistant.helpers.storage import Store
 from ..const import DOMAIN
 from ..models import SlotCode
 from ._base import BaseLock
+from ._util import parse_slot_num
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,15 +106,15 @@ class VirtualLock(BaseLock):
         managed_slots = self.managed_slots
         stored_slots = set()
         for k in self._data:
-            try:
-                stored_slots.add(int(k))
-            except TypeError, ValueError:
+            slot_num = parse_slot_num(k)
+            if slot_num is None:
                 _LOGGER.warning(
                     "Virtual lock %s: skipping stored slot with invalid key %r",
                     self.lock.entity_id,
                     k,
                 )
                 continue
+            stored_slots.add(slot_num)
         all_slots = managed_slots | stored_slots
         data: dict[int, str | SlotCode] = {}
         for slot_num in all_slots:

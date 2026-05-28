@@ -110,11 +110,6 @@ class ZHALock(BaseLock):
             return timedelta(hours=1)
         return None
 
-    @property
-    def connection_check_interval(self) -> timedelta | None:
-        """Return interval for connection checks."""
-        return timedelta(seconds=30)
-
     # -- Setup ---------------------------------------------------------------
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:

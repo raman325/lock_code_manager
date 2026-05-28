@@ -41,6 +41,7 @@ from ..exceptions import (
 )
 from ..models import SlotCode
 from ._base import BaseLock
+from ._util import parse_slot_num
 from .const import LOGGER
 
 # DoorLock cluster ID (0x0101 = 257)
@@ -325,9 +326,8 @@ class MatterLock(BaseLock):
         raw_index = data.get("dataIndex")
         if raw_index is None:
             return
-        try:
-            code_slot = int(raw_index)
-        except TypeError, ValueError:
+        code_slot = parse_slot_num(raw_index)
+        if code_slot is None:
             LOGGER.warning(
                 "Lock %s: LockUserChange has non-integer dataIndex %r, ignoring",
                 self.lock.entity_id,
@@ -459,15 +459,15 @@ class MatterLock(BaseLock):
                 cred_index = credential.get("index")
                 if cred_index is None:
                     continue
-                try:
-                    occupied_slots.add(int(cred_index))
-                except TypeError, ValueError:
+                slot_num = parse_slot_num(cred_index)
+                if slot_num is None:
                     LOGGER.warning(
                         "Lock %s: skipping credential with invalid index %r",
                         self.lock.entity_id,
                         cred_index,
                     )
                     continue
+                occupied_slots.add(slot_num)
 
         all_slots = managed_slots | occupied_slots
         LOGGER.debug(
