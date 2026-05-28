@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.lock_code_manager.exceptions import (
     LockCodeManagerError,
-    LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.schlage import (
@@ -412,21 +412,21 @@ async def test_set_usercode_non_exists_error_still_raises(
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
-    with pytest.raises(LockDisconnected, match="connection lost"):
+    with pytest.raises(LockOperationFailed, match="connection lost"):
         await schlage_lock.async_set_usercode(1, "1234")
 
 
 async def test_set_usercode_service_failure(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test that set_usercode raises LockDisconnected on service failure."""
+    """Test that set_usercode raises LockOperationFailed on service failure."""
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
-    with pytest.raises(LockDisconnected, match="connection lost"):
+    with pytest.raises(LockOperationFailed, match="connection lost"):
         await schlage_lock.async_set_usercode(1, "1234")
 
 
@@ -451,7 +451,7 @@ async def test_clear_usercode_already_empty(
 async def test_clear_usercode_service_failure(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test that clear_usercode raises LockDisconnected on service failure."""
+    """Test that clear_usercode raises LockOperationFailed on service failure."""
     get_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:1] Guest", "code": "****"},
@@ -462,7 +462,7 @@ async def test_clear_usercode_service_failure(
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
-    with pytest.raises(LockDisconnected, match="connection lost"):
+    with pytest.raises(LockOperationFailed, match="connection lost"):
         await schlage_lock.async_clear_usercode(1)
 
 
@@ -503,11 +503,11 @@ async def test_get_codes_service_failure(
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that get_usercodes raises LockDisconnected on service failure."""
+    """Test that get_usercodes raises LockOperationFailed on service failure."""
     handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
-    with pytest.raises(LockDisconnected, match="connection lost"):
+    with pytest.raises(LockOperationFailed, match="connection lost"):
         await schlage_lock.async_get_usercodes()
 
 
@@ -516,11 +516,11 @@ async def test_get_codes_service_validation_error(
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that get_usercodes raises LockDisconnected on ServiceValidationError."""
+    """Test that get_usercodes raises LockOperationFailed on ServiceValidationError."""
     handler = AsyncMock(side_effect=ServiceValidationError("invalid entity"))
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
-    with pytest.raises(LockDisconnected, match="invalid entity"):
+    with pytest.raises(LockOperationFailed, match="invalid entity"):
         await schlage_lock.async_get_usercodes()
 
 

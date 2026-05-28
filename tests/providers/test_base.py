@@ -22,6 +22,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers._base import BaseLock
@@ -338,12 +339,12 @@ async def test_connection_failure_does_not_rate_limit_next_operation(
     assert succeeded_duration < 0.2
 
 
-async def test_async_call_service_raises_lock_disconnected_on_error(
+async def test_async_call_service_raises_operation_failed_on_error(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that async_call_service wraps HA service errors as LockDisconnected."""
+    """Test that async_call_service wraps HA service errors as LockOperationFailed."""
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
 
     async def failing_service(call):
@@ -352,7 +353,7 @@ async def test_async_call_service_raises_lock_disconnected_on_error(
     hass.services.async_register("test_domain", "failing_service", failing_service)
 
     with pytest.raises(
-        LockDisconnected, match="Service call test_domain.failing_service failed"
+        LockOperationFailed, match="Service call test_domain.failing_service failed"
     ):
         await lock_provider.async_call_service("test_domain", "failing_service", {})
 
