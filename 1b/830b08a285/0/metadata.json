@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "1b830b08a285",
+  "session_id": "73c731a0-9d5e-43b7-b0ed-642052a25b52",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-28T22:20:52.50676Z",
+  "branch": "refactor/complexity-pass-2",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/binary_sensor.py",
+    "custom_components/lock_code_manager/exceptions.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/sensor.py",
+    "custom_components/lock_code_manager/util.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/test_exceptions.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "2cec9061d19c",
+  "token_usage": {
+    "input_tokens": 6089,
+    "cache_creation_tokens": 2412352,
+    "cache_read_tokens": 137290390,
+    "output_tokens": 454994,
+    "api_call_count": 345
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-28T22:20:51.882461Z",
+    "agent_lines": 41,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 42,
+    "agent_percentage": 97.61904761904762
+  }
+}
