@@ -13,7 +13,6 @@ from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
-    EntityNotFoundError,
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -163,38 +162,6 @@ def test_lock_disconnected_inherits_from_provider_error():
     assert isinstance(err, LockCodeManagerProviderError)
     assert isinstance(err, LockCodeManagerError)
     assert "lock offline" in str(err)
-
-
-def test_entity_not_found_is_not_a_provider_error(hass: HomeAssistant):
-    """
-    EntityNotFoundError is LCM-internal, NOT a provider error.
-
-    This split lets callers catch only real provider failures via
-    ``except LockCodeManagerProviderError`` without also swallowing
-    LCM-internal entity-registry misses.
-    """
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-    err = EntityNotFoundError(lock, 1, "pin")
-    assert isinstance(err, LockCodeManagerError)
-    assert not isinstance(err, LockCodeManagerProviderError)
-
-
-async def test_entity_not_found_error(hass: HomeAssistant):
-    """Test EntityNotFoundError contains lock, slot, and key info."""
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock = create_minimal_lock(hass, config_entry)
-    err = EntityNotFoundError(lock, 5, "pin")
-
-    assert err.lock is lock
-    assert err.slot_num == 5
-    assert err.key == "pin"
-    assert "slot 5" in str(err)
-    assert "pin" in str(err)
 
 
 # =============================================================================

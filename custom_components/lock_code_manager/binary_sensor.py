@@ -38,6 +38,7 @@ from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManage
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 from .sync import SlotSyncManager
+from .util import get_slot_coordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,15 +67,8 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ):
         """Add code slot sensor entities for slot."""
-        coordinator = lock.coordinator
+        coordinator = get_slot_coordinator(config_entry, lock, slot_num)
         if coordinator is None:
-            _LOGGER.warning(
-                "%s (%s): Coordinator missing for lock %s when adding slot %s entities",
-                config_entry.entry_id,
-                config_entry.title,
-                lock.lock.entity_id,
-                slot_num,
-            )
             return
         async_add_entities(
             [

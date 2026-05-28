@@ -120,12 +120,6 @@ class MatterLock(BaseLock):
             )
             return None
 
-    @property
-    def _matter_node_id(self) -> int | None:
-        """Resolve the Matter node ID."""
-        node = self._get_matter_node()
-        return node.node_id if node else None
-
     def _get_matter_client(self) -> Any | None:
         """Get the MatterClient via the Matter integration helper."""
         try:
@@ -208,7 +202,8 @@ class MatterLock(BaseLock):
             return
 
         client = self._get_matter_client()
-        node_id = self._matter_node_id
+        node = self._get_matter_node()
+        node_id = node.node_id if node else None
         if not client or node_id is None:
             raise LockDisconnected(
                 f"Matter client or node ID unavailable for {self.lock.entity_id}"

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -16,8 +14,7 @@ from .coordinator import LockUsercodeUpdateCoordinator
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
 from .models import LockCodeManagerConfigEntry, SlotCode
 from .providers import BaseLock
-
-_LOGGER = logging.getLogger(__name__)
+from .util import get_slot_coordinator
 
 
 async def async_setup_entry(
@@ -32,15 +29,8 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Add code slot sensor entities for slot."""
-        coordinator = lock.coordinator
+        coordinator = get_slot_coordinator(config_entry, lock, slot_num)
         if coordinator is None:
-            _LOGGER.warning(
-                "%s (%s): Coordinator missing for lock %s when adding slot %s entities",
-                config_entry.entry_id,
-                config_entry.title,
-                lock.lock.entity_id,
-                slot_num,
-            )
             return
         async_add_entities(
             [
