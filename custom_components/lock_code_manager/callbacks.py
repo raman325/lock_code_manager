@@ -75,20 +75,11 @@ class EntityCallbackRegistry:
         Lock-slot: Entities created once per lock+slot combination (e.g., PIN
             code sensor showing the actual code on the lock, in-sync binary
             sensor). For 3 locks with 2 slots, this creates 6 entities.
-
-        Keyed: Entities created only when a specific config key has a value.
-            The key parameter identifies which config option triggers entity
-            creation. No platform currently uses this; the infrastructure
-            remains so future per-key entities can register without
-            re-introducing it.
     """
 
     # Entity creation callbacks (platforms register these in async_setup_entry)
     add_standard_entity: list[StandardEntityCallback] = field(default_factory=list)
     add_lock_slot_entity: list[LockSlotEntityCallback] = field(default_factory=list)
-    add_keyed_entity: dict[str, list[StandardEntityCallback]] = field(
-        default_factory=dict
-    )
 
     # Entity removal callbacks (entities register themselves in async_added_to_hass)
     # Key format: "{slot_num}|{key}" or "{slot_num}|{key}|{lock_entity_id}"
@@ -127,21 +118,6 @@ class EntityCallbackRegistry:
         return lambda: (
             self.add_lock_slot_entity.remove(callback)
             if callback in self.add_lock_slot_entity
-            else None
-        )
-
-    def register_keyed_adder(
-        self, key: str, callback: StandardEntityCallback
-    ) -> UnregisterFunc:
-        """
-        Register callback for adding keyed entities (only when config key is set).
-
-        Currently unused by any built-in platform; reserved for future per-key entities.
-        """
-        self.add_keyed_entity.setdefault(key, []).append(callback)
-        return lambda: (
-            self.add_keyed_entity[key].remove(callback)
-            if key in self.add_keyed_entity and callback in self.add_keyed_entity[key]
             else None
         )
 
@@ -209,42 +185,10 @@ class EntityCallbackRegistry:
                     slot_num,
                 )
 
-    @callback
-    def invoke_keyed_adders(
-        self, key: str, slot_num: int, ent_reg: er.EntityRegistry
-    ) -> None:
-        """Invoke keyed entity creation callbacks for a specific config key."""
-        for cb in self.add_keyed_entity.get(key, []):
-            try:
-                cb(slot_num, ent_reg)
-            except Exception:
-                _LOGGER.exception(
-                    "Error in optional entity callback for key %s slot %s",
-                    key,
-                    slot_num,
-                )
-
     async def invoke_entity_removers_for_slot(self, slot_num: int) -> None:
         """Invoke entity removal callbacks for an entire slot."""
         prefix = f"{slot_num}|"
         to_remove = [uid for uid in self.remove_entity if uid.startswith(prefix)]
-        for uid in to_remove:
-            try:
-                await self.remove_entity[uid]()
-            except Exception:
-                _LOGGER.exception("Error removing entity with uid %s", uid)
-            finally:
-                self.remove_entity.pop(uid, None)
-
-    async def invoke_entity_removers_for_key(self, slot_num: int, key: str) -> None:
-        """Invoke entity removal callbacks for a specific slot/key."""
-        # Match both "{slot}|{key}" and "{slot}|{key}|{lock}" patterns
-        prefix = f"{slot_num}|{key}"
-        to_remove = [
-            uid
-            for uid in self.remove_entity
-            if uid == prefix or uid.startswith(f"{prefix}|")
-        ]
         for uid in to_remove:
             try:
                 await self.remove_entity[uid]()

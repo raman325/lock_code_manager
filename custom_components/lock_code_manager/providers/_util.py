@@ -33,3 +33,17 @@ def parse_tag(name: str) -> tuple[int | None, str]:
     if match:
         return int(match.group(1)), match.group(2)
     return None, name
+
+
+def parse_slot_num(value: object) -> int | None:
+    """
+    Convert a slot identifier to an int, or return None if not convertible.
+
+    Mirrors ``int(value)`` while collapsing the ``TypeError``/``ValueError``
+    that providers otherwise catch when a lock reports a non-numeric slot key.
+    Call sites remain responsible for their own logging and skip/return flow.
+    """
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except TypeError, ValueError:
+        return None

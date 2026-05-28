@@ -23,6 +23,7 @@ from homeassistant.exceptions import HomeAssistantError
 from ..exceptions import LockDisconnected
 from ..models import SlotCode
 from ._base import BaseLock
+from ._util import parse_slot_num
 from .const import LOGGER
 
 # Default Zigbee2MQTT base topic
@@ -106,11 +107,6 @@ class Zigbee2MQTTLock(BaseLock):
         """Return interval for hard refresh."""
         return timedelta(hours=1)
 
-    @property
-    def connection_check_interval(self) -> timedelta | None:
-        """Return interval for connection checks."""
-        return timedelta(seconds=30)
-
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Subscribe to the device topic before the coordinator runs its first poll."""
         await self._async_ensure_device_subscription()
@@ -190,9 +186,8 @@ class Zigbee2MQTTLock(BaseLock):
         if isinstance(action, str) and action in _Z2M_LOCK_ACTIONS:
             action_user = payload.get("action_user")
             if action_user is not None and not isinstance(action_user, bool):
-                try:
-                    code_slot = int(action_user)
-                except ValueError, TypeError:
+                code_slot = parse_slot_num(action_user)
+                if code_slot is None:
                     LOGGER.debug(
                         "Ignoring %s with non-numeric action_user %r for %s",
                         action,
@@ -230,9 +225,8 @@ class Zigbee2MQTTLock(BaseLock):
         if users_data and isinstance(users_data, dict):
             updates: dict[int, str | SlotCode] = {}
             for user_id_str, user_info in users_data.items():
-                try:
-                    user_id = int(user_id_str)
-                except ValueError, TypeError:
+                user_id = parse_slot_num(user_id_str)
+                if user_id is None:
                     LOGGER.warning(
                         "Skipping non-numeric Zigbee2MQTT user key %r for %s",
                         user_id_str,
@@ -286,9 +280,8 @@ class Zigbee2MQTTLock(BaseLock):
                 )
                 return
 
-            try:
-                user_id = int(raw_user)
-            except ValueError, TypeError:
+            user_id = parse_slot_num(raw_user)
+            if user_id is None:
                 LOGGER.warning(
                     "Ignoring pin_code payload with non-numeric user for %s",
                     self.lock.entity_id,

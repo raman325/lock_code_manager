@@ -37,7 +37,6 @@ def test_diff_empty_inputs() -> None:
 
     assert dict(diff.slots_added) == {}
     assert dict(diff.slots_removed) == {}
-    assert diff.slots_unchanged == frozenset()
     assert diff.locks_added == ()
     assert diff.locks_removed == ()
     assert diff.pairs_added == frozenset()
@@ -79,7 +78,6 @@ def test_diff_no_changes() -> None:
     diff = EntryConfigDiff(old=config, new=config)
 
     assert not diff.has_changes
-    assert diff.slots_unchanged == frozenset({1})
     assert diff.pairs_added == frozenset()
     assert diff.pairs_removed == frozenset()
 
@@ -115,8 +113,6 @@ def test_diff_slot_dicts_always_int_keyed() -> None:
 
     assert 2 in diff.slots_added
     assert "2" not in diff.slots_added
-    assert 1 in diff.slots_unchanged
-    assert "1" not in diff.slots_unchanged
     assert 3 in diff.slots_removed
     assert "3" not in diff.slots_removed
 
@@ -221,7 +217,6 @@ def test_diff_is_deeply_immutable() -> None:
         diff.slots_removed[1]["pin"] = "9999"  # type: ignore[index]
 
     # Contained sets cannot grow
-    assert not hasattr(diff.slots_unchanged, "add")
     assert not hasattr(diff.pairs_added, "add")
 
     # Contained lists are tuples (no mutation methods)

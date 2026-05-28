@@ -51,6 +51,7 @@ from .const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
+from .data import build_slot_unique_id
 from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
 from .models import SlotCode, SyncState
 from .resilience import CircuitBreaker
@@ -136,12 +137,20 @@ class SlotSyncManager:
         # Unique ID components for entity discovery
         entry_id = config_entry.entry_id
         lock_entity_id = lock.lock.entity_id
-        base_uid = f"{entry_id}|{slot_num}"
         self._unique_ids: dict[str, tuple[str, str]] = {
-            CONF_PIN: (TEXT_DOMAIN, f"{base_uid}|{CONF_PIN}"),
-            CONF_NAME: (TEXT_DOMAIN, f"{base_uid}|{CONF_NAME}"),
-            ATTR_ACTIVE: (BINARY_SENSOR_DOMAIN, f"{base_uid}|{ATTR_ACTIVE}"),
-            ATTR_CODE: (SENSOR_DOMAIN, f"{base_uid}|{ATTR_CODE}|{lock_entity_id}"),
+            CONF_PIN: (TEXT_DOMAIN, build_slot_unique_id(entry_id, slot_num, CONF_PIN)),
+            CONF_NAME: (
+                TEXT_DOMAIN,
+                build_slot_unique_id(entry_id, slot_num, CONF_NAME),
+            ),
+            ATTR_ACTIVE: (
+                BINARY_SENSOR_DOMAIN,
+                build_slot_unique_id(entry_id, slot_num, ATTR_ACTIVE),
+            ),
+            ATTR_CODE: (
+                SENSOR_DOMAIN,
+                build_slot_unique_id(entry_id, slot_num, ATTR_CODE, lock_entity_id),
+            ),
         }
 
         # Sync state machine — single source of truth replacing _dirty,
@@ -306,13 +315,16 @@ class SlotSyncManager:
         if not self._ensure_entities_ready():
             return None
 
+        # _ensure_entities_ready guarantees these three are non-None (the name
+        # entity is optional). No awaits run between that check and these reads,
+        # so the states cannot change underneath us on the single-threaded loop.
         active_state = self._get_entity_state(ATTR_ACTIVE)
         pin_state = self._get_entity_state(CONF_PIN)
         name_state = self._get_entity_state(CONF_NAME)
         code_state = self._get_entity_state(ATTR_CODE)
-
-        if active_state is None or pin_state is None or code_state is None:
-            return None
+        assert active_state is not None
+        assert pin_state is not None
+        assert code_state is not None
 
         coordinator_code = self._coordinator.data.get(self._slot_num)
         return SlotState(
@@ -456,6 +468,28 @@ class SlotSyncManager:
             },
         )
 
+    def _clear_resolved_issues(self, slot_state: SlotState) -> None:
+        """
+        Clear repair issues that no longer apply now that the slot is in sync.
+
+        The per-slot ``slot_disabled`` issue is cleared only when the slot is
+        active (an inactive slot was never meant to hold a code, so a lingering
+        disabled issue there is unrelated). The per-lock ``slot_suspended``
+        issue is cleared regardless of active state.
+        """
+        entry_id = self._config_entry.entry_id
+        if slot_state.active_state == STATE_ON:
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"slot_disabled_{entry_id}_{self._slot_num}",
+            )
+        async_delete_issue(
+            self._hass,
+            DOMAIN,
+            f"slot_suspended_{entry_id}_{self._lock.lock.entity_id}_{self._slot_num}",
+        )
+
     # -- Orchestration -------------------------------------------------------
 
     def _write_state(self) -> None:
@@ -562,19 +596,7 @@ class SlotSyncManager:
 
             if expected_in_sync:
                 self._state = SyncState.IN_SYNC
-                if slot_state.active_state == STATE_ON:
-                    async_delete_issue(
-                        self._hass,
-                        DOMAIN,
-                        f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
-                    )
-                # Per-lock issue: clear regardless of slot active state
-                async_delete_issue(
-                    self._hass,
-                    DOMAIN,
-                    f"slot_suspended_{self._config_entry.entry_id}_"
-                    f"{self._lock.lock.entity_id}_{self._slot_num}",
-                )
+                self._clear_resolved_issues(slot_state)
             else:
                 self._state = SyncState.OUT_OF_SYNC
 
@@ -597,19 +619,7 @@ class SlotSyncManager:
             self._state = SyncState.IN_SYNC
             self._slot_breaker.reset()
             self._write_state()
-            if slot_state.active_state == STATE_ON:
-                async_delete_issue(
-                    self._hass,
-                    DOMAIN,
-                    f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
-                )
-            # Per-lock issue: clear regardless of slot active state
-            async_delete_issue(
-                self._hass,
-                DOMAIN,
-                f"slot_suspended_{self._config_entry.entry_id}_"
-                f"{self._lock.lock.entity_id}_{self._slot_num}",
-            )
+            self._clear_resolved_issues(slot_state)
             return
 
         # Circuit breaker check (set operations only)
@@ -704,19 +714,7 @@ class SlotSyncManager:
             self._state = SyncState.IN_SYNC
             self._slot_breaker.reset()
             self._write_state()
-            if slot_state.active_state == STATE_ON:
-                async_delete_issue(
-                    self._hass,
-                    DOMAIN,
-                    f"slot_disabled_{self._config_entry.entry_id}_{self._slot_num}",
-                )
-            # Per-lock issue: clear regardless of slot active state
-            async_delete_issue(
-                self._hass,
-                DOMAIN,
-                f"slot_suspended_{self._config_entry.entry_id}_"
-                f"{self._lock.lock.entity_id}_{self._slot_num}",
-            )
+            self._clear_resolved_issues(slot_state)
         else:
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()

@@ -34,7 +34,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import EntryConfig, get_entry_config
-from .exceptions import LockCodeManagerError, LockCodeManagerProviderError
+from .exceptions import LockCodeManagerError
 from .models import SlotCode
 from .providers import INTEGRATIONS_CLASS_MAP
 
@@ -52,9 +52,14 @@ CODE_SLOT_SCHEMA = vol.Schema(
 )
 
 
+def _slot_enabled_without_pin(slot: dict[str, Any]) -> bool:
+    """Return True if a slot is enabled but has no PIN set."""
+    return bool(slot.get(CONF_ENABLED)) and not slot.get(CONF_PIN)
+
+
 def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
     """Validate that if enabled is True, pin is set."""
-    if any(val.get(CONF_ENABLED) and not val.get(CONF_PIN) for val in data.values()):
+    if any(_slot_enabled_without_pin(val) for val in data.values()):
         raise vol.Invalid("PIN must be set if enabled is True")
     return data
 
@@ -102,6 +107,30 @@ def _check_common_slots(
             "lock": lock,
             "entry_title": entry_title,
         }
+
+
+def _validate_slots_yaml(
+    hass: HomeAssistant,
+    raw_slots: dict[Any, Any],
+    locks: Iterable[str],
+    config_entry: ConfigEntry | None = None,
+) -> tuple[dict | None, dict, dict]:
+    """
+    Validate a slots-YAML submission for the config and options flows.
+
+    Runs ``CODE_SLOTS_SCHEMA`` over ``raw_slots`` and, when it parses cleanly,
+    checks for slots already configured on the same locks by another entry.
+    Returns the parsed slots (or ``None`` if validation failed) along with the
+    accumulated error and description-placeholder dicts.
+    """
+    try:
+        parsed_slots = CODE_SLOTS_SCHEMA(raw_slots)
+    except vol.Invalid as err:
+        _LOGGER.error("Invalid YAML: %s", err)
+        return None, {"base": "invalid_config"}, {}
+
+    errors, placeholders = _check_common_slots(hass, locks, parsed_slots, config_entry)
+    return parsed_slots, errors, placeholders
 
 
 class _LockQuerySkipped(LockCodeManagerError):
@@ -171,13 +200,6 @@ async def _async_get_all_codes(
             )
             usercodes = await lock_instance.async_internal_get_usercodes()
         except _LockQuerySkipped:
-            continue
-        except LockCodeManagerProviderError as err:
-            _LOGGER.warning(
-                "Failed to get usercodes from %s: %s",
-                lock_entity_id,
-                err,
-            )
             continue
         except LockCodeManagerError as err:
             _LOGGER.warning(
@@ -291,7 +313,7 @@ class LockCodeManagerFlowHandler(
 ):
     """Config flow for Lock Code Manager."""
 
-    VERSION = 2
+    VERSION = 3
     CONNECTION_CLASS = config_entries.CONN_CLASS_LOCAL_POLL
 
     def __init__(self) -> None:
@@ -389,7 +411,7 @@ class LockCodeManagerFlowHandler(
         self.data.setdefault(CONF_SLOTS, {})
 
         if user_input is not None:
-            if user_input.get(CONF_ENABLED) and not user_input.get(CONF_PIN):
+            if _slot_enabled_without_pin(user_input):
                 errors[CONF_PIN] = "missing_pin_if_enabled"
 
             # Check for excluded platforms with a single registry lookup
@@ -430,31 +452,24 @@ class LockCodeManagerFlowHandler(
         if not user_input:
             user_input = {}
         if user_input:
-            try:
-                slots = CODE_SLOTS_SCHEMA(user_input[CONF_SLOTS])
-            except vol.Invalid as err:
-                _LOGGER.error("Invalid YAML: %s", err)
-                errors["base"] = "invalid_config"
-            else:
-                additional_errors, additional_placeholders = _check_common_slots(
-                    self.hass, self.data[CONF_LOCKS], user_input[CONF_SLOTS]
-                )
-                errors.update(additional_errors)
-                description_placeholders.update(additional_placeholders)
+            slots, validation_errors, validation_placeholders = _validate_slots_yaml(
+                self.hass, user_input[CONF_SLOTS], self.data[CONF_LOCKS]
+            )
+            errors.update(validation_errors)
+            description_placeholders.update(validation_placeholders)
 
-                if not errors:
-                    self.data[CONF_SLOTS] = slots
-                    self._occupied_lock_slots = self._find_occupied_lock_slots(
-                        slots.keys()
+            if not errors:
+                assert slots is not None
+                self.data[CONF_SLOTS] = slots
+                self._occupied_lock_slots = self._find_occupied_lock_slots(slots.keys())
+                if self._occupied_lock_slots:
+                    self._next_step = partial(
+                        self._create_entry,
+                        title=self.title,
+                        data=self.data,
                     )
-                    if self._occupied_lock_slots:
-                        self._next_step = partial(
-                            self._create_entry,
-                            title=self.title,
-                            data=self.data,
-                        )
-                        return await self.async_step_existing_codes_confirm()
-                    return self.async_create_entry(title=self.title, data=self.data)
+                    return await self.async_step_existing_codes_confirm()
+                return self.async_create_entry(title=self.title, data=self.data)
 
         return self.async_show_form(
             step_id="yaml",
@@ -539,23 +554,21 @@ class LockCodeManagerOptionsFlow(_ExistingCodesFlowMixin, config_entries.Options
             user_input = {}
 
         if user_input:
-            try:
-                user_input[CONF_SLOTS] = CODE_SLOTS_SCHEMA(user_input[CONF_SLOTS])
-            except vol.Invalid as err:
-                _LOGGER.error("Invalid YAML: %s", err)
-                errors["base"] = "invalid_config"
-            else:
-                additional_errors, additional_placeholders = _check_common_slots(
+            parsed_slots, validation_errors, validation_placeholders = (
+                _validate_slots_yaml(
                     self.hass,
-                    user_input[CONF_LOCKS],
                     user_input[CONF_SLOTS],
+                    user_input[CONF_LOCKS],
                     self.config_entry,
                 )
-                errors.update(additional_errors)
-                description_placeholders.update(additional_placeholders)
+            )
+            errors.update(validation_errors)
+            description_placeholders.update(validation_placeholders)
 
-                if not errors:
-                    return await self._maybe_confirm_then_persist(user_input)
+            if not errors:
+                assert parsed_slots is not None
+                user_input[CONF_SLOTS] = parsed_slots
+                return await self._maybe_confirm_then_persist(user_input)
 
         # Use to_dict() rather than .locks / .slots directly — to_dict
         # returns plain mutable dict/list, while EntryConfig.slots is a

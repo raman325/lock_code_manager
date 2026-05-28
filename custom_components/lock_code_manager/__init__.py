@@ -23,11 +23,8 @@ from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
     ATTR_ENTITY_ID,
-    CONF_ENABLED,
     CONF_ENTITY_ID,
     CONF_ID,
-    CONF_NAME,
-    CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
     EVENT_LOVELACE_UPDATED,
@@ -69,7 +66,6 @@ from .const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    EVENT_PIN_USED,
     PLATFORM_MAP,
     PLATFORMS,
     SERVICE_CLEAR_SLOT_CONDITION,
@@ -143,6 +139,56 @@ async def async_migrate_entry(
             config_entry.entry_id,
             config_entry.title,
         )
+
+    if config_entry.version == 2:
+        # Strip the deprecated number_of_uses field from slot configs and
+        # surface a one-time informational repair pointing users to the Slot
+        # Usage Limiter blueprint replacement. Running here (before setup)
+        # ensures the deprecated field never reaches any EntryConfig consumer.
+        async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
+        new_data = {**config_entry.data}
+        new_options = {**config_entry.options}
+        entry_impacted: set[str] = set()
+        for data_dict in (new_data, new_options):
+            if CONF_SLOTS not in data_dict:
+                continue
+            new_slots = {}
+            for slot_num, slot_config in data_dict[CONF_SLOTS].items():
+                new_slot = {**slot_config}
+                if "number_of_uses" in new_slot:
+                    new_slot.pop("number_of_uses")
+                    entry_impacted.add(str(slot_num))
+                new_slots[slot_num] = new_slot
+            data_dict[CONF_SLOTS] = new_slots
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options, version=3
+        )
+        if entry_impacted:
+            impacted_slots = sorted(entry_impacted, key=int)
+            async_create_issue(
+                hass,
+                DOMAIN,
+                f"number_of_uses_removed_{config_entry.entry_id}",
+                is_fixable=True,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key="number_of_uses_removed",
+                translation_placeholders={
+                    "impacted": (
+                        f"- **{config_entry.title}**: slots {', '.join(impacted_slots)}"
+                    ),
+                    "blueprint_url": (
+                        "https://github.com/raman325/lock_code_manager/wiki/"
+                        "Blueprints#slot-usage-limiter"
+                    ),
+                },
+            )
+            _LOGGER.warning(
+                "Removed deprecated number_of_uses from %s slot(s): %s. "
+                "Use the Slot Usage Limiter blueprint instead.",
+                config_entry.title,
+                ", ".join(impacted_slots),
+            )
 
     return True
 
@@ -460,68 +506,6 @@ async def async_setup_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
     """Set up is called when Home Assistant is loading our component."""
-    # Auto-migrate: strip the deprecated number_of_uses field from this entry's
-    # slot configs and surface a one-time informational repair so the user knows
-    # what happened and can find the replacement (Slot Usage Limiter blueprint).
-    # Runs as the FIRST work in setup — before any consumer of EntryConfig
-    # (e.g. the missing-lock reauth check below, platform forwarding, or
-    # runtime_data construction) — so the deprecated field never leaks into
-    # parsed config. Migration runs at most once per entry: once stripped,
-    # subsequent setups find nothing to migrate and the repair is not re-raised.
-
-    # Clear any stale issue from prior versions that used the old key so users
-    # upgrading from a previous release don't see an obsolete unfixable repair.
-    async_delete_issue(hass, DOMAIN, "number_of_uses_deprecated")
-
-    # Legacy slot field name; the constant was deleted alongside the field.
-    legacy_number_of_uses_key = "number_of_uses"
-    new_data = {**config_entry.data}
-    new_options = {**config_entry.options}
-    changed = False
-    entry_impacted: set[str] = set()
-    for data_dict in (new_data, new_options):
-        if CONF_SLOTS not in data_dict:
-            continue
-        new_slots = {}
-        for slot_num, slot_config in data_dict[CONF_SLOTS].items():
-            new_slot = {**slot_config}
-            if legacy_number_of_uses_key in new_slot:
-                new_slot.pop(legacy_number_of_uses_key)
-                changed = True
-                entry_impacted.add(str(slot_num))
-            new_slots[slot_num] = new_slot
-        data_dict[CONF_SLOTS] = new_slots
-    if changed:
-        hass.config_entries.async_update_entry(
-            config_entry, data=new_data, options=new_options
-        )
-        impacted_slots = sorted(entry_impacted, key=int)
-        impacted_md = f"- **{config_entry.title}**: slots {', '.join(impacted_slots)}"
-
-        async_create_issue(
-            hass,
-            DOMAIN,
-            f"number_of_uses_removed_{config_entry.entry_id}",
-            is_fixable=True,
-            is_persistent=True,
-            severity=IssueSeverity.WARNING,
-            translation_key="number_of_uses_removed",
-            translation_placeholders={
-                "impacted": impacted_md,
-                "blueprint_url": (
-                    "https://github.com/raman325/lock_code_manager/wiki/"
-                    "Blueprints#slot-usage-limiter"
-                ),
-            },
-        )
-
-        _LOGGER.warning(
-            "Removed deprecated number_of_uses from %s slot(s): %s. "
-            "Use the Slot Usage Limiter blueprint instead.",
-            config_entry.title,
-            ", ".join(impacted_slots),
-        )
-
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     try:
@@ -581,6 +565,21 @@ async def async_setup_entry(
     return True
 
 
+def _lock_managed_by_other_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+) -> bool:
+    """Return True if another (non-disabled, non-ignored) LCM entry manages the lock."""
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and get_entry_config(entry).has_lock(lock_entity_id)
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+
+
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -594,14 +593,7 @@ async def async_unload_lock(
         [lock_entity_id] if lock_entity_id else list(runtime_data.locks.keys())
     )
     for _lock_entity_id in lock_entity_ids:
-        if not any(
-            entry != config_entry
-            and _lock_entity_id
-            in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
-            for entry in hass.config_entries.async_entries(
-                DOMAIN, include_disabled=False, include_ignore=False
-            )
-        ):
+        if not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id):
             lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
             if lock.coordinator is not None:
@@ -654,19 +646,9 @@ async def async_unload_entry(
         for slot_num in config.slots:
             async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
             async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
-        # Only delete lock_offline if no other LCM entry manages this lock
-        other_entries = [
-            e
-            for e in hass.config_entries.async_entries(
-                DOMAIN, include_disabled=False, include_ignore=False
-            )
-            if e.entry_id != entry_id
-        ]
         for lock_entity_id in config.locks:
-            still_managed = any(
-                get_entry_config(e).has_lock(lock_entity_id) for e in other_entries
-            )
-            if not still_managed:
+            # Only delete lock_offline if no other LCM entry manages this lock
+            if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
                 async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
             for slot_num in config.slots:
                 async_delete_issue(
@@ -862,32 +844,13 @@ async def async_update_listener(
     # add slot sensors for existing locks only since new locks were already set up
     # above.
     for slot_num in slots_to_add:
-        # First we store the set of entities we are adding so we can track when they
-        # are done
-        entities_to_add: set[str] = {
-            CONF_ENABLED,
-            CONF_NAME,
-            CONF_PIN,
-            EVENT_PIN_USED,
-        }
-
         _LOGGER.debug(
-            "%s (%s): Adding PIN enabled binary sensor for slot %s",
+            "%s (%s): Adding standard entities for slot %s",
             entry_id,
             entry_title,
             slot_num,
         )
         callbacks.invoke_standard_adders(slot_num, ent_reg)
-        for key in entities_to_add:
-            _LOGGER.debug(
-                "%s (%s): Adding %s entity for slot %s",
-                entry_id,
-                entry_title,
-                key,
-                slot_num,
-            )
-            if key in callbacks.add_keyed_entity:
-                callbacks.invoke_keyed_adders(key, slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():
             if lock_entity_id in locks_to_add:
