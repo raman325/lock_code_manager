@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "b06f837fc554",
+  "session_id": "73c731a0-9d5e-43b7-b0ed-642052a25b52",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-28T16:44:05.388786Z",
+  "branch": "refactor/resilience-circuit-breaker",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "79c753ff35fd",
+  "token_usage": {
+    "input_tokens": 331,
+    "cache_creation_tokens": 380118,
+    "cache_read_tokens": 38374051,
+    "output_tokens": 186981,
+    "api_call_count": 167
+  },
+  "session_metrics": {
+    "turn_count": 5
+  }
+}
