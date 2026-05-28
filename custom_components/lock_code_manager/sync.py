@@ -627,6 +627,9 @@ class SlotSyncManager:
                 "set" if slot_state.active_state == STATE_ON else "clear",
                 err,
             )
+            # Feed the lock breaker so repeated connectivity failures during
+            # sync converge to "unreachable" alongside poll failures.
+            self._coordinator.note_connectivity_failure()
             self._state = SyncState.OUT_OF_SYNC
             return
         except Exception as err:

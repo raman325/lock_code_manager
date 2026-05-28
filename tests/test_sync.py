@@ -852,6 +852,36 @@ class TestSyncStateMachine:
         # A slot-level failure does not mark the whole lock unreachable.
         assert failing._coordinator.unreachable is False
 
+    async def test_set_disconnect_failures_trip_lock_breaker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Repeated LockDisconnected on set trips the lock breaker and suspends the tick."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockDisconnected("offline"),
+        ):
+            for _ in range(BACKOFF_FAILURE_THRESHOLD):
+                manager._state = SyncState.OUT_OF_SYNC
+                await manager._async_tick()
+                await hass.async_block_till_done()
+
+        # Connectivity failures during set converged to "unreachable".
+        assert manager._coordinator.unreachable is True
+
+        # The next tick observes the unreachable lock and suspends instead of
+        # retrying every tick.
+        manager._state = SyncState.OUT_OF_SYNC
+        await manager._async_tick()
+        assert manager._state is SyncState.SUSPENDED
+
 
 class TestSyncStatusAttribute:
     """Tests for sync_status extra state attribute."""

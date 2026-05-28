@@ -126,6 +126,16 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
 
         self.async_set_updated_data(new_data)
 
+    def note_connectivity_failure(self) -> None:
+        """
+        Record a connectivity failure observed outside the poll path.
+
+        Lets the sync layer feed set/clear transport failures into the same
+        lock breaker that polling uses, so "lock is unreachable" converges
+        from both code paths.
+        """
+        self._apply_backoff()
+
     def _apply_backoff(self) -> None:
         """Record a connectivity failure and apply exponential polling backoff."""
         self._lock_breaker.record_failure()
