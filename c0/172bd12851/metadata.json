@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c0172bd12851",
+  "strategy": "manual-commit",
+  "branch": "refactor/complexity-reduction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c0/172bd12851/0/metadata.json",
+      "transcript": "/c0/172bd12851/0/full.jsonl",
+      "content_hash": "/c0/172bd12851/0/content_hash.txt",
+      "prompt": "/c0/172bd12851/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5977,
+    "cache_creation_tokens": 1566059,
+    "cache_read_tokens": 99050817,
+    "output_tokens": 358025,
+    "api_call_count": 289
+  }
+}
