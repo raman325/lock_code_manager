@@ -622,8 +622,9 @@ class SlotSyncManager:
             self._clear_resolved_issues(slot_state)
             return
 
-        # Circuit breaker check (set operations only)
-        if slot_state.active_state == STATE_ON and self._slot_breaker.tripped:
+        # Circuit breaker check: too many failed sync attempts (a set that
+        # never converges, or repeated LockOperationFailed) suspends the slot.
+        if self._slot_breaker.tripped:
             _LOGGER.error(
                 "%s: Sync attempts exceeded (%s in %s window), suspending slot",
                 self._log_prefix,
@@ -661,16 +662,31 @@ class SlotSyncManager:
             # tick resolves to IN_SYNC.
             self._state = SyncState.OUT_OF_SYNC
             return
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockDisconnected as err:
             _LOGGER.info(
-                "%s: Lock operation failed during %s usercode: %s. Will retry on next tick.",
+                "%s: Lock unreachable during %s usercode: %s. Will retry on next tick.",
                 self._log_prefix,
                 "set" if slot_state.active_state == STATE_ON else "clear",
                 err,
             )
-            # Feed the lock breaker so repeated connectivity failures during
-            # sync converge to "unreachable" alongside poll failures.
+            # Connectivity failure: feed the lock breaker so repeated failures
+            # converge to "unreachable" alongside poll failures (recovers via a
+            # successful poll/push).
             self._coordinator.note_connectivity_failure()
+            self._state = SyncState.OUT_OF_SYNC
+            return
+        except LockOperationFailed as err:
+            _LOGGER.info(
+                "%s: Operation failed during %s usercode: %s. Will retry on next tick.",
+                self._log_prefix,
+                "set" if slot_state.active_state == STATE_ON else "clear",
+                err,
+            )
+            # The lock is reachable but the operation failed. Count toward the
+            # slot breaker so a persistently-failing slot suspends instead of
+            # retrying forever -- NOT the lock breaker, whose read-probe
+            # recovery can't validate a failing write.
+            self._slot_breaker.record_failure()
             self._state = SyncState.OUT_OF_SYNC
             return
         except Exception as err:

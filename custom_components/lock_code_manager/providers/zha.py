@@ -25,7 +25,7 @@ from homeassistant.components.zha.helpers import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
-from ..exceptions import CodeRejectedError, LockDisconnected
+from ..exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
 from ..models import SlotCode
 from ._base import BaseLock
 
@@ -289,7 +289,7 @@ class ZHALock(BaseLock):
         except CodeRejectedError, LockDisconnected:
             raise
         except Exception as err:
-            raise LockDisconnected(f"Failed to set PIN: {err}") from err
+            raise LockOperationFailed(f"Failed to set PIN: {err}") from err
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """Clear a PIN code from a slot."""
@@ -314,7 +314,7 @@ class ZHALock(BaseLock):
         except CodeRejectedError, LockDisconnected:
             raise
         except Exception as err:
-            raise LockDisconnected(f"Failed to clear PIN: {err}") from err
+            raise LockOperationFailed(f"Failed to clear PIN: {err}") from err
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
         """Re-read all codes from the lock (no cache to invalidate)."""

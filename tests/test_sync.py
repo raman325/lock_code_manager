@@ -418,6 +418,39 @@ class TestLockOperationFailedRetry:
         # Should retry (OUT_OF_SYNC) rather than disable the slot
         assert manager._state is SyncState.OUT_OF_SYNC
 
+    async def test_repeated_operation_failure_trips_slot_breaker_not_lock(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Repeated LockOperationFailed suspends the slot, not the whole lock."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockOperationFailed("operation failed"),
+        ):
+            for _ in range(MAX_SYNC_ATTEMPTS):
+                manager._state = SyncState.OUT_OF_SYNC
+                await manager._async_tick()
+                await hass.async_block_till_done()
+
+        # The operation failures accumulated on the slot breaker, which is now
+        # tripped -- but the lock itself is NOT marked unreachable.
+        assert manager._slot_breaker.tripped is True
+        assert manager._coordinator.unreachable is False
+
+        # The next tick suspends just this slot (it no longer hammers the lock).
+        manager._state = SyncState.OUT_OF_SYNC
+        await manager._async_tick()
+        await hass.async_block_till_done()
+        assert manager._state is SyncState.SUSPENDED
+        assert manager._coordinator.unreachable is False
+
 
 class TestSyncStateMachine:
     """Tests for SyncState transitions in SlotSyncManager."""
