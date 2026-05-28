@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ad0f4e09b8f5",
+  "strategy": "manual-commit",
+  "branch": "refactor/complexity-pass-2",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ad/0f4e09b8f5/0/metadata.json",
+      "transcript": "/ad/0f4e09b8f5/0/full.jsonl",
+      "content_hash": "/ad/0f4e09b8f5/0/content_hash.txt",
+      "prompt": "/ad/0f4e09b8f5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6171,
+    "cache_creation_tokens": 2490592,
+    "cache_read_tokens": 170908741,
+    "output_tokens": 502010,
+    "api_call_count": 386
+  }
+}
