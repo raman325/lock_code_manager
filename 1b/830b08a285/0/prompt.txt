@@ -27,3 +27,15 @@ yes, and we can apply to 1181
 ---
 
 can you do dynamic workflows? If so, switch back to main, and do a review of the entire codebase for code complexity. We want to reduce complexity as much as possible and strip things down to the bare minimum
+
+---
+
+check review commentg
+
+---
+
+merged. ff main, delete stale branches, then run ruff format and check just to ensure
+
+---
+
+do one more pass for code complexity
