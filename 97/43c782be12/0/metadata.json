@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9743c782be12",
+  "session_id": "73c731a0-9d5e-43b7-b0ed-642052a25b52",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-28T16:22:41.828882Z",
+  "branch": "refactor/resilience-circuit-breaker",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py",
+    "tests/test_coordinator.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "79c753ff35fd",
+  "checkpoint_transcript_start": 349,
+  "transcript_lines_at_start": 349,
+  "token_usage": {
+    "input_tokens": 38,
+    "cache_creation_tokens": 24359,
+    "cache_read_tokens": 3777734,
+    "output_tokens": 11595,
+    "api_call_count": 19
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-28T16:22:41.616619Z",
+    "agent_lines": 83,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 83,
+    "agent_percentage": 100
+  }
+}
