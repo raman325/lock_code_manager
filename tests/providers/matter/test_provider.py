@@ -1077,7 +1077,7 @@ class TestLockOperationEvent:
 class TestEventSubscription:
     """Test event subscription setup and teardown."""
 
-    def test_matter_node_id_no_device(self, matter_lock_simple: MatterLock) -> None:
+    def test_get_matter_node_no_device(self, matter_lock_simple: MatterLock) -> None:
         """Test node resolution returns None when no device entry."""
         matter_lock_simple.device_entry = None
         assert matter_lock_simple._get_matter_node() is None
@@ -1125,7 +1125,7 @@ class TestEventSubscription:
 
     # -- Tests using the full Matter integration fixture --
 
-    def test_matter_node_id_resolves(self, matter_lock: MatterLock) -> None:
+    def test_get_matter_node_resolves(self, matter_lock: MatterLock) -> None:
         """Test node resolves from real Matter integration device."""
         node = matter_lock._get_matter_node()
         assert node is not None
