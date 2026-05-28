@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "37f1bbcb6dc0",
+  "session_id": "73c731a0-9d5e-43b7-b0ed-642052a25b52",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-28T22:56:57.682381Z",
+  "branch": "feat/lock-operation-failed",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/schlage/test_provider.py",
+    "tests/providers/test_base.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "6a7a7e88457b",
+  "token_usage": {
+    "input_tokens": 6195,
+    "cache_creation_tokens": 2531815,
+    "cache_read_tokens": 181346284,
+    "output_tokens": 529478,
+    "api_call_count": 398
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-28T22:56:56.976227Z",
+    "agent_lines": 59,
+    "human_added": 152,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 211,
+    "agent_percentage": 27.96208530805687
+  }
+}
