@@ -1,0 +1,17 @@
+We have retries, backoffs, and rate limiting in general. Can we simplify those into a simpler set of primitives while achieving the same thing? The goal is to reduce code complexity
+
+---
+
+A makes sense
+
+---
+
+all looks good
+
+---
+
+we don't keep specs, we just store them locally for execution
+
+---
+
+proceed
