@@ -1,0 +1,29 @@
+everything is merged, ff main and delete stale branches then fix 1146
+
+---
+
+merged ff main and clean up
+
+---
+
+in a new branch and PR, allow event_entity to also be a list in the usage notifier blueprint
+
+---
+
+merged, ff main and delete stale branches
+
+---
+
+for the slot usage limiter, why can't we derive config entry and slot number from pin_used_entity
+
+---
+
+yes
+
+---
+
+we don't have tests for our blueprints. See how blueprints are tested in ../home-assistant. It would be great to have tests for these to make sure our inputs and outputs work as expected
+
+---
+
+merged, ff then move on to PR B

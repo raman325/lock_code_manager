@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "1afe709b28af",
+  "strategy": "manual-commit",
+  "branch": "refactor/resilience-circuit-breaker",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "requirements_dev.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/fe709b28af/0/metadata.json",
+      "transcript": "/1a/fe709b28af/0/full.jsonl",
+      "content_hash": "/1a/fe709b28af/0/content_hash.txt",
+      "prompt": "/1a/fe709b28af/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 210,
+    "cache_creation_tokens": 715016,
+    "cache_read_tokens": 14190342,
+    "output_tokens": 84722,
+    "api_call_count": 111
+  }
+}
