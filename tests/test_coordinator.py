@@ -588,12 +588,12 @@ async def test_drift_check_runs_below_backoff_threshold(
         mock_hard_refresh.assert_called_once()
 
 
-async def test_backoff_push_provider_does_not_change_interval(
+async def test_backoff_push_provider_polls_to_probe_recovery(
     push_coordinator: LockUsercodeUpdateCoordinator,
     push_lock: MockLCMPushLock,
 ) -> None:
-    """Test that push-based providers do not modify update_interval during backoff."""
-    # Push providers have update_interval=None
+    """A push provider starts polling on a backoff once the breaker trips, then stops on recovery."""
+    # Push providers normally have update_interval=None (no polling)
     assert push_coordinator.update_interval is None
     push_coordinator.last_update_success = True
 
@@ -603,10 +603,45 @@ async def test_backoff_push_provider_does_not_change_interval(
             with pytest.raises(UpdateFailed):
                 await push_coordinator.async_get_usercodes()
 
-    # update_interval should remain None for push providers
-    assert push_coordinator.update_interval is None
-    # But failure counter should still be tracked
+    # While unreachable, the push provider polls on the backoff interval to
+    # probe for recovery.
+    assert push_coordinator.unreachable is True
+    assert (
+        push_coordinator.update_interval == push_coordinator._lock_breaker.backoff_delay
+    )
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 2
+
+    # A successful poll clears the breaker and stops the probe polling.
+    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    with patch.object(push_lock, "async_internal_get_usercodes", mock_get_ok):
+        await push_coordinator.async_get_usercodes()
+
+    assert push_coordinator.unreachable is False
+    assert push_coordinator.update_interval is None
+
+
+async def test_note_connectivity_failure_kicks_probe_for_push(
+    hass: HomeAssistant,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Set-side failures that trip the breaker start probe polling on a push provider."""
+    assert push_coordinator.update_interval is None
+
+    with patch.object(
+        push_coordinator, "async_request_refresh", new_callable=AsyncMock
+    ) as mock_refresh:
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            push_coordinator.note_connectivity_failure()
+        await hass.async_block_till_done()
+
+    assert push_coordinator.unreachable is True
+    # Probe polling enabled at the backoff cadence.
+    assert (
+        push_coordinator.update_interval == push_coordinator._lock_breaker.backoff_delay
+    )
+    # A refresh was kicked once, on the trip transition, so a push provider
+    # that otherwise never polls begins probing for recovery.
+    mock_refresh.assert_called_once()
 
 
 async def test_backoff_init_stores_original_interval(

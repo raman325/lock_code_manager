@@ -165,6 +165,14 @@ class SlotSyncManager:
             MAX_SYNC_ATTEMPTS, window=SYNC_ATTEMPT_WINDOW
         )
 
+        # The desired target (active_state, pin_state) captured when the slot
+        # is suspended for a non-converging code or an unexpected error. While
+        # set, the slot stays suspended until that target changes (user edits
+        # the PIN or toggles the slot) or it returns to sync -- it does NOT
+        # resume on unrelated coordinator updates. None for a slot that is not
+        # suspended, or that is suspended only because the lock is unreachable.
+        self._code_suspend_target: tuple[str, str] | None = None
+
         # Invalid state tracking (for initial load)
         self._logged_invalid_state: bool = False
 
@@ -415,9 +423,16 @@ class SlotSyncManager:
         finally:
             self._slot_breaker.reset()
 
-    def _suspend_slot(self, reason: str) -> None:
-        """Suspend this lock and slot and create a per-slot repair issue."""
+    def _suspend_slot(self, slot_state: SlotState, reason: str) -> None:
+        """
+        Suspend this lock and slot and create a per-slot repair issue.
+
+        Records the desired target so the slot stays suspended until that
+        target changes or it returns to sync, rather than resuming on
+        unrelated coordinator updates.
+        """
         self._state = SyncState.SUSPENDED
+        self._code_suspend_target = (slot_state.active_state, slot_state.pin_state)
         self._slot_breaker.reset()
         self._write_state()
 
@@ -464,11 +479,25 @@ class SlotSyncManager:
                 self._slot_breaker.reset()
                 self._write_state()
         elif self._state is SyncState.SUSPENDED:
-            if not self._coordinator.unreachable:
-                # Lock is reachable again: reset the slot breaker and retry.
-                # For a code that won't converge this restarts the attempt
-                # window each recovery cycle; for connectivity suspension the
-                # breaker is already clear.
+            if self._code_suspend_target is not None:
+                # Suspended for a non-converging code or an unexpected error.
+                # Only retry once the desired target changes (e.g. the user
+                # edits the PIN or toggles the slot) or the slot returns to
+                # sync on its own -- otherwise stay suspended so we don't
+                # hammer the lock with a code it keeps rejecting.
+                slot_state = self._resolve_slot_state()
+                if slot_state is not None and (
+                    (slot_state.active_state, slot_state.pin_state)
+                    != self._code_suspend_target
+                    or self.calculate_in_sync(slot_state)
+                ):
+                    self._slot_breaker.reset()
+                    self._code_suspend_target = None
+                    self._state = SyncState.OUT_OF_SYNC
+                    self._write_state()
+            elif not self._coordinator.unreachable:
+                # Suspended because the lock was unreachable; it is reachable
+                # again, so resume.
                 self._slot_breaker.reset()
                 self._state = SyncState.OUT_OF_SYNC
                 self._write_state()
@@ -592,6 +621,7 @@ class SlotSyncManager:
                 SYNC_ATTEMPT_WINDOW,
             )
             self._suspend_slot(
+                slot_state,
                 f"Lock **{self._lock.lock.entity_id}**: slot "
                 f"**{self._slot_num}** failed to sync after "
                 f"{self._slot_breaker.failure_count} consecutive attempts. "
@@ -643,6 +673,7 @@ class SlotSyncManager:
                 err,
             )
             self._suspend_slot(
+                slot_state,
                 f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}** "
                 f"encountered an unexpected error during sync. This may indicate a bug "
                 f"in the lock code manager integration. Check logs for details and "

@@ -132,31 +132,33 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
 
         Lets the sync layer feed set/clear transport failures into the same
         lock breaker that polling uses, so "lock is unreachable" converges
-        from both code paths.
+        from both code paths. When this is what trips the breaker, kick a
+        refresh so a provider that does not normally poll (push) starts
+        probing for recovery.
         """
+        was_tripped = self._lock_breaker.tripped
         self._apply_backoff()
+        if self._lock_breaker.tripped and not was_tripped:
+            self.hass.async_create_task(self.async_request_refresh())
 
     def _apply_backoff(self) -> None:
-        """Record a connectivity failure and apply exponential polling backoff."""
+        """Record a connectivity failure and poll on a backoff until recovery."""
         self._lock_breaker.record_failure()
         if self._lock_breaker.tripped:
-            if self._original_update_interval is not None:
-                new_interval = self._lock_breaker.backoff_delay
-                if new_interval != self.update_interval:  # type: ignore[has-type]
-                    self.update_interval = new_interval
-                    _LOGGER.warning(
-                        "Update failed %d consecutive times for %s, "
-                        "backing off polling interval to %ds",
-                        self._lock_breaker.failure_count,
-                        self._lock.lock.entity_id,
-                        new_interval.total_seconds(),
-                    )
-            else:
+            # Poll on the backoff interval until a successful update clears the
+            # breaker. Push providers normally do not poll, but while the lock
+            # is unreachable we poll to probe for recovery -- otherwise a push
+            # provider whose writes fail (with no push arriving) could stay
+            # suspended indefinitely.
+            new_interval = self._lock_breaker.backoff_delay
+            if new_interval != self.update_interval:  # type: ignore[has-type]
+                self.update_interval = new_interval
                 _LOGGER.warning(
                     "Update failed %d consecutive times for %s, "
-                    "suppressing drift checks until recovery",
+                    "polling every %ds until it recovers",
                     self._lock_breaker.failure_count,
                     self._lock.lock.entity_id,
+                    new_interval.total_seconds(),
                 )
 
         if self._lock_breaker.failure_count == POLL_FAILURE_ALERT_THRESHOLD:
@@ -187,8 +189,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
                 self._lock_breaker.failure_count,
             )
             self._lock_breaker.reset()
-            if self._original_update_interval is not None:
-                self.update_interval = self._original_update_interval
+            # Restore the normal cadence. For push providers this is None,
+            # which stops the recovery probe polling.
+            self.update_interval = self._original_update_interval  # type: ignore[assignment]
         # Unconditionally clear lock_offline issue on any successful poll.
         # Runs outside the if-block so it also clears persisted issues that
         # survive HA restarts (where the breaker resets to 0).

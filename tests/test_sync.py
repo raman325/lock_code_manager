@@ -882,6 +882,41 @@ class TestSyncStateMachine:
         await manager._async_tick()
         assert manager._state is SyncState.SUSPENDED
 
+    async def test_code_suspension_latches_until_target_changes(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A code-suspended slot stays suspended until its desired target changes."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+
+        # Trip the slot breaker so the tick suspends for a non-converging code.
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        for _ in range(MAX_SYNC_ATTEMPTS):
+            manager._slot_breaker.record_failure()
+        await manager._async_tick()
+        await hass.async_block_till_done()
+
+        assert manager._state is SyncState.SUSPENDED
+        assert manager._code_suspend_target is not None
+        # The lock is reachable, so this is NOT a connectivity suspension.
+        assert manager._coordinator.unreachable is False
+
+        # A sync check with the same desired target must not resume the slot —
+        # this is the key fix: it no longer hot-loops on a reachable lock.
+        manager._request_sync_check()
+        assert manager._state is SyncState.SUSPENDED
+
+        # Simulate the desired target changing (e.g. the user edits the PIN):
+        # the recorded target now differs from the resolved state, so the slot
+        # resumes.
+        manager._code_suspend_target = (STATE_ON, "0000")
+        manager._request_sync_check()
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._code_suspend_target is None
+
 
 class TestSyncStatusAttribute:
     """Tests for sync_status extra state attribute."""
