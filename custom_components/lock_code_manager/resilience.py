@@ -20,10 +20,10 @@ class CircuitBreaker:
     for connectivity.
 
     Windowed trip (set ``window``, leave the backoff arguments unset): counts
-    failures within a sliding window. ``tripped`` latches once the threshold is
-    reached and stays latched until ``reset`` is called, so a caller decides
-    when recovery happens. Used at the slot level for a code that never
-    converges.
+    failures within a sliding window. ``tripped`` is True only while the
+    threshold is met within the trailing window; once the window elapses with
+    no new failures it clears on its own (and ``reset`` clears it immediately).
+    Used at the slot level for a code that never converges.
     """
 
     def __init__(

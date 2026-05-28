@@ -627,8 +627,9 @@ class SlotSyncManager:
                 f"{self._slot_breaker.failure_count} consecutive attempts. "
                 f"The lock may be rejecting the code silently or "
                 f"experiencing communication issues. "
-                f"Sync has been suspended for this slot. It will "
-                f"resume automatically when the lock recovers.",
+                f"Sync has been suspended for this slot. It will resume "
+                f"automatically once the lock accepts the code or you change "
+                f"the PIN for this slot.",
             )
             return
 

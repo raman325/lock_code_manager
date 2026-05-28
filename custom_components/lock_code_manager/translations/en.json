@@ -204,7 +204,7 @@
         "step": {
           "init": {
             "title": "Sync suspended for slot {slot_num} on {lock_name}",
-            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nSyncing for this slot will resume automatically when the lock recovers. Click **Submit** to acknowledge this issue."
+            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nSyncing for this slot will resume automatically once the lock accepts the code or you change the PIN for this slot. Click **Submit** to acknowledge this issue."
           }
         }
       }
