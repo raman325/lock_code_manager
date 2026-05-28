@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9eed1ada14dc",
+  "strategy": "manual-commit",
+  "branch": "refactor/resilience-circuit-breaker",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/coordinator.py",
+    "custom_components/lock_code_manager/diagnostics.py",
+    "custom_components/lock_code_manager/resilience.py",
+    "custom_components/lock_code_manager/sync.py",
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_coordinator.py",
+    "tests/test_init.py",
+    "tests/test_resilience.py",
+    "tests/test_sync.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9e/ed1ada14dc/0/metadata.json",
+      "transcript": "/9e/ed1ada14dc/0/full.jsonl",
+      "content_hash": "/9e/ed1ada14dc/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 172,
+    "cache_creation_tokens": 144839,
+    "cache_read_tokens": 25297460,
+    "output_tokens": 87094,
+    "api_call_count": 86
+  }
+}
