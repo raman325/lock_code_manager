@@ -31,6 +31,7 @@ from .const import (
 from .data import get_entry_config
 from .exceptions import LockCodeManagerError
 from .models import SlotCode
+from .resilience import CircuitBreaker
 
 if TYPE_CHECKING:
     from .providers import BaseLock
@@ -60,7 +61,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         self.data: dict[int, str | SlotCode] = {}
         self._slot_sync_mgrs_suspended: bool = False
         self._config_entry = config_entry
-        self._consecutive_failures: int = 0
+        self._lock_breaker = CircuitBreaker(
+            BACKOFF_FAILURE_THRESHOLD,
+            backoff_initial=timedelta(seconds=BACKOFF_INITIAL_SECONDS),
+            backoff_max=timedelta(seconds=BACKOFF_MAX_SECONDS),
+        )
         self._original_update_interval: timedelta | None = update_interval
 
         # Set up drift detection timer for locks with hard_refresh_interval
@@ -123,34 +128,29 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         self.async_set_updated_data(new_data)
 
     def _apply_backoff(self) -> None:
-        """Increment failure counter and apply exponential backoff if threshold met."""
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= BACKOFF_FAILURE_THRESHOLD:
-            backoff_secs = min(
-                BACKOFF_INITIAL_SECONDS
-                * 2 ** (self._consecutive_failures - BACKOFF_FAILURE_THRESHOLD),
-                BACKOFF_MAX_SECONDS,
-            )
+        """Record a connectivity failure and apply exponential polling backoff."""
+        self._lock_breaker.record_failure()
+        if self._lock_breaker.tripped:
             if self._original_update_interval is not None:
-                new_interval = timedelta(seconds=backoff_secs)
+                new_interval = self._lock_breaker.backoff_delay
                 if new_interval != self.update_interval:  # type: ignore[has-type]
                     self.update_interval = new_interval
                     _LOGGER.warning(
                         "Update failed %d consecutive times for %s, "
                         "backing off polling interval to %ds",
-                        self._consecutive_failures,
+                        self._lock_breaker.failure_count,
                         self._lock.lock.entity_id,
-                        backoff_secs,
+                        new_interval.total_seconds(),
                     )
             else:
                 _LOGGER.warning(
                     "Update failed %d consecutive times for %s, "
                     "suppressing drift checks until recovery",
-                    self._consecutive_failures,
+                    self._lock_breaker.failure_count,
                     self._lock.lock.entity_id,
                 )
 
-        if self._consecutive_failures == POLL_FAILURE_ALERT_THRESHOLD:
+        if self._lock_breaker.failure_count == POLL_FAILURE_ALERT_THRESHOLD:
             async_create_issue(
                 self.hass,
                 DOMAIN,
@@ -169,6 +169,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         """Return whether slot sync operations are suspended for this lock."""
         return self._slot_sync_mgrs_suspended
 
+    @property
+    def unreachable(self) -> bool:
+        """Return whether the lock is currently considered unreachable."""
+        return self._lock_breaker.tripped
+
     def suspend_slot_sync_mgrs(self) -> None:
         """
         Suspend slot sync managers for this lock.
@@ -185,15 +190,15 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         self.async_update_listeners()
 
     def _reset_backoff(self) -> None:
-        """Reset failure counter and restore original update interval."""
+        """Reset the lock breaker and restore the original update interval."""
         self._slot_sync_mgrs_suspended = False
-        if self._consecutive_failures > 0:
+        if self._lock_breaker.failure_count > 0:
             _LOGGER.info(
                 "Lock %s recovered after %d consecutive failures",
                 self._lock.lock.entity_id,
-                self._consecutive_failures,
+                self._lock_breaker.failure_count,
             )
-            self._consecutive_failures = 0
+            self._lock_breaker.reset()
             if self._original_update_interval is not None:
                 self.update_interval = self._original_update_interval
         # Unconditionally clear lock_offline issue on any successful poll.
@@ -234,11 +239,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         if not self.last_update_success:
             return
 
-        if self._consecutive_failures >= BACKOFF_FAILURE_THRESHOLD:
+        if self._lock_breaker.tripped:
             _LOGGER.debug(
                 "Skipping drift check for %s (in backoff after %d failures)",
                 self._lock.lock.entity_id,
-                self._consecutive_failures,
+                self._lock_breaker.failure_count,
             )
             return
 
