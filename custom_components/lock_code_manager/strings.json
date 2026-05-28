@@ -199,12 +199,12 @@
       }
     },
     "slot_suspended": {
-      "title": "Lock Code Manager: Sync suspended for {lock_name}",
+      "title": "Lock Code Manager: Sync suspended for slot {slot_num} on {lock_name}",
       "fix_flow": {
         "step": {
           "init": {
-            "title": "Sync suspended for {lock_name}",
-            "description": "Sync has been suspended for lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nThe lock will resume syncing automatically when it recovers. Click **Submit** to acknowledge this issue."
+            "title": "Sync suspended for slot {slot_num} on {lock_name}",
+            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nSyncing for this slot will resume automatically once the lock accepts the code or you change the PIN for this slot. Click **Submit** to acknowledge this issue."
           }
         }
       }

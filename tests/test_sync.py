@@ -14,9 +14,12 @@ from homeassistant.helpers.issue_registry import (
     async_create_issue,
     async_get as async_get_issue_registry,
 )
-from homeassistant.util import dt as dt_util
 
-from custom_components.lock_code_manager.const import DOMAIN, MAX_SYNC_ATTEMPTS
+from custom_components.lock_code_manager.const import (
+    BACKOFF_FAILURE_THRESHOLD,
+    DOMAIN,
+    MAX_SYNC_ATTEMPTS,
+)
 from custom_components.lock_code_manager.exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -25,7 +28,12 @@ from custom_components.lock_code_manager.exceptions import (
 from custom_components.lock_code_manager.models import SlotCode, SyncState
 from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
-from .common import SLOT_1_ACTIVE_ENTITY, SLOT_1_IN_SYNC_ENTITY, SLOT_1_PIN_ENTITY
+from .common import (
+    SLOT_1_ACTIVE_ENTITY,
+    SLOT_1_IN_SYNC_ENTITY,
+    SLOT_1_PIN_ENTITY,
+    SLOT_2_IN_SYNC_ENTITY,
+)
 from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
 
 
@@ -292,8 +300,8 @@ class TestDisableSlotExceptionHandling:
         manager = entity_obj._sync_manager
 
         # Set up some sync tracker state to verify it gets reset
-        manager._sync_attempt_count = 5
-        manager._sync_attempt_first = MagicMock()
+        for _ in range(5):
+            manager._slot_breaker.record_failure()
 
         with patch(
             "custom_components.lock_code_manager.sync.async_disable_slot",
@@ -303,8 +311,7 @@ class TestDisableSlotExceptionHandling:
             await manager._disable_slot("test reason")
 
         # Sync tracker should still be reset even after exception
-        assert manager._sync_attempt_count == 0
-        assert manager._sync_attempt_first is None
+        assert manager._slot_breaker.failure_count == 0
         assert "Failed to disable slot" in caplog.text
 
         # Fallback repair issue should be created even though service call failed
@@ -324,8 +331,8 @@ class TestDisableSlotExceptionHandling:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._sync_attempt_count = 5
-        manager._sync_attempt_first = MagicMock()
+        for _ in range(5):
+            manager._slot_breaker.record_failure()
 
         with patch(
             "custom_components.lock_code_manager.sync.async_disable_slot",
@@ -334,8 +341,7 @@ class TestDisableSlotExceptionHandling:
         ):
             await manager._disable_slot("test reason")
 
-        assert manager._sync_attempt_count == 0
-        assert manager._sync_attempt_first is None
+        assert manager._slot_breaker.failure_count == 0
 
 
 class TestSlotDisabledIssueCleanup:
@@ -602,7 +608,7 @@ class TestSyncStateMachine:
             await hass.async_block_till_done()
 
         assert manager._state is SyncState.SUSPENDED
-        assert manager._coordinator.slot_sync_mgrs_suspended is True
+        assert manager._coordinator.unreachable is False
 
     async def test_syncing_to_suspended_on_circuit_breaker(
         self,
@@ -616,14 +622,14 @@ class TestSyncStateMachine:
 
         manager._state = SyncState.OUT_OF_SYNC
         manager._coordinator.data[1] = SlotCode.EMPTY
-        manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
-        manager._sync_attempt_first = dt_util.utcnow()
+        for _ in range(MAX_SYNC_ATTEMPTS):
+            manager._slot_breaker.record_failure()
 
         await manager._async_tick()
         await hass.async_block_till_done()
 
         assert manager._state is SyncState.SUSPENDED
-        assert manager._coordinator.slot_sync_mgrs_suspended is True
+        assert manager._coordinator.unreachable is False
 
     async def test_suspended_skips_tick(
         self,
@@ -647,30 +653,34 @@ class TestSyncStateMachine:
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """SUSPENDED transitions to OUT_OF_SYNC when coordinator clears suspended flag."""
+        """SUSPENDED transitions to OUT_OF_SYNC when the lock becomes reachable."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
+        # Lock unreachable suspends the slot.
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            manager._coordinator._lock_breaker.record_failure()
         manager._state = SyncState.SUSPENDED
-        manager._coordinator.suspend_slot_sync_mgrs()
 
-        manager._coordinator._slot_sync_mgrs_suspended = False
+        # Lock recovers: breaker resets, so the next sync check resumes.
+        manager._coordinator._lock_breaker.reset()
         manager._request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
 
-    async def test_suspended_stays_suspended_when_coordinator_still_suspended(
+    async def test_suspended_stays_suspended_when_lock_still_unreachable(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """SUSPENDED stays SUSPENDED when coordinator flag is still set."""
+        """SUSPENDED stays SUSPENDED while the lock is still unreachable."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            manager._coordinator._lock_breaker.record_failure()
         manager._state = SyncState.SUSPENDED
-        manager._coordinator.suspend_slot_sync_mgrs()
 
         manager._request_sync_check()
         assert manager._state is SyncState.SUSPENDED
@@ -705,7 +715,7 @@ class TestSyncStateMachine:
             await hass.async_block_till_done()
 
         mock_disable.assert_called_once()
-        assert manager._coordinator.slot_sync_mgrs_suspended is False
+        assert manager._coordinator.unreachable is False
 
     async def test_suspend_creates_repair_issue(
         self,
@@ -713,7 +723,7 @@ class TestSyncStateMachine:
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """Suspension creates a per-lock slot_suspended repair issue."""
+        """Suspension creates a per-slot slot_suspended repair issue."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
@@ -732,8 +742,9 @@ class TestSyncStateMachine:
         issue_registry = async_get_issue_registry(hass)
         entry_id = lock_code_manager_config_entry.entry_id
         lock_entity_id = manager._lock.lock.entity_id
+        slot_num = manager._slot_num
         issue = issue_registry.async_get_issue(
-            DOMAIN, f"slot_suspended_{entry_id}_{lock_entity_id}"
+            DOMAIN, f"slot_suspended_{entry_id}_{lock_entity_id}_{slot_num}"
         )
         assert issue is not None
         assert issue.severity == IssueSeverity.WARNING
@@ -749,9 +760,10 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
         entry_id = lock_code_manager_config_entry.entry_id
         lock_entity_id = manager._lock.lock.entity_id
+        slot_num = manager._slot_num
 
         # Create a slot_suspended issue
-        issue_id = f"slot_suspended_{entry_id}_{lock_entity_id}"
+        issue_id = f"slot_suspended_{entry_id}_{lock_entity_id}_{slot_num}"
         async_create_issue(
             hass,
             DOMAIN,
@@ -813,6 +825,98 @@ class TestSyncStateMachine:
         # Sync "succeeded" but verify check shows still out of sync
         assert manager._state is SyncState.OUT_OF_SYNC
 
+    async def test_non_converging_code_suspends_only_its_slot(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A code that won't converge suspends its own slot, not siblings."""
+        failing = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        sibling = get_in_sync_entity_obj(hass, SLOT_2_IN_SYNC_ENTITY)._sync_manager
+        # Both slots are on the same lock and share one coordinator.
+        assert failing._coordinator is sibling._coordinator
+
+        # Trip the failing slot's breaker so the next tick suspends it.
+        failing._state = SyncState.OUT_OF_SYNC
+        failing._coordinator.data[1] = SlotCode.EMPTY
+        for _ in range(MAX_SYNC_ATTEMPTS):
+            failing._slot_breaker.record_failure()
+
+        await failing._async_tick()
+        await hass.async_block_till_done()
+
+        assert failing._state is SyncState.SUSPENDED
+        # The sibling slot on the same lock is unaffected.
+        assert sibling._state is not SyncState.SUSPENDED
+        # A slot-level failure does not mark the whole lock unreachable.
+        assert failing._coordinator.unreachable is False
+
+    async def test_set_disconnect_failures_trip_lock_breaker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Repeated LockDisconnected on set trips the lock breaker and suspends the tick."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+        manager._coordinator.data[1] = SlotCode.EMPTY
+
+        with patch.object(
+            manager,
+            "_perform_sync",
+            new_callable=AsyncMock,
+            side_effect=LockDisconnected("offline"),
+        ):
+            for _ in range(BACKOFF_FAILURE_THRESHOLD):
+                manager._state = SyncState.OUT_OF_SYNC
+                await manager._async_tick()
+                await hass.async_block_till_done()
+
+        # Connectivity failures during set converged to "unreachable".
+        assert manager._coordinator.unreachable is True
+
+        # The next tick observes the unreachable lock and suspends instead of
+        # retrying every tick.
+        manager._state = SyncState.OUT_OF_SYNC
+        await manager._async_tick()
+        assert manager._state is SyncState.SUSPENDED
+
+    async def test_code_suspension_latches_until_target_changes(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A code-suspended slot stays suspended until its desired target changes."""
+        manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
+
+        # Trip the slot breaker so the tick suspends for a non-converging code.
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        for _ in range(MAX_SYNC_ATTEMPTS):
+            manager._slot_breaker.record_failure()
+        await manager._async_tick()
+        await hass.async_block_till_done()
+
+        assert manager._state is SyncState.SUSPENDED
+        assert manager._code_suspend_target is not None
+        # The lock is reachable, so this is NOT a connectivity suspension.
+        assert manager._coordinator.unreachable is False
+
+        # A sync check with the same desired target must not resume the slot —
+        # this is the key fix: it no longer hot-loops on a reachable lock.
+        manager._request_sync_check()
+        assert manager._state is SyncState.SUSPENDED
+
+        # Simulate the desired target changing (e.g. the user edits the PIN):
+        # the recorded target now differs from the resolved state, so the slot
+        # resumes.
+        manager._code_suspend_target = (STATE_ON, "0000")
+        manager._request_sync_check()
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._code_suspend_target is None
+
 
 class TestSyncStatusAttribute:
     """Tests for sync_status extra state attribute."""
@@ -858,7 +962,10 @@ class TestSyncStatusAttribute:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.suspend_slot_sync_mgrs()
+        # Make the lock unreachable so the suspended state is not immediately
+        # cleared by a sync check.
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            manager._coordinator._lock_breaker.record_failure()
         manager._state = SyncState.SUSPENDED
         manager._write_state()
         await hass.async_block_till_done()

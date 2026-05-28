@@ -408,7 +408,7 @@ async def test_backoff_failure_counter_increments(
         for i in range(1, 4):
             with pytest.raises(UpdateFailed):
                 await poll_coordinator.async_get_usercodes()
-            assert poll_coordinator._consecutive_failures == i
+            assert poll_coordinator._lock_breaker.failure_count == i
 
 
 async def test_backoff_first_failure_returns_empty_dict(
@@ -424,7 +424,7 @@ async def test_backoff_first_failure_returns_empty_dict(
         result = await poll_coordinator.async_get_usercodes()
 
     assert result == {}
-    assert poll_coordinator._consecutive_failures == 1
+    assert poll_coordinator._lock_breaker.failure_count == 1
 
 
 async def test_backoff_subsequent_failure_raises_update_failed(
@@ -439,7 +439,7 @@ async def test_backoff_subsequent_failure_raises_update_failed(
         with pytest.raises(UpdateFailed):
             await poll_coordinator.async_get_usercodes()
 
-    assert poll_coordinator._consecutive_failures == 1
+    assert poll_coordinator._lock_breaker.failure_count == 1
 
 
 async def test_backoff_activates_after_threshold(
@@ -463,7 +463,7 @@ async def test_backoff_activates_after_threshold(
         with pytest.raises(UpdateFailed):
             await poll_coordinator.async_get_usercodes()
 
-        assert poll_coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD
+        assert poll_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD
         expected_backoff = timedelta(
             seconds=BACKOFF_INITIAL_SECONDS * 2**0  # 2^(3-3) = 1
         )
@@ -521,7 +521,7 @@ async def test_backoff_resets_on_success(
             with pytest.raises(UpdateFailed):
                 await poll_coordinator.async_get_usercodes()
 
-    assert poll_coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1
+    assert poll_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
     assert poll_coordinator.update_interval != original_interval
 
     # Now succeed
@@ -530,7 +530,7 @@ async def test_backoff_resets_on_success(
         result = await poll_coordinator.async_get_usercodes()
 
     assert result == {1: "1234"}
-    assert poll_coordinator._consecutive_failures == 0
+    assert poll_coordinator._lock_breaker.failure_count == 0
     assert poll_coordinator.update_interval == original_interval
 
 
@@ -546,7 +546,7 @@ async def test_backoff_no_reset_when_no_prior_failures(
         result = await poll_coordinator.async_get_usercodes()
 
     assert result == {1: "1234"}
-    assert poll_coordinator._consecutive_failures == 0
+    assert poll_coordinator._lock_breaker.failure_count == 0
     assert poll_coordinator.update_interval == original_interval
 
 
@@ -556,7 +556,8 @@ async def test_drift_check_skipped_during_backoff(
 ) -> None:
     """Test that drift check is skipped when in backoff."""
     push_coordinator.last_update_success = True
-    push_coordinator._consecutive_failures = BACKOFF_FAILURE_THRESHOLD
+    for _ in range(BACKOFF_FAILURE_THRESHOLD):
+        push_coordinator._lock_breaker.record_failure()
 
     mock_hard_refresh = AsyncMock()
     with patch.object(
@@ -574,7 +575,8 @@ async def test_drift_check_runs_below_backoff_threshold(
 ) -> None:
     """Test that drift check runs when failures are below threshold."""
     push_coordinator.last_update_success = True
-    push_coordinator._consecutive_failures = BACKOFF_FAILURE_THRESHOLD - 1
+    for _ in range(BACKOFF_FAILURE_THRESHOLD - 1):
+        push_coordinator._lock_breaker.record_failure()
 
     mock_hard_refresh = AsyncMock(return_value={1: "1234"})
     with patch.object(
@@ -586,12 +588,12 @@ async def test_drift_check_runs_below_backoff_threshold(
         mock_hard_refresh.assert_called_once()
 
 
-async def test_backoff_push_provider_does_not_change_interval(
+async def test_backoff_push_provider_polls_to_probe_recovery(
     push_coordinator: LockUsercodeUpdateCoordinator,
     push_lock: MockLCMPushLock,
 ) -> None:
-    """Test that push-based providers do not modify update_interval during backoff."""
-    # Push providers have update_interval=None
+    """A push provider starts polling on a backoff once the breaker trips, then stops on recovery."""
+    # Push providers normally have update_interval=None (no polling)
     assert push_coordinator.update_interval is None
     push_coordinator.last_update_success = True
 
@@ -601,10 +603,45 @@ async def test_backoff_push_provider_does_not_change_interval(
             with pytest.raises(UpdateFailed):
                 await push_coordinator.async_get_usercodes()
 
-    # update_interval should remain None for push providers
+    # While unreachable, the push provider polls on the backoff interval to
+    # probe for recovery.
+    assert push_coordinator.unreachable is True
+    assert (
+        push_coordinator.update_interval == push_coordinator._lock_breaker.backoff_delay
+    )
+    assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 2
+
+    # A successful poll clears the breaker and stops the probe polling.
+    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    with patch.object(push_lock, "async_internal_get_usercodes", mock_get_ok):
+        await push_coordinator.async_get_usercodes()
+
+    assert push_coordinator.unreachable is False
     assert push_coordinator.update_interval is None
-    # But failure counter should still be tracked
-    assert push_coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 2
+
+
+async def test_note_connectivity_failure_kicks_probe_for_push(
+    hass: HomeAssistant,
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """Set-side failures that trip the breaker start probe polling on a push provider."""
+    assert push_coordinator.update_interval is None
+
+    with patch.object(
+        push_coordinator, "async_request_refresh", new_callable=AsyncMock
+    ) as mock_refresh:
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            push_coordinator.note_connectivity_failure()
+        await hass.async_block_till_done()
+
+    assert push_coordinator.unreachable is True
+    # Probe polling enabled at the backoff cadence.
+    assert (
+        push_coordinator.update_interval == push_coordinator._lock_breaker.backoff_delay
+    )
+    # A refresh was kicked once, on the trip transition, so a push provider
+    # that otherwise never polls begins probing for recovery.
+    mock_refresh.assert_called_once()
 
 
 async def test_backoff_init_stores_original_interval(
@@ -615,7 +652,7 @@ async def test_backoff_init_stores_original_interval(
     assert (
         poll_coordinator._original_update_interval == poll_lock.usercode_scan_interval
     )
-    assert poll_coordinator._consecutive_failures == 0
+    assert poll_coordinator._lock_breaker.failure_count == 0
 
 
 async def test_backoff_init_push_stores_none_interval(
@@ -623,7 +660,7 @@ async def test_backoff_init_push_stores_none_interval(
 ) -> None:
     """Test that __init__ stores None for push-based providers."""
     assert push_coordinator._original_update_interval is None
-    assert push_coordinator._consecutive_failures == 0
+    assert push_coordinator._lock_breaker.failure_count == 0
 
 
 async def test_push_update_resets_backoff(
@@ -640,13 +677,13 @@ async def test_push_update_resets_backoff(
             with pytest.raises(UpdateFailed):
                 await push_coordinator.async_get_usercodes()
 
-    assert push_coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 2
+    assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 2
 
     # Push update with new data should reset backoff
     push_coordinator.data = {1: "old"}
     push_coordinator.push_update({1: "1234"})
 
-    assert push_coordinator._consecutive_failures == 0
+    assert push_coordinator._lock_breaker.failure_count == 0
 
 
 async def test_push_update_no_reset_when_data_unchanged(
@@ -663,13 +700,13 @@ async def test_push_update_no_reset_when_data_unchanged(
             with pytest.raises(UpdateFailed):
                 await push_coordinator.async_get_usercodes()
 
-    assert push_coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1
+    assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
 
     # Push update with same data should NOT reset backoff
     push_coordinator.data = {1: "1234"}
     push_coordinator.push_update({1: "1234"})
 
-    assert push_coordinator._consecutive_failures == BACKOFF_FAILURE_THRESHOLD + 1
+    assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
 
 
 async def test_poll_failure_alert_created_after_threshold(
@@ -742,42 +779,6 @@ async def test_poll_failure_alert_dismissed_on_recovery(
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
 
 
-async def test_coordinator_suspended_flag_defaults_false(
-    hass: HomeAssistant, poll_lock, lcm_config_entry
-) -> None:
-    """Coordinator starts with suspended=False."""
-    coordinator = LockUsercodeUpdateCoordinator(hass, poll_lock, lcm_config_entry)
-    assert coordinator.slot_sync_mgrs_suspended is False
-
-
-async def test_coordinator_suspended_cleared_on_successful_poll(
-    hass: HomeAssistant, poll_lock, poll_coordinator
-) -> None:
-    """Successful poll clears suspended flag."""
-    poll_coordinator.suspend_slot_sync_mgrs()
-    await poll_coordinator.async_refresh()
-    assert poll_coordinator.slot_sync_mgrs_suspended is False
-
-
-async def test_coordinator_suspended_cleared_on_push_update(
-    hass: HomeAssistant, push_lock, push_coordinator
-) -> None:
-    """Push update clears suspended flag."""
-    push_coordinator.suspend_slot_sync_mgrs()
-    push_coordinator.push_update({1: "1234"})
-    assert push_coordinator.slot_sync_mgrs_suspended is False
-
-
-async def test_coordinator_suspended_not_cleared_on_failed_poll(
-    hass: HomeAssistant, poll_lock, poll_coordinator
-) -> None:
-    """Failed poll does not clear suspended flag."""
-    poll_coordinator.suspend_slot_sync_mgrs()
-    poll_lock.set_connected(False)
-    await poll_coordinator.async_refresh()
-    assert poll_coordinator.slot_sync_mgrs_suspended is True
-
-
 async def test_lock_offline_issue_persists_across_shutdown(
     poll_coordinator: LockUsercodeUpdateCoordinator,
     poll_lock: MockLCMLock,
@@ -803,3 +804,43 @@ async def test_lock_offline_issue_persists_across_shutdown(
     # Shutdown should NOT delete the issue — it persists across restarts
     await poll_coordinator.async_shutdown()
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+
+async def test_unreachable_reflects_backoff_trip(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
+) -> None:
+    """unreachable is False until the lock breaker trips, then True."""
+    poll_coordinator.last_update_success = True
+    assert poll_coordinator.unreachable is False
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await poll_coordinator.async_get_usercodes()
+
+    assert poll_coordinator.unreachable is True
+
+
+async def test_unreachable_clears_on_recovery(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
+) -> None:
+    """A successful poll resets the breaker and clears unreachable."""
+    poll_coordinator.last_update_success = True
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(BACKOFF_FAILURE_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await poll_coordinator.async_get_usercodes()
+    assert poll_coordinator.unreachable is True
+
+    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_ok):
+        await poll_coordinator.async_get_usercodes()
+
+    assert poll_coordinator.unreachable is False
+    assert (
+        poll_coordinator.update_interval == poll_coordinator._original_update_interval
+    )

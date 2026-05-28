@@ -42,7 +42,6 @@ from homeassistant.helpers.issue_registry import (
     async_create_issue,
     async_delete_issue,
 )
-from homeassistant.util import dt as dt_util
 
 from .const import (
     ATTR_ACTIVE,
@@ -54,6 +53,7 @@ from .const import (
 )
 from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
 from .models import SlotCode, SyncState
+from .resilience import CircuitBreaker
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
@@ -159,9 +159,19 @@ class SlotSyncManager:
         # masked/write-only slot on every restart.
         self._last_set_pin: str | None = None
 
-        # Circuit breaker
-        self._sync_attempt_count: int = 0
-        self._sync_attempt_first: datetime | None = None
+        # Slot-level circuit breaker: trips when a code repeatedly fails to
+        # converge within the window, suspending just this lock and slot.
+        self._slot_breaker = CircuitBreaker(
+            MAX_SYNC_ATTEMPTS, window=SYNC_ATTEMPT_WINDOW
+        )
+
+        # The desired target (active_state, pin_state) captured when the slot
+        # is suspended for a non-converging code or an unexpected error. While
+        # set, the slot stays suspended until that target changes (user edits
+        # the PIN or toggles the slot) or it returns to sync -- it does NOT
+        # resume on unrelated coordinator updates. None for a slot that is not
+        # suspended, or that is suspended only because the lock is unreachable.
+        self._code_suspend_target: tuple[str, str] | None = None
 
         # Invalid state tracking (for initial load)
         self._logged_invalid_state: bool = False
@@ -211,7 +221,7 @@ class SlotSyncManager:
         if self._coordinator_unsub:
             self._coordinator_unsub()
             self._coordinator_unsub = None
-        self._reset_sync_tracker()
+        self._slot_breaker.reset()
 
     # -- State resolution ----------------------------------------------------
 
@@ -367,9 +377,9 @@ class SlotSyncManager:
                 source="sync",
             )
             self._last_set_pin = slot_state.pin_state
-            # Track set operations toward circuit breaker. Clear operations
+            # Track set operations toward the slot breaker. Clear operations
             # don't increment the counter (expected to always succeed).
-            self._record_sync_attempt()
+            self._slot_breaker.record_failure()
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
         else:
             await self._lock.async_internal_clear_usercode(
@@ -411,17 +421,24 @@ class SlotSyncManager:
                 },
             )
         finally:
-            self._reset_sync_tracker()
+            self._slot_breaker.reset()
 
-    def _suspend_lock(self, reason: str) -> None:
-        """Suspend this lock and create a per-lock repair issue."""
+    def _suspend_slot(self, slot_state: SlotState, reason: str) -> None:
+        """
+        Suspend this lock and slot and create a per-slot repair issue.
+
+        Records the desired target so the slot stays suspended until that
+        target changes or it returns to sync, rather than resuming on
+        unrelated coordinator updates.
+        """
         self._state = SyncState.SUSPENDED
-        self._coordinator.suspend_slot_sync_mgrs()
-        self._reset_sync_tracker()
+        self._code_suspend_target = (slot_state.active_state, slot_state.pin_state)
+        self._slot_breaker.reset()
         self._write_state()
 
         issue_id = (
-            f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}"
+            f"slot_suspended_{self._config_entry.entry_id}_"
+            f"{self._lock.lock.entity_id}_{self._slot_num}"
         )
         async_create_issue(
             self._hass,
@@ -434,44 +451,10 @@ class SlotSyncManager:
             translation_placeholders={
                 "lock_entity_id": self._lock.lock.entity_id,
                 "lock_name": self._lock.display_name or self._lock.lock.entity_id,
+                "slot_num": str(self._slot_num),
                 "reason": reason,
             },
         )
-
-    # -- Attempt tracking + circuit breaker ----------------------------------
-
-    def _reset_sync_tracker(self) -> None:
-        """Reset the sync attempt tracker."""
-        self._sync_attempt_count = 0
-        self._sync_attempt_first = None
-
-    def _record_sync_attempt(self) -> None:
-        """
-        Record a sync attempt toward circuit breaker counter.
-
-        Called for set operations. Successful clear operations and transient
-        LockDisconnected errors are not tracked since they represent
-        transient lock communication issues, not persistent failures.
-        """
-        now = dt_util.utcnow()
-        if (
-            self._sync_attempt_first is not None
-            and now - self._sync_attempt_first > SYNC_ATTEMPT_WINDOW
-        ):
-            self._sync_attempt_count = 0
-            self._sync_attempt_first = None
-
-        if self._sync_attempt_first is None:
-            self._sync_attempt_first = now
-        self._sync_attempt_count += 1
-
-    def _sync_attempts_exceeded(self) -> bool:
-        """Check if sync attempts exceeded the limit within the time window."""
-        if self._sync_attempt_count < MAX_SYNC_ATTEMPTS:
-            return False
-        if self._sync_attempt_first is None:
-            return False
-        return dt_util.utcnow() - self._sync_attempt_first <= SYNC_ATTEMPT_WINDOW
 
     # -- Orchestration -------------------------------------------------------
 
@@ -493,10 +476,29 @@ class SlotSyncManager:
             slot_state = self._resolve_slot_state()
             if slot_state is not None and not self.calculate_in_sync(slot_state):
                 self._state = SyncState.OUT_OF_SYNC
-                self._reset_sync_tracker()
+                self._slot_breaker.reset()
                 self._write_state()
         elif self._state is SyncState.SUSPENDED:
-            if not self._coordinator.slot_sync_mgrs_suspended:
+            if self._code_suspend_target is not None:
+                # Suspended for a non-converging code or an unexpected error.
+                # Only retry once the desired target changes (e.g. the user
+                # edits the PIN or toggles the slot) or the slot returns to
+                # sync on its own -- otherwise stay suspended so we don't
+                # hammer the lock with a code it keeps rejecting.
+                slot_state = self._resolve_slot_state()
+                if slot_state is not None and (
+                    (slot_state.active_state, slot_state.pin_state)
+                    != self._code_suspend_target
+                    or self.calculate_in_sync(slot_state)
+                ):
+                    self._slot_breaker.reset()
+                    self._code_suspend_target = None
+                    self._state = SyncState.OUT_OF_SYNC
+                    self._write_state()
+            elif not self._coordinator.unreachable:
+                # Suspended because the lock was unreachable; it is reachable
+                # again, so resume.
+                self._slot_breaker.reset()
                 self._state = SyncState.OUT_OF_SYNC
                 self._write_state()
 
@@ -570,7 +572,8 @@ class SlotSyncManager:
                 async_delete_issue(
                     self._hass,
                     DOMAIN,
-                    f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+                    f"slot_suspended_{self._config_entry.entry_id}_"
+                    f"{self._lock.lock.entity_id}_{self._slot_num}",
                 )
             else:
                 self._state = SyncState.OUT_OF_SYNC
@@ -583,8 +586,8 @@ class SlotSyncManager:
             self._write_state()
             return
 
-        # -- OUT_OF_SYNC: check coordinator suspend flag, then attempt sync --
-        if self._coordinator.slot_sync_mgrs_suspended:
+        # -- OUT_OF_SYNC: check lock reachability, then attempt sync --
+        if self._coordinator.unreachable:
             self._state = SyncState.SUSPENDED
             self._write_state()
             return
@@ -592,7 +595,7 @@ class SlotSyncManager:
         if expected_in_sync:
             # Became in sync without us doing anything (external change)
             self._state = SyncState.IN_SYNC
-            self._reset_sync_tracker()
+            self._slot_breaker.reset()
             self._write_state()
             if slot_state.active_state == STATE_ON:
                 async_delete_issue(
@@ -604,26 +607,29 @@ class SlotSyncManager:
             async_delete_issue(
                 self._hass,
                 DOMAIN,
-                f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+                f"slot_suspended_{self._config_entry.entry_id}_"
+                f"{self._lock.lock.entity_id}_{self._slot_num}",
             )
             return
 
         # Circuit breaker check (set operations only)
-        if slot_state.active_state == STATE_ON and self._sync_attempts_exceeded():
+        if slot_state.active_state == STATE_ON and self._slot_breaker.tripped:
             _LOGGER.error(
-                "%s: Sync attempts exceeded (%s in %s window), suspending lock",
+                "%s: Sync attempts exceeded (%s in %s window), suspending slot",
                 self._log_prefix,
-                self._sync_attempt_count,
+                self._slot_breaker.failure_count,
                 SYNC_ATTEMPT_WINDOW,
             )
-            self._suspend_lock(
+            self._suspend_slot(
+                slot_state,
                 f"Lock **{self._lock.lock.entity_id}**: slot "
                 f"**{self._slot_num}** failed to sync after "
-                f"{self._sync_attempt_count} consecutive attempts. "
+                f"{self._slot_breaker.failure_count} consecutive attempts. "
                 f"The lock may be rejecting the code silently or "
                 f"experiencing communication issues. "
-                f"Sync has been suspended for this lock. It will "
-                f"resume automatically when the lock recovers.",
+                f"Sync has been suspended for this slot. It will resume "
+                f"automatically once the lock accepts the code or you change "
+                f"the PIN for this slot.",
             )
             return
 
@@ -652,6 +658,9 @@ class SlotSyncManager:
                 "set" if slot_state.active_state == STATE_ON else "clear",
                 err,
             )
+            # Feed the lock breaker so repeated connectivity failures during
+            # sync converge to "unreachable" alongside poll failures.
+            self._coordinator.note_connectivity_failure()
             self._state = SyncState.OUT_OF_SYNC
             return
         except Exception as err:
@@ -664,7 +673,8 @@ class SlotSyncManager:
                 type(err).__name__,
                 err,
             )
-            self._suspend_lock(
+            self._suspend_slot(
+                slot_state,
                 f"Lock **{self._lock.lock.entity_id}**: slot **{self._slot_num}** "
                 f"encountered an unexpected error during sync. This may indicate a bug "
                 f"in the lock code manager integration. Check logs for details and "
@@ -692,7 +702,7 @@ class SlotSyncManager:
         slot_state = self._resolve_slot_state()
         if slot_state is not None and self.calculate_in_sync(slot_state):
             self._state = SyncState.IN_SYNC
-            self._reset_sync_tracker()
+            self._slot_breaker.reset()
             self._write_state()
             if slot_state.active_state == STATE_ON:
                 async_delete_issue(
@@ -704,7 +714,8 @@ class SlotSyncManager:
             async_delete_issue(
                 self._hass,
                 DOMAIN,
-                f"slot_suspended_{self._config_entry.entry_id}_{self._lock.lock.entity_id}",
+                f"slot_suspended_{self._config_entry.entry_id}_"
+                f"{self._lock.lock.entity_id}_{self._slot_num}",
             )
         else:
             self._state = SyncState.OUT_OF_SYNC

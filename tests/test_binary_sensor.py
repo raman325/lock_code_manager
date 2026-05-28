@@ -884,12 +884,12 @@ async def test_sync_disables_slot_on_duplicate_code(
     assert lock_provider.codes.get(1) != "9999"
 
 
-async def test_sync_attempts_exceeded_disables_slot(
+async def test_sync_attempts_exceeded_suspends_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that exceeding sync attempts disables slot and notifies."""
+    """Test that exceeding sync attempts suspends the slot."""
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
 
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
@@ -910,19 +910,18 @@ async def test_sync_attempts_exceeded_disables_slot(
 
     sync_mgr = in_sync_entity_obj._sync_manager
 
-    # Pre-load the tracker to simulate repeated failures on the same PIN
-    now = dt_util.utcnow()
-    sync_mgr._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    sync_mgr._sync_attempt_first = now
+    # Pre-load the breaker to simulate repeated failures on the same PIN
+    for _ in range(MAX_SYNC_ATTEMPTS):
+        sync_mgr._slot_breaker.record_failure()
 
     # Trigger tick — circuit breaker should fire before attempting sync
     sync_mgr._state = SyncState.OUT_OF_SYNC
     await sync_mgr._async_tick()
     await hass.async_block_till_done()
 
-    # Lock should be suspended (not slot disabled)
+    # Slot should be suspended; the lock itself is not marked unreachable
     assert sync_mgr._state is SyncState.SUSPENDED
-    assert coordinator.slot_sync_mgrs_suspended is True
+    assert coordinator.unreachable is False
 
     # The "9999" code should never have been sent to the lock — the tracker
     # check fires BEFORE the sync operation
@@ -970,7 +969,7 @@ async def test_sync_tracker_resets_when_back_in_sync(
     # tracker should not be at the circuit breaker threshold
     synced_state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
     assert synced_state.state == STATE_ON
-    assert not in_sync_entity_obj._sync_manager._sync_attempts_exceeded()
+    assert not in_sync_entity_obj._sync_manager._slot_breaker.tripped
 
 
 async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
@@ -981,7 +980,7 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     """
     Test that stale sync attempts outside the window do not trigger the circuit breaker.
 
-    When the attempt window expires, _record_sync_attempt resets the counter,
+    When the attempt window expires, record_failure resets the counter,
     preventing stale counts from triggering the breaker on a new sync cycle.
     """
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
@@ -993,8 +992,8 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
     # Simulate prior sync attempts from an EXPIRED window
-    sync_mgr._sync_attempt_count = MAX_SYNC_ATTEMPTS - 1
-    sync_mgr._sync_attempt_first = dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
+    sync_mgr._slot_breaker._failure_count = MAX_SYNC_ATTEMPTS - 1
+    sync_mgr._slot_breaker._first_failure = dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
 
     # Change PIN to trigger out-of-sync
     await hass.services.async_call(
@@ -1009,16 +1008,16 @@ async def test_sync_tracker_does_not_fire_breaker_with_expired_window(
     # _request_sync_check transitions IN_SYNC -> OUT_OF_SYNC
     assert sync_mgr._state is SyncState.OUT_OF_SYNC
 
-    # Tick fires — expired window causes _record_sync_attempt to reset
-    # the counter, so the breaker does not fire. Sync succeeds and
-    # resets the tracker.
+    # Tick fires — expired window causes record_failure to reset the
+    # counter, so the breaker does not fire. Sync succeeds and resets the
+    # breaker.
     await sync_mgr._async_tick()
     await hass.async_block_till_done()
 
     # Sync succeeded — lock should be IN_SYNC, not SUSPENDED
     assert sync_mgr._state is SyncState.IN_SYNC
-    # Tracker reset after successful sync
-    assert sync_mgr._sync_attempt_count == 0
+    # Breaker reset after successful sync
+    assert sync_mgr._slot_breaker.failure_count == 0
 
 
 async def test_sync_tracker_expired_window_resets(
@@ -1033,14 +1032,14 @@ async def test_sync_tracker_expired_window_resets(
 
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
-    # Set up tracker with max attempts but with an expired window
-    in_sync_entity_obj._sync_manager._sync_attempt_count = MAX_SYNC_ATTEMPTS
-    in_sync_entity_obj._sync_manager._sync_attempt_first = (
+    # Set up breaker with max attempts but with an expired window
+    in_sync_entity_obj._sync_manager._slot_breaker._failure_count = MAX_SYNC_ATTEMPTS
+    in_sync_entity_obj._sync_manager._slot_breaker._first_failure = (
         dt_util.utcnow() - SYNC_ATTEMPT_WINDOW * 2
     )
 
-    # The _sync_attempts_exceeded check should return False (window expired)
-    assert not in_sync_entity_obj._sync_manager._sync_attempts_exceeded()
+    # tripped should be False since the breaches fall outside the window
+    assert not in_sync_entity_obj._sync_manager._slot_breaker.tripped
 
 
 async def test_clear_operation_does_not_increment_tracker(
@@ -1056,7 +1055,7 @@ async def test_clear_operation_does_not_increment_tracker(
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
 
     # Verify starting at zero
-    assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0
+    assert in_sync_entity_obj._sync_manager._slot_breaker.failure_count == 0
 
     # Disable slot to trigger a clear sync cycle
     await hass.services.async_call(
@@ -1069,7 +1068,7 @@ async def test_clear_operation_does_not_increment_tracker(
     await _async_force_sync_cycle(hass, coordinator)
 
     # Clear operation should NOT have incremented the tracker
-    assert in_sync_entity_obj._sync_manager._sync_attempt_count == 0
+    assert in_sync_entity_obj._sync_manager._slot_breaker.failure_count == 0
 
 
 async def test_invalid_active_state_during_initial_load(
@@ -1100,12 +1099,12 @@ async def test_invalid_active_state_during_initial_load(
     assert in_sync_entity_obj._sync_manager._state is SyncState.LOADING
 
 
-async def test_unexpected_error_during_sync_suspends_lock(
+async def test_unexpected_error_during_sync_suspends_slot(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that unexpected errors during sync operation suspend the lock."""
+    """Test that unexpected errors during sync operation suspend the slot."""
     in_sync_entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
@@ -1128,9 +1127,9 @@ async def test_unexpected_error_during_sync_suspends_lock(
         await in_sync_entity_obj._sync_manager._async_tick()
         await hass.async_block_till_done()
 
-        # Verify that the lock was suspended
+        # Verify that the slot was suspended without marking the lock unreachable
         assert in_sync_entity_obj._sync_manager._state is SyncState.SUSPENDED
-        assert coordinator.slot_sync_mgrs_suspended is True
+        assert coordinator.unreachable is False
 
 
 async def test_sync_manager_handles_string_slot_num(
@@ -1287,11 +1286,11 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
 
-async def test_suspension_propagates_to_out_of_sync_managers_on_next_tick(
+async def test_slot_suspension_isolated_from_other_slots(
     hass: HomeAssistant,
     mock_lock_config_entry,
 ):
-    """When one slot suspends the lock, other out-of-sync slots transition to SUSPENDED on next tick."""
+    """A generic error on one slot suspends only that slot, not its siblings or the lock."""
     config = {
         CONF_LOCKS: [LOCK_1_ENTITY_ID],
         CONF_SLOTS: {
@@ -1303,7 +1302,7 @@ async def test_suspension_propagates_to_out_of_sync_managers_on_next_tick(
     config_entry = MockConfigEntry(
         domain=DOMAIN,
         data=config,
-        unique_id="Test Suspension Propagation",
+        unique_id="Test Suspension Isolation",
         title="Test LCM",
     )
     config_entry.add_to_hass(hass)
@@ -1318,51 +1317,25 @@ async def test_suspension_propagates_to_out_of_sync_managers_on_next_tick(
     lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     coordinator = lock_provider.coordinator
 
-    entity_obj_1 = get_in_sync_entity_obj(hass, in_sync_slot_1)
-    entity_obj_2 = get_in_sync_entity_obj(hass, in_sync_slot_2)
+    mgr_1 = get_in_sync_entity_obj(hass, in_sync_slot_1)._sync_manager
+    mgr_2 = get_in_sync_entity_obj(hass, in_sync_slot_2)._sync_manager
 
-    mgr_1 = entity_obj_1._sync_manager
-    mgr_2 = entity_obj_2._sync_manager
-
-    # Make slot 1 out of sync by changing the lock code externally
-    lock_provider.codes[1] = "9999"
-    await coordinator.async_refresh()
-    await hass.async_block_till_done()
-
-    # Make slot 2's sync fail with an unexpected error
+    # Only slot 2's sync hits an unexpected error; slot 1 is left in sync.
     with patch.object(
-        lock_provider,
-        "async_internal_set_usercode",
-        AsyncMock(side_effect=ValueError("Unexpected hardware error")),
+        mgr_2,
+        "_perform_sync",
+        new_callable=AsyncMock,
+        side_effect=ValueError("Unexpected hardware error"),
     ):
-        # Also make slot 2 out of sync
-        lock_provider.codes[2] = "0000"
-        await coordinator.async_refresh()
+        mgr_2._state = SyncState.OUT_OF_SYNC
+        coordinator.data[2] = "0000"
+        await mgr_2._async_tick()
         await hass.async_block_till_done()
 
-        # Fire tick — slot 2 tries to sync, hits generic exception, suspends lock
-        async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
-        await hass.async_block_till_done()
-
-    # Verify the lock is suspended
-    assert coordinator.slot_sync_mgrs_suspended is True
-
-    # One of the managers should be SUSPENDED (the one that hit the error)
-    # The other should transition to SUSPENDED on the next tick
-    suspended_count = sum(1 for m in (mgr_1, mgr_2) if m._state is SyncState.SUSPENDED)
-    assert suspended_count >= 1, "At least one manager should be SUSPENDED"
-
-    # Fire another tick so the other slot transitions to SUSPENDED too
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
-    await hass.async_block_till_done()
-
-    # Both managers should now be SUSPENDED
-    assert mgr_1._state is SyncState.SUSPENDED, (
-        f"Expected slot 1 SUSPENDED, got {mgr_1._state}"
-    )
-    assert mgr_2._state is SyncState.SUSPENDED, (
-        f"Expected slot 2 SUSPENDED, got {mgr_2._state}"
-    )
+    # Slot 2 is suspended; slot 1 and the lock itself are unaffected.
+    assert mgr_2._state is SyncState.SUSPENDED
+    assert mgr_1._state is not SyncState.SUSPENDED
+    assert coordinator.unreachable is False
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 

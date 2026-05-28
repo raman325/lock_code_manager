@@ -110,9 +110,7 @@ def _lock_diagnostic(
             "last_update_success": (
                 coordinator.last_update_success if coordinator else None
             ),
-            "slot_sync_mgrs_suspended": (
-                coordinator.slot_sync_mgrs_suspended if coordinator else None
-            ),
+            "lock_unreachable": (coordinator.unreachable if coordinator else None),
             "data": coordinator_data,
         },
     }
