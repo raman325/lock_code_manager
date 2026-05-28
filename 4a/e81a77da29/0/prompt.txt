@@ -1,0 +1,49 @@
+fix the critical. For important, if we trip the lock breaker, we should poll until we get status back
+
+---
+
+run code review again
+
+---
+
+check review comments then fix CI
+
+---
+
+we should stop, address and merge all the dependabot PRs first, then come back to this one
+
+---
+
+we should stop, address and merge all the dependabot PRs first, then come back to this one
+
+---
+
+continue
+
+---
+
+yes, and we can apply to 1181
+
+---
+
+can you do dynamic workflows? If so, switch back to main, and do a review of the entire codebase for code complexity. We want to reduce complexity as much as possible and strip things down to the bare minimum
+
+---
+
+check review commentg
+
+---
+
+merged. ff main, delete stale branches, then run ruff format and check just to ensure
+
+---
+
+do one more pass for code complexity
+
+---
+
+yes, but I wonder, should operation failed not call the lock breaker eventually? if something is broken for a long time we don't want to retry for a long time
+
+---
+
+yes
