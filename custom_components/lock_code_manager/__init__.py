@@ -565,6 +565,21 @@ async def async_setup_entry(
     return True
 
 
+def _lock_managed_by_other_entry(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+) -> bool:
+    """Return True if another (non-disabled, non-ignored) LCM entry manages the lock."""
+    return any(
+        entry.entry_id != config_entry.entry_id
+        and get_entry_config(entry).has_lock(lock_entity_id)
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+
+
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -578,14 +593,7 @@ async def async_unload_lock(
         [lock_entity_id] if lock_entity_id else list(runtime_data.locks.keys())
     )
     for _lock_entity_id in lock_entity_ids:
-        if not any(
-            entry != config_entry
-            and _lock_entity_id
-            in entry.data.get(CONF_LOCKS, entry.options.get(CONF_LOCKS, ""))
-            for entry in hass.config_entries.async_entries(
-                DOMAIN, include_disabled=False, include_ignore=False
-            )
-        ):
+        if not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id):
             lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
             if lock.coordinator is not None:
@@ -638,19 +646,9 @@ async def async_unload_entry(
         for slot_num in config.slots:
             async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
             async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
-        # Only delete lock_offline if no other LCM entry manages this lock
-        other_entries = [
-            e
-            for e in hass.config_entries.async_entries(
-                DOMAIN, include_disabled=False, include_ignore=False
-            )
-            if e.entry_id != entry_id
-        ]
         for lock_entity_id in config.locks:
-            still_managed = any(
-                get_entry_config(e).has_lock(lock_entity_id) for e in other_entries
-            )
-            if not still_managed:
+            # Only delete lock_offline if no other LCM entry manages this lock
+            if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
                 async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
             for slot_num in config.slots:
                 async_delete_issue(
