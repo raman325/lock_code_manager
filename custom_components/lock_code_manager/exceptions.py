@@ -28,17 +28,6 @@ class LockCodeManagerProviderError(LockCodeManagerError):
     """
 
 
-class EntityNotFoundError(LockCodeManagerError):
-    """Raise when en entity is not found."""
-
-    def __init__(self, lock: BaseLock, slot_num: int, key: str):
-        """Initialize the error."""
-        self.lock = lock
-        self.key = key
-        self.slot_num = slot_num
-        super().__init__(f"Entity not found for lock {lock} slot {slot_num} key {key}")
-
-
 class CodeRejectedError(LockCodeManagerProviderError):
     """Raised when the lock will not accept a PIN on a slot."""
 

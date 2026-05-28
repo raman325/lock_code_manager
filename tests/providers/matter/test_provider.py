@@ -1078,9 +1078,9 @@ class TestEventSubscription:
     """Test event subscription setup and teardown."""
 
     def test_matter_node_id_no_device(self, matter_lock_simple: MatterLock) -> None:
-        """Test _matter_node_id returns None when no device entry."""
+        """Test node resolution returns None when no device entry."""
         matter_lock_simple.device_entry = None
-        assert matter_lock_simple._matter_node_id is None
+        assert matter_lock_simple._get_matter_node() is None
 
     def test_get_matter_client_no_data(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
@@ -1126,8 +1126,10 @@ class TestEventSubscription:
     # -- Tests using the full Matter integration fixture --
 
     def test_matter_node_id_resolves(self, matter_lock: MatterLock) -> None:
-        """Test _matter_node_id resolves from real Matter integration device."""
-        assert matter_lock._matter_node_id == 16  # from mock_door_lock.json
+        """Test node resolves from real Matter integration device."""
+        node = matter_lock._get_matter_node()
+        assert node is not None
+        assert node.node_id == 16  # from mock_door_lock.json
 
     def test_get_matter_client_from_integration(
         self, matter_lock: MatterLock, matter_client: MagicMock
