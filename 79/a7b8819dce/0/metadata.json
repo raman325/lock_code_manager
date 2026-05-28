@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "79a7b8819dce",
+  "session_id": "73c731a0-9d5e-43b7-b0ed-642052a25b52",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-28T21:54:51.986897Z",
+  "branch": "refactor/complexity-reduction",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/sync.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "f4eea3fe21fd",
+  "token_usage": {
+    "input_tokens": 6035,
+    "cache_creation_tokens": 1643415,
+    "cache_read_tokens": 118304526,
+    "output_tokens": 402271,
+    "api_call_count": 318
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-28T21:54:51.258729Z",
+    "agent_lines": 63,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 63,
+    "agent_percentage": 100
+  }
+}
