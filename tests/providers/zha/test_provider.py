@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.lock_code_manager.exceptions import (
     CodeRejectedError,
     LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zha import (
@@ -605,12 +606,12 @@ async def test_set_usercode_generic_exception(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode wraps generic exceptions as LockDisconnected."""
+    """Test set_usercode wraps generic exceptions as LockOperationFailed."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
 
-    with pytest.raises(LockDisconnected, match="Failed to set PIN"):
+    with pytest.raises(LockOperationFailed, match="Failed to set PIN"):
         await zha_lock.async_set_usercode(1, "1234")
 
 
@@ -619,10 +620,10 @@ async def test_clear_usercode_generic_exception(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode wraps generic exceptions as LockDisconnected."""
+    """Test clear_usercode wraps generic exceptions as LockOperationFailed."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
 
-    with pytest.raises(LockDisconnected, match="Failed to clear PIN"):
+    with pytest.raises(LockOperationFailed, match="Failed to clear PIN"):
         await zha_lock.async_clear_usercode(1)

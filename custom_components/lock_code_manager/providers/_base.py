@@ -44,6 +44,7 @@ from ..exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
     LockDisconnected,
+    LockOperationFailed,
     ProviderNotImplementedError,
 )
 from ..models import SlotCode
@@ -459,7 +460,7 @@ class BaseLock:
         self._lcm_config_entry = config_entry
         try:
             await self.async_setup(config_entry)
-        except LockDisconnected as err:
+        except (LockDisconnected, LockOperationFailed) as err:
             LOGGER.warning(
                 "Provider setup failed for %s: %s. Coordinator will be "
                 "created but data will be unavailable until the lock "
@@ -498,7 +499,7 @@ class BaseLock:
         self._setup_running = True
         try:
             await self.async_setup(self._lcm_config_entry)
-        except LockDisconnected:
+        except LockDisconnected, LockOperationFailed:
             LOGGER.debug(
                 "Provider setup failed for %s, will retry on next reconnect",
                 self.lock.entity_id,
@@ -842,16 +843,25 @@ class BaseLock:
                 blocking=blocking,
                 return_response=return_response,
             )
-        except (HomeAssistantError, OSError) as err:
-            # HomeAssistantError covers ServiceValidationError and HA-wrapped
-            # failures. OSError covers transient network errors (ReadTimeout,
+        except OSError as err:
+            # OSError covers transient connectivity errors (ReadTimeout,
             # ConnectionError) from integrations that don't wrap them in
-            # HomeAssistantError. CancelledError and programming bugs
-            # (TypeError, KeyError) deliberately propagate.
+            # HomeAssistantError. These mean the lock could not be reached.
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
             raise LockDisconnected(
+                f"Service call {domain}.{service} failed: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            # HomeAssistantError covers ServiceValidationError and HA-wrapped
+            # failures. The lock was reachable but the operation was rejected
+            # or otherwise failed. CancelledError and programming bugs
+            # (TypeError, KeyError) deliberately propagate.
+            LOGGER.error(
+                "Error calling %s.%s service call: %s", domain, service, str(err)
+            )
+            raise LockOperationFailed(
                 f"Service call {domain}.{service} failed: {err}"
             ) from err
 

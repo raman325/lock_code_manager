@@ -13,7 +13,10 @@ from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.exceptions import (
+    LockDisconnected,
+    LockOperationFailed,
+)
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
@@ -578,7 +581,7 @@ class TestAsyncSetClearHardRefresh:
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """Publish errors surface as LockDisconnected."""
+        """Publish errors surface as LockOperationFailed."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         mock_pub = AsyncMock(side_effect=OSError("broker"))
@@ -592,7 +595,7 @@ class TestAsyncSetClearHardRefresh:
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
                 mock_pub,
             ),
-            pytest.raises(LockDisconnected, match="Failed to set PIN"),
+            pytest.raises(LockOperationFailed, match="Failed to set PIN"),
         ):
             await lock.async_set_usercode(1, "1111")
 
@@ -619,12 +622,12 @@ class TestAsyncSetClearHardRefresh:
         ):
             await lock.async_clear_usercode(4)
 
-    async def test_async_clear_usercode_publish_oserror_raises_lock_disconnected(
+    async def test_async_clear_usercode_publish_oserror_raises_operation_failed(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """Clear path maps MQTT publish failures to LockDisconnected."""
+        """Clear path maps MQTT publish failures to LockOperationFailed."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         mock_pub = AsyncMock(side_effect=OSError("broker"))
@@ -638,7 +641,7 @@ class TestAsyncSetClearHardRefresh:
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
                 mock_pub,
             ),
-            pytest.raises(LockDisconnected, match="Failed to clear PIN"),
+            pytest.raises(LockOperationFailed, match="Failed to clear PIN"),
         ):
             await lock.async_clear_usercode(4)
 

@@ -20,7 +20,11 @@ from typing import Any, Literal
 
 from homeassistant.config_entries import ConfigEntry
 
-from ..exceptions import LockCodeManagerProviderError, LockDisconnected
+from ..exceptions import (
+    LockCodeManagerProviderError,
+    LockDisconnected,
+    LockOperationFailed,
+)
 from ..models import SlotCode
 from ._base import BaseLock
 from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
@@ -211,7 +215,7 @@ class AkuvoxLock(BaseLock):
             tagged_name = _make_tagged_name(slot_num, original_name)
             try:
                 await self._async_modify_user(device_id, name=tagged_name)
-            except LockDisconnected:
+            except LockDisconnected, LockOperationFailed:
                 LOGGER.error(
                     "Lock %s: failed to tag user '%s' for slot %d",
                     self.lock.entity_id,

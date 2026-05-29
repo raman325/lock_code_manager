@@ -20,7 +20,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..exceptions import LockDisconnected
+from ..exceptions import LockDisconnected, LockOperationFailed
 from ..models import SlotCode
 from ._base import BaseLock
 from ._util import parse_slot_num
@@ -524,7 +524,7 @@ class Zigbee2MQTTLock(BaseLock):
                 code_slot,
                 err,
             )
-            raise LockDisconnected(f"Failed to set PIN: {err}") from err
+            raise LockOperationFailed(f"Failed to set PIN: {err}") from err
 
         LOGGER.debug(
             "Published set_pin_code for %s slot %s",
@@ -571,7 +571,7 @@ class Zigbee2MQTTLock(BaseLock):
                 code_slot,
                 err,
             )
-            raise LockDisconnected(f"Failed to clear PIN: {err}") from err
+            raise LockOperationFailed(f"Failed to clear PIN: {err}") from err
 
         LOGGER.debug(
             "Published clear_pin_code for %s slot %s",

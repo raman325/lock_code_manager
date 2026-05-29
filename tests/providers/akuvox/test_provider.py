@@ -14,7 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.exceptions import (
     LockCodeManagerError,
-    LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.akuvox import (
@@ -303,7 +303,7 @@ class TestSetUsercode:
     async def test_set_usercode_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
-        """Test that service failures raise LockDisconnected."""
+        """Test that service failures raise LockOperationFailed."""
         list_response = {LOCK_ENTITY_ID: {"users": []}}
         register_mock_service(
             hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
@@ -315,7 +315,7 @@ class TestSetUsercode:
             AsyncMock(side_effect=HomeAssistantError("device offline")),
         )
 
-        with pytest.raises(LockDisconnected, match="device offline"):
+        with pytest.raises(LockOperationFailed, match="device offline"):
             await akuvox_lock.async_set_usercode(1, "1234")
 
 
@@ -342,7 +342,7 @@ class TestClearUsercode:
     async def test_clear_usercode_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
-        """Test that service failures raise LockDisconnected."""
+        """Test that service failures raise LockOperationFailed."""
         list_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -360,7 +360,7 @@ class TestClearUsercode:
             AsyncMock(side_effect=HomeAssistantError("device offline")),
         )
 
-        with pytest.raises(LockDisconnected, match="device offline"):
+        with pytest.raises(LockOperationFailed, match="device offline"):
             await akuvox_lock.async_clear_usercode(1)
 
 
@@ -378,7 +378,7 @@ class TestListUsersErrors:
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that list_users failure raises LockDisconnected."""
+        """Test that list_users failure raises LockOperationFailed."""
         register_mock_service(
             hass,
             AKUVOX_DOMAIN,
@@ -386,7 +386,7 @@ class TestListUsersErrors:
             AsyncMock(side_effect=HomeAssistantError("connection lost")),
         )
 
-        with pytest.raises(LockDisconnected, match="connection lost"):
+        with pytest.raises(LockOperationFailed, match="connection lost"):
             await akuvox_lock.async_get_usercodes()
 
     async def test_list_users_invalid_response(
@@ -396,20 +396,20 @@ class TestListUsersErrors:
         lcm_config_entry: MockConfigEntry,
     ) -> None:
         """
-        Test that a non-dict service response raises LockDisconnected.
+        Test that a non-dict service response raises LockOperationFailed.
 
         Home Assistant's service layer rejects non-dict return values when
         return_response=True, so the service call itself raises HomeAssistantError
-        which our provider wraps as LockDisconnected.
+        which our provider wraps as LockOperationFailed.
         """
         register_mock_service(
             hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value="not a dict")
         )
 
-        # The base async_call_service wrapper re-raises any failure as
-        # LockDisconnected with the standard "Service call X.Y failed" prefix.
+        # The base async_call_service wrapper re-raises a HomeAssistantError as
+        # LockOperationFailed with the standard "Service call X.Y failed" prefix.
         with pytest.raises(
-            LockDisconnected, match="Service call local_akuvox.list_users failed"
+            LockOperationFailed, match="Service call local_akuvox.list_users failed"
         ):
             await akuvox_lock.async_get_usercodes()
 
