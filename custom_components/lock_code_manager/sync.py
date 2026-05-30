@@ -804,6 +804,12 @@ class SlotSyncManager:
                         "Will retry on next tick.",
                         self._log_prefix,
                     )
+                    # Treat an unverified set the same as a verification
+                    # miss: repeated unverified sets must eventually trip
+                    # the slot breaker, otherwise a persistently failing
+                    # refresh path leaves the slot retrying forever.
+                    if was_set:
+                        self._slot_breaker.record_failure()
                     self._state = SyncState.OUT_OF_SYNC
                     return
 

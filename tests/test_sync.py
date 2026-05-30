@@ -1292,6 +1292,34 @@ class TestBreakerTickSoleMutatorInvariant:
         assert manager._slot_breaker.failure_count == seeded_count
         assert manager._breaker_reset_requested is True
 
+    async def test_set_then_refresh_failure_records_failure(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        A set that succeeds but whose verification refresh raises still
+        counts toward the slot breaker. Otherwise repeated unverified
+        sets caused by a failing refresh path would retry forever.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._coordinator.data[1] = "9999"
+        manager._state = SyncState.OUT_OF_SYNC
+        starting_count = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager._coordinator,
+            "async_refresh",
+            side_effect=RuntimeError("refresh boom"),
+        ):
+            await manager._async_tick_impl()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._slot_breaker.failure_count == starting_count + 1
+
     async def test_request_sync_check_sets_flag_not_breaker(
         self,
         hass: HomeAssistant,
