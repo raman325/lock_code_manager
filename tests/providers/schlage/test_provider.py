@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -299,6 +300,78 @@ async def test_tag_unmanaged_codes_no_managed_slots(
     assert add_handler.call_count == 0
 
 
+async def test_async_setup_idempotent_skips_repeat_tag_pass(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A second async_setup call must not re-run the tag pass.
+
+    Reconnect can call async_setup again on the same provider instance;
+    re-tagging there would produce double-tag / rename storms against a
+    possibly-drifted device list.
+    """
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(return_value=None)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    with patch.object(
+        schlage_lock,
+        "_async_run_tag_pass",
+        wraps=schlage_lock._async_run_tag_pass,
+    ) as mock_pass:
+        await schlage_lock.async_setup(simple_lcm_config_entry)
+        await schlage_lock.async_setup(simple_lcm_config_entry)
+
+    assert mock_pass.await_count == 1
+    assert schlage_lock._tagged_once is True
+
+
+async def test_concurrent_set_usercode_serialized_under_sequence_lock(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Concurrent set_usercode calls must not interleave their read-modify-write."""
+    in_section = [0]
+    max_overlap = [0]
+
+    async def get_codes_handler(call):
+        in_section[0] += 1
+        max_overlap[0] = max(max_overlap[0], in_section[0])
+        # Yield so other tasks could observe overlap if sequencing fails
+        await asyncio.sleep(0)
+        in_section[0] -= 1
+        return {LOCK_ENTITY_ID: {}}
+
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_codes_handler)
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(return_value=None)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    await asyncio.gather(
+        schlage_lock.async_set_usercode(1, "1111"),
+        schlage_lock.async_set_usercode(2, "2222"),
+        schlage_lock.async_set_usercode(3, "3333"),
+    )
+
+    assert max_overlap[0] == 1
+
+
 # ---------------------------------------------------------------------------
 # set_usercode tests
 # ---------------------------------------------------------------------------
@@ -485,7 +558,7 @@ async def test_hard_refresh_codes(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
-    with patch.object(schlage_lock, "_async_tag_unmanaged_codes") as mock_tag:
+    with patch.object(schlage_lock, "_async_run_tag_pass") as mock_tag:
         codes = await schlage_lock.async_hard_refresh_codes()
         mock_tag.assert_awaited_once()
 

@@ -14,7 +14,7 @@ services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -66,6 +66,12 @@ class AkuvoxLock(BaseLock):
     PINs are readable from the device, so occupied slots report the actual
     PIN value. Cleared slots report SlotCode.EMPTY.
     """
+
+    # Tracks whether the initial auto-tag pass already ran for this
+    # provider instance. Skips re-tagging on reconnects so a drifted
+    # device list does not produce double-tag / rename storms. Reset
+    # naturally when the provider instance is recreated on full reload.
+    _tagged_once: bool = field(default=False, init=False)
 
     @property
     def domain(self) -> str:
@@ -160,13 +166,30 @@ class AkuvoxLock(BaseLock):
         )
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Set up lock by tagging any pre-existing unmanaged users."""
+        """
+        Set up lock by tagging any pre-existing unmanaged users.
+
+        Idempotent: the tag pass runs only once per provider instance to
+        prevent double-tag / rename storms on reconnect (the device list
+        may have drifted since the previous load).
+        """
         await super().async_setup(config_entry)
+        if self._tagged_once:
+            return
         await self._async_tag_unmanaged_users()
+        self._tagged_once = True
 
     async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
-        """Re-tag unmanaged users, then return all codes."""
-        await self._async_tag_unmanaged_users()
+        """
+        Re-tag unmanaged users, then return all codes.
+
+        Hard refresh is an explicit drift-detection request, so the
+        setup-time idempotency gate does not apply.
+        """
+        managed_slots = self.managed_slots
+        if managed_slots:
+            async with self._serialize_sequence():
+                await self._async_run_tag_pass(managed_slots)
         return await self.async_get_usercodes()
 
     async def _async_tag_unmanaged_users(self) -> None:
@@ -175,12 +198,20 @@ class AkuvoxLock(BaseLock):
 
         Untagged local users that have a PIN are assigned to the next
         available managed slot and their names are updated on the device
-        to include the ``[LCM:<slot>]`` tag via ``modify_user``.
+        to include the ``[LCM:<slot>]`` tag via ``modify_user``. The
+        list/modify sequence runs under the sequence lock so concurrent
+        set/clear/hard-refresh callers do not interleave their own
+        multi-step writes.
         """
         managed_slots = self.managed_slots
         if not managed_slots:
             return
 
+        async with self._serialize_sequence():
+            await self._async_run_tag_pass(managed_slots)
+
+    async def _async_run_tag_pass(self, managed_slots: set[int]) -> None:
+        """Body of the tag pass; caller holds the sequence lock."""
         users = await self._async_list_users()
 
         assigned_slots: set[int] = set()
@@ -287,31 +318,35 @@ class AkuvoxLock(BaseLock):
         a new user is created via ``add_user``.
 
         Returns True unconditionally because the Akuvox API does not
-        indicate whether the value actually changed.
+        indicate whether the value actually changed. The list/modify
+        (or list/add) sequence runs under the sequence lock so concurrent
+        callers cannot interleave their own multi-step writes against the
+        same slot.
         """
-        users = await self._async_list_users()
+        async with self._serialize_sequence():
+            users = await self._async_list_users()
 
-        existing_device_id: str | None = None
-        existing_friendly_name: str | None = None
-        for user in users:
-            if not _is_local_user(user):
-                continue
-            user_name = user.get("name", "")
-            parsed_slot, friendly = _parse_tag(user_name)
-            if parsed_slot == code_slot:
-                existing_device_id = str(user.get("id", ""))
-                existing_friendly_name = friendly
-                break
+            existing_device_id: str | None = None
+            existing_friendly_name: str | None = None
+            for user in users:
+                if not _is_local_user(user):
+                    continue
+                user_name = user.get("name", "")
+                parsed_slot, friendly = _parse_tag(user_name)
+                if parsed_slot == code_slot:
+                    existing_device_id = str(user.get("id", ""))
+                    existing_friendly_name = friendly
+                    break
 
-        effective_name = name or existing_friendly_name
-        tagged_name = _make_tagged_name(code_slot, effective_name)
+            effective_name = name or existing_friendly_name
+            tagged_name = _make_tagged_name(code_slot, effective_name)
 
-        if existing_device_id:
-            await self._async_modify_user(
-                existing_device_id, name=tagged_name, pin=usercode
-            )
-        else:
-            await self._async_add_user(tagged_name, usercode)
+            if existing_device_id:
+                await self._async_modify_user(
+                    existing_device_id, name=tagged_name, pin=usercode
+                )
+            else:
+                await self._async_add_user(tagged_name, usercode)
 
         LOGGER.debug(
             "Lock %s: set usercode on slot %s",
@@ -324,22 +359,25 @@ class AkuvoxLock(BaseLock):
         """
         Clear user code from a virtual slot by deleting the user.
 
-        Returns True if a user was deleted, False if the slot was already empty.
+        Returns True if a user was deleted, False if the slot was already
+        empty. The list/delete sequence runs under the sequence lock for
+        the same reason ``async_set_usercode`` does.
         """
-        users = await self._async_list_users()
-        target_device_id: str | None = None
-        for user in users:
-            if not _is_local_user(user):
-                continue
-            parsed_slot, _ = _parse_tag(user.get("name", ""))
-            if parsed_slot == code_slot:
-                target_device_id = str(user.get("id", ""))
-                break
+        async with self._serialize_sequence():
+            users = await self._async_list_users()
+            target_device_id: str | None = None
+            for user in users:
+                if not _is_local_user(user):
+                    continue
+                parsed_slot, _ = _parse_tag(user.get("name", ""))
+                if parsed_slot == code_slot:
+                    target_device_id = str(user.get("id", ""))
+                    break
 
-        if not target_device_id:
-            return False
+            if not target_device_id:
+                return False
 
-        await self._async_delete_user(target_device_id)
+            await self._async_delete_user(target_device_id)
         LOGGER.debug(
             "Lock %s: cleared usercode from slot %s",
             self.lock.entity_id,
