@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -14,6 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.exceptions import (
     LockCodeManagerError,
+    LockDisconnected,
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
@@ -522,6 +524,92 @@ class TestAutoTagging:
         # No LCM config entry means no managed slots
         await akuvox_lock._async_tag_unmanaged_users()
         # No service calls should have been made (no list_users registered)
+
+    async def test_async_setup_idempotent_skips_repeat_tag_pass(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """A second async_setup call must not re-run the tag pass."""
+        register_mock_service(
+            hass,
+            AKUVOX_DOMAIN,
+            "list_users",
+            AsyncMock(return_value={LOCK_ENTITY_ID: {"users": []}}),
+        )
+
+        with patch.object(
+            akuvox_lock,
+            "_async_run_tag_pass",
+            wraps=akuvox_lock._async_run_tag_pass,
+        ) as mock_pass:
+            await akuvox_lock.async_setup(lcm_config_entry)
+            await akuvox_lock.async_setup(lcm_config_entry)
+
+        assert mock_pass.await_count == 1
+        assert akuvox_lock._tagged_once is True
+
+    async def test_async_setup_retries_after_disconnect_during_first_pass(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """LockDisconnected during the first tag pass must leave _tagged_once False so reconnect retries."""
+        untagged_users = {
+            LOCK_ENTITY_ID: {
+                "users": [make_user("200", "Guest", "9999")],
+            },
+        }
+        register_mock_service(
+            hass,
+            AKUVOX_DOMAIN,
+            "list_users",
+            AsyncMock(return_value=untagged_users),
+        )
+
+        with patch.object(
+            akuvox_lock,
+            "_async_modify_user",
+            side_effect=LockDisconnected("offline"),
+        ):
+            with pytest.raises(LockDisconnected, match="disconnect during tag pass"):
+                await akuvox_lock.async_setup(lcm_config_entry)
+        assert akuvox_lock._tagged_once is False
+
+        # Reconnect: now the underlying modify succeeds.
+        await akuvox_lock.async_setup(lcm_config_entry)
+        assert akuvox_lock._tagged_once is True
+
+    async def test_concurrent_set_usercode_serialized_under_sequence_lock(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Concurrent set_usercode calls must not interleave their read-modify-write."""
+        in_section = [0]
+        max_overlap = [0]
+
+        async def list_handler(call):
+            in_section[0] += 1
+            max_overlap[0] = max(max_overlap[0], in_section[0])
+            await asyncio.sleep(0)
+            in_section[0] -= 1
+            return {LOCK_ENTITY_ID: {"users": []}}
+
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "add_user", AsyncMock(return_value=None)
+        )
+
+        await asyncio.gather(
+            akuvox_lock.async_set_usercode(1, "1111"),
+            akuvox_lock.async_set_usercode(2, "2222"),
+        )
+
+        assert max_overlap[0] == 1
 
 
 # ---------------------------------------------------------------------------

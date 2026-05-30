@@ -703,10 +703,10 @@ async def test_unload_cleans_up_push_subscription(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     zwave_js_lock.subscribe_push_updates()
-    assert zwave_js_lock._value_update_unsub is not None
+    assert zwave_js_lock._push_unsubs
 
     await zwave_js_lock.async_unload(False)
-    assert zwave_js_lock._value_update_unsub is None
+    assert not zwave_js_lock._push_unsubs
 
 
 # Hard refresh tests

@@ -86,8 +86,10 @@ class ZWaveJSLock(BaseLock):
     """Class to represent ZWave JS lock."""
 
     lock_config_entry: ConfigEntry = field(repr=False)
+    # Home Assistant event-bus listeners (separate lifecycle from push
+    # subscriptions: registered in ``async_setup``, released in
+    # ``async_unload``).
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
-    _value_update_unsub: Callable[[], None] | None = field(init=False, default=None)
     _set_in_progress_code_slot: int | None = field(init=False, default=None)
 
     @property
@@ -231,7 +233,7 @@ class ZWaveJSLock(BaseLock):
     def setup_push_subscription(self) -> None:
         """Subscribe to User Code CC value update events."""
         # Idempotent - skip if already subscribed
-        if self._value_update_unsub is not None:
+        if self._push_unsubs:
             return
 
         ready, reason = self._get_client_state()
@@ -275,16 +277,15 @@ class ZWaveJSLock(BaseLock):
                 self._handle_usercode_value_update(code_slot, args.get("newValue"))
 
         try:
-            self._value_update_unsub = self.node.on("value updated", on_value_updated)
+            unsub = self.node.on("value updated", on_value_updated)
         except ValueError as err:
             raise LockDisconnected(f"node not ready: {err}") from err
+        self._register_push_unsub(unsub)
 
     @callback
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from value update events."""
-        if self._value_update_unsub:
-            self._value_update_unsub()
-            self._value_update_unsub = None
+        self._clear_push_unsubs()
 
     @callback
     def _zwave_js_event_filter(self, event_data: dict[str, Any]) -> bool:

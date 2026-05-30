@@ -62,7 +62,7 @@ class TestFullSetupLifecycle:
         e2e_zwave_lock: ZWaveJSLock,
     ) -> None:
         """The provider subscribes to Z-Wave JS value updates during setup."""
-        assert e2e_zwave_lock._value_update_unsub is not None
+        assert e2e_zwave_lock._push_unsubs
 
 
 class TestSetAndClearUsercodes:

@@ -1147,3 +1147,125 @@ async def test_async_unload_logs_reconnect_task_exception(
         for record in caplog.records
         if record.levelname == "WARNING"
     )
+
+
+# =============================================================================
+# Push unsub registry
+# =============================================================================
+
+
+async def test_clear_push_unsubs_invokes_and_empties_registry(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """_clear_push_unsubs invokes every registered unsub and clears the list."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    calls: list[str] = []
+    lock._register_push_unsub(lambda: calls.append("a"))
+    lock._register_push_unsub(lambda: calls.append("b"))
+    assert len(lock._push_unsubs) == 2
+
+    lock._clear_push_unsubs()
+
+    assert calls == ["a", "b"]
+    assert lock._push_unsubs == []
+
+
+async def test_clear_push_unsubs_continues_on_individual_failure(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A raising unsub does not prevent later unsubs from running."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    second_called = [False]
+
+    def boom_unsub() -> None:
+        raise RuntimeError("unsub failed")
+
+    def second_unsub() -> None:
+        second_called[0] = True
+
+    lock._register_push_unsub(boom_unsub)
+    lock._register_push_unsub(second_unsub)
+
+    with caplog.at_level(logging.WARNING):
+        lock._clear_push_unsubs()
+
+    assert second_called[0]
+    assert lock._push_unsubs == []
+
+
+async def test_clear_push_unsubs_safe_when_unsub_reregisters(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """An unsub that re-registers must not corrupt iteration or loop forever."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    calls: list[str] = []
+
+    def reregistering_unsub() -> None:
+        calls.append("first")
+        # Re-register self after the original snapshot was taken; the
+        # re-registration must survive clear() but must not be called
+        # again in this _clear_push_unsubs invocation.
+        lock._register_push_unsub(reregistering_unsub)
+
+    lock._register_push_unsub(reregistering_unsub)
+    lock._register_push_unsub(lambda: calls.append("second"))
+
+    lock._clear_push_unsubs()
+
+    assert calls == ["first", "second"]
+    assert lock._push_unsubs == [reregistering_unsub]
+
+
+# =============================================================================
+# Sequence lock context manager
+# =============================================================================
+
+
+async def test_serialize_sequence_serializes_concurrent_blocks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """_serialize_sequence forces concurrent multi-step ops to run one at a time."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    in_section = [0]
+    max_overlap = [0]
+    order: list[int] = []
+
+    async def section(tag: int) -> None:
+        async with lock._serialize_sequence():
+            in_section[0] += 1
+            max_overlap[0] = max(max_overlap[0], in_section[0])
+            await asyncio.sleep(0)
+            order.append(tag)
+            in_section[0] -= 1
+
+    await asyncio.gather(section(1), section(2), section(3))
+
+    assert max_overlap[0] == 1
+    assert sorted(order) == [1, 2, 3]
+
+
+async def test_serialize_sequence_allows_rate_limited_inside(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A rate-limited leaf call inside _serialize_sequence does not deadlock."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock._min_operation_delay = TEST_OPERATION_DELAY
+
+    async with lock._serialize_sequence():
+        result = await lock.async_internal_set_usercode(5, "5555", "Test 5")
+
+    assert result is None

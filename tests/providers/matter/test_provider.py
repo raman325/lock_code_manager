@@ -1091,10 +1091,10 @@ class TestEventSubscription:
 
     def test_setup_push_idempotent(self, matter_lock_simple: MatterLock) -> None:
         """Test setup_push_subscription is a no-op if already subscribed."""
-        matter_lock_simple._event_unsub = lambda: None  # already subscribed
+        matter_lock_simple._push_unsubs.append(lambda: None)  # already subscribed
         matter_lock_simple.setup_push_subscription()  # should be a no-op
         # If it tried to subscribe again, it would fail (no client)
-        assert matter_lock_simple._event_unsub is not None
+        assert matter_lock_simple._push_unsubs
 
     def test_setup_push_no_client_raises(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
@@ -1111,16 +1111,16 @@ class TestEventSubscription:
         def _unsub() -> None:
             unsub_called[0] = True
 
-        matter_lock_simple._event_unsub = _unsub
+        matter_lock_simple._push_unsubs.append(_unsub)
         matter_lock_simple.teardown_push_subscription()
         assert unsub_called[0]
-        assert matter_lock_simple._event_unsub is None
+        assert not matter_lock_simple._push_unsubs
 
     def test_teardown_push_no_subscription(
         self, matter_lock_simple: MatterLock
     ) -> None:
         """Test teardown_push_subscription handles no active subscription."""
-        matter_lock_simple._event_unsub = None
+        assert not matter_lock_simple._push_unsubs
         matter_lock_simple.teardown_push_subscription()  # should not crash
 
     # -- Tests using the full Matter integration fixture --
@@ -1143,7 +1143,7 @@ class TestEventSubscription:
     ) -> None:
         """Test setup_push_subscription subscribes with correct node ID."""
         matter_lock.setup_push_subscription()
-        assert matter_lock._event_unsub is not None
+        assert matter_lock._push_unsubs
         # Find LCM's subscription by its callback method name
         lcm_calls = [
             call
@@ -1182,7 +1182,7 @@ class TestEventSubscription:
         with pytest.raises(LockDisconnected):
             matter_lock_simple.setup_push_subscription()
 
-        assert matter_lock_simple._event_unsub is None
+        assert not matter_lock_simple._push_unsubs
         mock_client.subscribe_events.assert_not_called()
 
 

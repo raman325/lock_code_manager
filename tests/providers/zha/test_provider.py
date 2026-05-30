@@ -15,7 +15,6 @@ from homeassistant.core import HomeAssistant
 from custom_components.lock_code_manager.exceptions import (
     CodeRejectedError,
     LockDisconnected,
-    LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
 from custom_components.lock_code_manager.providers.zha import (
@@ -201,19 +200,19 @@ async def test_clear_usercode_failure(
 async def test_subscribe_push_updates(hass: HomeAssistant, zha_lock: ZHALock) -> None:
     """Test subscribing to push updates."""
     zha_lock.setup_push_subscription()
-    assert zha_lock._cluster_listener_unsub is not None
+    assert zha_lock._push_unsubs
 
     zha_lock.teardown_push_subscription()
-    assert zha_lock._cluster_listener_unsub is None
+    assert not zha_lock._push_unsubs
 
 
 async def test_subscribe_is_idempotent(hass: HomeAssistant, zha_lock: ZHALock) -> None:
     """Test that calling subscribe multiple times is safe."""
     zha_lock.setup_push_subscription()
-    first_unsub = zha_lock._cluster_listener_unsub
+    first_unsubs = list(zha_lock._push_unsubs)
 
     zha_lock.setup_push_subscription()
-    assert zha_lock._cluster_listener_unsub is first_unsub
+    assert list(zha_lock._push_unsubs) == first_unsubs
 
     zha_lock.teardown_push_subscription()
 
@@ -489,9 +488,9 @@ async def test_teardown_push_when_not_subscribed(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
     """Test teardown when not subscribed is a no-op."""
-    assert zha_lock._cluster_listener_unsub is None
+    assert not zha_lock._push_unsubs
     zha_lock.teardown_push_subscription()
-    assert zha_lock._cluster_listener_unsub is None
+    assert not zha_lock._push_unsubs
 
 
 # ---------------------------------------------------------------------------
@@ -542,13 +541,13 @@ async def test_async_setup_is_idempotent(
 
     await zha_lock.async_setup(simple_lcm_config_entry)
     zha_lock.setup_push_subscription()
-    assert zha_lock._cluster_listener_unsub is not None
+    assert zha_lock._push_unsubs
 
     # Simulate ZHA reload — async_setup tears down and re-initializes
     await zha_lock.async_setup(simple_lcm_config_entry)
 
     # Listener torn down by async_setup's teardown call
-    assert zha_lock._cluster_listener_unsub is None
+    assert not zha_lock._push_unsubs
 
 
 async def test_check_programming_support_no_cluster(
@@ -606,12 +605,12 @@ async def test_set_usercode_generic_exception(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode wraps generic exceptions as LockOperationFailed."""
+    """Test set_usercode wraps zigpy comms failures as LockDisconnected."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
 
-    with pytest.raises(LockOperationFailed, match="Failed to set PIN"):
+    with pytest.raises(LockDisconnected, match="Failed to set PIN"):
         await zha_lock.async_set_usercode(1, "1234")
 
 
@@ -620,10 +619,10 @@ async def test_clear_usercode_generic_exception(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode wraps generic exceptions as LockOperationFailed."""
+    """Test clear_usercode wraps zigpy comms failures as LockDisconnected."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
 
-    with pytest.raises(LockOperationFailed, match="Failed to clear PIN"):
+    with pytest.raises(LockDisconnected, match="Failed to clear PIN"):
         await zha_lock.async_clear_usercode(1)
