@@ -910,9 +910,13 @@ async def test_sync_attempts_exceeded_suspends_slot(
 
     sync_mgr = in_sync_entity_obj._sync_manager
 
-    # Pre-load the breaker to simulate repeated failures on the same PIN
+    # Pre-load the breaker to simulate repeated failures on the same PIN.
+    # The PIN change above will have set _breaker_reset_requested via
+    # _request_sync_check; clear it so the seeded count survives into
+    # the tick that's about to read .tripped.
     for _ in range(MAX_SYNC_ATTEMPTS):
         sync_mgr._slot_breaker.record_failure()
+    sync_mgr._breaker_reset_requested = False
 
     # Trigger tick — circuit breaker should fire before attempting sync
     sync_mgr._state = SyncState.OUT_OF_SYNC

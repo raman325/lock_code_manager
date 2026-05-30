@@ -290,20 +290,20 @@ class TestTryUpgradeStateTracking:
 class TestDisableSlotExceptionHandling:
     """Tests for _disable_slot exception handling (Issue 7)."""
 
-    async def test_disable_slot_exception_resets_sync_tracker(
+    async def test_disable_slot_exception_requests_breaker_reset(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Sync tracker resets even when async_disable_slot raises."""
+        """A failed disable still requests a breaker reset for the next tick."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        # Set up some sync tracker state to verify it gets reset
         for _ in range(5):
             manager._slot_breaker.record_failure()
+        assert manager._slot_breaker.failure_count == 5
 
         with patch(
             "custom_components.lock_code_manager.sync.async_disable_slot",
@@ -312,8 +312,10 @@ class TestDisableSlotExceptionHandling:
         ):
             await manager._disable_slot("test reason")
 
-        # Sync tracker should still be reset even after exception
-        assert manager._slot_breaker.failure_count == 0
+        # The tick is the sole breaker mutator; _disable_slot just flags the
+        # request. Count stays until the next tick consumes the flag.
+        assert manager._breaker_reset_requested is True
+        assert manager._slot_breaker.failure_count == 5
         assert "Failed to disable slot" in caplog.text
 
         # Fallback repair issue should be created even though service call failed
@@ -323,13 +325,13 @@ class TestDisableSlotExceptionHandling:
         assert issue is not None
         assert issue.severity == IssueSeverity.WARNING
 
-    async def test_disable_slot_success_resets_sync_tracker(
+    async def test_disable_slot_success_requests_breaker_reset(
         self,
         hass: HomeAssistant,
         mock_lock_config_entry,
         lock_code_manager_config_entry,
     ) -> None:
-        """Sync tracker resets when async_disable_slot succeeds."""
+        """A successful disable requests a breaker reset for the next tick."""
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
@@ -343,7 +345,8 @@ class TestDisableSlotExceptionHandling:
         ):
             await manager._disable_slot("test reason")
 
-        assert manager._slot_breaker.failure_count == 0
+        assert manager._breaker_reset_requested is True
+        assert manager._slot_breaker.failure_count == 5
 
 
 class TestSlotDisabledIssueCleanup:
@@ -1185,3 +1188,133 @@ class TestAsyncStopAwaitsInFlightTick:
             if record.levelname == "WARNING" and record.exc_info is not None
         ]
         assert any(rec.exc_info[1] is boom for rec in warning_records)
+
+
+class TestBreakerTickSoleMutatorInvariant:
+    """The slot circuit breaker is mutated only inside ``_async_tick_impl``."""
+
+    async def test_request_sync_check_does_not_mutate_breaker_mid_tick(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        While a tick is awaiting _perform_sync, _request_sync_check must set
+        the reset-request flag without touching the breaker directly.
+
+        Reproduces the race the refactor closes: a coordinator listener
+        firing across the await boundary could otherwise clear failure state
+        the tick is about to read.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._coordinator.data[1] = "9999"
+        manager._state = SyncState.OUT_OF_SYNC
+        # Seed the breaker so a mid-tick mutation would be observable.
+        manager._slot_breaker.record_failure()
+        seeded_count = manager._slot_breaker.failure_count
+        assert seeded_count == 1
+
+        mid_sync = asyncio.Event()
+        resume = asyncio.Event()
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        original_set = lock_provider.async_set_usercode
+
+        async def paused_set(code_slot, usercode, name=None, **kwargs):
+            mid_sync.set()
+            await resume.wait()
+            return await original_set(code_slot, usercode, name, **kwargs)
+
+        with (
+            patch.object(lock_provider, "async_set_usercode", paused_set),
+            patch.object(
+                manager._slot_breaker,
+                "reset",
+                wraps=manager._slot_breaker.reset,
+            ) as reset_spy,
+            patch.object(
+                manager._slot_breaker,
+                "record_failure",
+                wraps=manager._slot_breaker.record_failure,
+            ) as record_spy,
+        ):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(mid_sync.wait(), timeout=5)
+
+            # The tick has consumed the (initially-clear) flag at its start
+            # and is now awaiting the set. Fire callbacks that would, under
+            # the old contract, have called reset() directly.
+            manager._state = SyncState.IN_SYNC
+            manager._request_sync_check()
+            manager._state = SyncState.SUSPENDED
+            manager._code_suspend_target = ("on", "1234")
+            manager._request_sync_check()
+
+            # Mutators must not have fired from the callback path.
+            assert reset_spy.call_count == 0
+            assert record_spy.call_count == 0
+            # But the flag must reflect the requests.
+            assert manager._breaker_reset_requested is True
+            # And the breaker counter must be untouched mid-tick.
+            assert manager._slot_breaker.failure_count == seeded_count
+
+            resume.set()
+            await tick_task
+
+    async def test_suspend_slot_defers_breaker_reset_to_tick(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """``_suspend_slot`` sets the flag; the breaker is reset by the next tick."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        for _ in range(MAX_SYNC_ATTEMPTS):
+            manager._slot_breaker.record_failure()
+        seeded_count = manager._slot_breaker.failure_count
+
+        slot_state = SlotState(
+            active_state=STATE_ON,
+            pin_state="1234",
+            name_state="Test",
+            code_state="",
+            coordinator_code=SlotCode.EMPTY,
+        )
+        manager._suspend_slot(slot_state, "test reason")
+
+        # Synchronous: counter is unchanged, flag is set.
+        assert manager._slot_breaker.failure_count == seeded_count
+        assert manager._breaker_reset_requested is True
+
+    async def test_request_sync_check_sets_flag_not_breaker(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """All three transition branches in _request_sync_check use the flag."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        # Branch 1: IN_SYNC -> OUT_OF_SYNC when target diverges.
+        manager._state = SyncState.IN_SYNC
+        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._slot_breaker.record_failure()
+        seeded = manager._slot_breaker.failure_count
+        manager._breaker_reset_requested = False
+
+        with patch.object(
+            manager._slot_breaker, "reset", wraps=manager._slot_breaker.reset
+        ) as reset_spy:
+            manager._request_sync_check()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._breaker_reset_requested is True
+        assert reset_spy.call_count == 0
+        assert manager._slot_breaker.failure_count == seeded
