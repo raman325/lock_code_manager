@@ -607,8 +607,22 @@ class BaseLock:
         reconnect_task = self._reconnect_task
         if reconnect_task is not None and not reconnect_task.done():
             reconnect_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
+            try:
                 await reconnect_task
+            except asyncio.CancelledError:
+                # If our own task is being cancelled, propagate; otherwise
+                # the CancelledError is for the reconnect task we just
+                # cancelled and is expected.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "Reconnect task raised during teardown of %s: %s",
+                    self.lock.entity_id,
+                    err,
+                    exc_info=err,
+                )
         self._reconnect_task = None
 
         # Unsubscribe from push updates before unloading

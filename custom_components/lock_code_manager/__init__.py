@@ -630,10 +630,19 @@ async def async_unload_entry(
         _LOGGER.debug(
             "Unload: stopping %s sync manager(s)", len(runtime_data.sync_managers)
         )
-        await asyncio.gather(
+        stop_results = await asyncio.gather(
             *(mgr.async_stop() for mgr in list(runtime_data.sync_managers)),
             return_exceptions=True,
         )
+        for result in stop_results:
+            if isinstance(result, BaseException) and not isinstance(
+                result, asyncio.CancelledError
+            ):
+                _LOGGER.warning(
+                    "Sync manager stop raised during unload: %s",
+                    result,
+                    exc_info=result,
+                )
 
     # Fire slot entity removal callbacks first so per-slot entities (which
     # reference locks) clean up before the locks are torn down
