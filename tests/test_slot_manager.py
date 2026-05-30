@@ -32,6 +32,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
+from custom_components.lock_code_manager.binary_sensor import (
+    LockCodeManagerActiveEntity,
+)
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
@@ -387,3 +390,113 @@ async def test_condition_entity_swap_resubscribes(
     assert coordinator.is_active is True
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_slot_remove_then_readd_creates_fresh_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Re-adding a removed slot creates a NEW coordinator with fresh state.
+
+    A regression that retained a stale coordinator across remove + re-add
+    would let prior state (condition subscription, registered writers,
+    repair-issue history) leak into the new slot lifecycle.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    original_slot_2_coordinator = runtime_data.slot_coordinators[2]
+
+    # Remove slot 2.
+    options_without_2 = {
+        CONF_LOCKS: list(runtime_data.locks.keys()),
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=options_without_2
+    )
+    await hass.async_block_till_done()
+    assert 2 not in runtime_data.slot_coordinators
+
+    # Re-add slot 2 with different config.
+    options_with_2 = {
+        CONF_LOCKS: list(runtime_data.locks.keys()),
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            2: {CONF_NAME: "fresh2", CONF_PIN: "9999", CONF_ENABLED: False},
+        },
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=options_with_2
+    )
+    await hass.async_block_till_done()
+
+    assert 2 in runtime_data.slot_coordinators
+    new_slot_2_coordinator = runtime_data.slot_coordinators[2]
+    assert new_slot_2_coordinator is not original_slot_2_coordinator
+    assert new_slot_2_coordinator.pin_value == "9999"
+    assert new_slot_2_coordinator.is_enabled is False
+    # The discarded coordinator must have been stopped.
+    assert original_slot_2_coordinator._started is False
+
+
+async def test_request_sync_check_public_wrapper_delegates(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The public ``request_sync_check`` forwards to the private handler.
+
+    The wrapper exists so callers that aren't listener-shaped don't have
+    to pretend to be one (``_request_sync_check`` accepts ``*_args`` to
+    serve as a state-change listener). A regression that bypasses the
+    private handler would lose the centralized state-transition rules.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    assert runtime_data.sync_managers
+    manager = next(iter(runtime_data.sync_managers))
+
+    with patch.object(manager, "_request_sync_check") as private:
+        manager.request_sync_check()
+
+    private.assert_called_once_with()
+
+
+async def test_active_binary_sensor_does_not_self_track_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """``LockCodeManagerActiveEntity`` must not subscribe to state changes itself.
+
+    All condition-entity tracking lives on ``SlotEntityCoordinator``;
+    a regression that re-added ``async_track_state_change_event`` inside
+    the entity would risk double subscriptions and re-introduce the
+    cross-entity-state-coupling D removed.
+    """
+    # The entity's only subscription handle should be the coordinator
+    # view unsub. The pre-D version tracked the condition entity and a
+    # config-entry update listener via additional unsub attributes.
+    assert not any(
+        attr.startswith("_condition_") or attr.startswith("_config_entry_")
+        for attr in vars(LockCodeManagerActiveEntity)
+        if attr.endswith("_unsub")
+    )
+    instance_attrs = set()
+    for entity in hass.states.async_all("binary_sensor"):
+        if not entity.entity_id.endswith("_active"):
+            continue
+        runtime_data = lock_code_manager_config_entry.runtime_data
+        for slot_coord in runtime_data.slot_coordinators.values():
+            for writer in slot_coord._active_view_writers:
+                # The writer is the entity's bound method; reach its instance.
+                if hasattr(writer, "__self__"):
+                    instance_attrs.update(vars(writer.__self__).keys())
+
+    # Same assertion at instance level: no condition / config-entry unsubs.
+    assert not any(
+        attr.startswith("_condition_") or attr.startswith("_config_entry_")
+        for attr in instance_attrs
+        if attr.endswith("_unsub")
+    )
