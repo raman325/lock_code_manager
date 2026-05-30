@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import CONF_LOCKS, DOMAIN
+from .const import DOMAIN
 from .data import get_entry_config
 from .models import SlotCode
 from .providers._base import BaseLock
@@ -177,7 +177,10 @@ async def async_get_config_entry_diagnostics(
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     entry_config = get_entry_config(config_entry)
-    all_locks: dict[str, BaseLock] = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
+    runtime_data = getattr(config_entry, "runtime_data", None)
+    all_locks: dict[str, BaseLock] = (
+        dict(runtime_data.locks) if runtime_data is not None else {}
+    )
 
     return {
         "config_entry": {
@@ -207,7 +210,10 @@ async def async_get_device_diagnostics(
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     entry_config = get_entry_config(config_entry)
-    all_locks: dict[str, BaseLock] = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
+    runtime_data = getattr(config_entry, "runtime_data", None)
+    all_locks: dict[str, BaseLock] = (
+        dict(runtime_data.locks) if runtime_data is not None else {}
+    )
 
     # Check if this is a slot device: (DOMAIN, entry_id|slot_num)
     for identifier in device.identifiers:

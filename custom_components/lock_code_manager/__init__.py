@@ -19,6 +19,7 @@ from homeassistant.components.lovelace.resources import (
     ResourceStorageCollection,
     ResourceYAMLCollection,
 )
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import (
     ATTR_AREA_ID,
     ATTR_DEVICE_ID,
@@ -63,7 +64,6 @@ from .const import (
     ATTR_USERCODE,
     CONDITION_ENTITY_DOMAINS,
     CONF_CALENDAR,
-    CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
     PLATFORM_MAP,
@@ -300,7 +300,7 @@ async def _async_cleanup_strategy_resource(
 
 async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     """Set up integration."""
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
+    hass.data.setdefault(DOMAIN, {"resources": False})
     hass.data[DOMAIN]["instance_id"] = await instance_id.async_get(hass)
     # Expose strategy javascript
     await hass.http.async_register_static_paths(
@@ -522,7 +522,7 @@ async def async_setup_entry(
             f"Unable to start because lock {entity_id} can't be found"
         )
 
-    hass.data.setdefault(DOMAIN, {CONF_LOCKS: {}, "resources": False})
+    hass.data.setdefault(DOMAIN, {"resources": False})
     await _async_register_strategy_resource(hass)
 
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData(
@@ -580,6 +580,33 @@ def _lock_managed_by_other_entry(
     )
 
 
+def _find_shared_lock_instance(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    lock_entity_id: str,
+) -> BaseLock | None:
+    """
+    Return an existing BaseLock for ``lock_entity_id`` from another loaded entry.
+
+    A single physical lock may be referenced by multiple Lock Code Manager
+    entries. We keep one BaseLock instance and share it: when a new entry
+    references a lock that another loaded entry is already managing,
+    reuse that entry's instance instead of creating a duplicate.
+    """
+    return next(
+        (
+            entry.runtime_data.locks[lock_entity_id]
+            for entry in hass.config_entries.async_entries(
+                DOMAIN, include_disabled=False, include_ignore=False
+            )
+            if entry.entry_id != config_entry.entry_id
+            and entry.state is ConfigEntryState.LOADED
+            and lock_entity_id in entry.runtime_data.locks
+        ),
+        None,
+    )
+
+
 async def async_unload_lock(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -587,19 +614,18 @@ async def async_unload_lock(
     remove_permanently: bool = False,
 ):
     """Unload lock."""
-    hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
     lock_entity_ids = (
         [lock_entity_id] if lock_entity_id else list(runtime_data.locks.keys())
     )
     for _lock_entity_id in lock_entity_ids:
+        lock = runtime_data.locks.pop(_lock_entity_id, None)
+        if lock is None:
+            continue
         if not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id):
-            lock: BaseLock = hass_data[CONF_LOCKS].pop(_lock_entity_id)
             await lock.async_unload(remove_permanently)
             if lock.coordinator is not None:
                 await lock.coordinator.async_shutdown()
-
-        runtime_data.locks.pop(_lock_entity_id, None)
 
 
 async def async_unload_entry(
@@ -657,7 +683,18 @@ async def async_unload_entry(
                     f"slot_suspended_{entry_id}_{lock_entity_id}_{slot_num}",
                 )
 
-    if not hass_data.get(CONF_LOCKS):
+    # Only clean up the strategy resource if no other Lock Code Manager
+    # entries remain loaded. The current entry is still listed (in
+    # UNLOAD_IN_PROGRESS / NOT_LOADED state at this point) so filter it
+    # out before checking.
+    other_loaded_entries = any(
+        entry.entry_id != config_entry.entry_id
+        and entry.state is ConfigEntryState.LOADED
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+    )
+    if not other_loaded_entries:
         await _async_cleanup_strategy_resource(hass, hass_data)
 
     return unload_ok
@@ -674,7 +711,6 @@ async def _async_setup_new_locks(
     """Set up newly added locks and create per-slot entities for them."""
     entry_id = config_entry.entry_id
     entry_title = config_entry.title
-    hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
 
     _LOGGER.debug(
@@ -685,21 +721,18 @@ async def _async_setup_new_locks(
     )
     added_locks: list[BaseLock] = []
     for lock_entity_id in locks_to_add:
-        if lock_entity_id in hass_data[CONF_LOCKS]:
+        existing_lock = _find_shared_lock_instance(hass, config_entry, lock_entity_id)
+        if existing_lock is not None:
             _LOGGER.debug(
                 "%s (%s): Reusing lock instance for lock %s",
                 entry_id,
                 entry_title,
-                hass_data[CONF_LOCKS][lock_entity_id],
+                existing_lock,
             )
-            lock = runtime_data.locks[lock_entity_id] = hass_data[CONF_LOCKS][
-                lock_entity_id
-            ]
+            lock = runtime_data.locks[lock_entity_id] = existing_lock
             await lock.async_wait_for_setup()
         else:
-            lock = hass_data[CONF_LOCKS][lock_entity_id] = runtime_data.locks[
-                lock_entity_id
-            ] = async_create_lock_instance(
+            lock = runtime_data.locks[lock_entity_id] = async_create_lock_instance(
                 hass,
                 dr.async_get(hass),
                 ent_reg,
@@ -823,7 +856,7 @@ async def async_update_listener(
         )
     for lock_entity_id in locks_to_remove:
         callbacks.invoke_lock_removed_handlers(lock_entity_id)
-        lock: BaseLock = hass.data[DOMAIN][CONF_LOCKS][lock_entity_id]
+        lock: BaseLock = runtime_data.locks[lock_entity_id]
         if lock.device_entry:
             dev_reg = dr.async_get(hass)
             dev_reg.async_update_device(
