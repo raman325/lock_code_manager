@@ -1200,6 +1200,32 @@ async def test_clear_push_unsubs_continues_on_individual_failure(
     assert lock._push_unsubs == []
 
 
+async def test_clear_push_unsubs_safe_when_unsub_reregisters(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """An unsub that re-registers must not corrupt iteration or loop forever."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    calls: list[str] = []
+
+    def reregistering_unsub() -> None:
+        calls.append("first")
+        # Re-register self after the original snapshot was taken; the
+        # re-registration must survive clear() but must not be called
+        # again in this _clear_push_unsubs invocation.
+        lock._register_push_unsub(reregistering_unsub)
+
+    lock._register_push_unsub(reregistering_unsub)
+    lock._register_push_unsub(lambda: calls.append("second"))
+
+    lock._clear_push_unsubs()
+
+    assert calls == ["first", "second"]
+    assert lock._push_unsubs == [reregistering_unsub]
+
+
 # =============================================================================
 # Sequence lock context manager
 # =============================================================================

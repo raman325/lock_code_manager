@@ -267,9 +267,12 @@ class BaseLock:
         """
         Register a push-subscription unsub for base teardown management.
 
-        Providers append integration-specific unsub callables (cluster
-        listeners, event subscriptions, MQTT unsubscribes, bus listeners)
-        here so ``_clear_push_unsubs`` can release them in one place.
+        Scope is explicitly the push-subscription lifecycle: cluster
+        listeners, event subscriptions, and MQTT unsubscribes wired from
+        ``subscribe_push_updates`` / ``setup_push_subscription``.
+        Listeners with a different lifecycle (Home Assistant event-bus
+        listeners tied to setup/unload, like Z-Wave JS's) do NOT belong
+        here -- they must be tracked separately.
         """
         self._push_unsubs.append(unsub)
 
@@ -277,7 +280,11 @@ class BaseLock:
     @callback
     def _clear_push_unsubs(self) -> None:
         """Release every registered push-subscription unsub, logging individual failures."""
-        for unsub in self._push_unsubs:
+        # Snapshot first: an unsub that re-registers (or otherwise mutates
+        # the registry) would otherwise break iteration.
+        unsubs = list(self._push_unsubs)
+        self._push_unsubs.clear()
+        for unsub in unsubs:
             try:
                 unsub()
             except Exception as err:
@@ -286,7 +293,6 @@ class BaseLock:
                     self.lock.entity_id,
                     err,
                 )
-        self._push_unsubs.clear()
 
     @final
     @callback
