@@ -101,6 +101,7 @@ from .helpers import (
     async_clear_usercode,
     async_set_slot_condition,
     async_set_usercode,
+    get_managed_locks,
 )
 from .models import SlotCode
 from .providers import BaseLock
@@ -380,7 +381,7 @@ async def get_config_entry_data(
     config_entry: ConfigEntry,
 ) -> None:
     """Return the config entry fragment, entity registry entries, lock list, and slot calendar mapping."""
-    all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
+    entry_locks = config_entry.runtime_data.locks
     entry_config = get_entry_config(config_entry)
 
     connection.send_result(
@@ -398,8 +399,7 @@ async def get_config_entry_data(
                     ATTR_ENTITY_ID: lock_id,
                     CONF_NAME: _get_lock_friendly_name(hass, lock),
                 }
-                for lock_id, lock in all_locks.items()
-                if entry_config.has_lock(lock_id)
+                for lock_id, lock in entry_locks.items()
             ],
             CONF_SLOTS: {
                 k: v.get(CONF_ENTITY_ID) for k, v in entry_config.slots.items()
@@ -629,7 +629,7 @@ async def subscribe_lock_codes(
     """
     lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
     reveal = msg["reveal"]
-    lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
+    lock = get_managed_locks(hass).get(lock_entity_id)
     if not lock:
         connection.send_error(
             msg["id"],
@@ -927,7 +927,7 @@ def _serialize_slot_card_data(
     condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
 
     # Build per-lock status
-    all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
+    entry_locks = config_entry.runtime_data.locks
     entry_lock_ids = get_entry_config(config_entry).locks
 
     locks_data: list[dict[str, Any]] = [
@@ -939,7 +939,7 @@ def _serialize_slot_card_data(
             reveal=reveal,
         )
         for lock_entity_id in entry_lock_ids
-        if (lock := all_locks.get(lock_entity_id))
+        if (lock := entry_locks.get(lock_entity_id))
     ]
 
     # Build result
@@ -1117,11 +1117,11 @@ async def subscribe_code_slot(
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
-    all_locks = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {})
+    entry_locks = config_entry.runtime_data.locks
     entry_lock_ids = get_entry_config(config_entry).locks
 
     for lock_entity_id in entry_lock_ids:
-        lock = all_locks.get(lock_entity_id)
+        lock = entry_locks.get(lock_entity_id)
         if lock and lock.coordinator:
             unsub_coordinators.append(lock.coordinator.async_add_listener(_send_update))
 

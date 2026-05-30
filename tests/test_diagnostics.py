@@ -89,8 +89,7 @@ async def test_device_diagnostics_lock_device(
     The test mock may not create a device_entry for the lock. If that's the
     case, verify the fallback to config entry diagnostics instead.
     """
-    all_locks = hass.data.get(DOMAIN, {}).get("locks", {})
-    lock = all_locks.get(LOCK_1_ENTITY_ID)
+    lock = lock_code_manager_config_entry.runtime_data.locks.get(LOCK_1_ENTITY_ID)
     assert lock is not None
 
     if lock.device_entry:

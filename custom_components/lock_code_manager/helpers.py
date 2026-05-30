@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 import logging
 from typing import Any
 
@@ -22,7 +22,7 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
-from .const import CONF_LOCKS, DOMAIN, EXCLUDED_CONDITION_PLATFORMS
+from .const import DOMAIN, EXCLUDED_CONDITION_PLATFORMS
 from .data import get_entry_config
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
@@ -53,6 +53,39 @@ def async_create_lock_instance(
     return lock
 
 
+def _iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
+    """
+    Yield loaded Lock Code Manager config entries.
+
+    A lock may be shared by multiple LCM entries (same physical lock
+    managed from multiple Lock Code Manager configurations); callers
+    should treat the iteration as authoritative for "which locks does
+    Lock Code Manager manage right now".
+    """
+    return (
+        entry
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+        if entry.state is ConfigEntryState.LOADED
+    )
+
+
+def get_managed_locks(hass: HomeAssistant) -> dict[str, BaseLock]:
+    """
+    Return the union of locks across all loaded Lock Code Manager entries.
+
+    When two entries share the same physical lock they hold the same
+    ``BaseLock`` instance, so a flat ``entity_id -> BaseLock`` mapping is
+    well-defined.
+    """
+    return {
+        entity_id: lock
+        for entry in _iter_loaded_lcm_entries(hass)
+        for entity_id, lock in entry.runtime_data.locks.items()
+    }
+
+
 def get_locks_from_targets(
     hass: HomeAssistant, target_data: dict[str, Any]
 ) -> set[BaseLock]:
@@ -61,8 +94,9 @@ def get_locks_from_targets(
     area_ids: list[str] = cv.ensure_list(target_data.get(ATTR_AREA_ID, []))
     device_ids: list[str] = cv.ensure_list(target_data.get(ATTR_DEVICE_ID, []))
     entity_ids: list[str] = cv.ensure_list(target_data.get(ATTR_ENTITY_ID, []))
+    managed_locks = get_managed_locks(hass)
+    lcm_lock_entity_ids = managed_locks.keys()
     lock_entity_ids: set[str] = set()
-    lcm_lock_entity_ids: set[str] = set(hass.data[DOMAIN][CONF_LOCKS].keys())
     ent_reg = er.async_get(hass)
     lock_entity_ids.update(
         ent.entity_id
@@ -105,13 +139,20 @@ def get_locks_from_targets(
     return {
         lock
         for ent_id in (lock_entity_ids & lcm_lock_entity_ids)
-        if (lock := hass.data[DOMAIN][CONF_LOCKS].get(ent_id))
+        if (lock := managed_locks.get(ent_id))
     }
 
 
 def get_managed_lock(hass: HomeAssistant, lock_entity_id: str) -> BaseLock:
     """Get a managed lock by entity ID, raising if not found."""
-    lock = hass.data.get(DOMAIN, {}).get(CONF_LOCKS, {}).get(lock_entity_id)
+    lock = next(
+        (
+            entry.runtime_data.locks[lock_entity_id]
+            for entry in _iter_loaded_lcm_entries(hass)
+            if lock_entity_id in entry.runtime_data.locks
+        ),
+        None,
+    )
     if not lock:
         raise ServiceValidationError(
             f"Lock {lock_entity_id} is not managed by Lock Code Manager"

@@ -17,7 +17,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
     ATTR_USERCODE,
-    CONF_LOCKS,
     DOMAIN,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
@@ -36,7 +35,7 @@ async def test_set_usercode_service(
     lock_code_manager_config_entry,
 ) -> None:
     """Test set_usercode service sets a code on the lock."""
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.async_internal_set_usercode = AsyncMock()
 
     await hass.services.async_call(
@@ -78,7 +77,7 @@ async def test_clear_usercode_service(
     lock_code_manager_config_entry,
 ) -> None:
     """Test clear_usercode service clears a code on the lock."""
-    lock = hass.data[DOMAIN][CONF_LOCKS][LOCK_1_ENTITY_ID]
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     lock.async_internal_clear_usercode = AsyncMock()
 
     await hass.services.async_call(

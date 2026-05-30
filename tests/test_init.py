@@ -65,6 +65,16 @@ _LOGGER = logging.getLogger(__name__)
 LEGACY_NUMBER_OF_USES_KEY = "number_of_uses"
 
 
+def _loaded_lcm_lock_entity_ids(hass: HomeAssistant) -> set[str]:
+    """Return entity IDs of locks held by any loaded Lock Code Manager entry."""
+    return {
+        entity_id
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if (runtime_data := getattr(entry, "runtime_data", None)) is not None
+        for entity_id in runtime_data.locks
+    }
+
+
 @pytest.mark.parametrize("config", [{}])
 async def test_entry_setup_and_unload(
     hass: HomeAssistant,
@@ -401,7 +411,7 @@ async def test_resource_not_loaded_on_unload(
     await hass.config_entries.async_unload(config_entry.entry_id)
 
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert not hass.data[DOMAIN].get(CONF_LOCKS)
+    assert not _loaded_lcm_lock_entity_ids(hass)
 
 
 @pytest.mark.parametrize("config", [{}])
@@ -444,7 +454,7 @@ async def test_resource_reregistered_after_unload_and_new_entry(
     await hass.config_entries.async_remove(config_entry_2.entry_id)
     await hass.async_block_till_done()
     assert not any(item[CONF_URL] == STRATEGY_PATH for item in resources.async_items())
-    assert not hass.data[DOMAIN].get(CONF_LOCKS)
+    assert not _loaded_lcm_lock_entity_ids(hass)
 
     # Set up a new config entry - resource should be re-registered
     config_entry_3 = MockConfigEntry(
