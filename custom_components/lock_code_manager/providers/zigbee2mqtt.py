@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 import json
@@ -73,7 +72,6 @@ class Zigbee2MQTTLock(BaseLock):
 
     _base_topic: str = field(init=False, default=DEFAULT_BASE_TOPIC)
     _friendly_name: str | None = field(init=False, default=None)
-    _unsubscribe: Callable[[], None] | None = field(init=False, default=None)
     _pending_codes: dict[int, asyncio.Future[str | None]] = field(
         init=False, default_factory=dict
     )
@@ -300,7 +298,7 @@ class Zigbee2MQTTLock(BaseLock):
 
     async def _async_ensure_device_subscription(self) -> None:
         """Subscribe to the Z2M device topic; idempotent."""
-        if self._unsubscribe is not None:
+        if self._push_unsubs:
             return
 
         if not mqtt_config_entry_enabled(self.hass):
@@ -328,9 +326,7 @@ class Zigbee2MQTTLock(BaseLock):
             self.hass.add_job(self._process_z2m_device_payload, payload)
 
         try:
-            self._unsubscribe = await async_subscribe(
-                self.hass, topic, message_received
-            )
+            unsub = await async_subscribe(self.hass, topic, message_received)
         except HomeAssistantError as err:
             LOGGER.error(
                 "Failed to subscribe to MQTT for %s: %s",
@@ -340,10 +336,8 @@ class Zigbee2MQTTLock(BaseLock):
             raise LockDisconnected(
                 f"Failed to subscribe to MQTT for {self.lock.entity_id}"
             ) from err
-        else:
-            LOGGER.debug(
-                "Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id
-            )
+        self._register_push_unsub(unsub)
+        LOGGER.debug("Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id)
 
     @callback
     def setup_push_subscription(self) -> None:
@@ -352,7 +346,7 @@ class Zigbee2MQTTLock(BaseLock):
 
         Primary subscribe is ``await`` in ``async_setup``.
         """
-        if self._unsubscribe is not None:
+        if self._push_unsubs:
             return
 
         topic = self._get_topic()
@@ -397,9 +391,9 @@ class Zigbee2MQTTLock(BaseLock):
     @callback
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from MQTT updates."""
-        if self._unsubscribe:
-            self._unsubscribe()
-            self._unsubscribe = None
+        had_subscription = bool(self._push_unsubs)
+        self._clear_push_unsubs()
+        if had_subscription:
             LOGGER.debug("Unsubscribed from MQTT for %s", self.lock.entity_id)
 
         # Cancel any pending futures
@@ -517,7 +511,18 @@ class Zigbee2MQTTLock(BaseLock):
 
         try:
             await async_publish(self.hass, set_topic, payload)
-        except (HomeAssistantError, OSError) as err:
+        except OSError as err:
+            # Network-level publish failure (broker unreachable). Route to
+            # disconnect so the reconnect path runs instead of breaking
+            # per-slot.
+            LOGGER.error(
+                "Failed to set PIN for %s slot %s: %s",
+                self.lock.entity_id,
+                code_slot,
+                err,
+            )
+            raise LockDisconnected(f"Failed to set PIN: {err}") from err
+        except HomeAssistantError as err:
             LOGGER.error(
                 "Failed to set PIN for %s slot %s: %s",
                 self.lock.entity_id,
@@ -564,7 +569,16 @@ class Zigbee2MQTTLock(BaseLock):
 
         try:
             await async_publish(self.hass, set_topic, payload)
-        except (HomeAssistantError, OSError) as err:
+        except OSError as err:
+            # See ``async_set_usercode`` for the OSError split rationale.
+            LOGGER.error(
+                "Failed to clear PIN for %s slot %s: %s",
+                self.lock.entity_id,
+                code_slot,
+                err,
+            )
+            raise LockDisconnected(f"Failed to clear PIN: {err}") from err
+        except HomeAssistantError as err:
             LOGGER.error(
                 "Failed to clear PIN for %s slot %s: %s",
                 self.lock.entity_id,

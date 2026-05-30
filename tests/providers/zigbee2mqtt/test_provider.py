@@ -167,7 +167,7 @@ class TestPushSubscription:
             lock.setup_push_subscription()
             await hass.async_block_till_done()
 
-        assert lock._unsubscribe is None
+        assert not lock._push_unsubs
 
     async def test_teardown_push_unsubscribes_and_cancels_pending(
         self,
@@ -176,14 +176,14 @@ class TestPushSubscription:
         """Teardown calls MQTT unsubscribe and cancels outstanding futures."""
         lock = zigbee2mqtt_lock_with_device
         unsub = MagicMock()
-        lock._unsubscribe = unsub
+        lock._push_unsubs.append(unsub)
         fut = asyncio.get_running_loop().create_future()
         lock._pending_codes[3] = fut
 
         lock.teardown_push_subscription()
 
         unsub.assert_called_once()
-        assert lock._unsubscribe is None
+        assert not lock._push_unsubs
         assert fut.cancelled()
 
 
@@ -576,15 +576,43 @@ class TestAsyncSetClearHardRefresh:
         ):
             assert await lock.async_set_usercode(2, "9999") is True
 
-    async def test_async_set_usercode_publish_failure_raises(
+    async def test_async_set_usercode_publish_oserror_raises_lock_disconnected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """Publish errors surface as LockOperationFailed."""
+        """Set path maps MQTT OSError publish failures to LockDisconnected.
+
+        OSError reflects a broker-reachability problem; routing it to
+        LockDisconnected lets the reconnect/backoff path handle recovery
+        instead of breaking per-slot.
+        """
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         mock_pub = AsyncMock(side_effect=OSError("broker"))
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                mock_pub,
+            ),
+            pytest.raises(LockDisconnected, match="Failed to set PIN"),
+        ):
+            await lock.async_set_usercode(1, "1111")
+
+    async def test_async_set_usercode_publish_ha_error_raises_operation_failed(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """HomeAssistantError from publish surfaces as LockOperationFailed."""
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+        mock_pub = AsyncMock(side_effect=HomeAssistantError("payload rejected"))
 
         with (
             patch(
@@ -622,15 +650,38 @@ class TestAsyncSetClearHardRefresh:
         ):
             await lock.async_clear_usercode(4)
 
-    async def test_async_clear_usercode_publish_oserror_raises_operation_failed(
+    async def test_async_clear_usercode_publish_oserror_raises_lock_disconnected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """Clear path maps MQTT publish failures to LockOperationFailed."""
+        """Clear path maps MQTT OSError publish failures to LockDisconnected."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         mock_pub = AsyncMock(side_effect=OSError("broker"))
+
+        with (
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
+                return_value=True,
+            ),
+            patch(
+                "custom_components.lock_code_manager.providers.zigbee2mqtt.async_publish",
+                mock_pub,
+            ),
+            pytest.raises(LockDisconnected, match="Failed to clear PIN"),
+        ):
+            await lock.async_clear_usercode(4)
+
+    async def test_async_clear_usercode_publish_ha_error_raises_operation_failed(
+        self,
+        hass: HomeAssistant,
+        zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
+    ) -> None:
+        """HomeAssistantError from publish surfaces as LockOperationFailed."""
+        lock = zigbee2mqtt_lock_with_device
+        hass.states.async_set(lock.lock.entity_id, "locked")
+        mock_pub = AsyncMock(side_effect=HomeAssistantError("payload rejected"))
 
         with (
             patch(
