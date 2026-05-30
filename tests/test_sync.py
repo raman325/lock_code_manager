@@ -34,6 +34,7 @@ from .common import (
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
+    SLOT_2_ACTIVE_ENTITY,
     SLOT_2_IN_SYNC_ENTITY,
 )
 from .conftest import async_trigger_sync_tick, get_in_sync_entity_obj
@@ -1346,3 +1347,145 @@ class TestBreakerTickSoleMutatorInvariant:
         assert manager._breaker_reset_requested is True
         assert reset_spy.call_count == 0
         assert manager._slot_breaker.failure_count == seeded
+
+    async def test_request_sync_check_suspended_target_diverged_sets_flag(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SUSPENDED -> OUT_OF_SYNC when the suspend target diverges uses the flag."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.SUSPENDED
+        # Pin a target that does not match the current resolved state.
+        manager._code_suspend_target = (STATE_OFF, "9999")
+        manager._slot_breaker.record_failure()
+        seeded = manager._slot_breaker.failure_count
+        manager._breaker_reset_requested = False
+
+        with patch.object(
+            manager._slot_breaker, "reset", wraps=manager._slot_breaker.reset
+        ) as reset_spy:
+            manager._request_sync_check()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._breaker_reset_requested is True
+        assert reset_spy.call_count == 0
+        assert manager._slot_breaker.failure_count == seeded
+
+    async def test_request_sync_check_suspended_reachable_again_sets_flag(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """SUSPENDED (lock unreachable) -> OUT_OF_SYNC when reachable again uses the flag."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.SUSPENDED
+        # No code-suspend target means the slot is suspended only because
+        # the lock was unreachable. ``unreachable`` is a property reading
+        # the coordinator's lock breaker, so make sure it returns False.
+        manager._code_suspend_target = None
+        manager._coordinator._lock_breaker.reset()
+        manager._slot_breaker.record_failure()
+        seeded = manager._slot_breaker.failure_count
+        manager._breaker_reset_requested = False
+        assert not manager._coordinator.unreachable
+
+        with patch.object(
+            manager._slot_breaker, "reset", wraps=manager._slot_breaker.reset
+        ) as reset_spy:
+            manager._request_sync_check()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._breaker_reset_requested is True
+        assert reset_spy.call_count == 0
+        assert manager._slot_breaker.failure_count == seeded
+
+    async def test_async_stop_preserves_breaker_failure_count(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """async_stop must NOT reset the breaker -- the manager is being torn down."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        for _ in range(2):
+            manager._slot_breaker.record_failure()
+        seeded = manager._slot_breaker.failure_count
+        assert seeded == 2
+
+        await manager.async_stop()
+
+        assert not manager._started
+        assert manager._slot_breaker.failure_count == seeded
+
+    async def test_tick_records_failure_on_set_verification_miss(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A set that completes but whose readback still shows out-of-sync increments the breaker."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._coordinator.data[1] = "9999"
+        manager._state = SyncState.OUT_OF_SYNC
+        starting_count = manager._slot_breaker.failure_count
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+
+        # async_set_usercode succeeds (was_set=True) but we no-op the
+        # refresh so coordinator.data[1] still reports the stale value and
+        # calculate_in_sync returns False -- the post-verification miss
+        # branch must then record a failure.
+        with (
+            patch.object(
+                lock_provider, "async_set_usercode", AsyncMock(return_value=None)
+            ),
+            patch.object(
+                manager._coordinator, "async_refresh", AsyncMock(return_value=None)
+            ),
+        ):
+            await manager._async_tick_impl()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._slot_breaker.failure_count == starting_count + 1
+
+    async def test_tick_does_not_record_failure_on_clear_verification_miss(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A clear-then-verification-miss must NOT increment the breaker (was_set=False)."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_2_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        # Slot 2 in the standard fixture is currently configured with a PIN
+        # but to make `_perform_sync` go down the clear branch the active
+        # entity must report STATE_OFF. Drive that via the entity.
+        hass.states.async_set(SLOT_2_ACTIVE_ENTITY, STATE_OFF)
+        # Coordinator still reports a code so verification will miss.
+        manager._coordinator.data[2] = "5678"
+        starting_count = manager._slot_breaker.failure_count
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+
+        with patch.object(
+            lock_provider, "async_clear_usercode", AsyncMock(return_value=None)
+        ):
+            await manager._async_tick_impl()
+
+        assert manager._state is SyncState.OUT_OF_SYNC
+        assert manager._slot_breaker.failure_count == starting_count
