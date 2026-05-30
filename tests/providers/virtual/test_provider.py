@@ -1,6 +1,6 @@
 """Test the Virtual lock platform."""
 
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 
@@ -60,7 +60,7 @@ async def test_virtual_lock_does_not_support_code_slot_events(
 async def test_get_usercodes_returns_empty_for_cleared_slots(
     virtual_lock_with_slots: VirtualLock,
 ):
-    """Test that async_get_usercodes returns SlotCode.EMPTY for cleared slots."""
+    """Test that async_get_usercodes returns SlotCredential.empty() for cleared slots."""
     lock = virtual_lock_with_slots
 
     # Set code on slot 1 only
@@ -68,14 +68,14 @@ async def test_get_usercodes_returns_empty_for_cleared_slots(
 
     # Get usercodes: slot 1 should have code, slot 2 should be EMPTY
     codes = await lock.async_get_usercodes()
-    assert codes[1] == "1234"
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] == SlotCredential.known("1234")
+    assert codes[2] is SlotCredential.empty()
 
     # Clear slot 1 and verify it becomes EMPTY
     await lock.async_clear_usercode(1)
     codes = await lock.async_get_usercodes()
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] is SlotCredential.empty()
+    assert codes[2] is SlotCredential.empty()
 
 
 async def test_get_usercodes_includes_unmanaged_slots(
@@ -89,9 +89,9 @@ async def test_get_usercodes_includes_unmanaged_slots(
     lock._data["99"] = {"code": "9999", "name": "unmanaged"}
 
     codes = await lock.async_get_usercodes()
-    assert codes[1] == "1234"
-    assert codes[2] is SlotCode.EMPTY
-    assert codes[99] == "9999"
+    assert codes[1] == SlotCredential.known("1234")
+    assert codes[2] is SlotCredential.empty()
+    assert codes[99] == SlotCredential.known("9999")
 
 
 async def test_get_usercodes_invalid_stored_key_skipped(
@@ -106,4 +106,4 @@ async def test_get_usercodes_invalid_stored_key_skipped(
     codes = await lock.async_get_usercodes()
     # "bad_key" should be skipped; slot 3 should appear
     assert 3 in codes
-    assert codes[3] == "3333"
+    assert codes[3] == SlotCredential.known("3333")

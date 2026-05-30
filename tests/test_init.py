@@ -42,7 +42,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
 )
-from custom_components.lock_code_manager.models import SyncState
+from custom_components.lock_code_manager.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -1109,7 +1109,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
 
     # Ensure slot 3 exists in coordinator data so sync manager can resolve state.
     # The mock lock only starts with slots 1 and 2, so push slot 3 data.
-    lock_a.coordinator.push_update({3: "0123"})
+    lock_a.coordinator.push_update({3: SlotCredential.known("0123")})
     await hass.async_block_till_done()
 
     # Drive initial ticks for entry B's sync managers to reach IN_SYNC
@@ -1131,7 +1131,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
 
     # Now make entry B's slot out-of-sync by changing the code on the lock
     # while the coordinator is suspended
-    lock_a.coordinator.push_update({3: "different"})
+    lock_a.coordinator.push_update({3: SlotCredential.known("different")})
     await hass.async_block_till_done()
 
     # The push_update call above resets the lock breaker (successful push
@@ -1154,7 +1154,7 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     )
 
     # Recovery: push a successful update to reset backoff and clear suspension
-    lock_a.coordinator.push_update({3: "0123"})
+    lock_a.coordinator.push_update({3: SlotCredential.known("0123")})
     await hass.async_block_till_done()
 
     # After recovery, entry B's sync manager should resume from SUSPENDED

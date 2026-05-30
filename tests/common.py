@@ -19,7 +19,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
 LOCK_1_ENTITY_ID = "lock.test_1"
@@ -84,7 +84,7 @@ class MockLCMLock(BaseLock):
         """Return whether the integration's client/driver/broker is connected."""
         return self._connected
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Perform hard refresh of all codes."""
         self.service_calls["hard_refresh_codes"].append(())
         return await self.async_get_usercodes()
@@ -119,11 +119,11 @@ class MockLCMLock(BaseLock):
         self.service_calls["clear_usercode"].append((code_slot,))
         return True
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """Return dictionary of code slots and usercodes."""
         snapshot = self.codes.copy()
         self.service_calls["get_usercodes"].append(snapshot)
-        return snapshot
+        return {slot: SlotCredential.known(pin) for slot, pin in snapshot.items()}
 
 
 @dataclass(repr=False, eq=False)

@@ -30,7 +30,7 @@ from .const import (
 )
 from .data import get_entry_config
 from .exceptions import LockCodeManagerError
-from .models import SlotCode
+from .models import SlotCredential
 from .resilience import CircuitBreaker
 
 if TYPE_CHECKING:
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCode]]):
+class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredential]]):
     """Class to manage usercode updates."""
 
     def __init__(self, hass: HomeAssistant, lock: BaseLock, config_entry: Any) -> None:
@@ -58,7 +58,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             update_interval=update_interval,
             config_entry=config_entry,
         )
-        self.data: dict[int, str | SlotCode] = {}
+        self.data: dict[int, SlotCredential] = {}
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -90,26 +90,35 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
         """Return the lock."""
         return self._lock
 
-    def get_expected_pin(self, slot_num: int) -> str | None:
-        """Return configured PIN for a slot, or None if disabled/unconfigured."""
+    def desired_credential(self, slot_num: int) -> SlotCredential:
+        """
+        Return the credential LCM wants on a slot.
+
+        Disabled slots and enabled-but-blank slots map to
+        ``SlotCredential.empty()``; an enabled slot with a configured PIN
+        maps to ``SlotCredential.known(pin)``.
+        """
         slot_data = get_entry_config(self._config_entry).slot(slot_num)
         if not slot_data.get(CONF_ENABLED):
-            return None
-        return slot_data.get(CONF_PIN) or None
+            return SlotCredential.empty()
+        pin = slot_data.get(CONF_PIN)
+        if not pin:
+            return SlotCredential.empty()
+        return SlotCredential.known(pin)
 
     def slot_expects_pin(self, slot_num: int) -> bool:
         """Return whether LCM expects a PIN on this slot (enabled with PIN)."""
-        return self.get_expected_pin(slot_num) is not None
+        return self.desired_credential(slot_num).is_present
 
     @staticmethod
     def _normalize_keys(
-        data: dict[Any, str | SlotCode],
-    ) -> dict[int, str | SlotCode]:
+        data: dict[Any, SlotCredential],
+    ) -> dict[int, SlotCredential]:
         """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
         return {int(k): v for k, v in data.items()}
 
     @callback
-    def push_update(self, updates: dict[int, str | SlotCode]) -> None:
+    def push_update(self, updates: dict[int, SlotCredential]) -> None:
         """Push one or more slot updates and notify listening entities."""
         if not updates:
             return
@@ -201,7 +210,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, str | SlotCo
             f"lock_offline_{self._lock.lock.entity_id}",
         )
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """Fetch usercodes from the provider, normalize slot keys to int, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()

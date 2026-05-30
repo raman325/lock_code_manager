@@ -17,7 +17,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
@@ -122,8 +122,8 @@ async def test_get_usercodes_no_codes(
 
     codes = await schlage_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] is SlotCredential.empty()
+    assert codes[2] is SlotCredential.empty()
 
 
 async def test_get_usercodes_no_configured_slots(
@@ -154,8 +154,8 @@ async def test_get_usercodes_does_not_auto_tag(
     codes = await schlage_lock.async_get_usercodes()
 
     # Untagged codes are not counted as occupied
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] is SlotCredential.empty()
+    assert codes[2] is SlotCredential.empty()
 
     # No add_code call should have been made
     assert add_handler.call_count == 0
@@ -178,8 +178,8 @@ async def test_get_usercodes_duplicate_tag_uses_first(
 
     codes = await schlage_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.UNREADABLE_CODE
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.empty()
 
 
 async def test_get_usercodes_ignores_tags_outside_managed_range(
@@ -198,8 +198,8 @@ async def test_get_usercodes_ignores_tags_outside_managed_range(
 
     codes = await schlage_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] is SlotCredential.empty()
+    assert codes[2] is SlotCredential.empty()
 
 
 # ---------------------------------------------------------------------------
@@ -636,8 +636,8 @@ async def test_hard_refresh_codes(
         codes = await schlage_lock.async_hard_refresh_codes()
         mock_tag.assert_awaited_once()
 
-    assert codes[1] is SlotCode.EMPTY
-    assert codes[2] is SlotCode.UNREADABLE_CODE
+    assert codes[1] is SlotCredential.empty()
+    assert codes[2] is SlotCredential.unreadable()
 
 
 # ---------------------------------------------------------------------------

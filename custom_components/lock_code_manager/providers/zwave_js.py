@@ -55,7 +55,7 @@ from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
 from ..exceptions import LockDisconnected
-from ..models import SlotCode
+from ..models import SlotCredential
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -182,37 +182,35 @@ class ZWaveJSLock(BaseLock):
                 return
 
             # Slot was cleared - update coordinator if needed
-            if (
-                self.coordinator
-                and self.coordinator.data.get(code_slot) is not SlotCode.EMPTY
-            ):
+            current = self.coordinator.data.get(code_slot) if self.coordinator else None
+            if self.coordinator and (current is None or not current.is_empty):
                 _LOGGER.debug(
                     "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
                     self.lock.entity_id,
                     code_slot,
                 )
-                self.coordinator.push_update({code_slot: SlotCode.EMPTY})
+                self._push_credential_update(code_slot, SlotCredential.empty())
 
     @callback
     def _handle_usercode_value_update(self, code_slot: int, new_value: Any) -> None:
         """Handle userCode value update for a code slot."""
-        # Determine the resolved value as a SlotCode or plain string
+        # Determine the resolved credential
         if not new_value:
-            resolved: str | SlotCode = SlotCode.EMPTY
+            resolved = SlotCredential.empty()
         else:
             value = str(new_value)
             slot_in_use = self.code_slot_in_use(code_slot)
-            # Asymmetric in_use checks: masked codes count as UNREADABLE_CODE even
+            # Asymmetric in_use checks: masked codes count as unreadable even
             # when in_use is None (some firmwares mask before reporting
-            # status), but all-zeros only counts as EMPTY when in_use is
+            # status), but all-zeros only counts as empty when in_use is
             # explicitly False (zeros from a partially-loaded cache must
             # not be misread as cleared).
             if value == "*" * len(value) and slot_in_use is not False:
-                resolved = SlotCode.UNREADABLE_CODE
+                resolved = SlotCredential.unreadable()
             elif value.strip("0") == "" and slot_in_use is False:
-                resolved = SlotCode.EMPTY
+                resolved = SlotCredential.empty()
             else:
-                resolved = value
+                resolved = SlotCredential.known(value)
 
         # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
         if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
@@ -222,12 +220,11 @@ class ZWaveJSLock(BaseLock):
             "Lock %s received push update for slot %s: %s",
             self.lock.entity_id,
             code_slot,
-            "****" if not isinstance(resolved, SlotCode) else f"({resolved})",
+            "****" if resolved.is_readable else f"({resolved.as_label()})",
         )
 
         # Push update to coordinator
-        if self.coordinator:
-            self.coordinator.push_update({code_slot: resolved})
+        self._push_credential_update(code_slot, resolved)
 
     @callback
     def setup_push_subscription(self) -> None:
@@ -393,7 +390,7 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Refresh the User Code CC cache from the device and return all codes."""
         await self._async_refresh_usercode_cache()
         return await self.async_get_usercodes()
@@ -462,8 +459,7 @@ class ZWaveJSLock(BaseLock):
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
-        if self.coordinator:
-            self.coordinator.push_update({code_slot: usercode})
+        self._push_credential_update(code_slot, SlotCredential.known(usercode))
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -497,8 +493,7 @@ class ZWaveJSLock(BaseLock):
         # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
         # value cache updates asynchronously via push notification. Update coordinator
         # immediately to prevent sync loops from reading stale cache data.
-        if self.coordinator:
-            self.coordinator.push_update({code_slot: SlotCode.EMPTY})
+        self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
     def _get_usercodes_from_cache(self) -> list[dict[str, Any]]:
@@ -515,10 +510,10 @@ class ZWaveJSLock(BaseLock):
         except Exception as err:
             raise LockDisconnected from err
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """Get dictionary of code slots and usercodes."""
         code_slots = self.managed_slots
-        data: dict[int, str | SlotCode] = {}
+        data: dict[int, SlotCredential] = {}
 
         if not await self.async_is_integration_connected():
             raise LockDisconnected
@@ -549,19 +544,19 @@ class ZWaveJSLock(BaseLock):
             in_use: bool | None = slot["in_use"]
 
             if not in_use:
-                data[code_slot] = SlotCode.EMPTY
+                data[code_slot] = SlotCredential.empty()
             elif not usercode:
                 # in_use but no code content (cache partially populated); skip
                 continue
             elif usercode == "*" * len(usercode):
                 # Masked code (all asterisks with slot in use)
-                data[code_slot] = SlotCode.UNREADABLE_CODE
+                data[code_slot] = SlotCredential.unreadable()
             else:
                 # Unmasked code
-                data[code_slot] = usercode
+                data[code_slot] = SlotCredential.known(usercode)
 
-        slots_with_pin = [s for s, v in data.items() if v is not SlotCode.EMPTY]
-        slots_empty = [s for s, v in data.items() if v is SlotCode.EMPTY]
+        slots_with_pin = [s for s, v in data.items() if v.is_present]
+        slots_empty = [s for s, v in data.items() if v.is_empty]
         _LOGGER.debug(
             "Lock %s: %s slots with PIN %s, %s slots empty %s",
             self.lock.entity_id,

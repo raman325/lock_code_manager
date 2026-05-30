@@ -34,7 +34,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.models import (
     LockCodeManagerConfigEntryRuntimeData,
-    SlotCode,
+    SlotCredential,
 )
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
@@ -456,10 +456,10 @@ async def test_push_update_masked_code_sends_unknown(
     lock_schlage_be469: Node,
 ) -> None:
     """
-    Test that push updates with masked codes send SlotCode.UNREADABLE_CODE.
+    Test that push updates with masked codes send SlotCredential.unreadable().
 
     When a push update arrives with a masked code (all asterisks) and the slot
-    is in use, the coordinator should receive SlotCode.UNREADABLE_CODE.
+    is in use, the coordinator should receive SlotCredential.unreadable().
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -499,9 +499,9 @@ async def test_push_update_masked_code_sends_unknown(
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        # Coordinator should receive SlotCode.UNREADABLE_CODE for masked codes
+        # Coordinator should receive SlotCredential.unreadable() for masked codes
         mock_coordinator.push_update.assert_called_once_with(
-            {2: SlotCode.UNREADABLE_CODE}
+            {2: SlotCredential.unreadable()}
         )
 
 
@@ -511,7 +511,7 @@ async def test_push_update_falsy_value_sends_empty(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that push updates with falsy values send SlotCode.EMPTY."""
+    """Test that push updates with falsy values send SlotCredential.empty()."""
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -523,7 +523,7 @@ async def test_push_update_falsy_value_sends_empty(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
     zwave_js_lock.subscribe_push_updates()
 
@@ -545,7 +545,7 @@ async def test_push_update_falsy_value_sends_empty(
     lock_schlage_be469.receive_event(event)
     await hass.async_block_till_done()
 
-    mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
 
 
 async def test_push_update_all_zeros_not_in_use_sends_empty(
@@ -554,7 +554,7 @@ async def test_push_update_all_zeros_not_in_use_sends_empty(
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
-    """Test that all-zeros with slot_in_use=False sends SlotCode.EMPTY."""
+    """Test that all-zeros with slot_in_use=False sends SlotCredential.empty()."""
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -566,7 +566,7 @@ async def test_push_update_all_zeros_not_in_use_sends_empty(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
     zwave_js_lock.subscribe_push_updates()
 
@@ -588,7 +588,9 @@ async def test_push_update_all_zeros_not_in_use_sends_empty(
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+        mock_coordinator.push_update.assert_called_once_with(
+            {2: SlotCredential.empty()}
+        )
 
 
 async def test_push_update_duplicate_value_skipped(
@@ -609,7 +611,7 @@ async def test_push_update_duplicate_value_skipped(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}  # Already has this value
+    mock_coordinator.data = {2: SlotCredential.known("1234")}  # Already has this value
     zwave_js_lock.coordinator = mock_coordinator
     zwave_js_lock.subscribe_push_updates()
 
@@ -677,7 +679,7 @@ async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
         await hass.async_block_till_done()
 
         mock_coordinator.push_update.assert_called_once_with(
-            {2: SlotCode.UNREADABLE_CODE}
+            {2: SlotCredential.unreadable()}
         )
 
 
@@ -711,7 +713,7 @@ async def test_push_update_user_id_status_available_clears_slot(
 
     # Set up a mock coordinator with existing data
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}  # Slot has a PIN
+    mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
     mock_coordinator.slot_expects_pin.return_value = False  # No expected PIN
     zwave_js_lock.coordinator = mock_coordinator
 
@@ -733,8 +735,8 @@ async def test_push_update_user_id_status_available_clears_slot(
     lock_schlage_be469.emit("value updated", event.data)
     await hass.async_block_till_done()
 
-    # Coordinator should be updated with SlotCode.EMPTY
-    mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+    # Coordinator should be updated with SlotCredential.empty()
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
@@ -764,7 +766,7 @@ async def test_push_update_user_id_status_available_skipped_when_already_empty(
 
     # Set up a mock coordinator - slot already empty
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: SlotCode.EMPTY}  # Slot already empty
+    mock_coordinator.data = {2: SlotCredential.empty()}  # Slot already empty
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -816,7 +818,7 @@ async def test_push_update_user_id_status_enabled_ignored(
 
     # Set up a mock coordinator
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: ""}
+    mock_coordinator.data = {2: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -868,7 +870,7 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
 
     # Set up a mock coordinator with existing PIN
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}  # Slot has a PIN
+    mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -922,7 +924,7 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
 
     # Set up a mock coordinator with existing PIN
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}  # Slot has a PIN
+    mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -946,7 +948,9 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
         await hass.async_block_till_done()
 
         # Coordinator SHOULD be updated (slot cleared)
-        mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+        mock_coordinator.push_update.assert_called_once_with(
+            {2: SlotCredential.empty()}
+        )
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
@@ -1123,7 +1127,7 @@ async def test_set_in_progress_cleared_on_value_update(
     await zwave_js_lock.async_setup(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: ""}
+    mock_coordinator.data = {2: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
 
     zwave_js_lock.subscribe_push_updates()

@@ -26,7 +26,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.models import SlotCode, SyncState
+from custom_components.lock_code_manager.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
 from .common import (
@@ -45,9 +45,11 @@ def _slot(
     pin: str = "1234",
     name: str | None = "Test",
     code: str = "",
-    coordinator_code: str | SlotCode | None = None,
+    coordinator_code: str | SlotCredential | None = None,
 ) -> SlotState:
-    """Build a SlotState for testing."""
+    """Build a SlotState for testing; raw strings are wrapped as known credentials."""
+    if isinstance(coordinator_code, str):
+        coordinator_code = SlotCredential.known(coordinator_code)
     return SlotState(
         active_state=active,
         pin_state=pin,
@@ -89,7 +91,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.UNREADABLE_CODE,
+                    "coordinator_code": SlotCredential.unreadable(),
                 },
                 True,
                 id="active-unknown-code-matching-last-set",
@@ -99,7 +101,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "5678",
-                    "coordinator_code": SlotCode.UNREADABLE_CODE,
+                    "coordinator_code": SlotCredential.unreadable(),
                 },
                 False,
                 id="active-unknown-code-pin-changed",
@@ -109,7 +111,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.UNREADABLE_CODE,
+                    "coordinator_code": SlotCredential.unreadable(),
                 },
                 False,
                 id="active-unknown-code-never-set",
@@ -119,7 +121,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.EMPTY,
+                    "coordinator_code": SlotCredential.empty(),
                 },
                 False,
                 id="active-empty-code",
@@ -129,7 +131,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.EMPTY,
+                    "coordinator_code": SlotCredential.empty(),
                 },
                 True,
                 id="active-empty-code-matching-last-set",
@@ -139,7 +141,7 @@ class TestCalculateInSync:
                 {
                     "active": STATE_ON,
                     "pin": "1234",
-                    "coordinator_code": SlotCode.EMPTY,
+                    "coordinator_code": SlotCredential.empty(),
                 },
                 False,
                 id="active-empty-code-mismatched-last-set",
@@ -169,13 +171,13 @@ class TestCalculateInSync:
             # -- Inactive (OFF) + various lock codes --
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": SlotCode.EMPTY},
+                {"active": STATE_OFF, "coordinator_code": SlotCredential.empty()},
                 True,
                 id="inactive-empty-code",
             ),
             pytest.param(
                 None,
-                {"active": STATE_OFF, "coordinator_code": SlotCode.UNREADABLE_CODE},
+                {"active": STATE_OFF, "coordinator_code": SlotCredential.unreadable()},
                 False,
                 id="inactive-unknown-code",
             ),
@@ -410,7 +412,7 @@ class TestLockOperationFailedRetry:
         # Force out-of-sync state so _perform_sync is called:
         # set coordinator data to EMPTY so the slot appears to need a set
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with patch.object(
             manager,
@@ -432,7 +434,7 @@ class TestLockOperationFailedRetry:
     ) -> None:
         """Repeated LockOperationFailed suspends the slot, not the whole lock."""
         manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with patch.object(
             manager,
@@ -487,7 +489,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
         manager._state = SyncState.LOADING
         # Make coordinator data mismatch (slot active but lock has empty code)
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.OUT_OF_SYNC
 
@@ -506,7 +508,7 @@ class TestSyncStateMachine:
         hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_OFF)
         hass.states.async_set(SLOT_1_PIN_ENTITY, STATE_UNKNOWN)
         # Coordinator has slot as EMPTY (no code on lock)
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
 
@@ -525,7 +527,7 @@ class TestSyncStateMachine:
         manager._state = SyncState.LOADING
 
         hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_UNKNOWN)
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.LOADING
@@ -544,7 +546,7 @@ class TestSyncStateMachine:
         # Active=on but PIN unknown — can't sync without knowing what PIN to set
         hass.states.async_set(SLOT_1_ACTIVE_ENTITY, STATE_ON)
         hass.states.async_set(SLOT_1_PIN_ENTITY, STATE_UNKNOWN)
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.LOADING
@@ -575,7 +577,7 @@ class TestSyncStateMachine:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
         assert manager._state is SyncState.IN_SYNC
 
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
         manager._request_sync_check()
         assert manager._state is SyncState.OUT_OF_SYNC
 
@@ -593,7 +595,7 @@ class TestSyncStateMachine:
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.IN_SYNC
 
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
         manager._request_sync_check()
         assert manager._state is SyncState.OUT_OF_SYNC
 
@@ -611,7 +613,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with patch.object(
             manager,
@@ -635,7 +637,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with patch.object(
             manager,
@@ -660,7 +662,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
         for _ in range(MAX_SYNC_ATTEMPTS):
             manager._slot_breaker.record_failure()
 
@@ -735,7 +737,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with (
             patch.object(
@@ -767,7 +769,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with patch.object(
             manager,
@@ -841,7 +843,7 @@ class TestSyncStateMachine:
         manager = entity_obj._sync_manager
 
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         # _perform_sync succeeds but coordinator data stays EMPTY
         # (simulating a lock that silently rejects the code).
@@ -878,7 +880,7 @@ class TestSyncStateMachine:
 
         # Trip the failing slot's breaker so the next tick suspends it.
         failing._state = SyncState.OUT_OF_SYNC
-        failing._coordinator.data[1] = SlotCode.EMPTY
+        failing._coordinator.data[1] = SlotCredential.empty()
         for _ in range(MAX_SYNC_ATTEMPTS):
             failing._slot_breaker.record_failure()
 
@@ -899,7 +901,7 @@ class TestSyncStateMachine:
     ) -> None:
         """Repeated LockDisconnected on set trips the lock breaker and suspends the tick."""
         manager = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)._sync_manager
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
 
         with patch.object(
             manager,
@@ -932,7 +934,7 @@ class TestSyncStateMachine:
 
         # Trip the slot breaker so the tick suspends for a non-converging code.
         manager._state = SyncState.OUT_OF_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
         for _ in range(MAX_SYNC_ATTEMPTS):
             manager._slot_breaker.record_failure()
         await manager._async_tick()
@@ -1028,7 +1030,7 @@ class TestAsyncStopAwaitsInFlightTick:
         manager = entity_obj._sync_manager
 
         # Force an out-of-sync state so the next tick performs work.
-        manager._coordinator.data[1] = "9999"
+        manager._coordinator.data[1] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
 
         mid_sync = asyncio.Event()
@@ -1116,7 +1118,7 @@ class TestAsyncStopAwaitsInFlightTick:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.data[1] = "9999"
+        manager._coordinator.data[1] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
 
         mid_sync = asyncio.Event()
@@ -1211,7 +1213,7 @@ class TestBreakerTickSoleMutatorInvariant:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.data[1] = "9999"
+        manager._coordinator.data[1] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
         # Seed the breaker so a mid-tick mutation would be observable.
         manager._slot_breaker.record_failure()
@@ -1285,7 +1287,7 @@ class TestBreakerTickSoleMutatorInvariant:
             pin_state="1234",
             name_state="Test",
             code_state="",
-            coordinator_code=SlotCode.EMPTY,
+            coordinator_code=SlotCredential.empty(),
         )
         manager._suspend_slot(slot_state, "test reason")
 
@@ -1307,7 +1309,7 @@ class TestBreakerTickSoleMutatorInvariant:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.data[1] = "9999"
+        manager._coordinator.data[1] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
         starting_count = manager._slot_breaker.failure_count
 
@@ -1333,7 +1335,7 @@ class TestBreakerTickSoleMutatorInvariant:
 
         # Branch 1: IN_SYNC -> OUT_OF_SYNC when target diverges.
         manager._state = SyncState.IN_SYNC
-        manager._coordinator.data[1] = SlotCode.EMPTY
+        manager._coordinator.data[1] = SlotCredential.empty()
         manager._slot_breaker.record_failure()
         seeded = manager._slot_breaker.failure_count
         manager._breaker_reset_requested = False
@@ -1436,7 +1438,7 @@ class TestBreakerTickSoleMutatorInvariant:
         entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
         manager = entity_obj._sync_manager
 
-        manager._coordinator.data[1] = "9999"
+        manager._coordinator.data[1] = SlotCredential.known("9999")
         manager._state = SyncState.OUT_OF_SYNC
         starting_count = manager._slot_breaker.failure_count
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
@@ -1476,7 +1478,7 @@ class TestBreakerTickSoleMutatorInvariant:
         # entity must report STATE_OFF. Drive that via the entity.
         hass.states.async_set(SLOT_2_ACTIVE_ENTITY, STATE_OFF)
         # Coordinator still reports a code so verification will miss.
-        manager._coordinator.data[2] = "5678"
+        manager._coordinator.data[2] = SlotCredential.known("5678")
         starting_count = manager._slot_breaker.failure_count
         lock_provider = lock_code_manager_config_entry.runtime_data.locks[
             LOCK_1_ENTITY_ID

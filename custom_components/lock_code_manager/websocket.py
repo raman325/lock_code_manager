@@ -103,7 +103,7 @@ from .helpers import (
     async_set_usercode,
     get_managed_locks,
 )
-from .models import SlotCode
+from .models import SlotCode, SlotCredential
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -122,7 +122,7 @@ CALENDAR_ATTR_END_TIME = "end_time"
 
 
 def _slot_code_payload(
-    code: str | SlotCode | None,
+    code: str | SlotCredential | None,
     *,
     reveal: bool,
     code_key: str = ATTR_CODE,
@@ -133,8 +133,16 @@ def _slot_code_payload(
 
     SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
     regular codes are revealed verbatim or masked to ``None`` plus a length,
-    and ``None`` stays ``None``.
+    and ``None`` stays ``None``. A ``SlotCredential`` is collapsed to its
+    label (sentinel or PIN) before serialization.
     """
+    if isinstance(code, SlotCredential):
+        label = code.as_label()
+        if isinstance(label, SlotCode):
+            return {code_key: str(label)}
+        if reveal:
+            return {code_key: label}
+        return {code_key: None, length_key: len(label)}
     if isinstance(code, SlotCode):
         return {code_key: str(code)}
     if reveal or code is None:
@@ -410,7 +418,7 @@ async def get_config_entry_data(
 
 def _serialize_slot(
     slot: Any,
-    code: str | SlotCode | None,
+    code: str | SlotCredential | None,
     *,
     reveal: bool,
     name: str | None = None,

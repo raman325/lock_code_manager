@@ -25,7 +25,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 
@@ -906,8 +906,8 @@ async def test_execute_rate_limited_raises_when_device_not_available(
         ("", True),
         ("****", True),
         ("*", True),
-        (SlotCode.EMPTY, True),
-        (SlotCode.UNREADABLE_CODE, True),
+        (SlotCredential.empty(), True),
+        (SlotCredential.unreadable(), True),
         ("1234", False),
         ("12*4", False),
         ("0", False),
@@ -933,7 +933,13 @@ async def test_check_duplicate_code_raises_on_match(
     coordinator = lock.coordinator
     assert coordinator is not None
 
-    coordinator.async_set_updated_data({1: "1234", 2: "5678", 3: ""})
+    coordinator.async_set_updated_data(
+        {
+            1: SlotCredential.known("1234"),
+            2: SlotCredential.known("5678"),
+            3: SlotCredential.empty(),
+        }
+    )
 
     with pytest.raises(DuplicateCodeError) as exc_info:
         lock._check_duplicate_code(3, "1234")
@@ -952,7 +958,9 @@ async def test_check_duplicate_code_skips_masked(
     coordinator = lock.coordinator
     assert coordinator is not None
 
-    coordinator.async_set_updated_data({1: "****", 3: ""})
+    coordinator.async_set_updated_data(
+        {1: SlotCredential.unreadable(), 3: SlotCredential.empty()}
+    )
 
     lock._check_duplicate_code(3, "1234")
 
@@ -967,7 +975,7 @@ async def test_check_duplicate_code_skips_same_slot(
     coordinator = lock.coordinator
     assert coordinator is not None
 
-    coordinator.async_set_updated_data({1: "1234"})
+    coordinator.async_set_updated_data({1: SlotCredential.known("1234")})
 
     lock._check_duplicate_code(1, "1234")
 
@@ -982,7 +990,9 @@ async def test_check_duplicate_code_no_op_on_empty_usercode(
     coordinator = lock.coordinator
     assert coordinator is not None
 
-    coordinator.async_set_updated_data({1: "", 2: ""})
+    coordinator.async_set_updated_data(
+        {1: SlotCredential.empty(), 2: SlotCredential.empty()}
+    )
 
     lock._check_duplicate_code(3, "")
 

@@ -65,7 +65,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
 )
 from custom_components.lock_code_manager.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
@@ -2858,34 +2858,34 @@ class TestSerializeSlotWithSlotCode:
     """Test _serialize_slot passes SlotCode sentinels through as strings."""
 
     def test_empty_code_passes_through(self) -> None:
-        """SlotCode.EMPTY should serialize as the string "empty"."""
-        result = _serialize_slot(1, SlotCode.EMPTY, reveal=False)
+        """SlotCredential.empty() should serialize as the string "empty"."""
+        result = _serialize_slot(1, SlotCredential.empty(), reveal=False)
         assert result[ATTR_CODE] == "empty"
         assert ATTR_CODE_LENGTH not in result
 
     def test_empty_code_revealed_passes_through(self) -> None:
-        """SlotCode.EMPTY with reveal=True should still be "empty"."""
-        result = _serialize_slot(1, SlotCode.EMPTY, reveal=True)
+        """SlotCredential.empty() with reveal=True should still be "empty"."""
+        result = _serialize_slot(1, SlotCredential.empty(), reveal=True)
         assert result[ATTR_CODE] == "empty"
 
     def test_unreadable_code_passes_through(self) -> None:
-        """SlotCode.UNREADABLE_CODE should serialize as the string "unreadable_code"."""
-        result = _serialize_slot(1, SlotCode.UNREADABLE_CODE, reveal=False)
+        """SlotCredential.unreadable() should serialize as the string "unreadable_code"."""
+        result = _serialize_slot(1, SlotCredential.unreadable(), reveal=False)
         assert result[ATTR_CODE] == "unreadable_code"
         assert ATTR_CODE_LENGTH not in result
 
     def test_unreadable_code_includes_configured_code_when_revealed(self) -> None:
-        """SlotCode.UNREADABLE_CODE with configured_code and reveal should include it."""
+        """SlotCredential.unreadable() with configured_code and reveal should include it."""
         result = _serialize_slot(
-            1, SlotCode.UNREADABLE_CODE, reveal=True, configured_code="1234"
+            1, SlotCredential.unreadable(), reveal=True, configured_code="1234"
         )
         assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code"] == "1234"
 
     def test_unreadable_code_includes_configured_code_length_when_masked(self) -> None:
-        """SlotCode.UNREADABLE_CODE without reveal should include configured_code_length."""
+        """SlotCredential.unreadable() without reveal should include configured_code_length."""
         result = _serialize_slot(
-            1, SlotCode.UNREADABLE_CODE, reveal=False, configured_code="1234"
+            1, SlotCredential.unreadable(), reveal=False, configured_code="1234"
         )
         assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code_length"] == 4

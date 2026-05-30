@@ -54,7 +54,7 @@ from .const import (
 )
 from .data import build_slot_unique_id
 from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
-from .models import SlotCode, SyncState
+from .models import SlotCredential, SyncState
 from .resilience import CircuitBreaker
 from .util import async_disable_slot
 
@@ -83,7 +83,7 @@ class SlotState:
     pin_state: str
     name_state: str | None
     code_state: str
-    coordinator_code: str | SlotCode | None
+    coordinator_code: SlotCredential | None
 
 
 class SlotSyncManager:
@@ -396,33 +396,34 @@ class SlotSyncManager:
         Active (state=ON): PIN should match code on lock.
         Inactive (state=OFF): Code on lock should be empty.
 
-        For UNKNOWN codes (masked/write-only): in sync only if the configured
-        PIN matches what we last successfully set. This ensures that PIN
-        changes trigger a re-set even when the lock code is unreadable, and
-        that taking over a slot with an existing masked code triggers a set.
+        For unreadable credentials (masked/write-only): in sync only if the
+        configured PIN matches what we last successfully set. This ensures
+        that PIN changes trigger a re-set even when the lock code is
+        unreadable, and that taking over a slot with an existing masked code
+        triggers a set.
         """
-        lock_code = (
-            slot_state.coordinator_code
-            if slot_state.coordinator_code is not None
-            else slot_state.code_state
-        )
+        credential = slot_state.coordinator_code
         if slot_state.active_state == STATE_ON:
-            if lock_code is SlotCode.UNREADABLE_CODE:
-                return slot_state.pin_state == self._last_set_pin
-            if lock_code is SlotCode.EMPTY:
-                # If we recently set a PIN on this slot and it matches the
-                # configured PIN, trust the set — the provider may not have
-                # caught up yet (eventual consistency, e.g. Schlage cloud API).
-                return (
-                    self._last_set_pin is not None
-                    and slot_state.pin_state == self._last_set_pin
-                )
-            return slot_state.pin_state == lock_code
+            if credential is not None:
+                if credential.is_empty:
+                    # If we recently set a PIN on this slot and it matches the
+                    # configured PIN, trust the set — the provider may not
+                    # have caught up yet (eventual consistency, e.g. Schlage
+                    # cloud API).
+                    return (
+                        self._last_set_pin is not None
+                        and slot_state.pin_state == self._last_set_pin
+                    )
+                if not credential.is_readable:
+                    return slot_state.pin_state == self._last_set_pin
+                return credential.matches(slot_state.pin_state)
+            # No coordinator data — fall back to the code sensor entity state.
+            return slot_state.pin_state == slot_state.code_state
         # active_state == STATE_OFF: slot should be cleared
-        # The "" check covers the fallback path where coordinator_code is None
-        # and lock_code comes from the code sensor entity state (which returns ""
-        # for SlotCode.EMPTY).
-        return lock_code is SlotCode.EMPTY or lock_code == ""
+        if credential is not None:
+            return credential.is_empty
+        # Code sensor entity returns "" for empty credential.
+        return slot_state.code_state == ""
 
     # -- Sync execution ------------------------------------------------------
 

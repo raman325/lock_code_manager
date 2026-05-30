@@ -10,7 +10,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN
 from .data import get_entry_config
-from .models import SlotCode
+from .models import SlotCode, SlotCredential
 from .providers._base import BaseLock
 from .util import mask_pin
 
@@ -21,16 +21,17 @@ def _get_instance_id(hass: HomeAssistant) -> str:
 
 
 def _mask_code(
-    code: str | SlotCode | None, slot_num: int | str, instance_id: str
+    code: SlotCredential | None, slot_num: int | str, instance_id: str
 ) -> str | None:
     """Mask a PIN code for diagnostics output."""
     if code is None:
         return None
-    if isinstance(code, SlotCode):
-        return code.value
-    if not code:
+    label = code.as_label()
+    if isinstance(label, SlotCode):
+        return label.value
+    if not label:
         return "empty"
-    return mask_pin(code, slot_num, instance_id)
+    return mask_pin(label, slot_num, instance_id)
 
 
 _SENSITIVE_UNIQUE_ID_MARKERS = ("|pin", "|code")

@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
     EVENT_LOCK_STATE_CHANGED,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 
@@ -102,17 +102,17 @@ class TestSetAndClearUsercodes:
         """After set, the coordinator has the optimistic value."""
         await e2e_zwave_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert e2e_zwave_lock.coordinator.data.get(4) == "5678"
+        assert e2e_zwave_lock.coordinator.data.get(4) == SlotCredential.known("5678")
 
     async def test_clear_usercode_optimistic_update(
         self,
         hass: HomeAssistant,
         e2e_zwave_lock: ZWaveJSLock,
     ) -> None:
-        """After clear, the coordinator has SlotCode.EMPTY."""
+        """After clear, the coordinator has SlotCredential.empty()."""
         await e2e_zwave_lock.async_clear_usercode(2)
 
-        assert e2e_zwave_lock.coordinator.data.get(2) is SlotCode.EMPTY
+        assert e2e_zwave_lock.coordinator.data.get(2) is SlotCredential.empty()
 
 
 class TestGetUsercodes:
@@ -132,8 +132,8 @@ class TestGetUsercodes:
         codes = await e2e_zwave_lock.async_get_usercodes()
 
         # Slots 1 and 2 are managed by the LCM config
-        assert codes[1] == "9999"
-        assert codes[2] == "1234"
+        assert codes[1] == SlotCredential.known("9999")
+        assert codes[2] == SlotCredential.known("1234")
 
 
 class TestEvents:
@@ -201,4 +201,4 @@ class TestEvents:
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        assert e2e_zwave_lock.coordinator.data.get(1) == "4321"
+        assert e2e_zwave_lock.coordinator.data.get(1) == SlotCredential.known("4321")

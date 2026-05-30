@@ -17,7 +17,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -227,7 +227,7 @@ class TestAsyncGetUsercodes:
         ):
             result = await lock.async_get_usercodes()
 
-        assert result == {11: SlotCode.UNREADABLE_CODE}
+        assert result == {11: SlotCredential.unreadable()}
 
     async def test_publish_failure_maps_slot_to_unreadable(
         self,
@@ -257,7 +257,7 @@ class TestAsyncGetUsercodes:
         ):
             result = await lock.async_get_usercodes()
 
-        assert result == {7: SlotCode.UNREADABLE_CODE}
+        assert result == {7: SlotCredential.unreadable()}
 
     async def test_async_get_usercodes_raises_when_lock_not_connected(
         self,
@@ -369,7 +369,7 @@ class TestAsyncGetUsercodes:
         ):
             result = await lock.async_get_usercodes()
 
-        assert result == {21: SlotCode.UNREADABLE_CODE}
+        assert result == {21: SlotCredential.unreadable()}
 
 
 class TestAsyncSetClearHardRefresh:
@@ -736,4 +736,4 @@ class TestAsyncSetClearHardRefresh:
             refresh = await lock.async_hard_refresh_codes()
             direct = await lock.async_get_usercodes()
 
-        assert refresh == direct == {12: "ABC"}
+        assert refresh == direct == {12: SlotCredential.known("ABC")}

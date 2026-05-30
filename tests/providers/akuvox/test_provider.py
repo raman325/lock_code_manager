@@ -18,7 +18,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,
@@ -163,8 +163,8 @@ class TestGetUsercodes:
 
         codes = await akuvox_lock.async_get_usercodes()
 
-        assert codes[1] is SlotCode.EMPTY
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
+        assert codes[2] is SlotCredential.empty()
 
     async def test_get_usercodes_no_configured_slots(
         self,
@@ -195,8 +195,8 @@ class TestGetUsercodes:
         codes = await akuvox_lock.async_get_usercodes()
 
         # Untagged user should NOT appear in results (no auto-tagging)
-        assert codes[1] is SlotCode.EMPTY
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
+        assert codes[2] is SlotCredential.empty()
 
     async def test_get_usercodes_skips_cloud_users(
         self,
@@ -217,8 +217,8 @@ class TestGetUsercodes:
 
         codes = await akuvox_lock.async_get_usercodes()
 
-        assert codes[1] is SlotCode.EMPTY
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
+        assert codes[2] is SlotCredential.empty()
 
     async def test_get_usercodes_tagged_user_no_pin(
         self,
@@ -239,7 +239,7 @@ class TestGetUsercodes:
 
         codes = await akuvox_lock.async_get_usercodes()
 
-        assert codes[1] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
 
     async def test_get_usercodes_tagged_outside_managed_range(
         self,
@@ -261,8 +261,8 @@ class TestGetUsercodes:
         codes = await akuvox_lock.async_get_usercodes()
 
         assert 99 not in codes
-        assert codes[1] is SlotCode.EMPTY
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
+        assert codes[2] is SlotCredential.empty()
 
 
 # ---------------------------------------------------------------------------
@@ -644,5 +644,5 @@ class TestHardRefresh:
 
         codes = await akuvox_lock.async_hard_refresh_codes()
 
-        assert codes[1] == "9999"
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] == SlotCredential.known("9999")
+        assert codes[2] is SlotCredential.empty()
