@@ -635,6 +635,12 @@ async def async_unload_entry(
             *(mgr.async_stop() for mgr in mgrs_to_stop),
             return_exceptions=True,
         )
+        # Clear the registry explicitly so the lock-removed callbacks fired
+        # below observe an empty set. Entity removal also discards each
+        # manager during async_will_remove_from_hass, but that path only
+        # runs if invoke_entity_removers_for_slot has populated slots --
+        # which it may not when config has been migrated to options.
+        runtime_data.sync_managers.clear()
         for mgr, result in zip(mgrs_to_stop, stop_results, strict=True):
             if isinstance(result, Exception) and not isinstance(
                 result, asyncio.CancelledError
