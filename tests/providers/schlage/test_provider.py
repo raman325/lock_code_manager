@@ -14,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.lock_code_manager.exceptions import (
     LockCodeManagerError,
+    LockDisconnected,
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
@@ -335,6 +336,52 @@ async def test_async_setup_idempotent_skips_repeat_tag_pass(
         await schlage_lock.async_setup(simple_lcm_config_entry)
 
     assert mock_pass.await_count == 1
+    assert schlage_lock._tagged_once is True
+
+
+async def test_async_setup_retries_after_disconnect_during_first_pass(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A LockDisconnected during the first tag pass must leave _tagged_once False so reconnect retries."""
+    untagged_codes = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=untagged_codes)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(return_value=None)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    # First pass: _async_add_code is patched to raise LockDisconnected on
+    # every untagged entry. The tag pass must re-raise after logging so
+    # _tagged_once stays False.
+    with patch.object(
+        schlage_lock,
+        "_async_add_code",
+        side_effect=LockDisconnected("offline"),
+    ):
+        with pytest.raises(LockDisconnected):
+            await schlage_lock.async_setup(simple_lcm_config_entry)
+    assert schlage_lock._tagged_once is False
+
+    # Reconnect: now the underlying add succeeds. The pass must actually
+    # complete and the guard must be set so a further reconnect skips.
+    with patch.object(
+        schlage_lock,
+        "_async_add_code",
+        wraps=schlage_lock._async_add_code,
+    ) as second_add:
+        await schlage_lock.async_setup(simple_lcm_config_entry)
+
+    assert second_add.await_count >= 1
     assert schlage_lock._tagged_once is True
 
 

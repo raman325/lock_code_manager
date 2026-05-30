@@ -15,6 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.exceptions import (
     LockCodeManagerError,
+    LockDisconnected,
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.models import SlotCode
@@ -547,6 +548,45 @@ class TestAutoTagging:
             await akuvox_lock.async_setup(lcm_config_entry)
 
         assert mock_pass.await_count == 1
+        assert akuvox_lock._tagged_once is True
+
+    async def test_async_setup_retries_after_disconnect_during_first_pass(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """LockDisconnected during the first tag pass must leave _tagged_once False so reconnect retries."""
+        untagged_users = {
+            LOCK_ENTITY_ID: {
+                "users": [make_user("200", "Guest", "9999")],
+            },
+        }
+        register_mock_service(
+            hass,
+            AKUVOX_DOMAIN,
+            "list_users",
+            AsyncMock(return_value=untagged_users),
+        )
+
+        with patch.object(
+            akuvox_lock,
+            "_async_modify_user",
+            side_effect=LockDisconnected("offline"),
+        ):
+            with pytest.raises(LockDisconnected):
+                await akuvox_lock.async_setup(lcm_config_entry)
+        assert akuvox_lock._tagged_once is False
+
+        # Reconnect: now the underlying modify succeeds.
+        with patch.object(
+            akuvox_lock,
+            "_async_modify_user",
+            wraps=akuvox_lock._async_modify_user,
+        ) as second_modify:
+            await akuvox_lock.async_setup(lcm_config_entry)
+
+        assert second_modify.await_count >= 1
         assert akuvox_lock._tagged_once is True
 
     async def test_concurrent_set_usercode_serialized_under_sequence_lock(

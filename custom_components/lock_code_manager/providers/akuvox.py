@@ -211,7 +211,16 @@ class AkuvoxLock(BaseLock):
             await self._async_run_tag_pass(managed_slots)
 
     async def _async_run_tag_pass(self, managed_slots: set[int]) -> None:
-        """Body of the tag pass; caller holds the sequence lock."""
+        """
+        Body of the tag pass; caller holds the sequence lock.
+
+        Per-user ``LockDisconnected`` is logged and the loop continues so
+        any remaining users still get a chance to tag, but the disconnect
+        is re-raised at the end. ``async_setup`` then leaves
+        ``_tagged_once`` False so the reconnect path retries once the lock
+        is reachable. ``LockOperationFailed`` is a per-user condition and
+        does not gate idempotency.
+        """
         users = await self._async_list_users()
 
         assigned_slots: set[int] = set()
@@ -232,6 +241,7 @@ class AkuvoxLock(BaseLock):
                 untagged.append((device_id, pin, name))
 
         available = sorted(managed_slots - assigned_slots)
+        saw_disconnect = False
         for device_id, _pin, original_name in untagged:
             if not available:
                 LOGGER.debug(
@@ -246,13 +256,16 @@ class AkuvoxLock(BaseLock):
             tagged_name = _make_tagged_name(slot_num, original_name)
             try:
                 await self._async_modify_user(device_id, name=tagged_name)
-            except LockDisconnected, LockOperationFailed:
+            except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.error(
-                    "Lock %s: failed to tag user '%s' for slot %d",
+                    "Lock %s: failed to tag user '%s' for slot %d: %s",
                     self.lock.entity_id,
                     original_name,
                     slot_num,
+                    err,
                 )
+                if isinstance(err, LockDisconnected):
+                    saw_disconnect = True
                 continue
 
             available.pop(0)
@@ -263,6 +276,12 @@ class AkuvoxLock(BaseLock):
                 device_id,
                 slot_num,
                 tagged_name,
+            )
+
+        if saw_disconnect:
+            raise LockDisconnected(
+                f"Lock {self.lock.entity_id}: disconnect during initial tag pass; "
+                "reconnect will retry"
             )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:

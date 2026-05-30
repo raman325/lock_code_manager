@@ -164,7 +164,16 @@ class SchlageLock(BaseLock):
             await self._async_run_tag_pass(managed_slots)
 
     async def _async_run_tag_pass(self, managed_slots: set[int]) -> None:
-        """Body of the tag pass; caller holds the sequence lock."""
+        """
+        Body of the tag pass; caller holds the sequence lock.
+
+        Per-code ``LockDisconnected`` is logged and the loop continues so
+        any remaining codes still get a chance to tag, but the disconnect
+        is re-raised at the end. ``async_setup`` then leaves
+        ``_tagged_once`` False so the reconnect path retries once the lock
+        is reachable. ``LockOperationFailed`` is a per-code condition and
+        does not gate idempotency.
+        """
         codes = await self._async_get_codes()
 
         assigned_slots: set[int] = set()
@@ -182,6 +191,7 @@ class SchlageLock(BaseLock):
 
         sorted_managed = sorted(managed_slots)
         next_slot_idx = 0
+        saw_disconnect = False
         for _code_id, original_name, pin in untagged:
             if not original_name or not original_name.strip():
                 LOGGER.debug(
@@ -227,6 +237,8 @@ class SchlageLock(BaseLock):
                     prospective_slot,
                     err,
                 )
+                if isinstance(err, LockDisconnected):
+                    saw_disconnect = True
                 continue
 
             try:
@@ -240,6 +252,8 @@ class SchlageLock(BaseLock):
                     prospective_slot,
                     err,
                 )
+                if isinstance(err, LockDisconnected):
+                    saw_disconnect = True
                 try:
                     await self._async_delete_code(tagged_name)
                 except (LockDisconnected, LockOperationFailed) as rollback_err:
@@ -259,6 +273,12 @@ class SchlageLock(BaseLock):
                 original_name,
                 prospective_slot,
                 tagged_name,
+            )
+
+        if saw_disconnect:
+            raise LockDisconnected(
+                f"Lock {self.lock.entity_id}: disconnect during initial tag pass; "
+                "reconnect will retry"
             )
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
