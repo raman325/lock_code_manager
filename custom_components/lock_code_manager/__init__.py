@@ -911,9 +911,9 @@ async def async_update_listener(
             )
         )
         for slot_num in slots_to_remove:
-            coordinator = runtime_data.slot_coordinators.pop(slot_num, None)
-            if coordinator is not None:
-                coordinator.async_stop()
+            if slot_num in runtime_data.slot_coordinators:
+                runtime_data.slot_coordinators[slot_num].async_stop()
+                del runtime_data.slot_coordinators[slot_num]
 
     # Remove old lock entities
     if locks_to_remove:
