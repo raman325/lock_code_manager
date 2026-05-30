@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1063,3 +1064,36 @@ async def test_handle_state_change_supersedes_prior_reconnect_task(
         assert lock._reconnect_task is not prior_task
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_async_unload_logs_reconnect_task_exception(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """async_unload logs warnings when the reconnect task raises non-CancelledError on shutdown."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    boom = RuntimeError("simulated reconnect cleanup failure")
+    started = asyncio.Event()
+
+    async def stubborn_reconnect() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise boom from None
+
+    lock._reconnect_task = hass.async_create_task(stubborn_reconnect())
+    await started.wait()
+    assert not lock._reconnect_task.done()
+
+    with caplog.at_level(logging.WARNING):
+        await lock.async_unload(False)
+
+    assert lock._reconnect_task is None
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    )

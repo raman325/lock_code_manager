@@ -623,9 +623,9 @@ async def async_unload_entry(
 
     # Stop tick managers FIRST so no in-flight tick can keep calling
     # _perform_sync, coordinator.async_refresh, or _write_state once
-    # downstream teardown begins. SlotSyncManager.async_stop is idempotent
-    # and awaits its in-flight tick, so the binary sensor's own
-    # async_will_remove_from_hass becomes a no-op for these managers.
+    # downstream teardown begins. SlotSyncManager.async_stop is idempotent,
+    # so the binary sensor's later async_will_remove_from_hass call into the
+    # same manager is a cheap no-op.
     if runtime_data.sync_managers:
         _LOGGER.debug(
             "Unload: stopping %s sync manager(s)", len(runtime_data.sync_managers)
@@ -635,7 +635,7 @@ async def async_unload_entry(
             return_exceptions=True,
         )
         for result in stop_results:
-            if isinstance(result, BaseException) and not isinstance(
+            if isinstance(result, Exception) and not isinstance(
                 result, asyncio.CancelledError
             ):
                 _LOGGER.warning(

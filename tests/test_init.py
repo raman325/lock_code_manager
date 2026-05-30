@@ -1255,3 +1255,46 @@ async def test_unload_awaits_in_flight_sync_tick(
         release.set()
         await tick_task
         await unload_task
+
+
+async def test_unload_logs_sync_manager_stop_exceptions(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Unload logs warnings when individual sync manager stops raise and still stops the rest."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    managers = list(runtime_data.sync_managers)
+    assert len(managers) >= 2
+
+    boom = RuntimeError("simulated stop failure")
+    failing_mgr, *other_mgrs = managers
+    original_stop = failing_mgr.async_stop
+    # binary_sensor.async_will_remove_from_hass also calls async_stop after the
+    # unload entry has gathered them; clean up properly so timers do not leak,
+    # then raise on the first call only.
+    call_state = {"raised": False}
+
+    async def failing_stop() -> None:
+        await original_stop()
+        if not call_state["raised"]:
+            call_state["raised"] = True
+            raise boom
+
+    with patch.object(failing_mgr, "async_stop", failing_stop):
+        with caplog.at_level(logging.WARNING):
+            await hass.config_entries.async_unload(
+                lock_code_manager_config_entry.entry_id
+            )
+            await hass.async_block_till_done()
+
+    assert call_state["raised"]
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    )
+    # Sibling managers must still have been stopped even though one raised.
+    for mgr in other_mgrs:
+        assert not mgr._started
