@@ -201,6 +201,11 @@ class SlotSyncManager:
         self._tick_tasks: set[asyncio.Task[None]] = set()
 
     @property
+    def log_prefix(self) -> str:
+        """Return the structured log prefix identifying this manager's slot."""
+        return self._log_prefix
+
+    @property
     def in_sync(self) -> bool | None:
         """Return current sync state (None = not yet determined)."""
         if self._state is SyncState.LOADING:

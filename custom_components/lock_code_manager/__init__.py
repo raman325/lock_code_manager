@@ -630,16 +630,18 @@ async def async_unload_entry(
         _LOGGER.debug(
             "Unload: stopping %s sync manager(s)", len(runtime_data.sync_managers)
         )
+        mgrs_to_stop = list(runtime_data.sync_managers)
         stop_results = await asyncio.gather(
-            *(mgr.async_stop() for mgr in list(runtime_data.sync_managers)),
+            *(mgr.async_stop() for mgr in mgrs_to_stop),
             return_exceptions=True,
         )
-        for result in stop_results:
+        for mgr, result in zip(mgrs_to_stop, stop_results, strict=True):
             if isinstance(result, Exception) and not isinstance(
                 result, asyncio.CancelledError
             ):
                 _LOGGER.warning(
-                    "Sync manager stop raised during unload: %s",
+                    "%s: Sync manager stop raised during unload: %s",
+                    mgr.log_prefix,
                     result,
                     exc_info=result,
                 )

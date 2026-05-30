@@ -649,12 +649,17 @@ class BaseLock:
                 return
 
             if to_state == ConfigEntryState.LOADED:
-                # Cancel any prior reconnect that hasn't finished -- the
-                # provider transitioned through LOADED twice in quick
-                # succession (e.g. reload during reconnect). The new task
-                # supersedes the old one.
-                if self._reconnect_task is not None and not self._reconnect_task.done():
-                    self._reconnect_task.cancel()
+                # The provider transitioned through LOADED twice in quick
+                # succession (e.g. reload during reconnect). Cancel any
+                # prior in-flight reconnect; drain any pending exception
+                # on a prior task that already completed with an error so
+                # we do not leak an unretrieved exception at GC time.
+                if self._reconnect_task is not None:
+                    self._reconnect_task.add_done_callback(
+                        self._drain_superseded_reconnect
+                    )
+                    if not self._reconnect_task.done():
+                        self._reconnect_task.cancel()
                 self._reconnect_task = self.hass.async_create_task(
                     self._async_on_integration_loaded(),
                     f"Provider reconnect for {self.lock.entity_id}",
@@ -669,6 +674,19 @@ class BaseLock:
         self._config_entry_state_unsub = lock_entry.async_on_state_change(
             _handle_state_change
         )
+
+    def _drain_superseded_reconnect(self, task: asyncio.Task[None]) -> None:
+        """Consume any leftover exception on a superseded reconnect task."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            _LOGGER.warning(
+                "Superseded reconnect task raised for %s: %s",
+                self.lock.entity_id,
+                exc,
+                exc_info=exc,
+            )
 
     async def async_is_integration_connected(self) -> bool:
         """
