@@ -552,6 +552,17 @@ class SlotSyncManager:
         self._state_writer(self.in_sync)
 
     @callback
+    def request_sync_check(self) -> None:
+        """
+        Public entry point for external callers (slot coordinator) to nudge sync.
+
+        Routes through the same internal handler that coordinator and
+        entity-state listeners use so the state-transition rules stay in
+        one place.
+        """
+        self._request_sync_check()
+
+    @callback
     def _request_sync_check(self, *_args: Any) -> None:
         """
         Request a sync check on the next tick.
