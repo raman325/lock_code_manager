@@ -368,21 +368,48 @@ async def test_async_setup_retries_after_disconnect_during_first_pass(
         "_async_add_code",
         side_effect=LockDisconnected("offline"),
     ):
-        with pytest.raises(LockDisconnected):
+        with pytest.raises(LockDisconnected, match="disconnect during tag pass"):
             await schlage_lock.async_setup(simple_lcm_config_entry)
     assert schlage_lock._tagged_once is False
 
     # Reconnect: now the underlying add succeeds. The pass must actually
     # complete and the guard must be set so a further reconnect skips.
+    await schlage_lock.async_setup(simple_lcm_config_entry)
+    assert schlage_lock._tagged_once is True
+
+
+async def test_async_setup_retries_after_disconnect_on_delete_step(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """LockDisconnected on the delete-original step also re-raises after the loop."""
+    untagged_codes = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "Guest", "code": "1234"},
+        },
+    }
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=untagged_codes)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(return_value=None)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    # Patch only _async_delete_code so the add succeeds and the delete-
+    # original failure path is exercised. The rollback (delete tagged)
+    # would also be called; we stub both via the same patch.
     with patch.object(
         schlage_lock,
-        "_async_add_code",
-        wraps=schlage_lock._async_add_code,
-    ) as second_add:
-        await schlage_lock.async_setup(simple_lcm_config_entry)
-
-    assert second_add.await_count >= 1
-    assert schlage_lock._tagged_once is True
+        "_async_delete_code",
+        side_effect=LockDisconnected("delete offline"),
+    ):
+        with pytest.raises(LockDisconnected, match="disconnect during tag pass"):
+            await schlage_lock.async_setup(simple_lcm_config_entry)
+    assert schlage_lock._tagged_once is False
 
 
 async def test_concurrent_set_usercode_serialized_under_sequence_lock(

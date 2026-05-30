@@ -241,7 +241,7 @@ class AkuvoxLock(BaseLock):
                 untagged.append((device_id, pin, name))
 
         available = sorted(managed_slots - assigned_slots)
-        saw_disconnect = False
+        first_disconnect: LockDisconnected | None = None
         for device_id, _pin, original_name in untagged:
             if not available:
                 LOGGER.debug(
@@ -264,8 +264,8 @@ class AkuvoxLock(BaseLock):
                     slot_num,
                     err,
                 )
-                if isinstance(err, LockDisconnected):
-                    saw_disconnect = True
+                if first_disconnect is None and isinstance(err, LockDisconnected):
+                    first_disconnect = err
                 continue
 
             available.pop(0)
@@ -278,11 +278,11 @@ class AkuvoxLock(BaseLock):
                 tagged_name,
             )
 
-        if saw_disconnect:
+        if first_disconnect is not None:
             raise LockDisconnected(
-                f"Lock {self.lock.entity_id}: disconnect during initial tag pass; "
-                "reconnect will retry"
-            )
+                f"Lock {self.lock.entity_id}: disconnect during tag pass; "
+                "will be retried on reconnect"
+            ) from first_disconnect
 
     async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
         """

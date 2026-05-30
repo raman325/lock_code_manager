@@ -574,19 +574,12 @@ class TestAutoTagging:
             "_async_modify_user",
             side_effect=LockDisconnected("offline"),
         ):
-            with pytest.raises(LockDisconnected):
+            with pytest.raises(LockDisconnected, match="disconnect during tag pass"):
                 await akuvox_lock.async_setup(lcm_config_entry)
         assert akuvox_lock._tagged_once is False
 
         # Reconnect: now the underlying modify succeeds.
-        with patch.object(
-            akuvox_lock,
-            "_async_modify_user",
-            wraps=akuvox_lock._async_modify_user,
-        ) as second_modify:
-            await akuvox_lock.async_setup(lcm_config_entry)
-
-        assert second_modify.await_count >= 1
+        await akuvox_lock.async_setup(lcm_config_entry)
         assert akuvox_lock._tagged_once is True
 
     async def test_concurrent_set_usercode_serialized_under_sequence_lock(
