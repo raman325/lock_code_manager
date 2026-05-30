@@ -1,0 +1,298 @@
+"""Tests for the per-slot entity coordinator."""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from homeassistant.components.switch import (
+    DOMAIN as SWITCH_DOMAIN,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+)
+from homeassistant.components.text import (
+    ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE,
+)
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    CONF_ENABLED,
+    CONF_ENTITY_ID,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_OFF,
+    STATE_ON,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
+
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+)
+from custom_components.lock_code_manager.data import get_entry_config
+from custom_components.lock_code_manager.slot_manager import (
+    PinRequiredError,
+    SlotEntityCoordinator,
+)
+
+from .common import (
+    LOCK_1_ENTITY_ID,
+    SLOT_1_ACTIVE_ENTITY,
+    SLOT_1_ENABLED_ENTITY,
+    SLOT_1_PIN_ENTITY,
+    SLOT_2_ACTIVE_ENTITY,
+    SLOT_2_ENABLED_ENTITY,
+    SLOT_2_PIN_ENTITY,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def test_coordinator_registered_for_each_slot(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """One coordinator per configured slot is registered on runtime data."""
+    coordinators = lock_code_manager_config_entry.runtime_data.slot_coordinators
+    assert set(coordinators) == {1, 2}
+    for slot_num, coordinator in coordinators.items():
+        assert isinstance(coordinator, SlotEntityCoordinator)
+        assert coordinator.slot_num == slot_num
+
+
+async def test_coordinator_drives_active_view(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The active binary sensor renders the coordinator's derived state."""
+    state = hass.states.get(SLOT_1_ACTIVE_ENTITY)
+    assert state is not None
+    assert state.state == STATE_ON
+    # Slot 2 has a calendar condition; the calendar starts OFF, so slot 2 is inactive
+    state = hass.states.get(SLOT_2_ACTIVE_ENTITY)
+    assert state is not None
+    assert state.state == STATE_OFF
+
+
+async def test_request_pin_update_auto_disables_on_empty(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Clearing the PIN on an enabled slot disables the slot in one write."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+    assert coordinator.is_enabled is True
+    assert coordinator.pin_value == "1234"
+
+    await coordinator.async_request_pin_update("")
+    await hass.async_block_till_done()
+
+    config = get_entry_config(lock_code_manager_config_entry).slot(1)
+    assert config.get(CONF_PIN) == ""
+    assert config.get(CONF_ENABLED) is False
+    assert coordinator.is_enabled is False
+
+    state = hass.states.get(SLOT_1_PIN_ENTITY)
+    assert state is not None
+    assert state.state == ""
+    state = hass.states.get(SLOT_1_ENABLED_ENTITY)
+    assert state is not None
+    assert state.state == STATE_OFF
+
+
+async def test_request_pin_update_normalizes_whitespace(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A whitespace-only PIN normalizes to empty and auto-disables the slot."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_pin_update("   ")
+    await hass.async_block_till_done()
+
+    config = get_entry_config(lock_code_manager_config_entry).slot(1)
+    assert config.get(CONF_PIN) == ""
+    assert config.get(CONF_ENABLED) is False
+
+
+async def test_request_active_toggle_blocks_when_no_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Toggling active=True without a PIN raises and writes a repair issue."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    # Clear PIN first (auto-disables the slot)
+    await coordinator.async_request_pin_update("")
+    await hass.async_block_till_done()
+    assert coordinator.is_enabled is False
+    assert coordinator.pin_value is None
+
+    with pytest.raises(PinRequiredError):
+        await coordinator.async_request_active_toggle(True)
+
+    issue_registry = async_get_issue_registry(hass)
+    issue = issue_registry.async_get_issue(
+        DOMAIN, f"pin_required_{lock_code_manager_config_entry.entry_id}_1"
+    )
+    assert issue is not None
+    assert coordinator.is_enabled is False
+
+
+async def test_request_active_toggle_clears_pin_required_issue(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Successful enable removes the pin_required repair issue."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_pin_update("")
+    await hass.async_block_till_done()
+    with pytest.raises(PinRequiredError):
+        await coordinator.async_request_active_toggle(True)
+    issue_registry = async_get_issue_registry(hass)
+    assert (
+        issue_registry.async_get_issue(
+            DOMAIN, f"pin_required_{lock_code_manager_config_entry.entry_id}_1"
+        )
+        is not None
+    )
+
+    # Re-add a PIN and successfully enable; the repair issue must be cleared
+    await coordinator.async_request_pin_update("4242")
+    await hass.async_block_till_done()
+    await coordinator.async_request_active_toggle(True)
+    await hass.async_block_till_done()
+
+    assert coordinator.is_enabled is True
+    assert (
+        issue_registry.async_get_issue(
+            DOMAIN, f"pin_required_{lock_code_manager_config_entry.entry_id}_1"
+        )
+        is None
+    )
+
+
+async def test_switch_turn_on_raises_homeassistanterror_for_pin_required(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The switch entity translates PinRequiredError into HomeAssistantError."""
+    # Disable slot 2 so we can test the enable path; clear its PIN to trigger
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_2_ENABLED_ENTITY},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: ""},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
+        blocking=True,
+    )
+
+    with pytest.raises(HomeAssistantError, match="Set a PIN code"):
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_ON,
+            target={ATTR_ENTITY_ID: SLOT_2_ENABLED_ENTITY},
+            blocking=True,
+        )
+
+
+async def test_condition_entity_subscription_owned_by_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """The coordinator owns the condition-entity subscription, not the entity."""
+    hass.states.async_set("input_boolean.gate", STATE_ON)
+    await hass.async_block_till_done()
+
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "alice",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "input_boolean.gate",
+            },
+        },
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Test Cond")
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    assert coordinator.condition_entity_id == "input_boolean.gate"
+    assert coordinator.is_active is True
+
+    hass.states.async_set("input_boolean.gate", STATE_OFF)
+    await hass.async_block_till_done()
+    assert coordinator.is_active is False
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_coordinator_removed_on_slot_removal(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Removing a slot via options tears down its coordinator."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    assert 2 in runtime_data.slot_coordinators
+
+    new_options = {
+        CONF_LOCKS: list(runtime_data.locks.keys()),
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=new_options
+    )
+    await hass.async_block_till_done()
+
+    assert 2 not in runtime_data.slot_coordinators
+    assert 1 in runtime_data.slot_coordinators
+
+
+async def test_unload_reads_slots_via_entry_config_view(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """async_unload_entry routes slot enumeration through EntryConfig.
+
+    Reading via ``get_entry_config`` rather than ``config_entry.data``
+    keeps the unload slot loop functional regardless of which side of
+    the data/options migration last wrote the entry — covers the case
+    where an update listener has just migrated data to options but the
+    write-back has not run yet.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    removed_slots: list[int] = []
+    original_invoke = runtime_data.callbacks.invoke_entity_removers_for_slot
+
+    async def record_invoke(slot_num: int) -> None:
+        removed_slots.append(slot_num)
+        await original_invoke(slot_num)
+
+    runtime_data.callbacks.invoke_entity_removers_for_slot = record_invoke  # type: ignore[method-assign]
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert set(removed_slots) == {1, 2}

@@ -483,10 +483,10 @@ def test_to_dict_round_trips_through_from_mapping() -> None:
     """
     to_dict → from_mapping reconstructs an equivalent EntryConfig.
 
-    Guards the write path used by entity._update_config_entry and the
-    helpers write functions: they build a new EntryConfig, call
-    to_dict(), hand it to async_update_entry, and expect the eventual
-    listener re-read to produce the same logical config.
+    Guards the write path used by SlotEntityCoordinator and the helpers
+    write functions: they build a new EntryConfig, call to_dict(), hand
+    it to async_update_entry, and expect the eventual listener re-read
+    to produce the same logical config.
     """
     original = EntryConfig.from_mapping(
         {

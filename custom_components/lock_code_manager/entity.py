@@ -88,25 +88,6 @@ class BaseLockCodeManagerEntity(Entity):
             )
         return self._uid_cache[key]
 
-    @callback
-    @final
-    def _update_config_entry(self, value: Any) -> None:
-        """Update config entry data."""
-        _LOGGER.debug(
-            "%s (%s): Updating %s to %s",
-            self.config_entry.entry_id,
-            self.config_entry.title,
-            self.key,
-            value,
-        )
-        new_config = get_entry_config(self.config_entry).with_slot_field_set(
-            self.slot_num, self.key, value
-        )
-        self.hass.config_entries.async_update_entry(
-            self.config_entry, data=new_config.to_dict()
-        )
-        self.async_write_ha_state()
-
     async def _internal_async_remove(self) -> None:
         """
         Handle entity removal.

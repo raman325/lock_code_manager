@@ -5,15 +5,13 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.text import TextEntity, TextMode
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON, Platform
+from homeassistant.const import CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
 from .entity import BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
-from .util import async_disable_slot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +48,6 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
 
     _attr_native_min = 0
     _attr_native_max = 9999
-    _enabled_entity_id: str = ""
 
     def __init__(
         self,
@@ -74,49 +71,34 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
 
     async def async_set_value(self, value: str) -> None:
         """Set value of text."""
-        # Normalize whitespace-only PINs to empty string
-        if self.key == CONF_PIN and not value.strip():
-            value = ""
-
-        if not self._enabled_entity_id:
-            self._enabled_entity_id = (
-                self.ent_reg.async_get_entity_id(
-                    Platform.SWITCH, DOMAIN, self._get_uid(CONF_ENABLED)
-                )
-                or ""
+        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
+            self.slot_num
+        )
+        if coordinator is None:
+            _LOGGER.warning(
+                "%s (%s): No slot coordinator for slot %s; cannot apply %s update",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.slot_num,
+                self.key,
             )
-        # When clearing a PIN on an enabled slot, auto-disable the slot first so the
-        # sync logic will clear the code on the lock, then proceed to clear the PIN value.
-        if self.key == CONF_PIN and not value:
-            if (
-                self._enabled_entity_id
-                and (state := self.hass.states.get(self._enabled_entity_id))
-                and state.state == STATE_ON
-            ):
-                _LOGGER.debug(
-                    "%s (%s): Clearing PIN on enabled slot %s, auto-disabling slot",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.slot_num,
-                )
-                await async_disable_slot(
-                    self.hass,
-                    self.ent_reg,
-                    self.config_entry.entry_id,
-                    self.slot_num,
-                )
-            elif not self._enabled_entity_id:
-                _LOGGER.warning(
-                    "%s (%s): Clearing PIN on slot %s but cannot resolve enabled "
-                    "switch entity to auto-disable; slot may not be fully set up",
-                    self.config_entry.entry_id,
-                    self.config_entry.title,
-                    self.slot_num,
-                )
+            return
 
-        self._update_config_entry(value)
+        if self.key == CONF_PIN:
+            await coordinator.async_request_pin_update(value)
+        else:
+            await coordinator.async_request_name_update(value)
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         await TextEntity.async_added_to_hass(self)
+
+        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
+            self.slot_num
+        )
+        if coordinator is not None:
+            self.async_on_remove(
+                coordinator.register_state_subscriber(self.async_write_ha_state)
+            )

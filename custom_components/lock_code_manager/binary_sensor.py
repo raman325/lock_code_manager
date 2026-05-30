@@ -3,37 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
 import logging
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
-from homeassistant.const import (
-    CONF_ENTITY_ID,
-    CONF_NAME,
-    CONF_PIN,
-    STATE_OFF,
-    STATE_ON,
-    EntityCategory,
-)
-from homeassistant.core import (
-    Event,
-    EventStateChangedData,
-    HomeAssistant,
-    callback,
-)
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    ATTR_ACTIVE,
-    ATTR_IN_SYNC,
-    ATTR_SYNC_STATUS,
-    EVENT_PIN_USED,
-)
+from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
 from .coordinator import LockUsercodeUpdateCoordinator
-from .data import get_entry_config
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
@@ -90,129 +70,54 @@ async def async_setup_entry(
 
 
 class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity):
-    """Active binary sensor entity for lock code manager."""
+    """
+    Active binary sensor entity for lock code manager.
+
+    Read-only view over ``SlotEntityCoordinator``. The coordinator owns
+    the condition-entity subscription and the active-state computation;
+    this entity only renders the current value.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _condition_entity_unsub: Callable[[], None] | None = None
-    _subscribed_condition_entity_id: str | None = None
-
-    @property
-    def _condition_entity_id(self) -> str | None:
-        """Return condition entity ID for this slot."""
-        return (
-            get_entry_config(self.config_entry).slot(self.slot_num).get(CONF_ENTITY_ID)
-        )
+    _coordinator_view_unsub: Callable[[], None] | None = None
 
     @callback
-    def _cleanup_condition_subscription(self) -> None:
-        """Clean up condition entity subscription if one exists."""
-        if self._condition_entity_unsub:
-            self._condition_entity_unsub()
-            self._condition_entity_unsub = None
-
-    @callback
-    def _update_state(self, _: datetime | None = None) -> None:
-        """Update binary sensor state by getting dependent states."""
-        _LOGGER.debug(
-            "%s (%s): Updating %s",
-            self.config_entry.entry_id,
-            self.config_entry.title,
-            self.entity_id,
-        )
-
-        states: dict[str, bool | None] = {}
-        for key, state in (
-            get_entry_config(self.config_entry).slot(self.slot_num).items()
-        ):
-            if key in (EVENT_PIN_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
-                continue
-
-            # Handle condition entity - ON means access granted
-            if key == CONF_ENTITY_ID and (hass_state := self.hass.states.get(state)):
-                states[key] = (
-                    hass_state.state == STATE_ON
-                    if hass_state.state in (STATE_ON, STATE_OFF)
-                    else None
-                )
-                continue
-
-            states[key] = state
-
-        # For the binary sensor to be on, all states must be 'on'.
-        inactive_because_of = [key for key, state in states.items() if not state]
-        self._attr_is_on = bool(not inactive_because_of)
+    def _apply_coordinator_state(
+        self, is_on: bool | None, inactive_because_of: list[str]
+    ) -> None:
+        """Apply coordinator-derived active state and write Home Assistant state."""
+        self._attr_is_on = bool(is_on)
         if inactive_because_of:
-            self._attr_extra_state_attributes["inactive_because_of"] = (
+            self._attr_extra_state_attributes["inactive_because_of"] = list(
                 inactive_because_of
             )
         else:
             self._attr_extra_state_attributes.pop("inactive_because_of", None)
-        self.async_write_ha_state()
-
-    async def _config_entry_update_listener(
-        self, hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
-    ) -> None:
-        """Update listener."""
-        if config_entry.options:
-            return
-        # Re-subscribe if condition entity changed
-        self._update_condition_entity_subscription()
-        self._update_state()
-
-    @callback
-    def _handle_condition_entity_state_change(
-        self, event: Event[EventStateChangedData]
-    ) -> None:
-        """Handle condition entity state change."""
-        self._update_state()
-
-    @callback
-    def _update_condition_entity_subscription(self) -> None:
-        """Update subscription for condition entity if it changed."""
-        current_entity_id = self._condition_entity_id
-        old_entity_id = self._subscribed_condition_entity_id
-
-        # No change needed if entity ID hasn't changed
-        if current_entity_id == old_entity_id:
-            return
-
-        # Unsubscribe from old entity if we had one
-        self._cleanup_condition_subscription()
-
-        # Subscribe to new entity if we have one
-        if current_entity_id:
-            self._condition_entity_unsub = async_track_state_change_event(
-                self.hass,
-                [current_entity_id],
-                self._handle_condition_entity_state_change,
-            )
-
-        self._subscribed_condition_entity_id = current_entity_id
-        _LOGGER.debug(
-            "%s (%s): Updated condition entity subscription for %s: %s -> %s",
-            self.config_entry.entry_id,
-            self.config_entry.title,
-            self.entity_id,
-            old_entity_id,
-            current_entity_id,
-        )
+        if self.hass is not None and self.entity_id:
+            self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
-        # Register cleanup for condition entity subscription (called on entity removal)
-        self.async_on_remove(self._cleanup_condition_subscription)
-
-        # Track state changes for configured condition entity
-        self._update_condition_entity_subscription()
-
-        self.async_on_remove(
-            self.config_entry.add_update_listener(self._config_entry_update_listener)
+        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
+            self.slot_num
         )
+        if coordinator is None:
+            _LOGGER.warning(
+                "%s (%s): No slot coordinator for slot %s when registering "
+                "active binary sensor",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.slot_num,
+            )
+            return
 
-        self._update_state()
+        self._coordinator_view_unsub = coordinator.register_active_view(
+            self._apply_coordinator_state
+        )
+        self.async_on_remove(self._coordinator_view_unsub)
 
 
 class LockCodeManagerCodeSlotInSyncEntity(
@@ -223,6 +128,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
     """PIN synced binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _slot_coordinator_unsub: Callable[[], None] | None = None
 
     def __init__(
         self,
@@ -279,6 +185,13 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await CoordinatorEntity.async_added_to_hass(self)
 
         self.config_entry.runtime_data.sync_managers.add(self._sync_manager)
+        slot_coordinator = self.config_entry.runtime_data.slot_coordinators.get(
+            self.slot_num
+        )
+        if slot_coordinator is not None:
+            self._slot_coordinator_unsub = slot_coordinator.register_sync_manager(
+                self._sync_manager
+            )
         await self._sync_manager.async_start()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -288,5 +201,9 @@ class LockCodeManagerCodeSlotInSyncEntity(
         # removal paths that do not flow through async_unload_entry, such as
         # a slot being removed via the options update listener.
         self.config_entry.runtime_data.sync_managers.discard(self._sync_manager)
+        unsub = getattr(self, "_slot_coordinator_unsub", None)
+        if unsub is not None:
+            unsub()
+            self._slot_coordinator_unsub = None
         await self._sync_manager.async_stop()
         await CoordinatorEntity.async_will_remove_from_hass(self)
