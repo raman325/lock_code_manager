@@ -9,8 +9,7 @@ code slot tracking (LockOperation) and occupancy updates (LockUserChange).
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
 
@@ -63,10 +62,6 @@ _DATA_OP_MODIFY = 2
 @dataclass(repr=False, eq=False)
 class MatterLock(BaseLock):
     """Class to represent a Matter lock."""
-
-    _event_unsub: Callable[[], None] | None = field(
-        default=None, init=False, repr=False
-    )
 
     @property
     def domain(self) -> str:
@@ -198,7 +193,7 @@ class MatterLock(BaseLock):
         Called by BaseLock.subscribe_push_updates(). On failure, the
         reconnect handlers will retry when the integration reloads.
         """
-        if self._event_unsub is not None:
+        if self._push_unsubs:
             return
 
         client = self._get_matter_client()
@@ -209,10 +204,12 @@ class MatterLock(BaseLock):
                 f"Matter client or node ID unavailable for {self.lock.entity_id}"
             )
 
-        self._event_unsub = client.subscribe_events(
-            callback=self._on_node_event,
-            event_filter=EventType.NODE_EVENT,
-            node_filter=node_id,
+        self._register_push_unsub(
+            client.subscribe_events(
+                callback=self._on_node_event,
+                event_filter=EventType.NODE_EVENT,
+                node_filter=node_id,
+            )
         )
         LOGGER.debug(
             "Lock %s: subscribed to Matter events (node %s)",
@@ -223,9 +220,7 @@ class MatterLock(BaseLock):
     @callback
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from Matter DoorLock cluster events."""
-        if self._event_unsub:
-            self._event_unsub()
-            self._event_unsub = None
+        self._clear_push_unsubs()
 
     @callback
     def _on_node_event(self, _event: Any, node_event: Any) -> None:

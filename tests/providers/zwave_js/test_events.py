@@ -236,10 +236,10 @@ async def test_subscribe_push_updates(
     # Subscribe to push updates (idempotent - may already be subscribed)
     zwave_js_lock.subscribe_push_updates()
 
-    assert zwave_js_lock._value_update_unsub is not None
+    assert zwave_js_lock._push_unsubs
 
     zwave_js_lock.unsubscribe_push_updates()
-    assert zwave_js_lock._value_update_unsub is None
+    assert not zwave_js_lock._push_unsubs
 
     await zwave_js_lock.async_unload(False)
 
@@ -255,10 +255,10 @@ async def test_subscribe_is_idempotent(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     zwave_js_lock.subscribe_push_updates()
-    first_unsub = zwave_js_lock._value_update_unsub
+    first_unsubs = list(zwave_js_lock._push_unsubs)
 
     zwave_js_lock.subscribe_push_updates()
-    assert zwave_js_lock._value_update_unsub is first_unsub
+    assert list(zwave_js_lock._push_unsubs) == first_unsubs
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
@@ -275,7 +275,7 @@ async def test_subscribe_push_no_crash_on_client_not_ready(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     zwave_js_lock.unsubscribe_push_updates()
-    assert zwave_js_lock._value_update_unsub is None
+    assert not zwave_js_lock._push_unsubs
 
     # Make client appear not ready — should not crash
     with patch.object(
@@ -284,7 +284,7 @@ async def test_subscribe_push_no_crash_on_client_not_ready(
         zwave_js_lock.subscribe_push_updates()
 
     # Should not have subscribed (no crash, no retry timer)
-    assert zwave_js_lock._value_update_unsub is None
+    assert not zwave_js_lock._push_unsubs
 
     await zwave_js_lock.async_unload(False)
 
@@ -301,13 +301,13 @@ async def test_subscribe_push_no_crash_on_node_error(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     zwave_js_lock.unsubscribe_push_updates()
-    assert zwave_js_lock._value_update_unsub is None
+    assert not zwave_js_lock._push_unsubs
 
     # Make node.on raise — should not crash
     with patch.object(lock_schlage_be469, "on", side_effect=ValueError("not ready")):
         zwave_js_lock.subscribe_push_updates()
 
-    assert zwave_js_lock._value_update_unsub is None
+    assert not zwave_js_lock._push_unsubs
 
     await zwave_js_lock.async_unload(False)
 
