@@ -164,6 +164,16 @@ class BaseLock:
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
     coordinator: LockUsercodeUpdateCoordinator | None = field(default=None, init=False)
     _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    # Sequence lock for read-modify-write operations that need atomicity
+    # across multiple service calls. Outer lock so each leaf call can
+    # still acquire _aio_lock for rate limiting without deadlocking.
+    _sequence_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    # Registry of push-subscription unsub callables. Providers append to
+    # this list via _register_push_unsub() so the base helper can release
+    # everything on teardown without each provider tracking its own field.
+    _push_unsubs: list[Callable[[], None]] = field(
+        default_factory=list, init=False, repr=False
+    )
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
     _last_connection_up: bool | None = field(default=None, init=False)
@@ -238,6 +248,45 @@ class BaseLock:
             result = await func(*args, **kwargs)
             self._last_operation_time = time.monotonic()
             return result
+
+    @final
+    def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:
+        """
+        Return an async context manager that serializes a multi-step operation.
+
+        Use around read-modify-write sequences (e.g. get-codes/delete/add)
+        so concurrent callers see each sequence as atomic. Uses a separate
+        lock from ``_aio_lock`` so leaf calls inside the sequence can still
+        go through ``_execute_rate_limited`` without deadlocking.
+        """
+        return self._sequence_lock
+
+    @final
+    @callback
+    def _register_push_unsub(self, unsub: Callable[[], None]) -> None:
+        """
+        Register a push-subscription unsub for base teardown management.
+
+        Providers append integration-specific unsub callables (cluster
+        listeners, event subscriptions, MQTT unsubscribes, bus listeners)
+        here so ``_clear_push_unsubs`` can release them in one place.
+        """
+        self._push_unsubs.append(unsub)
+
+    @final
+    @callback
+    def _clear_push_unsubs(self) -> None:
+        """Release every registered push-subscription unsub, logging individual failures."""
+        for unsub in self._push_unsubs:
+            try:
+                unsub()
+            except Exception as err:
+                LOGGER.warning(
+                    "Lock %s: push unsubscribe raised, continuing teardown: %s",
+                    self.lock.entity_id,
+                    err,
+                )
+        self._push_unsubs.clear()
 
     @final
     @callback
