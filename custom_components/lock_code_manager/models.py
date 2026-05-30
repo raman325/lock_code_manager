@@ -20,6 +20,7 @@ from .data import EntryConfig
 
 if TYPE_CHECKING:
     from .providers import BaseLock
+    from .sync import SlotSyncManager
 
 
 class SyncState(StrEnum):
@@ -69,6 +70,16 @@ class LockCodeManagerConfigEntryRuntimeData:
     # update listener on every change. Readers should prefer this over
     # parsing config_entry.data/options directly. See data.EntryConfig.
     config: EntryConfig = field(default_factory=EntryConfig.empty)
+    # Active per-slot sync managers, registered by the in-sync binary sensor
+    # on add and discarded on remove. Tracked so async_unload_entry can stop
+    # them up front -- before lock-removed callbacks fire and before platforms
+    # unload -- so an in-flight tick cannot keep running against torn-down
+    # state.
+    sync_managers: set[SlotSyncManager] = field(default_factory=set)
+    # True once the options update listener has been registered for this
+    # entry. Guards against stacking when _setup_entry_after_start runs more
+    # than once (for example, a reload racing with EVENT_HOMEASSISTANT_STARTED).
+    update_listener_registered: bool = False
 
 
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryRuntimeData]

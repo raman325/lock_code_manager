@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,7 @@ from custom_components.lock_code_manager.models import SlotCode, SyncState
 from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
 from .common import (
+    LOCK_1_ENTITY_ID,
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
@@ -1006,3 +1008,180 @@ class TestSyncStatusAttribute:
         state = hass.states.get(SLOT_1_IN_SYNC_ENTITY)
         assert state is not None
         assert state.attributes.get("sync_status") == "suspended"
+
+
+class TestAsyncStopAwaitsInFlightTick:
+    """Tests that SlotSyncManager.async_stop blocks until the in-flight tick completes."""
+
+    async def test_async_stop_awaits_in_flight_tick(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """async_stop blocks until the running tick finishes and suppresses post-stop writes."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        # Force an out-of-sync state so the next tick performs work.
+        manager._coordinator.data[1] = "9999"
+        manager._state = SyncState.OUT_OF_SYNC
+
+        mid_sync = asyncio.Event()
+        resume = asyncio.Event()
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        original_set = lock_provider.async_set_usercode
+
+        async def paused_set(code_slot, usercode, name=None, **kwargs):
+            mid_sync.set()
+            await resume.wait()
+            return await original_set(code_slot, usercode, name, **kwargs)
+
+        with patch.object(lock_provider, "async_set_usercode", paused_set):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(mid_sync.wait(), timeout=5)
+
+            # Start async_stop while the tick is suspended inside set_usercode.
+            stop_task = hass.async_create_task(manager.async_stop())
+
+            # stop_task should not complete before the tick releases.
+            await asyncio.sleep(0)
+            assert not stop_task.done()
+
+            # _started should already be False even though the tick is still
+            # in flight -- new ticks must not start.
+            assert not manager._started
+
+            # Capture state-writer calls during the post-stop window so we can
+            # confirm _write_state suppresses them.
+            writes_after_stop: list[bool | None] = []
+            with patch.object(manager, "_state_writer", writes_after_stop.append):
+                resume.set()
+                await tick_task
+                await stop_task
+
+            assert writes_after_stop == []
+
+        # Tick task should not have raised
+        assert tick_task.exception() is None
+
+    async def test_async_stop_is_idempotent(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Calling async_stop twice in succession is a no-op the second time."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        await manager.async_stop()
+        assert not manager._started
+
+        # Second stop is a no-op and does not raise.
+        await manager.async_stop()
+        assert not manager._started
+
+    async def test_write_state_after_stop_is_suppressed(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """_write_state does not invoke the state writer once the manager is stopped."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        await manager.async_stop()
+
+        writes: list[bool | None] = []
+        with patch.object(manager, "_state_writer", writes.append):
+            manager._write_state()
+
+        assert writes == []
+
+    async def test_async_stop_awaits_tick_when_concurrent_tick_returned_early(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A quick-return tick must not orphan an in-flight tick from async_stop tracking."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._coordinator.data[1] = "9999"
+        manager._state = SyncState.OUT_OF_SYNC
+
+        mid_sync = asyncio.Event()
+        resume = asyncio.Event()
+        lock_provider = lock_code_manager_config_entry.runtime_data.locks[
+            LOCK_1_ENTITY_ID
+        ]
+        original_set = lock_provider.async_set_usercode
+
+        async def paused_set(code_slot, usercode, name=None, **kwargs):
+            mid_sync.set()
+            await resume.wait()
+            return await original_set(code_slot, usercode, name, **kwargs)
+
+        with patch.object(lock_provider, "async_set_usercode", paused_set):
+            in_flight_tick = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(mid_sync.wait(), timeout=5)
+
+            # Fire a concurrent tick. It should see SYNCING and return early
+            # without clobbering the in-flight tick's tracking.
+            await manager._async_tick()
+            assert in_flight_tick in manager._tick_tasks
+
+            stop_task = hass.async_create_task(manager.async_stop())
+            await asyncio.sleep(0)
+            assert not stop_task.done()
+
+            resume.set()
+            await in_flight_tick
+            await stop_task
+
+        assert in_flight_tick.exception() is None
+
+    async def test_async_stop_logs_tick_exception_at_warning(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """An in-flight tick raising during stop is logged at WARNING with exc_info."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        manager._state = SyncState.OUT_OF_SYNC
+
+        boom = RuntimeError("simulated tick failure")
+        ready = asyncio.Event()
+        release = asyncio.Event()
+
+        async def failing_tick_impl() -> None:
+            ready.set()
+            await release.wait()
+            raise boom
+
+        with patch.object(manager, "_async_tick_impl", failing_tick_impl):
+            tick_task = hass.async_create_task(manager._async_tick())
+            await asyncio.wait_for(ready.wait(), timeout=5)
+
+            stop_task = hass.async_create_task(manager.async_stop())
+            await asyncio.sleep(0)
+            release.set()
+            with caplog.at_level(logging.WARNING):
+                await stop_task
+
+        assert tick_task.done()
+        assert isinstance(tick_task.exception(), RuntimeError)
+        warning_records = [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and record.exc_info is not None
+        ]
+        assert any(rec.exc_info[1] is boom for rec in warning_records)

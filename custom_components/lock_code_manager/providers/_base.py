@@ -176,6 +176,12 @@ class BaseLock:
     _setup_running: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
+    # Reconnect task spawned by the config-entry state listener when the lock
+    # integration transitions to LOADED. Tracked so async_unload can cancel it
+    # before teardown -- otherwise a late reconnect can call
+    # coordinator.async_request_refresh() against an already-shutdown
+    # coordinator.
+    _reconnect_task: asyncio.Task[None] | None = field(default=None, init=False)
 
     @final
     @callback
@@ -589,10 +595,35 @@ class BaseLock:
         await self._setup_complete.wait()
 
     async def async_unload(self, remove_permanently: bool) -> None:
-        """Tear down config-entry-state listener and push subscription."""
+        """Tear down config-entry-state listener, reconnect task, and push subscription."""
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()
             self._config_entry_state_unsub = None
+
+        # Cancel any in-flight reconnect spawned by _handle_state_change so
+        # it cannot call coordinator.async_request_refresh() against an
+        # already-shutdown coordinator. Await it to confirm the cancellation
+        # took effect before we return from unload.
+        reconnect_task = self._reconnect_task
+        if reconnect_task is not None and not reconnect_task.done():
+            reconnect_task.cancel()
+            try:
+                await reconnect_task
+            except asyncio.CancelledError:
+                # If our own task is being cancelled, propagate; otherwise
+                # the CancelledError is for the reconnect task we just
+                # cancelled and is expected.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling() > 0:
+                    raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "Reconnect task raised during teardown of %s: %s",
+                    self.lock.entity_id,
+                    err,
+                    exc_info=err,
+                )
+        self._reconnect_task = None
 
         # Unsubscribe from push updates before unloading
         if self.supports_push:
@@ -618,7 +649,18 @@ class BaseLock:
                 return
 
             if to_state == ConfigEntryState.LOADED:
-                self.hass.async_create_task(
+                # The provider transitioned through LOADED twice in quick
+                # succession (e.g. reload during reconnect). Cancel any
+                # prior in-flight reconnect; drain any pending exception
+                # on a prior task that already completed with an error so
+                # we do not leak an unretrieved exception at GC time.
+                if self._reconnect_task is not None:
+                    self._reconnect_task.add_done_callback(
+                        self._drain_superseded_reconnect
+                    )
+                    if not self._reconnect_task.done():
+                        self._reconnect_task.cancel()
+                self._reconnect_task = self.hass.async_create_task(
                     self._async_on_integration_loaded(),
                     f"Provider reconnect for {self.lock.entity_id}",
                 )
@@ -632,6 +674,19 @@ class BaseLock:
         self._config_entry_state_unsub = lock_entry.async_on_state_change(
             _handle_state_change
         )
+
+    def _drain_superseded_reconnect(self, task: asyncio.Task[None]) -> None:
+        """Consume any leftover exception on a superseded reconnect task."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            _LOGGER.warning(
+                "Superseded reconnect task raised for %s: %s",
+                self.lock.entity_id,
+                exc,
+                exc_info=exc,
+            )
 
     async def async_is_integration_connected(self) -> bool:
         """

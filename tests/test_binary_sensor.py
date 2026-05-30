@@ -1599,14 +1599,17 @@ async def test_sync_manager_stop_during_active_sync_does_not_raise(
         # Wait deterministically until the mock signals it has been entered
         await asyncio.wait_for(mid_sync_event.wait(), timeout=5)
 
-        # Stop the sync manager while sync is in progress (sets _started = False)
-        mgr.async_stop()
+        # Stop the sync manager while sync is in progress. async_stop awaits
+        # the in-flight tick, so schedule it as a task and let the tick
+        # finish naturally below.
+        stop_task = hass.async_create_task(mgr.async_stop())
 
         # Let the set_usercode complete
         resume_event.set()
 
-        # The tick task should complete without raising
+        # Both tasks should complete without raising
         await tick_task
+        await stop_task
         await hass.async_block_till_done()
 
     # Verify clean shutdown -- _started should be False

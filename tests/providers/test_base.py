@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timedelta
+import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -996,3 +997,153 @@ async def test_check_duplicate_code_no_coordinator(
     lock.coordinator = None
 
     lock._check_duplicate_code(1, "1234")
+
+
+async def test_async_unload_cancels_in_flight_reconnect_task(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """async_unload cancels the reconnect task spawned by the state listener."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+    # Plant an in-flight reconnect task that takes a long time. async_unload
+    # should cancel it before returning so a late
+    # coordinator.async_request_refresh() cannot fire after teardown.
+    started = asyncio.Event()
+
+    async def slow_reconnect() -> None:
+        started.set()
+        await asyncio.sleep(60)
+
+    lock._reconnect_task = hass.async_create_task(slow_reconnect())
+    await started.wait()
+    assert not lock._reconnect_task.done()
+
+    await lock.async_unload(False)
+
+    assert lock._reconnect_task is None
+
+
+async def test_handle_state_change_supersedes_prior_reconnect_task(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A second LOADED transition cancels and replaces the prior reconnect task."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=BASE_CONFIG,
+            unique_id="Mock Title Reconnect Supersede",
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+        # Plant a long-running reconnect task to mimic a slow reconnect that
+        # has not yet completed.
+        async def slow_reconnect() -> None:
+            await asyncio.sleep(60)
+
+        prior_task = hass.async_create_task(slow_reconnect())
+        lock._reconnect_task = prior_task
+
+        # Drive a second LOADED transition through the state listener. The
+        # listener should cancel the prior task and store the new one.
+        lock._last_entry_state = ConfigEntryState.NOT_LOADED
+        mock_lock_config_entry.mock_state(hass, ConfigEntryState.LOADED)
+        await hass.async_block_till_done()
+
+        assert prior_task.cancelled() or prior_task.done()
+        assert lock._reconnect_task is not None
+        assert lock._reconnect_task is not prior_task
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_supersede_drains_prior_reconnect_exception(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A superseded reconnect task that failed before cancellation is logged, not orphaned."""
+    with patch(
+        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=BASE_CONFIG,
+            unique_id="Mock Title Drain Reconnect",
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+
+        boom = RuntimeError("simulated prior reconnect failure")
+
+        async def failed_reconnect() -> None:
+            raise boom
+
+        prior_task = hass.async_create_task(failed_reconnect())
+        # Let the task run to completion with its exception.
+        await asyncio.sleep(0)
+        assert prior_task.done()
+        assert prior_task.exception() is boom
+
+        lock._reconnect_task = prior_task
+
+        # Drive a LOADED transition through the state listener; the supersede
+        # path must drain the failed prior task and log its exception.
+        lock._last_entry_state = ConfigEntryState.NOT_LOADED
+        with caplog.at_level(logging.WARNING):
+            mock_lock_config_entry.mock_state(hass, ConfigEntryState.LOADED)
+            await hass.async_block_till_done()
+
+        assert any(
+            record.exc_info is not None and record.exc_info[1] is boom
+            for record in caplog.records
+            if record.levelname == "WARNING"
+        )
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_async_unload_logs_reconnect_task_exception(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """async_unload logs warnings when the reconnect task raises non-CancelledError on shutdown."""
+    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    boom = RuntimeError("simulated reconnect cleanup failure")
+    started = asyncio.Event()
+
+    async def stubborn_reconnect() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise boom from None
+
+    lock._reconnect_task = hass.async_create_task(stubborn_reconnect())
+    await started.wait()
+    assert not lock._reconnect_task.done()
+
+    with caplog.at_level(logging.WARNING):
+        await lock.async_unload(False)
+
+    assert lock._reconnect_task is None
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    )

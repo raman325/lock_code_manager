@@ -12,6 +12,7 @@ Circuit breaker: 3 attempts within 5 minutes (MAX_SYNC_ATTEMPTS, SYNC_ATTEMPT_WI
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -192,6 +193,18 @@ class SlotSyncManager:
         self._tracking_all_states: bool = False
         self._started = False
 
+        # All currently-executing _async_tick tasks. A new tick can fire from
+        # the interval timer while a prior tick is still awaiting
+        # ``_perform_sync`` or ``coordinator.async_refresh``; tracking every
+        # in-flight tick lets async_stop await them all before tearing down
+        # state. Tasks self-register on entry and self-discard on exit.
+        self._tick_tasks: set[asyncio.Task[None]] = set()
+
+    @property
+    def log_prefix(self) -> str:
+        """Return the structured log prefix identifying this manager's slot."""
+        return self._log_prefix
+
     @property
     def in_sync(self) -> bool | None:
         """Return current sync state (None = not yet determined)."""
@@ -218,8 +231,18 @@ class SlotSyncManager:
         )
         await self._async_tick()
 
-    def async_stop(self) -> None:
-        """Stop the sync manager -- unsubscribe tick and listeners. Idempotent."""
+    async def async_stop(self) -> None:
+        """
+        Stop the sync manager, awaiting any in-flight ticks.
+
+        Idempotent. Unsubscribes the timer and state listeners first so no
+        new ticks can start, then awaits any in-flight ticks so they cannot
+        continue to call ``_perform_sync``, ``coordinator.async_refresh``,
+        or ``_write_state()`` after stop returns. We do not cancel them --
+        a tick mid ``_perform_sync`` should be allowed to finish so the lock
+        operation completes; ``_started=False`` keeps it from scheduling
+        more work.
+        """
         if not self._started:
             return
         self._started = False
@@ -230,6 +253,24 @@ class SlotSyncManager:
         if self._coordinator_unsub:
             self._coordinator_unsub()
             self._coordinator_unsub = None
+
+        current = asyncio.current_task()
+        pending = {
+            task for task in self._tick_tasks if task is not current and not task.done()
+        }
+        if pending:
+            tick_results = await asyncio.gather(*pending, return_exceptions=True)
+            for result in tick_results:
+                if isinstance(result, Exception) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    _LOGGER.warning(
+                        "%s: In-flight tick raised during stop: %s",
+                        self._log_prefix,
+                        result,
+                        exc_info=result,
+                    )
+
         self._slot_breaker.reset()
 
     # -- State resolution ----------------------------------------------------
@@ -494,6 +535,10 @@ class SlotSyncManager:
 
     def _write_state(self) -> None:
         """Notify the entity to write Home Assistant state."""
+        # Skip if stopped: a tick mid-await may still call _write_state after
+        # async_stop has begun teardown of the owning entity.
+        if not self._started:
+            return
         self._state_writer(self.in_sync)
 
     @callback
@@ -557,14 +602,27 @@ class SlotSyncManager:
         if not self._started:
             return
 
-        # Try upgrading before the state check — catch-all mode may prevent
-        # _request_sync_check from firing for entities not yet tracked
-        self._try_upgrade_state_tracking()
-
-        if self._state in (SyncState.IN_SYNC, SyncState.SYNCING, SyncState.SUSPENDED):
+        # Register before the first await so a concurrent ``async_stop``
+        # sees this tick in ``_tick_tasks``.
+        task = asyncio.current_task()
+        if task is None:
             return
+        self._tick_tasks.add(task)
+        try:
+            # Try upgrading before the state check — catch-all mode may prevent
+            # _request_sync_check from firing for entities not yet tracked
+            self._try_upgrade_state_tracking()
 
-        await self._async_tick_impl()
+            if self._state in (
+                SyncState.IN_SYNC,
+                SyncState.SYNCING,
+                SyncState.SUSPENDED,
+            ):
+                return
+
+            await self._async_tick_impl()
+        finally:
+            self._tick_tasks.discard(task)
 
     async def _async_tick_impl(self) -> None:
         """

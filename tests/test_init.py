@@ -1,5 +1,6 @@
 """Test init module."""
 
+import asyncio
 import copy
 import logging
 from unittest.mock import patch
@@ -28,6 +29,7 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 
+from custom_components.lock_code_manager import _setup_entry_after_start
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
@@ -1163,3 +1165,146 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     )
 
     await hass.config_entries.async_unload(entry_b.entry_id)
+
+
+async def test_setup_entry_after_start_does_not_stack_update_listeners(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Running _setup_entry_after_start a second time does not stack update listeners."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    # Initial setup ran via the fixture and should have registered exactly one
+    # listener, marked by the runtime-data flag.
+    assert runtime_data.update_listener_registered is True
+    initial_listener_count = len(lock_code_manager_config_entry.update_listeners)
+
+    # A second invocation (simulating a reload race with EVENT_HOMEASSISTANT_STARTED)
+    # must not register another listener.
+    _setup_entry_after_start(hass, lock_code_manager_config_entry)
+    await hass.async_block_till_done()
+
+    assert (
+        len(lock_code_manager_config_entry.update_listeners) == initial_listener_count
+    )
+
+    # After unload, the flag clears so a future setup will register again.
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert runtime_data.update_listener_registered is False
+
+
+async def test_unload_stops_sync_managers_before_callbacks_and_platforms(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Unload sequence: stop sync managers -> fire lock-removed callbacks -> unload platforms."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    callbacks = runtime_data.callbacks
+
+    # Capture ordering: sync managers must be stopped (and thus discarded from
+    # the registry) before lock-removed callbacks fire.
+    sync_manager_count_at_lock_removed: list[int] = []
+
+    def _on_lock_removed(_entity_id: str) -> None:
+        sync_manager_count_at_lock_removed.append(len(runtime_data.sync_managers))
+
+    callbacks.register_lock_removed_handler(_on_lock_removed)
+
+    assert len(runtime_data.sync_managers) > 0
+    initial_manager_count = len(runtime_data.sync_managers)
+
+    await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Lock-removed handlers must have fired AFTER sync managers were stopped
+    # and cleared from the registry.
+    assert sync_manager_count_at_lock_removed
+    assert all(count == 0 for count in sync_manager_count_at_lock_removed)
+    # Multiple locks in the fixture means we saw multiple callback invocations.
+    assert len(sync_manager_count_at_lock_removed) >= 1
+
+    # And the original count was non-trivial -- we actually had managers to stop.
+    assert initial_manager_count >= 1
+
+
+async def test_unload_awaits_in_flight_sync_tick(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Unload waits for an in-flight sync tick before returning."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    assert runtime_data.sync_managers
+
+    # Pick a manager and stall its tick mid-flight by patching its
+    # _async_tick_impl to wait on an event we control.
+    manager = next(iter(runtime_data.sync_managers))
+    manager._state = SyncState.OUT_OF_SYNC
+
+    mid_tick = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stalled_tick_impl() -> None:
+        mid_tick.set()
+        await release.wait()
+
+    with patch.object(manager, "_async_tick_impl", stalled_tick_impl):
+        tick_task = hass.async_create_task(manager._async_tick())
+        await asyncio.wait_for(mid_tick.wait(), timeout=5)
+
+        # Begin unload; it should not return while the tick is in flight.
+        unload_task = hass.async_create_task(
+            hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
+        )
+        await asyncio.sleep(0)
+        assert not unload_task.done()
+
+        # Release the tick; unload should now complete.
+        release.set()
+        await tick_task
+        await unload_task
+
+
+async def test_unload_logs_sync_manager_stop_exceptions(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Unload logs warnings when individual sync manager stops raise and still stops the rest."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    managers = list(runtime_data.sync_managers)
+    assert len(managers) >= 2
+
+    boom = RuntimeError("simulated stop failure")
+    failing_mgr, *other_mgrs = managers
+    original_stop = failing_mgr.async_stop
+    # binary_sensor.async_will_remove_from_hass also calls async_stop after the
+    # unload entry has gathered them; clean up properly so timers do not leak,
+    # then raise on the first call only.
+    call_state = {"raised": False}
+
+    async def failing_stop() -> None:
+        await original_stop()
+        if not call_state["raised"]:
+            call_state["raised"] = True
+            raise boom
+
+    with patch.object(failing_mgr, "async_stop", failing_stop):
+        with caplog.at_level(logging.WARNING):
+            await hass.config_entries.async_unload(
+                lock_code_manager_config_entry.entry_id
+            )
+            await hass.async_block_till_done()
+
+    assert call_state["raised"]
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "WARNING"
+    )
+    # Sibling managers must still have been stopped even though one raised.
+    for mgr in other_mgrs:
+        assert not mgr._started

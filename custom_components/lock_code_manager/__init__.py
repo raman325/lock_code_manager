@@ -484,11 +484,22 @@ def _setup_entry_after_start(
     """
     Set up config entry.
 
-    Should only be run once Home Assistant has started.
+    Should only be run once Home Assistant has started. Update-listener
+    registration is guarded by ``runtime_data.update_listener_registered`` so
+    a reload racing with EVENT_HOMEASSISTANT_STARTED cannot stack multiple
+    listeners on the same entry.
     """
-    config_entry.async_on_unload(
-        config_entry.add_update_listener(async_update_listener)
-    )
+    runtime_data = config_entry.runtime_data
+    if not runtime_data.update_listener_registered:
+        runtime_data.update_listener_registered = True
+        unsub = config_entry.add_update_listener(async_update_listener)
+
+        @callback
+        def _clear_listener_registered() -> None:
+            runtime_data.update_listener_registered = False
+            unsub()
+
+        config_entry.async_on_unload(_clear_listener_registered)
 
     if config_entry.data:
         # Move data from data to options so update listener can work
@@ -631,10 +642,41 @@ async def async_unload_lock(
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
-    """Unload an entry, firing slot- and lock-removed callbacks before tearing down platforms."""
+    """Unload an entry, stopping tick managers before tearing down platforms."""
     hass_data = hass.data[DOMAIN]
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
+
+    # Stop tick managers FIRST so no in-flight tick can keep calling
+    # _perform_sync, coordinator.async_refresh, or _write_state once
+    # downstream teardown begins. SlotSyncManager.async_stop is idempotent,
+    # so the binary sensor's later async_will_remove_from_hass call into the
+    # same manager is a cheap no-op.
+    if runtime_data.sync_managers:
+        _LOGGER.debug(
+            "Unload: stopping %s sync manager(s)", len(runtime_data.sync_managers)
+        )
+        mgrs_to_stop = list(runtime_data.sync_managers)
+        stop_results = await asyncio.gather(
+            *(mgr.async_stop() for mgr in mgrs_to_stop),
+            return_exceptions=True,
+        )
+        # Clear the registry explicitly so the lock-removed callbacks fired
+        # below observe an empty set. Entity removal also discards each
+        # manager during async_will_remove_from_hass, but that path only
+        # runs if invoke_entity_removers_for_slot has populated slots --
+        # which it may not when config has been migrated to options.
+        runtime_data.sync_managers.clear()
+        for mgr, result in zip(mgrs_to_stop, stop_results, strict=True):
+            if isinstance(result, Exception) and not isinstance(
+                result, asyncio.CancelledError
+            ):
+                _LOGGER.warning(
+                    "%s: Sync manager stop raised during unload: %s",
+                    mgr.log_prefix,
+                    result,
+                    exc_info=result,
+                )
 
     # Fire slot entity removal callbacks first so per-slot entities (which
     # reference locks) clean up before the locks are torn down

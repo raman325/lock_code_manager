@@ -278,5 +278,15 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
         await CoordinatorEntity.async_added_to_hass(self)
 
-        self.async_on_remove(self._sync_manager.async_stop)
+        self.config_entry.runtime_data.sync_managers.add(self._sync_manager)
         await self._sync_manager.async_start()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop the sync manager and await its in-flight tick before removal."""
+        # async_unload_entry stops sync managers up front so this is normally
+        # a no-op (idempotent); the explicit stop here protects against entity
+        # removal paths that do not flow through async_unload_entry, such as
+        # a slot being removed via the options update listener.
+        self.config_entry.runtime_data.sync_managers.discard(self._sync_manager)
+        await self._sync_manager.async_stop()
+        await CoordinatorEntity.async_will_remove_from_hass(self)
