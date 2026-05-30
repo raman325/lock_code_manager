@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -296,3 +298,92 @@ async def test_unload_reads_slots_via_entry_config_view(
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
     assert set(removed_slots) == {1, 2}
+
+
+async def test_request_pin_update_auto_disables_in_single_write(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Empty-PIN auto-disable coalesces PIN and ENABLED into one async_update_entry call.
+
+    Two consecutive writes would let the second read a stale
+    ``runtime_data.config`` and silently drop the first; one write keys
+    both fields off the same snapshot.
+    """
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    captured: list[dict[str, Any]] = []
+    original = hass.config_entries.async_update_entry
+
+    def capture(entry, **kwargs):
+        if entry is lock_code_manager_config_entry and "data" in kwargs:
+            captured.append(kwargs["data"])
+        return original(entry, **kwargs)
+
+    with patch.object(hass.config_entries, "async_update_entry", side_effect=capture):
+        await coordinator.async_request_pin_update("")
+        await hass.async_block_till_done()
+
+    assert len(captured) == 1
+    slot_1 = captured[0][CONF_SLOTS][1]
+    assert slot_1[CONF_PIN] == ""
+    assert slot_1[CONF_ENABLED] is False
+
+
+async def test_condition_entity_swap_resubscribes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Changing CONF_ENTITY_ID via options unsubscribes from the old condition entity."""
+    hass.states.async_set("input_boolean.gate_a", STATE_ON)
+    hass.states.async_set("input_boolean.gate_b", STATE_OFF)
+    await hass.async_block_till_done()
+
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "alice",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "input_boolean.gate_a",
+            },
+        },
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Test Swap")
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    assert coordinator.is_active is True
+
+    new_options = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "alice",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "input_boolean.gate_b",
+            },
+        },
+    }
+    hass.config_entries.async_update_entry(entry, options=new_options)
+    await hass.async_block_till_done()
+
+    # gate_b is OFF, so the slot is now inactive.
+    assert coordinator.is_active is False
+
+    # Toggling the OLD condition entity must NOT affect the slot anymore.
+    hass.states.async_set("input_boolean.gate_a", STATE_OFF)
+    await hass.async_block_till_done()
+    assert coordinator.is_active is False
+
+    # Toggling the NEW condition entity to ON makes the slot active again.
+    hass.states.async_set("input_boolean.gate_b", STATE_ON)
+    await hass.async_block_till_done()
+    assert coordinator.is_active is True
+
+    await hass.config_entries.async_unload(entry.entry_id)

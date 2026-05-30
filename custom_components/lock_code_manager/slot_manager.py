@@ -41,7 +41,7 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from .const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
-from .data import get_entry_config
+from .data import EntryConfig, get_entry_config
 
 if TYPE_CHECKING:
     from .models import LockCodeManagerConfigEntry
@@ -165,10 +165,19 @@ class SlotEntityCoordinator:
 
         Returns an unsubscribe function. The writer is called immediately
         with the current derived state so the entity can render before
-        any subsequent state change.
+        any subsequent state change. If that immediate call raises, the
+        writer is not retained -- otherwise a half-added entity would
+        keep receiving fan-outs without ever being attached.
         """
+        try:
+            writer(self._is_active, list(self._inactive_because_of))
+        except Exception:
+            _LOGGER.exception(
+                "%s: Active-view writer raised on registration; discarding",
+                self._log_prefix,
+            )
+            raise
         self._active_view_writers.add(writer)
-        writer(self._is_active, list(self._inactive_because_of))
         return lambda: self._active_view_writers.discard(writer)
 
     @callback
@@ -222,28 +231,34 @@ class SlotEntityCoordinator:
         """
         Apply an enabled/disabled toggle requested by the switch entity.
 
-        Returns silently for the disable path. The enable path validates
-        that a PIN exists and creates or clears the ``pin_required``
-        repair issue. Raising is left to the caller -- this method
-        returns a bool so the switch can translate failure into a
-        HomeAssistantError.
+        Disable is unconditional. Enable validates that a PIN exists and
+        raises ``PinRequiredError`` if absent (the switch translates
+        that into ``HomeAssistantError``). On a successful enable the
+        ``pin_required`` repair issue is cleared; failures inside the
+        issue registry are logged and do not unwind the write.
         """
         if not enabled:
             self._write_config(CONF_ENABLED, False)
             return
 
         if not self.pin_value:
-            self._raise_pin_required_issue()
+            self._safely_raise_pin_required_issue()
             raise PinRequiredError(
                 f"Set a PIN code for slot {self._slot_num} before enabling it"
             )
 
         self._write_config(CONF_ENABLED, True)
-        async_delete_issue(
-            self._hass,
-            DOMAIN,
-            f"pin_required_{self._config_entry.entry_id}_{self._slot_num}",
-        )
+        try:
+            async_delete_issue(
+                self._hass,
+                DOMAIN,
+                f"pin_required_{self._config_entry.entry_id}_{self._slot_num}",
+            )
+        except Exception:
+            _LOGGER.exception(
+                "%s: Failed to delete pin_required repair issue after enable",
+                self._log_prefix,
+            )
 
     # -- Config change hook (called by async_update_listener) ----------------
 
@@ -282,6 +297,13 @@ class SlotEntityCoordinator:
         Coalescing avoids the trap where the update listener has not yet
         refreshed ``runtime_data.config`` between two consecutive writes,
         leading the second write to drop the first.
+
+        ``async_update_entry`` schedules the update listener as a task,
+        so ``runtime_data.config`` is still stale at the synchronous
+        notify below. Refresh it eagerly here so ``_recompute_active``,
+        ``_notify_state_subscribers``, and ``_poke_sync_managers``
+        observe the new values. The listener will refresh again when it
+        runs -- writing the same value twice is harmless.
         """
         config = get_entry_config(self._config_entry)
         for key, value in fields.items():
@@ -289,12 +311,9 @@ class SlotEntityCoordinator:
         self._hass.config_entries.async_update_entry(
             self._config_entry, data=config.to_dict()
         )
-        # The async_update_listener call refreshes runtime_data.config
-        # and then re-invokes notify_config_changed on us, but it bails
-        # out of the entity-creation pass because options is empty.
-        # We still update active state synchronously here so the entity's
-        # callback sees the change immediately without waiting for the
-        # listener's task to run.
+        self._config_entry.runtime_data.config = EntryConfig.from_entry(
+            self._config_entry
+        )
         self._recompute_active()
         self._notify_state_subscribers()
         self._poke_sync_managers()
@@ -311,8 +330,14 @@ class SlotEntityCoordinator:
     @callback
     def _poke_sync_managers(self) -> None:
         """Ask each per-lock sync manager to re-evaluate against fresh state."""
-        for manager in self._sync_managers:
-            manager.request_sync_check()
+        for manager in list(self._sync_managers):
+            try:
+                manager.request_sync_check()
+            except Exception:
+                _LOGGER.exception(
+                    "%s: Sync manager raised on request_sync_check",
+                    self._log_prefix,
+                )
 
     @callback
     def _update_condition_subscription(self) -> None:
@@ -337,6 +362,8 @@ class SlotEntityCoordinator:
         self, _event: Event[EventStateChangedData]
     ) -> None:
         """Recompute active state when the condition entity changes."""
+        if not self._started:
+            return
         self._recompute_active()
 
     @callback
@@ -344,11 +371,10 @@ class SlotEntityCoordinator:
         """
         Compute the slot's active state from config + condition entity.
 
-        Mirrors the legacy LockCodeManagerActiveEntity._update_state
-        logic: every relevant slot config key must be truthy. The
-        condition entity (CONF_ENTITY_ID) is truthy when its state is
-        ``on``; ``off`` is False and any other state (unknown,
-        unavailable, missing) is None and treated as inactive.
+        Every relevant slot config key must be truthy. The condition
+        entity (``CONF_ENTITY_ID``) is truthy when its state is ``on``;
+        ``off`` is False and any other state (unknown, unavailable,
+        missing) is None and treated as inactive.
         """
         slot_config = self._slot_config()
         states: dict[str, bool | None] = {}
@@ -381,21 +407,27 @@ class SlotEntityCoordinator:
             writer(self._is_active, list(self._inactive_because_of))
 
     @callback
-    def _raise_pin_required_issue(self) -> None:
-        """Create the ``pin_required`` repair issue for this slot."""
-        async_create_issue(
-            self._hass,
-            DOMAIN,
-            f"pin_required_{self._config_entry.entry_id}_{self._slot_num}",
-            is_fixable=True,
-            is_persistent=True,
-            severity=IssueSeverity.WARNING,
-            translation_key="pin_required",
-            translation_placeholders={
-                "slot_num": str(self._slot_num),
-                "config_entry_title": self._config_entry.title,
-            },
-        )
+    def _safely_raise_pin_required_issue(self) -> None:
+        """Create the ``pin_required`` repair issue, logging registry failures."""
+        try:
+            async_create_issue(
+                self._hass,
+                DOMAIN,
+                f"pin_required_{self._config_entry.entry_id}_{self._slot_num}",
+                is_fixable=True,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key="pin_required",
+                translation_placeholders={
+                    "slot_num": str(self._slot_num),
+                    "config_entry_title": self._config_entry.title,
+                },
+            )
+        except Exception:
+            _LOGGER.exception(
+                "%s: Failed to create pin_required repair issue",
+                self._log_prefix,
+            )
 
 
 class PinRequiredError(Exception):

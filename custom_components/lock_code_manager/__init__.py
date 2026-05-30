@@ -696,10 +696,14 @@ async def async_unload_entry(
         )
 
     # Stop per-slot coordinators after entity removal so the entities'
-    # async_will_remove_from_hass can still call into them (the writers
-    # are unregistered there). async_stop is idempotent.
-    for coordinator in runtime_data.slot_coordinators.values():
-        coordinator.async_stop()
+    # async_will_remove_from_hass can still call into them. One raising
+    # stop must not block the rest -- the registry is cleared whether
+    # individual stops succeed or fail.
+    for coordinator in list(runtime_data.slot_coordinators.values()):
+        try:
+            coordinator.async_stop()
+        except Exception:
+            _LOGGER.exception("Unload: slot coordinator stop raised")
     runtime_data.slot_coordinators.clear()
 
     # Fire lock-removed callbacks so per-lock entities are notified
@@ -911,9 +915,18 @@ async def async_update_listener(
             )
         )
         for slot_num in slots_to_remove:
-            if slot_num in runtime_data.slot_coordinators:
-                runtime_data.slot_coordinators[slot_num].async_stop()
-                del runtime_data.slot_coordinators[slot_num]
+            coordinator = runtime_data.slot_coordinators.pop(slot_num, None)
+            if coordinator is None:
+                continue
+            try:
+                coordinator.async_stop()
+            except Exception:
+                _LOGGER.exception(
+                    "%s (%s): slot %s coordinator stop raised",
+                    entry_id,
+                    entry_title,
+                    slot_num,
+                )
 
     # Remove old lock entities
     if locks_to_remove:

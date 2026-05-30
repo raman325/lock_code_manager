@@ -554,11 +554,12 @@ class SlotSyncManager:
     @callback
     def request_sync_check(self) -> None:
         """
-        Public entry point for external callers (slot coordinator) to nudge sync.
+        Public no-arg wrapper over ``_request_sync_check``.
 
-        Routes through the same internal handler that coordinator and
-        entity-state listeners use so the state-transition rules stay in
-        one place.
+        ``_request_sync_check`` accepts ``*_args`` so it can serve as a
+        coordinator/state-change listener; callers that want to nudge sync
+        directly should not have to pretend to be a listener. Routing
+        through it keeps the state-transition rules in one place.
         """
         self._request_sync_check()
 
