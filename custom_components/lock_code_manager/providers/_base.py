@@ -176,6 +176,12 @@ class BaseLock:
     _setup_running: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
+    # Reconnect task spawned by the config-entry state listener when the lock
+    # integration transitions to LOADED. Tracked so async_unload can cancel it
+    # before teardown -- otherwise a late reconnect can call
+    # coordinator.async_request_refresh() against an already-shutdown
+    # coordinator.
+    _reconnect_task: asyncio.Task[None] | None = field(default=None, init=False)
 
     @final
     @callback
@@ -589,10 +595,21 @@ class BaseLock:
         await self._setup_complete.wait()
 
     async def async_unload(self, remove_permanently: bool) -> None:
-        """Tear down config-entry-state listener and push subscription."""
+        """Tear down config-entry-state listener, reconnect task, and push subscription."""
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()
             self._config_entry_state_unsub = None
+
+        # Cancel any in-flight reconnect spawned by _handle_state_change so
+        # it cannot call coordinator.async_request_refresh() against an
+        # already-shutdown coordinator. Await it to confirm the cancellation
+        # took effect before we return from unload.
+        reconnect_task = self._reconnect_task
+        if reconnect_task is not None and not reconnect_task.done():
+            reconnect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await reconnect_task
+        self._reconnect_task = None
 
         # Unsubscribe from push updates before unloading
         if self.supports_push:
@@ -618,7 +635,13 @@ class BaseLock:
                 return
 
             if to_state == ConfigEntryState.LOADED:
-                self.hass.async_create_task(
+                # Cancel any prior reconnect that hasn't finished -- the
+                # provider transitioned through LOADED twice in quick
+                # succession (e.g. reload during reconnect). The new task
+                # supersedes the old one.
+                if self._reconnect_task is not None and not self._reconnect_task.done():
+                    self._reconnect_task.cancel()
+                self._reconnect_task = self.hass.async_create_task(
                     self._async_on_integration_loaded(),
                     f"Provider reconnect for {self.lock.entity_id}",
                 )

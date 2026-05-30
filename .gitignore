@@ -18,6 +18,7 @@ node_modules
 .ha
 docs/
 .serena/
+.worktrees/
 .github/hooks/
 .opencode/
 junit.xml
