@@ -107,6 +107,13 @@ class SlotSyncManager:
         - ``_async_tick_impl`` is the single authoritative place for all
           other state transitions, circuit breaker, sync operations,
           and ``_last_set_pin`` changes.
+        - The slot circuit breaker is mutated only inside
+          ``_async_tick_impl``. Non-tick code paths that want to reset it
+          (callbacks, suspend/disable helpers) set
+          ``_breaker_reset_requested``; the tick consumes the flag at its
+          start. This keeps callbacks firing across a tick's ``await
+          _perform_sync`` boundary from clearing failure state the tick
+          is about to read.
 
     Lifecycle methods (async_start, async_stop) are idempotent and re-entrant.
     """
@@ -171,9 +178,15 @@ class SlotSyncManager:
 
         # Slot-level circuit breaker: trips when a code repeatedly fails to
         # converge within the window, suspending just this lock and slot.
+        # Only ``_async_tick_impl`` mutates the breaker; external callbacks
+        # (state-change listeners, coordinator listeners) set
+        # ``_breaker_reset_requested`` and the next tick consumes it. A single
+        # bool suffices because resets are idempotent and carry no payload --
+        # coalescing many requests into one reset is the desired behavior.
         self._slot_breaker = CircuitBreaker(
             MAX_SYNC_ATTEMPTS, window=SYNC_ATTEMPT_WINDOW
         )
+        self._breaker_reset_requested: bool = False
 
         # The desired target (active_state, pin_state) captured when the slot
         # is suspended for a non-converging code or an unexpected error. While
@@ -270,8 +283,6 @@ class SlotSyncManager:
                         result,
                         exc_info=result,
                     )
-
-        self._slot_breaker.reset()
 
     # -- State resolution ----------------------------------------------------
 
@@ -415,12 +426,15 @@ class SlotSyncManager:
 
     # -- Sync execution ------------------------------------------------------
 
-    async def _perform_sync(self, slot_state: SlotState) -> None:
+    async def _perform_sync(self, slot_state: SlotState) -> bool:
         """
         Execute sync operation (set or clear usercode).
 
-        Raises CodeRejectedError, LockDisconnected, or propagates any exception.
-        Error handling is done by the caller (_async_tick).
+        Returns True if the operation was a set (which the tick must verify
+        against the lock readback) and False for a clear. Raises
+        CodeRejectedError, LockDisconnected, LockOperationFailed, or
+        propagates any other exception. Error handling and breaker accounting
+        live in the caller (``_async_tick_impl``).
         """
         if slot_state.active_state == STATE_ON:
             await self._lock.async_internal_set_usercode(
@@ -430,16 +444,12 @@ class SlotSyncManager:
                 source="sync",
             )
             self._last_set_pin = slot_state.pin_state
-            # Track set operations toward the slot breaker. Clear operations
-            # don't increment the counter (expected to always succeed).
-            self._slot_breaker.record_failure()
             _LOGGER.debug("%s: Set usercode", self._log_prefix)
-        else:
-            await self._lock.async_internal_clear_usercode(
-                self._slot_num, source="sync"
-            )
-            self._last_set_pin = None
-            _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
+            return True
+        await self._lock.async_internal_clear_usercode(self._slot_num, source="sync")
+        self._last_set_pin = None
+        _LOGGER.debug("%s: Cleared usercode", self._log_prefix)
+        return False
 
     async def _disable_slot(self, reason: str) -> None:
         """Disable the slot and create a repair issue."""
@@ -474,7 +484,7 @@ class SlotSyncManager:
                 },
             )
         finally:
-            self._slot_breaker.reset()
+            self._breaker_reset_requested = True
 
     def _suspend_slot(self, slot_state: SlotState, reason: str) -> None:
         """
@@ -486,7 +496,7 @@ class SlotSyncManager:
         """
         self._state = SyncState.SUSPENDED
         self._code_suspend_target = (slot_state.active_state, slot_state.pin_state)
-        self._slot_breaker.reset()
+        self._breaker_reset_requested = True
         self._write_state()
 
         issue_id = (
@@ -547,15 +557,20 @@ class SlotSyncManager:
         Request a sync check on the next tick.
 
         Transitions IN_SYNC -> OUT_OF_SYNC if calculate_in_sync returns False
-        (also resets circuit breaker since the sync target changed).
-        Transitions SUSPENDED -> OUT_OF_SYNC if the coordinator is no longer suspended.
-        No-op for LOADING, OUT_OF_SYNC, SYNCING.
+        (also requests a breaker reset since the sync target changed).
+        Transitions SUSPENDED -> OUT_OF_SYNC if the coordinator is no longer
+        suspended. No-op for LOADING, OUT_OF_SYNC, SYNCING.
+
+        The breaker is not mutated here -- this callback can fire while a
+        tick is awaiting ``_perform_sync``, and a direct ``reset()`` could
+        clear failure state that the tick is about to read. Instead we set
+        ``_breaker_reset_requested`` and the next tick consumes it.
         """
         if self._state is SyncState.IN_SYNC:
             slot_state = self._resolve_slot_state()
             if slot_state is not None and not self.calculate_in_sync(slot_state):
                 self._state = SyncState.OUT_OF_SYNC
-                self._slot_breaker.reset()
+                self._breaker_reset_requested = True
                 self._write_state()
         elif self._state is SyncState.SUSPENDED:
             if self._code_suspend_target is not None:
@@ -570,14 +585,14 @@ class SlotSyncManager:
                     != self._code_suspend_target
                     or self.calculate_in_sync(slot_state)
                 ):
-                    self._slot_breaker.reset()
+                    self._breaker_reset_requested = True
                     self._code_suspend_target = None
                     self._state = SyncState.OUT_OF_SYNC
                     self._write_state()
             elif not self._coordinator.unreachable:
                 # Suspended because the lock was unreachable; it is reachable
                 # again, so resume.
-                self._slot_breaker.reset()
+                self._breaker_reset_requested = True
                 self._state = SyncState.OUT_OF_SYNC
                 self._write_state()
 
@@ -632,6 +647,15 @@ class SlotSyncManager:
         circuit breaker tracking, sync operations, and ``_last_set_pin``
         changes.
         """
+        # Consume any external reset requests before reading breaker state.
+        # ``_request_sync_check`` cannot reset the breaker directly because
+        # it can fire while a tick is awaiting ``_perform_sync``, and a
+        # mid-flight reset would clear failure state the tick is about to
+        # read. Coalescing many requests into one reset is intentional.
+        if self._breaker_reset_requested:
+            self._breaker_reset_requested = False
+            self._slot_breaker.reset()
+
         slot_state = self._resolve_slot_state()
         if slot_state is None:
             # State resolution failed — stay in current state and retry.
@@ -705,8 +729,9 @@ class SlotSyncManager:
         # Perform sync
         self._state = SyncState.SYNCING
         self._write_state()
+        was_set = False
         try:
-            await self._perform_sync(slot_state)
+            was_set = await self._perform_sync(slot_state)
         except CodeRejectedError as err:
             _LOGGER.error("%s: Code rejected: %s", self._log_prefix, err)
             await self._disable_slot(
@@ -779,10 +804,16 @@ class SlotSyncManager:
                         "Will retry on next tick.",
                         self._log_prefix,
                     )
+                    # Treat an unverified set the same as a verification
+                    # miss: repeated unverified sets must eventually trip
+                    # the slot breaker, otherwise a persistently failing
+                    # refresh path leaves the slot retrying forever.
+                    if was_set:
+                        self._slot_breaker.record_failure()
                     self._state = SyncState.OUT_OF_SYNC
                     return
 
-        # Check if sync actually worked
+        # Check if sync actually worked.
         slot_state = self._resolve_slot_state()
         if slot_state is not None and self.calculate_in_sync(slot_state):
             self._state = SyncState.IN_SYNC
@@ -790,6 +821,10 @@ class SlotSyncManager:
             self._write_state()
             self._clear_resolved_issues(slot_state)
         else:
+            # Count only unverified sets so eventually-consistent providers
+            # don't accumulate spurious failures when the readback lags.
+            if was_set:
+                self._slot_breaker.record_failure()
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()
 
