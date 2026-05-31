@@ -5,20 +5,15 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.const import CONF_ENABLED, CONF_PIN, STATE_UNKNOWN, Platform
+from homeassistant.const import CONF_ENABLED
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.issue_registry import (
-    IssueSeverity,
-    async_create_issue,
-    async_delete_issue,
-)
 
-from .const import DOMAIN
 from .entity import BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
+from .slot_manager import PinRequiredError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,8 +46,6 @@ async def async_setup_entry(
 class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
     """Switch entity for lock code manager."""
 
-    _pin_entity_id: str = ""
-
     @property
     def is_on(self) -> bool:
         """Return native value."""
@@ -60,43 +53,15 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
-        if not self._pin_entity_id:
-            self._pin_entity_id = self.ent_reg.async_get_entity_id(
-                Platform.TEXT, DOMAIN, self._get_uid(CONF_PIN)
-            )
-        if (
-            self._pin_entity_id
-            and (state := self.hass.states.get(self._pin_entity_id))
-            and state.state in (None, "", STATE_UNKNOWN)
-        ):
-            async_create_issue(
-                self.hass,
-                DOMAIN,
-                f"pin_required_{self.config_entry.entry_id}_{self.slot_num}",
-                is_fixable=True,
-                is_persistent=True,
-                severity=IssueSeverity.WARNING,
-                translation_key="pin_required",
-                translation_placeholders={
-                    "slot_num": str(self.slot_num),
-                    "config_entry_title": self.config_entry.title,
-                },
-            )
-            raise HomeAssistantError(
-                f"Set a PIN code for slot {self.slot_num} before enabling it"
-            )
-        self._update_config_entry(True)
-        async_delete_issue(
-            self.hass,
-            DOMAIN,
-            f"pin_required_{self.config_entry.entry_id}_{self.slot_num}",
-        )
+        coordinator = self._require_slot_coordinator()
+        try:
+            await coordinator.async_request_active_toggle(True)
+        except PinRequiredError as err:
+            raise HomeAssistantError(str(err)) from err
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""
-        self._update_config_entry(False)
-
-    async def async_added_to_hass(self) -> None:
-        """Handle entity added to hass."""
-        await BaseLockCodeManagerEntity.async_added_to_hass(self)
-        await SwitchEntity.async_added_to_hass(self)
+        coordinator = self._require_slot_coordinator()
+        await coordinator.async_request_active_toggle(False)
+        self.async_write_ha_state()

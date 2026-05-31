@@ -95,6 +95,7 @@ from .pin_generator import (
     generate_pin,
 )
 from .providers import BaseLock
+from .slot_manager import SlotEntityCoordinator
 from .websocket import async_setup as async_websocket_setup
 
 _LOGGER = logging.getLogger(__name__)
@@ -679,16 +680,31 @@ async def async_unload_entry(
                 )
 
     # Fire slot entity removal callbacks first so per-slot entities (which
-    # reference locks) clean up before the locks are torn down
-    curr_slots = config_entry.data.get(CONF_SLOTS, {})
+    # reference locks) clean up before the locks are torn down. Read
+    # current slots from the cached EntryConfig view because
+    # ``_setup_entry_after_start`` migrates the entry's data to options
+    # at first setup, so ``config_entry.data`` is empty for any
+    # normally-loaded entry.
+    curr_slots = list(get_entry_config(config_entry).slots)
     if curr_slots:
-        _LOGGER.debug("Unload: removing slots %s", list(curr_slots))
+        _LOGGER.debug("Unload: removing slots %s", curr_slots)
         await asyncio.gather(
             *(
-                callbacks.invoke_entity_removers_for_slot(int(slot_num))
+                callbacks.invoke_entity_removers_for_slot(slot_num)
                 for slot_num in curr_slots
             )
         )
+
+    # Stop per-slot coordinators after entity removal so the entities'
+    # async_will_remove_from_hass can still call into them. One raising
+    # stop must not block the rest -- the registry is cleared whether
+    # individual stops succeed or fail.
+    for coordinator in list(runtime_data.slot_coordinators.values()):
+        try:
+            coordinator.async_stop()
+        except Exception:
+            _LOGGER.exception("Unload: slot coordinator stop raised")
+    runtime_data.slot_coordinators.clear()
 
     # Fire lock-removed callbacks so per-lock entities are notified
     lock_ids = list(runtime_data.locks)
@@ -829,6 +845,14 @@ async def async_update_listener(
     runtime_data = config_entry.runtime_data
     runtime_data.config = EntryConfig.from_entry(config_entry)
 
+    # Notify per-slot coordinators so derived "active" state and condition-
+    # entity subscriptions stay in sync with the refreshed config view.
+    # Runs on both the entity-driven path (early return below) and the
+    # options-flow path so a calendar/condition swap is picked up the
+    # same way.
+    for coordinator in runtime_data.slot_coordinators.values():
+        coordinator.notify_config_changed()
+
     # No need to do entity creation/removal work if there are no options
     # because that only happens at the end of this function (data + empty
     # options = the post-listener state we just wrote ourselves).
@@ -890,6 +914,19 @@ async def async_update_listener(
                 for slot_num in slots_to_remove
             )
         )
+        for slot_num in slots_to_remove:
+            coordinator = runtime_data.slot_coordinators.pop(slot_num, None)
+            if coordinator is None:
+                continue
+            try:
+                coordinator.async_stop()
+            except Exception:
+                _LOGGER.exception(
+                    "%s (%s): slot %s coordinator stop raised",
+                    entry_id,
+                    entry_title,
+                    slot_num,
+                )
 
     # Remove old lock entities
     if locks_to_remove:
@@ -925,6 +962,11 @@ async def async_update_listener(
             entry_title,
             slot_num,
         )
+        # Create the per-slot coordinator first so entities can look it
+        # up in their constructor / async_added_to_hass.
+        coordinator = SlotEntityCoordinator(hass, config_entry, slot_num)
+        runtime_data.slot_coordinators[slot_num] = coordinator
+        coordinator.async_start()
         callbacks.invoke_standard_adders(slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():

@@ -20,6 +20,7 @@ from .data import EntryConfig
 
 if TYPE_CHECKING:
     from .providers import BaseLock
+    from .slot_manager import SlotEntityCoordinator
     from .sync import SlotSyncManager
 
 
@@ -76,6 +77,12 @@ class LockCodeManagerConfigEntryRuntimeData:
     # unload -- so an in-flight tick cannot keep running against torn-down
     # state.
     sync_managers: set[SlotSyncManager] = field(default_factory=set)
+    # Per-slot entity coordinators. Created when a slot is added and torn
+    # down when it is removed. Owns the derived "active" state and the
+    # intent-dispatch surface used by text/switch/active entities so they
+    # do not have to mutate the config entry or call sibling-entity
+    # services directly.
+    slot_coordinators: dict[int, SlotEntityCoordinator] = field(default_factory=dict)
     # True once the options update listener has been registered for this
     # entry. Guards against stacking when _setup_entry_after_start runs more
     # than once (for example, a reload racing with EVENT_HOMEASSISTANT_STARTED).
