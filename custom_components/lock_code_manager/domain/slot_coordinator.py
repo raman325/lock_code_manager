@@ -40,12 +40,12 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 
-from .const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
-from .domain.config import EntryConfig
-from .domain.queries import get_entry_config
+from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
+from .config import EntryConfig
+from .queries import get_entry_config
 
 if TYPE_CHECKING:
-    from .models import LockCodeManagerConfigEntry
+    from ..models import LockCodeManagerConfigEntry
     from .sync import SlotSyncManager
 
 

@@ -27,9 +27,9 @@ from .const import (
 )
 from .domain.config import build_slot_unique_id
 from .domain.queries import get_entry_config
+from .domain.slot_coordinator import SlotEntityCoordinator
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
-from .slot_manager import SlotEntityCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -38,8 +38,8 @@ from ..const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
-from ..coordinator import LockUsercodeUpdateCoordinator
 from ..domain.config import build_slot_unique_id
+from ..domain.coordinator import LockUsercodeUpdateCoordinator
 from ..domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,

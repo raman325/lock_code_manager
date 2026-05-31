@@ -44,7 +44,7 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 
-from .const import (
+from ..const import (
     ATTR_ACTIVE,
     ATTR_CODE,
     DOMAIN,
@@ -52,16 +52,16 @@ from .const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
-from .domain.config import build_slot_unique_id
-from .domain.exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
-from .domain.resilience import CircuitBreaker
-from .models import SlotCredential, SyncState
-from .util import async_disable_slot
+from ..models import SlotCredential, SyncState
+from ..util import async_disable_slot
+from .config import build_slot_unique_id
+from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
+from .resilience import CircuitBreaker
 
 if TYPE_CHECKING:
+    from ..models import LockCodeManagerConfigEntry
+    from ..providers import BaseLock
     from .coordinator import LockUsercodeUpdateCoordinator
-    from .models import LockCodeManagerConfigEntry
-    from .providers import BaseLock
 
 
 _LOGGER = logging.getLogger(__name__)

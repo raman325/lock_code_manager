@@ -16,7 +16,7 @@ from .const import DOMAIN
 from .domain.config import build_slot_unique_id
 
 if TYPE_CHECKING:
-    from .coordinator import LockUsercodeUpdateCoordinator
+    from .domain.coordinator import LockUsercodeUpdateCoordinator
     from .models import LockCodeManagerConfigEntry
     from .providers import BaseLock
 

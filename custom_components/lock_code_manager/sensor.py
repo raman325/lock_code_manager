@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_CODE
-from .coordinator import LockUsercodeUpdateCoordinator
+from .domain.coordinator import LockUsercodeUpdateCoordinator
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock

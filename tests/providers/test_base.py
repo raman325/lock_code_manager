@@ -81,11 +81,11 @@ async def test_base(hass: HomeAssistant):
     # the abstract methods needed for a real refresh.
     with (
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
@@ -650,7 +650,7 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
     # Mock coordinator refreshes
     with (
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
     ):
@@ -695,11 +695,11 @@ async def test_async_setup_internal_creates_coordinator_when_setup_fails(
             side_effect=LockDisconnected("provider unavailable"),
         ),
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):

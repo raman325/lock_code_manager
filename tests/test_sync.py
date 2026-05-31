@@ -26,8 +26,8 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
+from custom_components.lock_code_manager.domain.sync import SlotState, SlotSyncManager
 from custom_components.lock_code_manager.models import SlotCredential, SyncState
-from custom_components.lock_code_manager.sync import SlotState, SlotSyncManager
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -309,7 +309,7 @@ class TestDisableSlotExceptionHandling:
         assert manager._slot_breaker.failure_count == 5
 
         with patch(
-            "custom_components.lock_code_manager.sync.async_disable_slot",
+            "custom_components.lock_code_manager.domain.sync.async_disable_slot",
             new_callable=AsyncMock,
             side_effect=RuntimeError("service call failed"),
         ):
@@ -342,7 +342,7 @@ class TestDisableSlotExceptionHandling:
             manager._slot_breaker.record_failure()
 
         with patch(
-            "custom_components.lock_code_manager.sync.async_disable_slot",
+            "custom_components.lock_code_manager.domain.sync.async_disable_slot",
             new_callable=AsyncMock,
             return_value=True,
         ):

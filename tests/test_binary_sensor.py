@@ -42,7 +42,7 @@ from custom_components.lock_code_manager.const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
-from custom_components.lock_code_manager.coordinator import (
+from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.domain.exceptions import (

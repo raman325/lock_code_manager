@@ -21,20 +21,20 @@ from homeassistant.helpers.issue_registry import (
 )
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import (
+from ..const import (
     BACKOFF_FAILURE_THRESHOLD,
     BACKOFF_INITIAL_SECONDS,
     BACKOFF_MAX_SECONDS,
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
-from .domain.exceptions import LockCodeManagerError
-from .domain.queries import get_entry_config
-from .domain.resilience import CircuitBreaker
-from .models import SlotCredential
+from ..models import SlotCredential
+from .exceptions import LockCodeManagerError
+from .queries import get_entry_config
+from .resilience import CircuitBreaker
 
 if TYPE_CHECKING:
-    from .providers import BaseLock
+    from ..providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 

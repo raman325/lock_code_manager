@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from homeassistant.exceptions import HomeAssistantError
 
 if TYPE_CHECKING:
-    from .providers import BaseLock
+    from ..providers import BaseLock
 
 
 class LockCodeManagerError(HomeAssistantError):

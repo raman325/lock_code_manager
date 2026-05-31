@@ -12,11 +12,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_ACTIVE, ATTR_IN_SYNC, ATTR_SYNC_STATUS
-from .coordinator import LockUsercodeUpdateCoordinator
+from .domain.coordinator import LockUsercodeUpdateCoordinator
+from .domain.sync import SlotSyncManager
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
-from .sync import SlotSyncManager
 from .util import get_slot_coordinator
 
 _LOGGER = logging.getLogger(__name__)
