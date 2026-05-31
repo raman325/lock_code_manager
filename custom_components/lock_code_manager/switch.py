@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .entity import BaseLockCodeManagerEntity
 from .models import LockCodeManagerConfigEntry
-from .slot_manager import PinRequiredError, SlotEntityCoordinator
+from .slot_manager import PinRequiredError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
-        coordinator = self._require_coordinator()
+        coordinator = self._require_slot_coordinator()
         try:
             await coordinator.async_request_active_toggle(True)
         except PinRequiredError as err:
@@ -62,12 +62,6 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""
-        coordinator = self._require_coordinator()
+        coordinator = self._require_slot_coordinator()
         await coordinator.async_request_active_toggle(False)
         self.async_write_ha_state()
-
-    def _require_coordinator(self) -> SlotEntityCoordinator:
-        """Return the slot coordinator, raising if it has not been created."""
-        if self._slot_coordinator is None:
-            raise HomeAssistantError(f"No slot coordinator for slot {self.slot_num}")
-        return self._slot_coordinator

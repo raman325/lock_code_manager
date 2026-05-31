@@ -101,6 +101,7 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
 
     def _register_slot_coordinator_subscription(self) -> None:
         """Subscribe to the derived active-state view rather than the generic state poke."""
+        # Type narrowing; the base only calls this hook when set.
         assert self._slot_coordinator is not None
         self.async_on_remove(
             self._slot_coordinator.register_active_view(self._apply_coordinator_state)
@@ -175,6 +176,7 @@ class LockCodeManagerCodeSlotInSyncEntity(
 
     def _register_slot_coordinator_subscription(self) -> None:
         """Register the per-lock sync manager with the per-slot coordinator."""
+        # Type narrowing; the base only calls this hook when set.
         assert self._slot_coordinator is not None
         self.async_on_remove(
             self._slot_coordinator.register_sync_manager(self._sync_manager)

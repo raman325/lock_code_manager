@@ -15,6 +15,7 @@ from homeassistant.core import (
     State,
     callback,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
@@ -254,15 +255,30 @@ class BaseLockCodeManagerEntity(Entity):
             self.entity_id,
         )
 
+    def _require_slot_coordinator(self) -> SlotEntityCoordinator:
+        """
+        Return the cached slot coordinator, raising ``HomeAssistantError`` if absent.
+
+        Used by intent handlers (text ``async_set_value``, switch
+        ``async_turn_on``/``async_turn_off``) so a missing coordinator
+        surfaces as a failed service call rather than a silent no-op.
+        """
+        if self._slot_coordinator is None:
+            raise HomeAssistantError(f"No slot coordinator for slot {self.slot_num}")
+        return self._slot_coordinator
+
     def _register_slot_coordinator_subscription(self) -> None:
         """
-        Subscribe to coordinator-driven state changes.
+        Register the entity's subscription with the slot coordinator.
 
-        Default behavior: write Home Assistant state whenever the
-        coordinator pokes its state subscribers (e.g. a sibling entity's
-        config write). Subclasses that need a different subscription
-        shape (active view, sync manager) override.
+        Default: write Home Assistant state after the coordinator writes
+        slot config fields (the shape text and switch want). Subclasses
+        that need a different subscription shape (active view, sync
+        manager) override. The base only calls this hook when
+        ``_slot_coordinator`` is not None; subclasses can rely on that
+        precondition.
         """
+        # Type narrowing for mypy; guaranteed non-None by the caller.
         assert self._slot_coordinator is not None
         self.async_on_remove(
             self._slot_coordinator.register_state_subscriber(self.async_write_ha_state)
