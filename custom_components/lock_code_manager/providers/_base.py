@@ -108,7 +108,7 @@ class BaseLock:
        - Real-time value updates via subscribe_push_updates()
        - Enabled when supports_push = True
        - Disables periodic polling (poll for updates)
-       - Updates pushed via coordinator.push_update({slot: value})
+       - Updates pushed via self._push_credential_update(slot, credential)
 
     3. Poll for drift:
        - Periodic hard_refresh_codes() at hard_refresh_interval
@@ -492,8 +492,8 @@ class BaseLock:
         self._raise_not_implemented(
             "setup_push_subscription",
             "Override this method to subscribe to real-time value updates "
-            "and call coordinator.push_update({slot: value}) when updates arrive. "
-            "Must be idempotent (no-op if already subscribed). "
+            "and call self._push_credential_update(slot, credential) when updates "
+            "arrive. Must be idempotent (no-op if already subscribed). "
             "Raise on failure.",
         )
 

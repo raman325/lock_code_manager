@@ -45,10 +45,11 @@ class SyncState(StrEnum):
 
 class SlotCode(StrEnum):
     """
-    Sentinel values for slot codes in coordinator data.
+    Serialization labels for non-string credential states.
 
-    Used alongside str values: a readable code is a plain string,
-    while EMPTY and UNREADABLE_CODE represent non-string slot states.
+    Returned by ``SlotCredential.as_label()`` for diagnostics and websocket
+    payloads so external consumers see stable string values ("empty" /
+    "unreadable_code") rather than a structured credential object.
 
     UNREADABLE_CODE means a code exists on the lock but its value cannot be
     read back (for example, write-only locks like Matter). This is distinct
