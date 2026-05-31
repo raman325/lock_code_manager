@@ -18,7 +18,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,

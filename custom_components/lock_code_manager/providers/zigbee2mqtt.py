@@ -20,7 +20,7 @@ from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
-from ..models import SlotCredential
+from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
 from .const import LOGGER

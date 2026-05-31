@@ -10,8 +10,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .domain.models import LockCodeManagerConfigEntry
 from .entity import BaseLockCodeManagerEntity
-from .models import LockCodeManagerConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 

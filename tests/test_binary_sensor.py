@@ -49,7 +49,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
 )
-from custom_components.lock_code_manager.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 
 from .common import (
     BASE_CONFIG,

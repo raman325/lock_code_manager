@@ -16,12 +16,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 
 from .callbacks import EntityCallbackRegistry
-from .domain.config import EntryConfig
+from .config import EntryConfig
 
 if TYPE_CHECKING:
-    from .domain.slot_coordinator import SlotEntityCoordinator
-    from .domain.sync import SlotSyncManager
-    from .providers import BaseLock
+    from ..providers import BaseLock
+    from .slot_coordinator import SlotEntityCoordinator
+    from .sync import SlotSyncManager
 
 
 class SyncState(StrEnum):

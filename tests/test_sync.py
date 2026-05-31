@@ -26,8 +26,8 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.domain.sync import SlotState, SlotSyncManager
-from custom_components.lock_code_manager.models import SlotCredential, SyncState
 
 from .common import (
     LOCK_1_ENTITY_ID,

@@ -42,7 +42,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     STRATEGY_PATH,
 )
-from custom_components.lock_code_manager.models import SlotCredential, SyncState
+from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,

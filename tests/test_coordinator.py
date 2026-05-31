@@ -23,7 +23,7 @@ from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from .common import MockLCMLock, MockLCMPushLock

@@ -10,7 +10,7 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
     _mqtt_payload_pin_has_code_value,

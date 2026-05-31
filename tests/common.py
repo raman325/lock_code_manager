@@ -19,7 +19,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
 LOCK_1_ENTITY_ID = "lock.test_1"

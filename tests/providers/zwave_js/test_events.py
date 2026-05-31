@@ -32,7 +32,7 @@ from custom_components.lock_code_manager.const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.models import (
+from custom_components.lock_code_manager.domain.models import (
     LockCodeManagerConfigEntryRuntimeData,
     SlotCredential,
 )

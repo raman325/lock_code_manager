@@ -45,7 +45,7 @@ from .config import EntryConfig
 from .queries import get_entry_config
 
 if TYPE_CHECKING:
-    from ..models import LockCodeManagerConfigEntry
+    from .models import LockCodeManagerConfigEntry
     from .sync import SlotSyncManager
 
 

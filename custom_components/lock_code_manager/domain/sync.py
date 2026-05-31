@@ -52,16 +52,16 @@ from ..const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
-from ..models import SlotCredential, SyncState
-from ..util import async_disable_slot
 from .config import build_slot_unique_id
 from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
+from .models import SlotCredential, SyncState
 from .resilience import CircuitBreaker
+from .util import async_disable_slot
 
 if TYPE_CHECKING:
-    from ..models import LockCodeManagerConfigEntry
     from ..providers import BaseLock
     from .coordinator import LockUsercodeUpdateCoordinator
+    from .models import LockCodeManagerConfigEntry
 
 
 _LOGGER = logging.getLogger(__name__)

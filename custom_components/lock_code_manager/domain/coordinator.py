@@ -28,8 +28,8 @@ from ..const import (
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
-from ..models import SlotCredential
 from .exceptions import LockCodeManagerError
+from .models import SlotCredential
 from .queries import get_entry_config
 from .resilience import CircuitBreaker
 

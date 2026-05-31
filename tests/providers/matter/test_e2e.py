@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 # Module path where lock_helpers functions are imported in the provider

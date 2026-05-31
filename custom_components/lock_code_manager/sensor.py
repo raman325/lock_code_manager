@@ -11,10 +11,10 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_CODE
 from .domain.coordinator import LockUsercodeUpdateCoordinator
+from .domain.models import LockCodeManagerConfigEntry
+from .domain.util import get_slot_coordinator
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
-from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
-from .util import get_slot_coordinator
 
 
 async def async_setup_entry(
