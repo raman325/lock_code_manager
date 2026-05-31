@@ -41,7 +41,8 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from .const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
-from .data import EntryConfig, get_entry_config
+from .domain.config import EntryConfig
+from .domain.queries import get_entry_config
 
 if TYPE_CHECKING:
     from .models import LockCodeManagerConfigEntry

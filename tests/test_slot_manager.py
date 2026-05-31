@@ -40,7 +40,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.data import get_entry_config
+from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.slot_manager import (
     PinRequiredError,
     SlotEntityCoordinator,

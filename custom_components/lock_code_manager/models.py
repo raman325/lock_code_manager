@@ -16,7 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 
 from .callbacks import EntityCallbackRegistry
-from .data import EntryConfig
+from .domain.config import EntryConfig
 
 if TYPE_CHECKING:
     from .providers import BaseLock

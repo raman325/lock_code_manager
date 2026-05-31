@@ -95,7 +95,7 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
-from .data import get_entry_config, get_managed_slots
+from .domain.queries import get_entry_config, get_managed_slots
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,

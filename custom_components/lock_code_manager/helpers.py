@@ -23,7 +23,7 @@ from homeassistant.helpers import (
 )
 
 from .const import DOMAIN, EXCLUDED_CONDITION_PLATFORMS
-from .data import get_entry_config
+from .domain.queries import get_entry_config
 from .providers import INTEGRATIONS_CLASS_MAP, BaseLock
 
 _LOGGER = logging.getLogger(__name__)

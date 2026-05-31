@@ -39,7 +39,7 @@ from ..const import (
     EVENT_LOCK_STATE_CHANGED,
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
-from ..data import build_slot_unique_id, find_entry_for_lock_slot, get_managed_slots
+from ..domain.config import build_slot_unique_id
 from ..domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
@@ -47,6 +47,7 @@ from ..domain.exceptions import (
     LockOperationFailed,
     ProviderNotImplementedError,
 )
+from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
 from ..models import SlotCredential
 from ..util import mask_pin
 from .const import LOGGER

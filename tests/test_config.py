@@ -11,11 +11,11 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.data import (
+from custom_components.lock_code_manager.domain.config import (
     EntryConfig,
     EntryConfigDiff,
-    get_entry_config,
 )
+from custom_components.lock_code_manager.domain.queries import get_entry_config
 
 
 def _slot(pin: str = "1234") -> dict:
