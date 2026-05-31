@@ -773,8 +773,8 @@ async def _async_setup_new_locks(
         entry_title,
         locks_to_add,
     )
-    added_locks: list[BaseLock] = []
-    for lock_entity_id in locks_to_add:
+
+    async def _setup_one_lock(lock_entity_id: str) -> BaseLock:
         existing_lock = _find_shared_lock_instance(hass, config_entry, lock_entity_id)
         if existing_lock is not None:
             _LOGGER.debug(
@@ -783,34 +783,59 @@ async def _async_setup_new_locks(
                 entry_title,
                 existing_lock,
             )
-            lock = runtime_data.locks[lock_entity_id] = existing_lock
-            await lock.async_wait_for_setup()
-        else:
-            lock = runtime_data.locks[lock_entity_id] = async_create_lock_instance(
-                hass,
-                dr.async_get(hass),
-                ent_reg,
-                config_entry,
-                lock_entity_id,
-            )
-            _LOGGER.debug(
-                "%s (%s): Creating lock instance for lock %s",
+            runtime_data.locks[lock_entity_id] = existing_lock
+            await existing_lock.async_wait_for_setup()
+            return existing_lock
+
+        lock = runtime_data.locks[lock_entity_id] = async_create_lock_instance(
+            hass,
+            dr.async_get(hass),
+            ent_reg,
+            config_entry,
+            lock_entity_id,
+        )
+        _LOGGER.debug(
+            "%s (%s): Creating lock instance for lock %s",
+            entry_id,
+            entry_title,
+            lock,
+        )
+        await lock.async_setup_internal(config_entry)
+        return lock
+
+    # Set up locks concurrently. Each lock's initial usercode fetch can take
+    # seconds (Z-Wave node poll, Schlage HTTP, Matter device read); serial
+    # setup meant lock N+1 only began once lock N finished. return_exceptions
+    # isolates per-lock failures so one bad lock does not block the others.
+    setup_results = await asyncio.gather(
+        *(_setup_one_lock(lock_entity_id) for lock_entity_id in locks_to_add),
+        return_exceptions=True,
+    )
+
+    added_locks: list[BaseLock] = []
+    for lock_entity_id, result in zip(locks_to_add, setup_results, strict=True):
+        if isinstance(result, BaseException):
+            _LOGGER.error(
+                "%s (%s): Failed to set up lock %s: %s",
                 entry_id,
                 entry_title,
-                lock,
+                lock_entity_id,
+                result,
+                exc_info=result,
             )
-            await lock.async_setup_internal(config_entry)
+            runtime_data.locks.pop(lock_entity_id, None)
+            continue
 
-        added_locks.append(lock)
+        added_locks.append(result)
 
-        if not await lock.async_internal_is_integration_connected():
+        if not await result.async_internal_is_integration_connected():
             _LOGGER.debug(
                 "%s (%s): Lock %s is not connected yet. Entities will be created "
                 "but will be unavailable until the lock comes online. This is normal "
                 "during startup if Z-Wave JS is still initializing.",
                 entry_id,
                 entry_title,
-                lock.lock.entity_id,
+                result.lock.entity_id,
             )
 
         for slot_num in new_config.slots:
@@ -821,7 +846,7 @@ async def _async_setup_new_locks(
                 lock_entity_id,
                 slot_num,
             )
-            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
+            callbacks.invoke_lock_slot_adders(result, slot_num, ent_reg)
 
     if added_locks:
         callbacks.invoke_lock_added_handlers(added_locks)
