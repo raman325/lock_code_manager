@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from .conftest import VIRTUAL_LOCK_ENTITY_ID
@@ -44,7 +44,7 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_set_usercode(1, "1111", "test_user")
 
         codes = await e2e_virtual_lock.async_get_usercodes()
-        assert codes[1] == "1111"
+        assert codes[1] == SlotCredential.known("1111")
 
     async def test_clear_usercode(
         self,
@@ -56,7 +56,7 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_clear_usercode(1)
 
         codes = await e2e_virtual_lock.async_get_usercodes()
-        assert codes[1] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
 
     async def test_codes_persist_across_unload_and_reload(
         self,
@@ -75,8 +75,8 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_setup_internal(config_entry)
         codes = await e2e_virtual_lock.async_get_usercodes()
 
-        assert codes[1] == "1111"
-        assert codes[2] == "2222"
+        assert codes[1] == SlotCredential.known("1111")
+        assert codes[2] == SlotCredential.known("2222")
 
     async def test_hard_refresh_reloads_from_store(
         self,
@@ -89,4 +89,4 @@ class TestSetAndGetUsercodes:
         # Hard refresh reloads from the store (which has not been saved to)
         codes = await e2e_virtual_lock.async_hard_refresh_codes()
 
-        assert codes[1] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()

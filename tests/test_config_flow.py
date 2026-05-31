@@ -25,7 +25,7 @@ from custom_components.lock_code_manager.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
@@ -330,7 +330,7 @@ async def test_config_flow_ui_scheduler_entity_excluded(hass: HomeAssistant):
 
 async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
     """UI path: existing codes detected -> confirm -> continue -> create entry."""
-    existing = {LOCK_1_ENTITY_ID: {1: "1234"}}
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
         flow_id = await _init_flow_to_user_step(hass)
@@ -381,7 +381,7 @@ async def test_ui_existing_codes_confirm_continue(hass: HomeAssistant):
 
 async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
     """UI path: existing codes detected -> confirm -> cancel -> abort."""
-    existing = {LOCK_1_ENTITY_ID: {1: "1234"}}
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
         flow_id = await _init_flow_to_user_step(hass)
@@ -410,7 +410,7 @@ async def test_ui_existing_codes_confirm_cancel(hass: HomeAssistant):
 
 async def test_yaml_existing_codes_confirm_continue(hass: HomeAssistant):
     """YAML path: existing codes detected -> confirm -> continue -> create entry."""
-    existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("9999")}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
         flow_id = await _init_flow_to_user_step(hass)
@@ -445,7 +445,7 @@ async def test_yaml_existing_codes_confirm_continue(hass: HomeAssistant):
 
 async def test_yaml_existing_codes_confirm_cancel(hass: HomeAssistant):
     """YAML path: existing codes detected -> confirm -> cancel -> abort."""
-    existing = {LOCK_1_ENTITY_ID: {1: "9999"}}
+    existing = {LOCK_1_ENTITY_ID: {1: SlotCredential.known("9999")}}
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
         flow_id = await _init_flow_to_user_step(hass)
@@ -518,7 +518,12 @@ async def test_yaml_no_existing_codes_skips_confirm(hass: HomeAssistant):
 
 async def test_ui_existing_codes_confirm_lists_multiple_slots(hass: HomeAssistant):
     """Confirm step shows all slots with existing codes, sorted."""
-    existing = {LOCK_1_ENTITY_ID: {3: "1234", 1: "5678"}}
+    existing = {
+        LOCK_1_ENTITY_ID: {
+            3: SlotCredential.known("1234"),
+            1: SlotCredential.known("5678"),
+        }
+    }
 
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
         flow_id = await _init_flow_to_user_step(hass)
@@ -675,7 +680,11 @@ async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
     """
     mock_instance = MagicMock()
     mock_instance.async_internal_get_usercodes = AsyncMock(
-        return_value={1: "1234", 3: "9999", 4: SlotCode.EMPTY}
+        return_value={
+            1: SlotCredential.known("1234"),
+            3: SlotCredential.known("9999"),
+            4: SlotCredential.empty(),
+        }
     )
     mock_lock_cls = MagicMock(return_value=mock_instance)
 
@@ -711,7 +720,11 @@ async def test_async_get_all_codes_returns_all_codes(hass: HomeAssistant):
     # _async_get_all_codes returns ALL codes — including empty slots.
     # Callers (e.g. _slots_with_existing_codes) filter as needed.
     assert LOCK_1_ENTITY_ID in result
-    assert result[LOCK_1_ENTITY_ID] == {1: "1234", 3: "9999", 4: SlotCode.EMPTY}
+    assert result[LOCK_1_ENTITY_ID] == {
+        1: SlotCredential.known("1234"),
+        3: SlotCredential.known("9999"),
+        4: SlotCredential.empty(),
+    }
 
 
 async def test_async_get_all_codes_entity_not_in_registry(hass: HomeAssistant):
@@ -763,11 +776,11 @@ async def test_existing_codes_detected_across_multiple_locks(hass: HomeAssistant
     # one whose slot 1 is reported as EMPTY (must not be cleared), and one
     # that doesn't have slot 1 at all (must not be cleared)
     existing = {
-        "lock.no_instance": {1: "1111"},
-        "lock.ok": {1: "2222"},
-        "lock.fails": {1: "3333"},
-        "lock.empty_slot": {1: SlotCode.EMPTY},
-        "lock.different_slot": {2: "4444"},
+        "lock.no_instance": {1: SlotCredential.known("1111")},
+        "lock.ok": {1: SlotCredential.known("2222")},
+        "lock.fails": {1: SlotCredential.known("3333")},
+        "lock.empty_slot": {1: SlotCredential.empty()},
+        "lock.different_slot": {2: SlotCredential.known("4444")},
     }
     with patch(GET_ALL_CODES_PATCH, return_value=existing):
         flow_id = await _init_flow_to_user_step(hass)
@@ -861,7 +874,7 @@ async def test_options_flow_added_pair_no_existing_code_persists(hass: HomeAssis
     # Adding slot 2; lock has nothing in slot 2 (only slot 1)
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {1: "1234"}},
+        return_value={LOCK_1_ENTITY_ID: {1: SlotCredential.known("1234")}},
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -887,7 +900,12 @@ async def test_options_flow_added_pair_with_existing_code_confirm(
     # in slot 1 — slot 1 is NOT in added_pairs so it must not be cleared)
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {1: "1234", 2: "9999"}},
+        return_value={
+            LOCK_1_ENTITY_ID: {
+                1: SlotCredential.known("1234"),
+                2: SlotCredential.known("9999"),
+            }
+        },
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -924,7 +942,7 @@ async def test_options_flow_added_lock_with_existing_code_confirm(
     # code in slot 1. The mixin should detect this and prompt.
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_2_ENTITY_ID: {1: "5555"}},
+        return_value={LOCK_2_ENTITY_ID: {1: SlotCredential.known("5555")}},
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -949,7 +967,7 @@ async def test_options_flow_existing_codes_cancel_aborts(hass: HomeAssistant):
 
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {2: "9999"}},
+        return_value={LOCK_1_ENTITY_ID: {2: SlotCredential.known("9999")}},
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,
@@ -978,7 +996,7 @@ async def test_options_flow_added_pair_empty_code_persists(hass: HomeAssistant):
 
     with patch(
         GET_ALL_CODES_PATCH,
-        return_value={LOCK_1_ENTITY_ID: {2: SlotCode.EMPTY}},
+        return_value={LOCK_1_ENTITY_ID: {2: SlotCredential.empty()}},
     ):
         result = await hass.config_entries.options.async_configure(
             flow_id,

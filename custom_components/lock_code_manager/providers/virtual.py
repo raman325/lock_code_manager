@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..models import SlotCode
+from ..models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
 
@@ -59,7 +59,7 @@ class VirtualLock(BaseLock):
         else:
             await self._store.async_save(self._data)
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Reload from store and return all codes."""
         self._data = data if (data := await self._store.async_load()) else {}
         return await self.async_get_usercodes()
@@ -95,7 +95,7 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -116,11 +116,11 @@ class VirtualLock(BaseLock):
                 continue
             stored_slots.add(slot_num)
         all_slots = managed_slots | stored_slots
-        data: dict[int, str | SlotCode] = {}
+        data: dict[int, SlotCredential] = {}
         for slot_num in all_slots:
             slot_key = str(slot_num)
             if slot_key in self._data:
-                data[slot_num] = str(self._data[slot_key]["code"])
+                data[slot_num] = SlotCredential.known(str(self._data[slot_key]["code"]))
             else:
-                data[slot_num] = SlotCode.EMPTY
+                data[slot_num] = SlotCredential.empty()
         return data

@@ -8,7 +8,7 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -78,7 +78,7 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(1) == "1234"
+        assert z2m_lock.coordinator.data.get(1) == SlotCredential.known("1234")
 
     async def test_multiple_slots_in_single_message(
         self,
@@ -100,9 +100,9 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(1) == "1111"
-        assert z2m_lock.coordinator.data.get(2) == "2222"
-        assert z2m_lock.coordinator.data.get(3) is SlotCode.EMPTY
+        assert z2m_lock.coordinator.data.get(1) == SlotCredential.known("1111")
+        assert z2m_lock.coordinator.data.get(2) == SlotCredential.known("2222")
+        assert z2m_lock.coordinator.data.get(3) is SlotCredential.empty()
 
     async def test_disabled_slot_maps_to_empty(
         self,
@@ -110,7 +110,7 @@ class TestPushUpdatesViaMqtt:
         z2m_lock,
         mqtt_bus: MqttMessageBus,
     ) -> None:
-        """A disabled user slot is reported as SlotCode.EMPTY."""
+        """A disabled user slot is reported as SlotCredential.empty()."""
         mqtt_bus.fire_message(
             Z2M_FULL_TOPIC,
             {"users": {"5": {"status": "disabled"}}},
@@ -118,7 +118,7 @@ class TestPushUpdatesViaMqtt:
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
-        assert z2m_lock.coordinator.data.get(5) is SlotCode.EMPTY
+        assert z2m_lock.coordinator.data.get(5) is SlotCredential.empty()
 
 
 class TestSetAndClearUsercodes:
@@ -153,7 +153,7 @@ class TestSetAndClearUsercodes:
         """After set, the coordinator has the optimistic value."""
         await z2m_lock.async_set_usercode(1, "9999")
 
-        assert z2m_lock.coordinator.data.get(1) == "9999"
+        assert z2m_lock.coordinator.data.get(1) == SlotCredential.known("9999")
 
     async def test_clear_usercode_publishes_disable_payload(
         self,
@@ -179,10 +179,10 @@ class TestSetAndClearUsercodes:
         z2m_lock,
         mqtt_bus: MqttMessageBus,
     ) -> None:
-        """After clear, the coordinator has SlotCode.EMPTY."""
+        """After clear, the coordinator has SlotCredential.empty()."""
         await z2m_lock.async_clear_usercode(1)
 
-        assert z2m_lock.coordinator.data.get(1) is SlotCode.EMPTY
+        assert z2m_lock.coordinator.data.get(1) is SlotCredential.empty()
 
 
 class TestGetUsercodes:
@@ -210,8 +210,8 @@ class TestGetUsercodes:
         assert 2 in requested_slots
 
         # Auto-responder returns user_enabled=False, so slots are EMPTY
-        assert result[1] is SlotCode.EMPTY
-        assert result[2] is SlotCode.EMPTY
+        assert result[1] is SlotCredential.empty()
+        assert result[2] is SlotCredential.empty()
 
     async def test_get_usercodes_with_responses(
         self,
@@ -242,5 +242,5 @@ class TestGetUsercodes:
 
         result = await z2m_lock.async_get_usercodes()
 
-        assert result[1] == "PIN1"
-        assert result[2] == "PIN2"
+        assert result[1] == SlotCredential.known("PIN1")
+        assert result[2] == SlotCredential.known("PIN2")

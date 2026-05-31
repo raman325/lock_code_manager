@@ -35,7 +35,7 @@ from .const import (
 )
 from .data import EntryConfig, get_entry_config
 from .exceptions import LockCodeManagerError
-from .models import SlotCode
+from .models import SlotCredential
 from .providers import INTEGRATIONS_CLASS_MAP
 
 _LOGGER = logging.getLogger(__name__)
@@ -182,15 +182,15 @@ async def _async_get_all_codes(
     dev_reg: dr.DeviceRegistry,
     ent_reg: er.EntityRegistry,
     lock_entity_ids: list[str],
-) -> dict[str, dict[int, str | SlotCode]]:
+) -> dict[str, dict[int, SlotCredential]]:
     """
     Query locks for all usercodes.
 
-    Returns ``codes_by_lock`` mapping each lock entity ID to its slot/code
-    dict (``SlotCode.EMPTY`` for empty slots).  Locks that fail to query are
-    skipped with logging.
+    Returns ``codes_by_lock`` mapping each lock entity ID to its slot/credential
+    dict (``SlotCredential.empty()`` for empty slots).  Locks that fail to query
+    are skipped with logging.
     """
-    result: dict[str, dict[int, str | SlotCode]] = {}
+    result: dict[str, dict[int, SlotCredential]] = {}
     # Query sequentially to avoid flooding networks (e.g. Z-Wave, Matter)
     # with simultaneous requests across multiple locks
     for lock_entity_id in lock_entity_ids:
@@ -222,11 +222,11 @@ async def _async_get_all_codes(
 
 
 def _scope_codes_to_pairs(
-    all_codes: dict[str, dict[int, str | SlotCode]],
+    all_codes: dict[str, dict[int, SlotCredential]],
     pairs: Iterable[tuple[str, int]],
-) -> dict[str, dict[int, str | SlotCode]]:
+) -> dict[str, dict[int, SlotCredential]]:
     """Filter raw query results to only the ``(lock, slot)`` pairs given."""
-    scoped_codes: dict[str, dict[int, str | SlotCode]] = {}
+    scoped_codes: dict[str, dict[int, SlotCredential]] = {}
     for lock, slot in pairs:
         if (code := all_codes.get(lock, {}).get(slot)) is not None:
             scoped_codes.setdefault(lock, {})[slot] = code
@@ -242,7 +242,7 @@ class _ExistingCodesFlowMixin:
     the sync manager handles reconciliation when the config entry loads.
     """
 
-    _all_codes: dict[str, dict[int, str | SlotCode]]
+    _all_codes: dict[str, dict[int, SlotCredential]]
     _occupied_lock_slots: list[tuple[str, int]]
     _next_step: Callable[[], Awaitable[dict[str, Any]]] | None
 
@@ -260,7 +260,7 @@ class _ExistingCodesFlowMixin:
             (lock_entity_id, slot_num)
             for slot_num in slot_nums
             for lock_entity_id, codes in self._all_codes.items()
-            if codes.get(slot_num, SlotCode.EMPTY) != SlotCode.EMPTY
+            if (credential := codes.get(slot_num)) is not None and credential.is_present
         )
 
     @staticmethod

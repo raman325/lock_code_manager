@@ -13,7 +13,8 @@ services (``schlage.get_codes``, ``schlage.add_code``,
 
 PINs are write-only from the Schlage API perspective: the ``get_codes``
 service returns masked PINs (``****``), so occupied slots report
-SlotCode.UNREADABLE_CODE and cleared slots report SlotCode.EMPTY.
+``SlotCredential.unreadable()`` and cleared slots report
+``SlotCredential.empty()``.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from ..exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from ..models import SlotCode
+from ..models import SlotCredential
 from ._base import BaseLock
 from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER
@@ -48,8 +49,8 @@ class SchlageLock(BaseLock):
     ``[LCM:<slot>]`` tag in each code's name.
 
     PINs are write-only: ``get_codes`` returns masked values, so the
-    coordinator sees SlotCode.UNREADABLE_CODE for occupied slots and SlotCode.EMPTY
-    for cleared slots.
+    coordinator sees ``SlotCredential.unreadable()`` for occupied slots
+    and ``SlotCredential.empty()`` for cleared slots.
     """
 
     # Tracks whether the initial auto-tag pass already ran for this
@@ -285,12 +286,13 @@ class SchlageLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """
         Get dictionary of code slots and usercodes.
 
         Schlage PINs are write-only (returned as masked values), so occupied
-        slots return SlotCode.UNREADABLE_CODE and cleared slots return SlotCode.EMPTY.
+        slots return ``SlotCredential.unreadable()`` and cleared slots return
+        ``SlotCredential.empty()``.
 
         This method only reads and classifies codes; auto-tagging of unmanaged
         codes is handled by ``_async_tag_unmanaged_codes()``.
@@ -335,9 +337,13 @@ class SchlageLock(BaseLock):
             seen_slots.add(slot_num)
             occupied_slots.add(slot_num)
 
-        # Build final result: UNREADABLE_CODE for occupied, EMPTY for unoccupied managed slots
+        # Build final result: unreadable() for occupied, empty() for unoccupied managed slots
         return {
-            slot: SlotCode.UNREADABLE_CODE if slot in occupied_slots else SlotCode.EMPTY
+            slot: (
+                SlotCredential.unreadable()
+                if slot in occupied_slots
+                else SlotCredential.empty()
+            )
             for slot in managed_slots
         }
 
@@ -444,7 +450,7 @@ class SchlageLock(BaseLock):
         )
         return True
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """
         Perform hard refresh and return all codes.
 

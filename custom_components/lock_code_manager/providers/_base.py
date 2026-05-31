@@ -47,7 +47,7 @@ from ..exceptions import (
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from ..models import SlotCode
+from ..models import SlotCredential
 from ..util import mask_pin
 from .const import LOGGER
 
@@ -108,7 +108,7 @@ class BaseLock:
        - Real-time value updates via subscribe_push_updates()
        - Enabled when supports_push = True
        - Disables periodic polling (poll for updates)
-       - Updates pushed via coordinator.push_update({slot: value})
+       - Updates pushed via self._push_credential_update(slot, credential)
 
     3. Poll for drift:
        - Periodic hard_refresh_codes() at hard_refresh_interval
@@ -347,12 +347,22 @@ class BaseLock:
         )
 
     @staticmethod
-    def is_masked_or_empty(code: str | SlotCode | None) -> bool:
+    def is_masked_or_empty(code: str | SlotCredential | None) -> bool:
         """Return whether a code is masked or empty (not comparable)."""
-        if code is None or code is SlotCode.EMPTY or code is SlotCode.UNREADABLE_CODE:
+        if code is None:
             return True
-        code_str = str(code)
-        return code_str == "*" * len(code_str)
+        if isinstance(code, SlotCredential):
+            return not code.is_readable
+        return code == "*" * len(code)
+
+    @final
+    @callback
+    def _push_credential_update(
+        self, code_slot: int, credential: SlotCredential
+    ) -> None:
+        """Push a coordinator credential update; no-op when no coordinator is attached."""
+        if self.coordinator is not None:
+            self.coordinator.push_update({code_slot: credential})
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -371,10 +381,8 @@ class BaseLock:
         try:
             other_code_slot = next(
                 other_code_slot
-                for other_code_slot, other_usercode in self.coordinator.data.items()
-                if other_code_slot != code_slot
-                and not self.is_masked_or_empty(other_usercode)
-                and str(other_usercode) == usercode
+                for other_code_slot, other_credential in self.coordinator.data.items()
+                if other_code_slot != code_slot and other_credential.matches(usercode)
             )
         except StopIteration:
             pass
@@ -484,8 +492,8 @@ class BaseLock:
         self._raise_not_implemented(
             "setup_push_subscription",
             "Override this method to subscribe to real-time value updates "
-            "and call coordinator.push_update({slot: value}) when updates arrive. "
-            "Must be idempotent (no-op if already subscribed). "
+            "and call self._push_credential_update(slot, credential) when updates "
+            "arrive. Must be idempotent (no-op if already subscribed). "
             "Raise on failure.",
         )
 
@@ -789,7 +797,7 @@ class BaseLock:
         elif self._last_connection_up is True and not is_up:
             self.unsubscribe_push_updates()
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-fetch all codes from the lock and return them in the same shape as async_get_usercodes()."""
         self._raise_not_implemented(
             "async_hard_refresh_codes",
@@ -797,7 +805,7 @@ class BaseLock:
         )
 
     @final
-    async def async_internal_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_internal_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Rate-limited wrapper around async_hard_refresh_codes()."""
         return await self._execute_rate_limited(
             "refresh", self.async_hard_refresh_codes
@@ -910,19 +918,19 @@ class BaseLock:
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
-        """Return a dict of {slot_num: usercode_or_SlotCode_sentinel} for the data coordinator."""
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+        """Return a dict mapping slot numbers to ``SlotCredential`` values for the coordinator."""
         self._raise_not_implemented(
             "async_get_usercodes",
             "Override this method to retrieve usercodes from the lock.",
         )
 
     @final
-    async def async_internal_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_internal_get_usercodes(self) -> dict[int, SlotCredential]:
         """
         Rate-limited wrapper around async_get_usercodes().
 
-        Slot keys are int; values are usercode strings or SlotCode sentinels.
+        Slot keys are int; values are ``SlotCredential`` instances.
         """
         return await self._execute_rate_limited("get", self.async_get_usercodes)
 

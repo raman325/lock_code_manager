@@ -10,7 +10,7 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
     _mqtt_payload_pin_has_code_value,
@@ -40,7 +40,7 @@ def test_users_enabled_with_numeric_zero_pin_updates() -> None:
     lock._process_z2m_device_payload(
         {"users": {"2": {"status": "enabled", "pin_code": 0}}}
     )
-    lock.coordinator.push_update.assert_called_once_with({2: "0"})
+    lock.coordinator.push_update.assert_called_once_with({2: SlotCredential.known("0")})
 
 
 def test_users_enabled_pin_null_clears_slot() -> None:
@@ -50,7 +50,7 @@ def test_users_enabled_pin_null_clears_slot() -> None:
     lock._process_z2m_device_payload(
         {"users": {"5": {"status": "enabled", "pin_code": None}}}
     )
-    lock.coordinator.push_update.assert_called_once_with({5: SlotCode.EMPTY})
+    lock.coordinator.push_update.assert_called_once_with({5: SlotCredential.empty()})
 
 
 def test_users_non_numeric_slot_key_skipped() -> None:

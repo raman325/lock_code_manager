@@ -25,7 +25,7 @@ from ..exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from ..models import SlotCode
+from ..models import SlotCredential
 from ._base import BaseLock
 from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER
@@ -64,7 +64,7 @@ class AkuvoxLock(BaseLock):
     numbers by embedding a ``[LCM:<slot>]`` tag in each user's name.
 
     PINs are readable from the device, so occupied slots report the actual
-    PIN value. Cleared slots report SlotCode.EMPTY.
+    PIN value. Cleared slots report ``SlotCredential.empty()``.
     """
 
     # Tracks whether the initial auto-tag pass already ran for this
@@ -179,7 +179,7 @@ class AkuvoxLock(BaseLock):
         await self._async_tag_unmanaged_users()
         self._tagged_once = True
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """
         Re-tag unmanaged users, then return all codes.
 
@@ -284,7 +284,7 @@ class AkuvoxLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """
         Get dictionary of code slots and usercodes.
 
@@ -302,7 +302,9 @@ class AkuvoxLock(BaseLock):
         users = await self._async_list_users()
 
         # Start with all managed slots empty
-        result: dict[int, str | SlotCode] = dict.fromkeys(managed_slots, SlotCode.EMPTY)
+        result: dict[int, SlotCredential] = dict.fromkeys(
+            managed_slots, SlotCredential.empty()
+        )
 
         for user in users:
             if not _is_local_user(user):
@@ -312,13 +314,15 @@ class AkuvoxLock(BaseLock):
             slot_num, _ = _parse_tag(name)
 
             if slot_num is not None and slot_num in managed_slots:
-                result[slot_num] = pin if pin else SlotCode.EMPTY
+                result[slot_num] = (
+                    SlotCredential.known(pin) if pin else SlotCredential.empty()
+                )
 
         LOGGER.debug(
             "Lock %s: %s managed slots, %s occupied",
             self.lock.entity_id,
             len(managed_slots),
-            sum(1 for v in result.values() if v is not SlotCode.EMPTY),
+            sum(1 for v in result.values() if v.is_present),
         )
         return result
 

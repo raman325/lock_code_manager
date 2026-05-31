@@ -23,6 +23,7 @@ from custom_components.lock_code_manager.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.exceptions import LockDisconnected
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from .common import MockLCMLock, MockLCMPushLock
@@ -164,36 +165,45 @@ async def test_push_update_updates_coordinator_data(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """Test that push_update correctly updates coordinator data."""
-    push_coordinator.data = {1: "1111", 2: "2222"}
+    push_coordinator.data = {
+        1: SlotCredential.known("1111"),
+        2: SlotCredential.known("2222"),
+    }
 
     # Push a single update
-    push_coordinator.push_update({1: "9999"})
+    push_coordinator.push_update({1: SlotCredential.known("9999")})
 
     # Verify data was updated
-    assert push_coordinator.data[1] == "9999"
-    assert push_coordinator.data[2] == "2222"  # Unchanged
+    assert push_coordinator.data[1] == SlotCredential.known("9999")
+    assert push_coordinator.data[2] == SlotCredential.known("2222")  # Unchanged
 
 
 async def test_push_update_bulk_updates(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """Test that push_update correctly handles bulk updates."""
-    push_coordinator.data = {1: "1111", 2: "2222", 3: "3333"}
+    push_coordinator.data = {
+        1: SlotCredential.known("1111"),
+        2: SlotCredential.known("2222"),
+        3: SlotCredential.known("3333"),
+    }
 
     # Push bulk update
-    push_coordinator.push_update({1: "9999", 3: ""})
+    push_coordinator.push_update(
+        {1: SlotCredential.known("9999"), 3: SlotCredential.empty()}
+    )
 
     # Verify all updates applied
-    assert push_coordinator.data[1] == "9999"
-    assert push_coordinator.data[2] == "2222"  # Unchanged
-    assert push_coordinator.data[3] == ""  # Cleared
+    assert push_coordinator.data[1] == SlotCredential.known("9999")
+    assert push_coordinator.data[2] == SlotCredential.known("2222")  # Unchanged
+    assert push_coordinator.data[3] == SlotCredential.empty()  # Cleared
 
 
 async def test_push_update_ignores_empty_updates(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """Test that push_update ignores empty update dict."""
-    push_coordinator.data = {1: "1111"}
+    push_coordinator.data = {1: SlotCredential.known("1111")}
 
     # Track async_set_updated_data calls
     with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
@@ -207,7 +217,7 @@ async def test_push_update_notifies_listeners(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):
     """Test that push_update notifies coordinator listeners."""
-    push_coordinator.data = {1: "1111"}
+    push_coordinator.data = {1: SlotCredential.known("1111")}
 
     # Track listener callbacks
     listener_called = [False]
@@ -219,7 +229,7 @@ async def test_push_update_notifies_listeners(
     push_coordinator.async_add_listener(listener)
 
     # Push an update
-    push_coordinator.push_update({1: "9999"})
+    push_coordinator.push_update({1: SlotCredential.known("9999")})
 
     # Verify listener was called
     assert listener_called[0]
@@ -378,7 +388,7 @@ async def test_drift_check_handles_hard_refresh_error(
 ):
     """Test that _async_drift_check handles hard refresh errors gracefully."""
     push_coordinator.last_update_success = True
-    push_coordinator.data = {1: "1234"}
+    push_coordinator.data = {1: SlotCredential.known("1234")}
 
     # Mock hard refresh to raise an exception
     mock_hard_refresh = AsyncMock(side_effect=LockDisconnected("Lock offline"))
@@ -389,7 +399,7 @@ async def test_drift_check_handles_hard_refresh_error(
         await push_coordinator._async_drift_check(dt_util.utcnow())
 
         # Data should remain unchanged
-        assert push_coordinator.data == {1: "1234"}
+        assert push_coordinator.data == {1: SlotCredential.known("1234")}
 
 
 # --- Backoff tests ---
@@ -680,8 +690,8 @@ async def test_push_update_resets_backoff(
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 2
 
     # Push update with new data should reset backoff
-    push_coordinator.data = {1: "old"}
-    push_coordinator.push_update({1: "1234"})
+    push_coordinator.data = {1: SlotCredential.known("old")}
+    push_coordinator.push_update({1: SlotCredential.known("1234")})
 
     assert push_coordinator._lock_breaker.failure_count == 0
 
@@ -703,8 +713,8 @@ async def test_push_update_no_reset_when_data_unchanged(
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
 
     # Push update with same data should NOT reset backoff
-    push_coordinator.data = {1: "1234"}
-    push_coordinator.push_update({1: "1234"})
+    push_coordinator.data = {1: SlotCredential.known("1234")}
+    push_coordinator.push_update({1: SlotCredential.known("1234")})
 
     assert push_coordinator._lock_breaker.failure_count == BACKOFF_FAILURE_THRESHOLD + 1
 

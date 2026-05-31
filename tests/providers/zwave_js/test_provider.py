@@ -22,7 +22,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.exceptions import LockDisconnected
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 
@@ -364,14 +364,18 @@ async def test_set_usercode_optimistic_update(
 
     # Set up a mock coordinator with stale data (simulating the race condition)
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: ""}  # Slot appears empty in stale cache
+    mock_coordinator.data = {
+        4: SlotCredential.empty()
+    }  # Slot appears empty in stale cache
     zwave_js_lock.coordinator = mock_coordinator
 
     result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
     assert result is True
     # Verify optimistic update was called with new PIN
-    mock_coordinator.push_update.assert_called_once_with({4: "5678"})
+    mock_coordinator.push_update.assert_called_once_with(
+        {4: SlotCredential.known("5678")}
+    )
 
     await zwave_js_lock.async_unload(False)
 
@@ -388,17 +392,19 @@ async def test_set_usercode_optimistic_update_prevents_stale_read(
 
     # Simulate stale cache: coordinator thinks slot is empty
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: ""}
+    mock_coordinator.data = {4: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
 
     await zwave_js_lock.async_set_usercode(4, "9999")
 
     # The optimistic update should have been called
-    mock_coordinator.push_update.assert_called_once_with({4: "9999"})
+    mock_coordinator.push_update.assert_called_once_with(
+        {4: SlotCredential.known("9999")}
+    )
 
     # Simulate what push_update does - update coordinator data
-    mock_coordinator.data[4] = "9999"
-    assert mock_coordinator.data[4] == "9999"
+    mock_coordinator.data[4] = SlotCredential.known("9999")
+    assert mock_coordinator.data[4] == SlotCredential.known("9999")
 
     await zwave_js_lock.async_unload(False)
 
@@ -412,7 +418,7 @@ async def test_clear_usercode_optimistic_update(
     Test that clear_usercode performs optimistic coordinator update.
 
     When a clear operation succeeds, the coordinator should be updated immediately
-    with SlotCode.EMPTY. This prevents sync loops where the binary sensor reads
+    with SlotCredential.empty(). This prevents sync loops where the binary sensor reads
     stale cached data showing the old PIN and triggers repeated clear attempts.
     """
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -421,14 +427,16 @@ async def test_clear_usercode_optimistic_update(
 
     # Set up a mock coordinator with stale data (still shows old PIN)
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}  # Stale: slot still shows PIN
+    mock_coordinator.data = {
+        2: SlotCredential.known("1234")
+    }  # Stale: slot still shows PIN
     zwave_js_lock.coordinator = mock_coordinator
 
     result = await zwave_js_lock.async_clear_usercode(2)
 
     assert result is True
-    # Verify optimistic update was called with SlotCode.EMPTY
-    mock_coordinator.push_update.assert_called_once_with({2: SlotCode.EMPTY})
+    # Verify optimistic update was called with SlotCredential.empty()
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
 
     await zwave_js_lock.async_unload(False)
 
@@ -455,7 +463,7 @@ async def test_v1_set_usercode_polls_slot(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: ""}
+    mock_coordinator.data = {4: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
 
     await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
@@ -478,7 +486,7 @@ async def test_v1_clear_usercode_polls_slot(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
 
     await zwave_js_lock.async_clear_usercode(2)
@@ -500,7 +508,7 @@ async def test_v2_set_usercode_does_not_poll_slot(
     await zwave_js_lock_v2.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: ""}
+    mock_coordinator.data = {4: SlotCredential.empty()}
     zwave_js_lock_v2.coordinator = mock_coordinator
 
     await zwave_js_lock_v2.async_set_usercode(4, "5678", "Test User")
@@ -528,7 +536,7 @@ async def test_v1_set_usercode_poll_failure_raises_lock_disconnected(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: ""}
+    mock_coordinator.data = {4: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
 
     mock_get_usercode_from_node.side_effect = FailedZWaveCommand(
@@ -559,7 +567,7 @@ async def test_v1_clear_usercode_poll_failure_raises_lock_disconnected(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
 
     mock_get_usercode_from_node.side_effect = FailedZWaveCommand(
@@ -590,7 +598,7 @@ async def test_v1_set_usercode_poll_non_zwave_error_propagates(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {4: ""}
+    mock_coordinator.data = {4: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
 
     mock_get_usercode_from_node.side_effect = RuntimeError("unexpected bug")
@@ -613,7 +621,7 @@ async def test_v1_clear_usercode_poll_non_zwave_error_propagates(
     await zwave_js_lock.async_setup_internal(lcm_entry)
 
     mock_coordinator = MagicMock()
-    mock_coordinator.data = {2: "1234"}
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
 
     mock_get_usercode_from_node.side_effect = RuntimeError("unexpected bug")
@@ -757,7 +765,7 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
     - Slot 1: Managed by LCM, has real code "9999" -> should be returned
     - Slot 5: NOT managed by LCM, has masked code "****" -> returns UNREADABLE_CODE
 
-    Unmanaged slots with masked PINs return SlotCode.UNREADABLE_CODE so sync
+    Unmanaged slots with masked PINs return SlotCredential.unreadable() so sync
     logic knows a PIN exists on the lock, even if we can't read the actual value.
     """
     # Configure LCM to only manage slot 1 (not slot 5)
@@ -791,9 +799,9 @@ async def test_get_usercodes_masked_pin_unmanaged_slot_returns_masked_value(
         codes = await zwave_js_lock.async_get_usercodes()
 
         # Slot 1 should have its code
-        assert codes[1] == "9999"
-        # Slot 5 returns UNREADABLE_CODE (masked code, so sync logic knows a PIN exists)
-        assert codes[5] is SlotCode.UNREADABLE_CODE
+        assert codes[1] == SlotCredential.known("9999")
+        # Slot 5 returns an unreadable credential (masked code, so sync logic knows a PIN exists)
+        assert codes[5] is SlotCredential.unreadable()
 
     await zwave_js_lock.async_unload(False)
 
@@ -804,10 +812,10 @@ async def test_get_usercodes_masked_pin_returns_unknown(
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test that masked PINs return SlotCode.UNREADABLE_CODE.
+    Test that masked PINs return SlotCredential.unreadable().
 
     When the lock returns masked codes (all asterisks), the provider returns
-    SlotCode.UNREADABLE_CODE so consumers know a code exists but the value is hidden.
+    SlotCredential.unreadable() so consumers know a code exists but the value is hidden.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -829,8 +837,8 @@ async def test_get_usercodes_masked_pin_returns_unknown(
     ):
         codes = await zwave_js_lock.async_get_usercodes()
 
-        # Masked PIN should be returned as SlotCode.UNREADABLE_CODE
-        assert codes[2] is SlotCode.UNREADABLE_CODE
+        # Masked PIN should be returned as SlotCredential.unreadable()
+        assert codes[2] is SlotCredential.unreadable()
 
     await zwave_js_lock.async_unload(False)
 
@@ -864,7 +872,7 @@ async def test_get_usercodes_empty_usercode_in_use_skipped(
         # Slot 2 should be skipped (not in result)
         assert 2 not in codes
         # Slot 3 should have its code
-        assert codes[3] == "5678"
+        assert codes[3] == SlotCredential.known("5678")
 
     await zwave_js_lock.async_unload(False)
 

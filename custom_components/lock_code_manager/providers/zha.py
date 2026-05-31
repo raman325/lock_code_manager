@@ -25,7 +25,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
 from ..exceptions import CodeRejectedError, LockDisconnected
-from ..models import SlotCode
+from ..models import SlotCredential
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
@@ -219,14 +219,14 @@ class ZHALock(BaseLock):
 
     # -- Usercode operations -------------------------------------------------
 
-    async def async_get_usercodes(self) -> dict[int, str | SlotCode]:
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
         """Read PIN codes from all managed slots."""
         cluster = await self._get_connected_cluster()
         managed = self.managed_slots
         if not managed:
             return {}
 
-        data: dict[int, str | SlotCode] = {}
+        data: dict[int, SlotCredential] = {}
         for slot_num in managed:
             try:
                 result = await cluster.get_pin_code(slot_num)
@@ -238,9 +238,9 @@ class ZHALock(BaseLock):
                 )
                 user_status, pin_code = self._parse_pin_response(result)
                 if user_status == DoorLock.UserStatus.Enabled and pin_code:
-                    data[slot_num] = pin_code
+                    data[slot_num] = SlotCredential.known(pin_code)
                 else:
-                    data[slot_num] = SlotCode.EMPTY
+                    data[slot_num] = SlotCredential.empty()
             except LockDisconnected:
                 raise
             except Exception:
@@ -250,7 +250,7 @@ class ZHALock(BaseLock):
                     slot_num,
                     exc_info=True,
                 )
-                data[slot_num] = SlotCode.UNREADABLE_CODE
+                data[slot_num] = SlotCredential.unreadable()
         return data
 
     async def async_set_usercode(
@@ -293,8 +293,7 @@ class ZHALock(BaseLock):
                 lock_entity_id=self.lock.entity_id,
                 reason=f"set_pin_code rejected: status {result.status}",
             )
-        if self.coordinator:
-            self.coordinator.push_update({code_slot: usercode})
+        self._push_credential_update(code_slot, SlotCredential.known(usercode))
         return True
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -321,11 +320,10 @@ class ZHALock(BaseLock):
                 lock_entity_id=self.lock.entity_id,
                 reason=f"clear_pin_code rejected: status {result.status}",
             )
-        if self.coordinator:
-            self.coordinator.push_update({code_slot: SlotCode.EMPTY})
+        self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
-    async def async_hard_refresh_codes(self) -> dict[int, str | SlotCode]:
+    async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
         return await self.async_get_usercodes()
 

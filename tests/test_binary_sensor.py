@@ -49,7 +49,7 @@ from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
 )
-from custom_components.lock_code_manager.models import SyncState
+from custom_components.lock_code_manager.models import SlotCredential, SyncState
 
 from .common import (
     BASE_CONFIG,
@@ -493,7 +493,7 @@ async def test_entities_track_availability(
     coordinator.data.pop(1)
     assert not in_sync_entity_obj.available
 
-    coordinator.data[1] = "1234"
+    coordinator.data[1] = SlotCredential.known("1234")
     assert in_sync_entity_obj.available
 
 
@@ -1125,7 +1125,9 @@ async def test_unexpected_error_during_sync_suspends_slot(
     ):
         # Force out-of-sync state
         in_sync_entity_obj._sync_manager._state = SyncState.OUT_OF_SYNC
-        in_sync_entity_obj._sync_manager._coordinator.data[1] = "wrong_code"
+        in_sync_entity_obj._sync_manager._coordinator.data[1] = SlotCredential.known(
+            "wrong_code"
+        )
 
         # Trigger tick to attempt sync (which will fail with unexpected error)
         await in_sync_entity_obj._sync_manager._async_tick()
@@ -1196,7 +1198,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     await hass.async_block_till_done()
 
     # Coordinator data should now reflect the external change
-    assert coordinator.data[1] == "9999"
+    assert coordinator.data[1] == SlotCredential.known("9999")
 
     # Fire the tick timer to let the sync manager detect the mismatch
     async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
@@ -1254,7 +1256,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
 
     # Push an update with a wrong code — this simulates a push-based lock
     # reporting that someone changed the code externally
-    coordinator.push_update({1: "wrong"})
+    coordinator.push_update({1: SlotCredential.known("wrong")})
     await hass.async_block_till_done()
 
     # The coordinator listener fires _request_sync_check synchronously,
@@ -1332,7 +1334,7 @@ async def test_slot_suspension_isolated_from_other_slots(
         side_effect=ValueError("Unexpected hardware error"),
     ):
         mgr_2._state = SyncState.OUT_OF_SYNC
-        coordinator.data[2] = "0000"
+        coordinator.data[2] = SlotCredential.known("0000")
         await mgr_2._async_tick()
         await hass.async_block_till_done()
 
@@ -1385,7 +1387,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     await hass.async_block_till_done()
 
     # Coordinator data should now have the drifted value
-    assert coordinator.data[1] == "5555"
+    assert coordinator.data[1] == SlotCredential.known("5555")
 
     # Fire tick to let the sync manager detect and correct
     async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
@@ -1538,7 +1540,7 @@ async def test_push_update_during_sync_operation_does_not_corrupt_state(
 
         # Push a different code -- this fires _request_sync_check, which
         # should be a no-op because we are in SYNCING state
-        coordinator.push_update({1: "7777"})
+        coordinator.push_update({1: SlotCredential.known("7777")})
 
         # State should still be SYNCING (push did not corrupt it)
         assert mgr._state is SyncState.SYNCING
@@ -1922,7 +1924,7 @@ async def test_slot_disabled_during_sync_resolves_correctly(
 
     # Ensure coordinator data reflects the cleared slot. The mock lock
     # removes the key on clear, but the coordinator needs it present
-    # (as empty/SlotCode.EMPTY) for _resolve_slot_state to work.
+    # (as empty/SlotCredential.empty()) for _resolve_slot_state to work.
     # Refresh coordinator to pick up the current state.
     await coordinator.async_refresh()
     await hass.async_block_till_done()
@@ -1964,7 +1966,7 @@ async def test_rapid_coordinator_updates_coalesce(
     # hardware reporting these values.
     for i in range(10):
         lock_provider.codes[1] = f"{i:04d}"
-        coordinator.push_update({1: f"{i:04d}"})
+        coordinator.push_update({1: SlotCredential.known(f"{i:04d}")})
 
     await hass.async_block_till_done()
 
@@ -1972,7 +1974,7 @@ async def test_rapid_coordinator_updates_coalesce(
     assert mgr._state is SyncState.OUT_OF_SYNC
 
     # The coordinator should have the latest value
-    assert coordinator.data[1] == "0009"
+    assert coordinator.data[1] == SlotCredential.known("0009")
 
     # Clear service calls to track only what the tick does
     lock_provider.service_calls["set_usercode"].clear()

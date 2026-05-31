@@ -12,7 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import ATTR_CODE
 from .coordinator import LockUsercodeUpdateCoordinator
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
-from .models import LockCodeManagerConfigEntry, SlotCode
+from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 from .util import get_slot_coordinator
 
@@ -76,12 +76,16 @@ class LockCodeManagerCodeSlotSensorEntity(
     @property
     def native_value(self) -> str | None:
         """Return native value."""
-        code = self.coordinator.data.get(int(self.slot_num))
-        if code is SlotCode.EMPTY:
+        credential = self.coordinator.data.get(int(self.slot_num))
+        if credential is None:
+            return None
+        if credential.is_empty:
             return ""
-        if code is SlotCode.UNREADABLE_CODE:
-            return self.coordinator.get_expected_pin(int(self.slot_num))
-        return code
+        if credential.is_readable:
+            return credential.readable_pin
+        # Unreadable code: fall back to the configured PIN so the sensor still
+        # exposes the slot's intended value to consumers like the sync layer.
+        return self.coordinator.desired_credential(int(self.slot_num)).readable_pin
 
     @property
     def available(self) -> bool:

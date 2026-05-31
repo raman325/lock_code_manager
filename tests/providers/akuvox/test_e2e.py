@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.akuvox import (
     AKUVOX_DOMAIN,
     AkuvoxLock,
@@ -148,8 +148,8 @@ class TestGetUsercodes:
 
         codes = await e2e_akuvox_lock.async_get_usercodes()
 
-        assert codes[1] == "4321"
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] == SlotCredential.known("4321")
+        assert codes[2] is SlotCredential.empty()
 
     async def test_get_usercodes_empty(
         self,
@@ -159,5 +159,5 @@ class TestGetUsercodes:
         """All managed slots are EMPTY when the device has no users."""
         codes = await e2e_akuvox_lock.async_get_usercodes()
 
-        assert codes[1] is SlotCode.EMPTY
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.empty()
+        assert codes[2] is SlotCredential.empty()

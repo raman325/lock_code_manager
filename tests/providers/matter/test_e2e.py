@@ -9,7 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 # Module path where lock_helpers functions are imported in the provider
@@ -112,7 +112,7 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert e2e_matter_lock.coordinator.data.get(4) is SlotCode.UNREADABLE_CODE
+        assert e2e_matter_lock.coordinator.data.get(4) is SlotCredential.unreadable()
 
     async def test_clear_usercode_optimistic_update(
         self,
@@ -120,7 +120,7 @@ class TestSetAndClearUsercodes:
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """After clear, the coordinator has SlotCode.EMPTY."""
+        """After clear, the coordinator has SlotCredential.empty()."""
         with (
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_credential_status",
@@ -133,7 +133,7 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_clear_usercode(2)
 
-        assert e2e_matter_lock.coordinator.data.get(2) is SlotCode.EMPTY
+        assert e2e_matter_lock.coordinator.data.get(2) is SlotCredential.empty()
 
 
 class TestGetUsercodes:
@@ -174,5 +174,5 @@ class TestGetUsercodes:
         with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
             codes = await e2e_matter_lock.async_get_usercodes()
 
-        assert codes[1] is SlotCode.UNREADABLE_CODE
-        assert codes[2] is SlotCode.EMPTY
+        assert codes[1] is SlotCredential.unreadable()
+        assert codes[2] is SlotCredential.empty()

@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.exceptions import (
     CodeRejectedError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.models import SlotCode
+from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
@@ -115,8 +115,8 @@ async def test_get_usercodes(
 
     codes = await zha_lock.async_get_usercodes()
 
-    assert codes[1] == "1234"
-    assert codes[2] is SlotCode.EMPTY
+    assert codes[1] == SlotCredential.known("1234")
+    assert codes[2] is SlotCredential.empty()
 
 
 async def test_set_usercode(
@@ -139,7 +139,9 @@ async def test_set_usercode(
         DoorLock.UserType.Unrestricted,
         "5678",
     )
-    zha_lock.coordinator.push_update.assert_called_once_with({3: "5678"})
+    zha_lock.coordinator.push_update.assert_called_once_with(
+        {3: SlotCredential.known("5678")}
+    )
 
 
 async def test_set_usercode_failure(
@@ -173,7 +175,9 @@ async def test_clear_usercode(
 
     assert result is True
     cluster.clear_pin_code.assert_called_once_with(3)
-    zha_lock.coordinator.push_update.assert_called_once_with({3: SlotCode.EMPTY})
+    zha_lock.coordinator.push_update.assert_called_once_with(
+        {3: SlotCredential.empty()}
+    )
 
 
 async def test_clear_usercode_failure(
@@ -588,8 +592,8 @@ async def test_get_usercodes_slot_read_failure(
 
     codes = await zha_lock.async_get_usercodes()
 
-    assert codes[1] is SlotCode.UNREADABLE_CODE
-    assert codes[2] is SlotCode.UNREADABLE_CODE
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.unreadable()
 
 
 async def test_get_usercodes_no_managed_slots(

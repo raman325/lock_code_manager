@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -45,10 +45,11 @@ class SyncState(StrEnum):
 
 class SlotCode(StrEnum):
     """
-    Sentinel values for slot codes in coordinator data.
+    Serialization labels for non-string credential states.
 
-    Used alongside str values: a readable code is a plain string,
-    while EMPTY and UNREADABLE_CODE represent non-string slot states.
+    Returned by ``SlotCredential.as_label()`` for diagnostics and websocket
+    payloads so external consumers see stable string values ("empty" /
+    "unreadable_code") rather than a structured credential object.
 
     UNREADABLE_CODE means a code exists on the lock but its value cannot be
     read back (for example, write-only locks like Matter). This is distinct
@@ -58,6 +59,74 @@ class SlotCode(StrEnum):
 
     EMPTY = "empty"
     UNREADABLE_CODE = "unreadable_code"
+
+
+@dataclass(frozen=True, slots=True)
+class SlotCredential:
+    """
+    Credential state for one slot on one lock.
+
+    Three constructors:
+    - ``empty()`` -- slot is cleared on the lock
+    - ``unreadable()`` -- slot holds a code whose value is write-only
+    - ``known(pin)`` -- slot holds a code whose value the provider exposes
+
+    Treat as opaque; consume via accessors not direct field access.
+    """
+
+    present: bool
+    pin: str | None
+
+    @classmethod
+    def empty(cls) -> SlotCredential:
+        """Return the shared "slot is cleared" credential."""
+        return _EMPTY_CREDENTIAL
+
+    @classmethod
+    def unreadable(cls) -> SlotCredential:
+        """Return the shared "slot holds a write-only code" credential."""
+        return _UNREADABLE_CREDENTIAL
+
+    @classmethod
+    def known(cls, pin: str) -> SlotCredential:
+        """Return a credential carrying a readable PIN."""
+        return cls(present=True, pin=pin)
+
+    @property
+    def is_empty(self) -> bool:
+        """Return True when no code is present on the lock for this slot."""
+        return not self.present
+
+    @property
+    def is_present(self) -> bool:
+        """Return True when a code is present on the lock for this slot."""
+        return self.present
+
+    @property
+    def is_readable(self) -> bool:
+        """Return True when the credential exposes a comparable PIN."""
+        return self.present and self.pin is not None
+
+    @property
+    def readable_pin(self) -> str | None:
+        """Return the PIN when readable, otherwise ``None``."""
+        return self.pin if self.is_readable else None
+
+    def matches(self, pin: str) -> bool:
+        """Return True when this credential is readable and equals ``pin``."""
+        return self.is_readable and self.pin == pin
+
+    def as_label(self) -> str | SlotCode:
+        """Return stable serialization for diagnostics/websocket consumers."""
+        if not self.present:
+            return SlotCode.EMPTY
+        if self.pin is None:
+            return SlotCode.UNREADABLE_CODE
+        return self.pin
+
+
+_EMPTY_CREDENTIAL: Final = SlotCredential(present=False, pin=None)
+_UNREADABLE_CREDENTIAL: Final = SlotCredential(present=True, pin=None)
 
 
 @dataclass
