@@ -95,13 +95,13 @@ from .const import (
     DOMAIN,
     EVENT_PIN_USED,
 )
+from .domain.locks import get_managed_locks
 from .domain.queries import get_entry_config, get_managed_slots
-from .helpers import (
+from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
     async_set_slot_condition,
     async_set_usercode,
-    get_managed_locks,
 )
 from .models import SlotCode, SlotCredential
 from .providers import BaseLock

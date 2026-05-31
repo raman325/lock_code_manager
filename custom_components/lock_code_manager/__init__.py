@@ -79,6 +79,7 @@ from .const import (
     Platform,
 )
 from .domain.config import EntryConfig
+from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
@@ -86,13 +87,11 @@ from .domain.pin_generator import (
     generate_pin,
 )
 from .domain.queries import get_entry_config
-from .helpers import (
+from .domain.services import (
     async_clear_slot_condition,
     async_clear_usercode,
-    async_create_lock_instance,
     async_set_slot_condition,
     async_set_usercode,
-    get_locks_from_targets,
 )
 from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryRuntimeData
 from .providers import BaseLock

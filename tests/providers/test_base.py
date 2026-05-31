@@ -149,7 +149,7 @@ async def test_config_entry_state_change_resubscribes(
 ):
     """Resubscribe and refresh when lock config entry reloads."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -182,7 +182,7 @@ async def test_connection_transition_resubscribes(
 ):
     """Resubscribe on reconnect and unsubscribe on disconnect."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -782,7 +782,7 @@ async def test_set_usercode_skips_refresh_for_push_provider(
 ):
     """Test that async_internal_set_usercode does NOT refresh coordinator for push providers."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -819,7 +819,7 @@ async def test_clear_usercode_skips_refresh_for_push_provider(
 ):
     """Test that async_internal_clear_usercode does NOT refresh coordinator for push providers."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -856,7 +856,7 @@ async def test_config_entry_state_listener_ignores_same_state(
 ):
     """Test that config entry state listener ignores transitions to same state."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1071,7 +1071,7 @@ async def test_handle_state_change_supersedes_prior_reconnect_task(
 ):
     """A second LOADED transition cancels and replaces the prior reconnect task."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(
@@ -1113,7 +1113,7 @@ async def test_supersede_drains_prior_reconnect_exception(
 ):
     """A superseded reconnect task that failed before cancellation is logged, not orphaned."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockWithPush},
     ):
         lcm_config_entry = MockConfigEntry(

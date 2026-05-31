@@ -130,7 +130,7 @@ async def test_event_entity_unavailable_when_no_supported_locks(
 ):
     """Test that event entity is unavailable when no locks support code slot events."""
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockNoEvents},
     ):
         config_entry = MockConfigEntry(
@@ -211,7 +211,7 @@ async def test_unsupported_locks_attribute_with_mixed_locks(
             return self.lock.entity_id == LOCK_1_ENTITY_ID
 
     with patch(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLockMixed},
     ):
         config_entry = MockConfigEntry(

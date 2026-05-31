@@ -6,7 +6,7 @@ from homeassistant.const import ATTR_AREA_ID, ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar, entity_registry as er
 
-from custom_components.lock_code_manager.helpers import get_locks_from_targets
+from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
 
 from .common import LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 
