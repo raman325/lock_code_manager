@@ -53,7 +53,7 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 def auto_setup_mock_lock():
     """Automatically set up MockLCMLock for all tests."""
     with patch.dict(
-        "custom_components.lock_code_manager.helpers.INTEGRATIONS_CLASS_MAP",
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
         {"test": MockLCMLock, **INTEGRATIONS_CLASS_MAP},
     ):
         yield

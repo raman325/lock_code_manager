@@ -1,9 +1,13 @@
-"""Query helpers that read across LCM config entries."""
+"""Config-only queries across LCM entries (no provider dependency)."""
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry
+from collections.abc import Iterator, Mapping
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 
 from ..const import DOMAIN
 from .config import EntryConfig
@@ -54,3 +58,41 @@ def find_entry_for_lock_slot(
         ),
         None,
     )
+
+
+def iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
+    """
+    Yield loaded Lock Code Manager config entries.
+
+    A lock may be shared by multiple LCM entries (same physical lock
+    managed from multiple Lock Code Manager configurations); callers
+    should treat the iteration as authoritative for "which locks does
+    Lock Code Manager manage right now".
+    """
+    return (
+        entry
+        for entry in hass.config_entries.async_entries(
+            DOMAIN, include_disabled=False, include_ignore=False
+        )
+        if entry.state is ConfigEntryState.LOADED
+    )
+
+
+def get_slot_config(config_entry: ConfigEntry, slot_num: int) -> Mapping[str, Any]:
+    """Get slot config, raising if not found."""
+    config = get_entry_config(config_entry)
+    if not config.has_slot(slot_num):
+        raise ServiceValidationError(f"Slot {slot_num} not found in config entry")
+    return config.slot(slot_num)
+
+
+def get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> ConfigEntry:
+    """Get a loaded config entry by ID, raising if not found or not loaded."""
+    config_entry = hass.config_entries.async_get_entry(config_entry_id)
+    if not config_entry or config_entry.domain != DOMAIN:
+        raise ServiceValidationError(
+            f"No lock code manager config entry with ID `{config_entry_id}` found"
+        )
+    if config_entry.state is not ConfigEntryState.LOADED:
+        raise ServiceValidationError(f"Config entry {config_entry.entry_id} not loaded")
+    return config_entry
