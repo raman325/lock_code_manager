@@ -24,7 +24,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
 )
-from custom_components.lock_code_manager.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
 
 from .common import LOCK_1_ENTITY_ID
 

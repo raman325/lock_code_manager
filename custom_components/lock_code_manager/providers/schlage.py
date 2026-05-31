@@ -26,7 +26,7 @@ from typing import Literal
 
 from homeassistant.config_entries import ConfigEntry
 
-from ..exceptions import (
+from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,

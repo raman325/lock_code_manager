@@ -21,7 +21,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
 )
-from custom_components.lock_code_manager.exceptions import (
+from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,

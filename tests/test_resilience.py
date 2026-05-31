@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from custom_components.lock_code_manager.resilience import CircuitBreaker
+from custom_components.lock_code_manager.domain.resilience import CircuitBreaker
 
 
 class TestConsecutiveBackoffPolicy:

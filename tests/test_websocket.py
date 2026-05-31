@@ -64,7 +64,7 @@ from custom_components.lock_code_manager.const import (
     CONF_PIN,
     CONF_SLOTS,
 )
-from custom_components.lock_code_manager.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (

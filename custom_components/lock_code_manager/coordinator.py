@@ -29,9 +29,9 @@ from .const import (
     POLL_FAILURE_ALERT_THRESHOLD,
 )
 from .data import get_entry_config
-from .exceptions import LockCodeManagerError
+from .domain.exceptions import LockCodeManagerError
+from .domain.resilience import CircuitBreaker
 from .models import SlotCredential
-from .resilience import CircuitBreaker
 
 if TYPE_CHECKING:
     from .providers import BaseLock

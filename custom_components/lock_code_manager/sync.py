@@ -53,9 +53,9 @@ from .const import (
     TICK_INTERVAL,
 )
 from .data import build_slot_unique_id
-from .exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
+from .domain.exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
+from .domain.resilience import CircuitBreaker
 from .models import SlotCredential, SyncState
-from .resilience import CircuitBreaker
 from .util import async_disable_slot
 
 if TYPE_CHECKING:
