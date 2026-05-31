@@ -19,7 +19,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     POLL_FAILURE_ALERT_THRESHOLD,
 )
-from custom_components.lock_code_manager.coordinator import (
+from custom_components.lock_code_manager.domain.coordinator import (
     LockUsercodeUpdateCoordinator,
 )
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
@@ -262,11 +262,11 @@ async def test_subscribe_push_updates_called_during_setup(
     # Mock coordinator refreshes
     with (
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
@@ -284,11 +284,11 @@ async def test_unsubscribe_push_updates_called_during_unload(
     # Setup first
     with (
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):
@@ -312,11 +312,11 @@ async def test_subscribe_push_not_called_for_non_push_lock(
     # Mock coordinator refreshes
     with (
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_config_entry_first_refresh"
         ),
         patch(
-            "custom_components.lock_code_manager.coordinator."
+            "custom_components.lock_code_manager.domain.coordinator."
             "LockUsercodeUpdateCoordinator.async_refresh"
         ),
     ):

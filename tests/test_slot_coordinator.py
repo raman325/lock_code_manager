@@ -41,7 +41,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.slot_manager import (
+from custom_components.lock_code_manager.domain.slot_coordinator import (
     PinRequiredError,
     SlotEntityCoordinator,
 )
@@ -632,7 +632,7 @@ async def test_active_toggle_enable_survives_repair_issue_delete_failure(
 
     boom = RuntimeError("issue registry boom")
     with patch(
-        "custom_components.lock_code_manager.slot_manager.async_delete_issue",
+        "custom_components.lock_code_manager.domain.slot_coordinator.async_delete_issue",
         side_effect=boom,
     ):
         with caplog.at_level(logging.ERROR):

@@ -93,9 +93,9 @@ from .domain.services import (
     async_set_slot_condition,
     async_set_usercode,
 )
+from .domain.slot_coordinator import SlotEntityCoordinator
 from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryRuntimeData
 from .providers import BaseLock
-from .slot_manager import SlotEntityCoordinator
 from .websocket import async_setup as async_websocket_setup
 
 _LOGGER = logging.getLogger(__name__)

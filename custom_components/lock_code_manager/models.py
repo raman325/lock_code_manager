@@ -19,9 +19,9 @@ from .callbacks import EntityCallbackRegistry
 from .domain.config import EntryConfig
 
 if TYPE_CHECKING:
+    from .domain.slot_coordinator import SlotEntityCoordinator
+    from .domain.sync import SlotSyncManager
     from .providers import BaseLock
-    from .slot_manager import SlotEntityCoordinator
-    from .sync import SlotSyncManager
 
 
 class SyncState(StrEnum):
