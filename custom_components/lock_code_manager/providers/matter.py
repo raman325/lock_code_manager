@@ -33,7 +33,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from ..exceptions import (
+from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerProviderError,

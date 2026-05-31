@@ -79,6 +79,12 @@ from .const import (
     Platform,
 )
 from .data import EntryConfig, get_entry_config
+from .domain.pin_generator import (
+    DEFAULT_PIN_LENGTH,
+    MAX_PIN_LENGTH,
+    MIN_PIN_LENGTH,
+    generate_pin,
+)
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,
@@ -88,12 +94,6 @@ from .helpers import (
     get_locks_from_targets,
 )
 from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryRuntimeData
-from .pin_generator import (
-    DEFAULT_PIN_LENGTH,
-    MAX_PIN_LENGTH,
-    MIN_PIN_LENGTH,
-    generate_pin,
-)
 from .providers import BaseLock
 from .slot_manager import SlotEntityCoordinator
 from .websocket import async_setup as async_websocket_setup

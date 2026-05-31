@@ -24,7 +24,7 @@ from homeassistant.components.zha.helpers import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
-from ..exceptions import CodeRejectedError, LockDisconnected
+from ..domain.exceptions import CodeRejectedError, LockDisconnected
 from ..models import SlotCredential
 from ._base import BaseLock
 

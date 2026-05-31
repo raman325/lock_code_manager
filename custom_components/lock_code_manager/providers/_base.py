@@ -40,7 +40,7 @@ from ..const import (
 )
 from ..coordinator import LockUsercodeUpdateCoordinator
 from ..data import build_slot_unique_id, find_entry_for_lock_slot, get_managed_slots
-from ..exceptions import (
+from ..domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
     LockDisconnected,

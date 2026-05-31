@@ -12,7 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from custom_components.lock_code_manager.exceptions import (
+from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,

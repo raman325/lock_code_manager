@@ -21,7 +21,7 @@ from custom_components.lock_code_manager.const import (
     CONF_START_SLOT,
     DOMAIN,
 )
-from custom_components.lock_code_manager.exceptions import (
+from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )

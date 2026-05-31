@@ -54,7 +54,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
-from ..exceptions import LockDisconnected
+from ..domain.exceptions import LockDisconnected
 from ..models import SlotCredential
 from ._base import BaseLock
 

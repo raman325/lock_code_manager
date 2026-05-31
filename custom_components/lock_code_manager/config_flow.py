@@ -34,7 +34,7 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from .data import EntryConfig, get_entry_config
-from .exceptions import LockCodeManagerError
+from .domain.exceptions import LockCodeManagerError
 from .models import SlotCredential
 from .providers import INTEGRATIONS_CLASS_MAP
 

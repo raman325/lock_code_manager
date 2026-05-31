@@ -2,7 +2,7 @@
 
 import pytest
 
-from custom_components.lock_code_manager.pin_generator import (
+from custom_components.lock_code_manager.domain.pin_generator import (
     COMMON_WEAK_PINS_4,
     DEFAULT_PIN_LENGTH,
     generate_pin,
