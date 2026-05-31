@@ -25,7 +25,8 @@ from .const import (
     ATTR_TO,
     DOMAIN,
 )
-from .data import build_slot_unique_id, get_entry_config
+from .domain.config import build_slot_unique_id
+from .domain.queries import get_entry_config
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
 from .slot_manager import SlotEntityCoordinator

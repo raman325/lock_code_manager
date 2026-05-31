@@ -52,7 +52,7 @@ from .const import (
     SYNC_ATTEMPT_WINDOW,
     TICK_INTERVAL,
 )
-from .data import build_slot_unique_id
+from .domain.config import build_slot_unique_id
 from .domain.exceptions import CodeRejectedError, LockDisconnected, LockOperationFailed
 from .domain.resilience import CircuitBreaker
 from .models import SlotCredential, SyncState

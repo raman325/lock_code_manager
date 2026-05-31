@@ -78,13 +78,14 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .data import EntryConfig, get_entry_config
+from .domain.config import EntryConfig
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
     generate_pin,
 )
+from .domain.queries import get_entry_config
 from .helpers import (
     async_clear_slot_condition,
     async_clear_usercode,

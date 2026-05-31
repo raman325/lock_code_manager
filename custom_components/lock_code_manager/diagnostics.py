@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN
-from .data import get_entry_config
+from .domain.queries import get_entry_config
 from .models import SlotCode, SlotCredential
 from .providers._base import BaseLock
 from .util import mask_pin

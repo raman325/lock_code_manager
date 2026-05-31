@@ -33,8 +33,9 @@ from .const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from .data import EntryConfig, get_entry_config
+from .domain.config import EntryConfig
 from .domain.exceptions import LockCodeManagerError
+from .domain.queries import get_entry_config
 from .models import SlotCredential
 from .providers import INTEGRATIONS_CLASS_MAP
 
