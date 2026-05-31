@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
     LockOperationFailed,
+    ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import BaseLock
@@ -111,6 +112,35 @@ async def test_base(hass: HomeAssistant):
             await lock.async_internal_set_usercode(1, "1234")
         with pytest.raises(NotImplementedError):
             await lock.async_internal_get_usercodes()
+
+
+async def test_unsubscribe_push_updates_suppresses_not_implemented(
+    hass: HomeAssistant,
+) -> None:
+    """Test unsubscribe_push_updates swallows ProviderNotImplementedError.
+
+    Providers that don't override teardown_push_subscription raise
+    ProviderNotImplementedError from the base default.  The public
+    unsubscribe_push_updates() wrapper must suppress that error so callers
+    (e.g. async_setup teardown on reconnect) never see it propagate.
+    """
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock",
+        "test",
+        "test_lock_no_push",
+        config_entry=config_entry,
+    )
+    lock = BaseLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+    # teardown_push_subscription raises ProviderNotImplementedError by default
+    with pytest.raises(ProviderNotImplementedError):
+        lock.teardown_push_subscription()
+
+    # The public wrapper must not propagate it
+    lock.unsubscribe_push_updates()  # must not raise
 
 
 async def test_config_entry_state_change_resubscribes(

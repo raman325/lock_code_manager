@@ -120,7 +120,7 @@ class ZHALock(BaseLock):
         ``hard_refresh_interval`` during init, so detection must complete
         before coordinator creation.
         """
-        self.teardown_push_subscription()
+        self.unsubscribe_push_updates()
         self._door_lock_cluster = None
         self._endpoint_id = None
         await super().async_setup(config_entry)
