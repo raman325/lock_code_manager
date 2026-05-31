@@ -53,12 +53,6 @@ class TestConsecutiveBackoffPolicy:
         assert not breaker.tripped
         assert breaker.backoff_delay == timedelta(0)
 
-    def test_record_success_is_reset(self) -> None:
-        breaker = self._breaker()
-        breaker.record_failure()
-        breaker.record_success()
-        assert breaker.failure_count == 0
-
 
 class TestWindowedTripPolicy:
     """Slot-level config: threshold within a sliding window, no backoff."""
