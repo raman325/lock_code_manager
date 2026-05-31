@@ -12,7 +12,6 @@ from zwave_js_server.model.node import Node
 
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import CONF_ENABLED, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -900,63 +899,6 @@ async def test_code_slot_in_use(
         **mock_config,
     ):
         assert zwave_js_lock.code_slot_in_use(1) is expected
-
-
-# _slot_expects_pin tests
-
-
-@pytest.mark.parametrize(
-    ("slot_config", "expected"),
-    [
-        ({CONF_PIN: "1234", CONF_ENABLED: True}, True),
-        ({CONF_PIN: "1234", CONF_ENABLED: False}, False),
-        ({CONF_PIN: "", CONF_ENABLED: True}, False),
-        ({CONF_ENABLED: True}, False),
-    ],
-)
-async def test_slot_expects_pin_by_config(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-    slot_config: dict,
-    expected: bool,
-) -> None:
-    """Test _slot_expects_pin based on coordinator.slot_expects_pin from config entry."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": slot_config},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    assert zwave_js_lock._slot_expects_pin(2) is expected
-
-    await zwave_js_lock.async_unload(False)
-
-
-async def test_slot_expects_pin_returns_false_for_unmanaged_slot(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-) -> None:
-    """Test _slot_expects_pin returns False for unmanaged slot."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},  # Only slot 1 managed
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    # Slot 99 is not managed
-    assert zwave_js_lock._slot_expects_pin(99) is False
-
-    await zwave_js_lock.async_unload(False)
 
 
 # Device availability tests

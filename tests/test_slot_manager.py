@@ -441,28 +441,6 @@ async def test_slot_remove_then_readd_creates_fresh_coordinator(
     assert original_slot_2_coordinator._started is False
 
 
-async def test_request_sync_check_public_wrapper_delegates(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """The public ``request_sync_check`` forwards to the private handler.
-
-    The wrapper exists so callers that aren't listener-shaped don't have
-    to pretend to be one (``_request_sync_check`` accepts ``*_args`` to
-    serve as a state-change listener). A regression that bypasses the
-    private handler would lose the centralized state-transition rules.
-    """
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    assert runtime_data.sync_managers
-    manager = next(iter(runtime_data.sync_managers))
-
-    with patch.object(manager, "_request_sync_check") as private:
-        manager.request_sync_check()
-
-    private.assert_called_once_with()
-
-
 async def test_active_binary_sensor_does_not_self_track_state(
     hass: HomeAssistant,
     mock_lock_config_entry,

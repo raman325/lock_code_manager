@@ -542,7 +542,54 @@ class BaseLock:
             self._setup_succeeded = True
 
         try:
-            await self._async_setup_internal(config_entry)
+            lock_entity_id = self.lock.entity_id
+            # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
+            # when that integration reloads or reconnects.
+            self._setup_config_entry_state_listener()
+
+            # Reuse existing coordinator or create new one
+            if self.coordinator is not None:
+                self.hass.async_create_task(
+                    self.coordinator.async_request_refresh(),
+                    f"Refresh coordinator for {lock_entity_id}",
+                )
+            else:
+                self.coordinator = LockUsercodeUpdateCoordinator(
+                    self.hass, self, config_entry
+                )
+                if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
+                    try:
+                        await self.coordinator.async_config_entry_first_refresh()
+                    except (ConfigEntryNotReady, UpdateFailed) as err:
+                        LOGGER.warning(
+                            "Failed to fetch initial data for lock %s: %s. "
+                            "Entities will be created but unavailable until lock is ready.",
+                            lock_entity_id,
+                            err,
+                        )
+                else:
+                    await self.coordinator.async_refresh()
+                    if not self.coordinator.last_update_success:
+                        LOGGER.warning(
+                            "Failed to fetch initial data for lock %s: %s. "
+                            "Entities will be created but unavailable until lock is ready.",
+                            lock_entity_id,
+                            self.coordinator.last_exception,
+                        )
+
+                # Subscribe to push updates after coordinator is ready. If the provider's
+                # config entry isn't loaded yet, defer and let the state listener resubscribe.
+                if self.supports_push:
+                    if (
+                        self.lock_config_entry
+                        and self.lock_config_entry.state != ConfigEntryState.LOADED
+                    ):
+                        LOGGER.debug(
+                            "Lock %s: deferring push subscription until config entry is loaded",
+                            lock_entity_id,
+                        )
+                    else:
+                        self.subscribe_push_updates()
         finally:
             self._setup_complete.set()
 
@@ -588,57 +635,6 @@ class BaseLock:
             await self.coordinator.async_request_refresh()
         if self.supports_push:
             self.subscribe_push_updates()
-
-    @final
-    async def _async_setup_internal(self, config_entry: ConfigEntry) -> None:
-        """Set up lock and coordinator."""
-        lock_entity_id = self.lock.entity_id
-        # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
-        # when that integration reloads or reconnects.
-        self._setup_config_entry_state_listener()
-
-        # Reuse existing coordinator or create new one
-        if self.coordinator is not None:
-            self.hass.async_create_task(
-                self.coordinator.async_request_refresh(),
-                f"Refresh coordinator for {lock_entity_id}",
-            )
-            return
-
-        self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self, config_entry)
-        if config_entry.state == ConfigEntryState.SETUP_IN_PROGRESS:
-            try:
-                await self.coordinator.async_config_entry_first_refresh()
-            except (ConfigEntryNotReady, UpdateFailed) as err:
-                LOGGER.warning(
-                    "Failed to fetch initial data for lock %s: %s. "
-                    "Entities will be created but unavailable until lock is ready.",
-                    lock_entity_id,
-                    err,
-                )
-        else:
-            await self.coordinator.async_refresh()
-            if not self.coordinator.last_update_success:
-                LOGGER.warning(
-                    "Failed to fetch initial data for lock %s: %s. "
-                    "Entities will be created but unavailable until lock is ready.",
-                    lock_entity_id,
-                    self.coordinator.last_exception,
-                )
-
-        # Subscribe to push updates after coordinator is ready. If the provider's
-        # config entry isn't loaded yet, defer and let the state listener resubscribe.
-        if self.supports_push:
-            if (
-                self.lock_config_entry
-                and self.lock_config_entry.state != ConfigEntryState.LOADED
-            ):
-                LOGGER.debug(
-                    "Lock %s: deferring push subscription until config entry is loaded",
-                    lock_entity_id,
-                )
-            else:
-                self.subscribe_push_updates()
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
@@ -784,7 +780,7 @@ class BaseLock:
             return
         # Skip during SETUP_IN_PROGRESS: the setup path handles the initial
         # subscription, and a parallel subscribe here would race with
-        # coordinator creation in _async_setup_internal.
+        # coordinator creation in async_setup_internal.
         if lock_entry.state != ConfigEntryState.LOADED:
             return
         if self._last_connection_up is False and is_up:

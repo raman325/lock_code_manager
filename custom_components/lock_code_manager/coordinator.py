@@ -106,10 +106,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             return SlotCredential.empty()
         return SlotCredential.known(pin)
 
-    def slot_expects_pin(self, slot_num: int) -> bool:
-        """Return whether LCM expects a PIN on this slot (enabled with PIN)."""
-        return self.desired_credential(slot_num).is_present
-
     @staticmethod
     def _normalize_keys(
         data: dict[Any, SlotCredential],
