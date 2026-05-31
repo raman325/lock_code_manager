@@ -25,7 +25,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
 from ..domain.exceptions import CodeRejectedError, LockDisconnected
-from ..models import SlotCredential
+from ..domain.models import SlotCredential
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

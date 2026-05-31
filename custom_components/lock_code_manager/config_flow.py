@@ -35,8 +35,8 @@ from .const import (
 )
 from .domain.config import EntryConfig
 from .domain.exceptions import LockCodeManagerError
+from .domain.models import SlotCredential
 from .domain.queries import get_entry_config
-from .models import SlotCredential
 from .providers import INTEGRATIONS_CLASS_MAP
 
 _LOGGER = logging.getLogger(__name__)

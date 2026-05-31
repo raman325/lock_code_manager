@@ -1,6 +1,6 @@
 """Test the Virtual lock platform."""
 
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 

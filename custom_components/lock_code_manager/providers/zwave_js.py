@@ -55,7 +55,7 @@ from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
 from ..domain.exceptions import LockDisconnected
-from ..models import SlotCredential
+from ..domain.models import SlotCredential
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

@@ -39,7 +39,7 @@ from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
 )
-from ..models import SlotCredential
+from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
 from .const import LOGGER

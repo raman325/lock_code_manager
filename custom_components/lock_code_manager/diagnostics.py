@@ -9,10 +9,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DOMAIN
+from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config
-from .models import SlotCode, SlotCredential
+from .domain.util import mask_pin
 from .providers._base import BaseLock
-from .util import mask_pin
 
 
 def _get_instance_id(hass: HomeAssistant) -> str:

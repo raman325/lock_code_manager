@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )

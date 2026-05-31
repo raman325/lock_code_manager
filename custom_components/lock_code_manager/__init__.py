@@ -80,6 +80,10 @@ from .const import (
 )
 from .domain.config import EntryConfig
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
+from .domain.models import (
+    LockCodeManagerConfigEntry,
+    LockCodeManagerConfigEntryRuntimeData,
+)
 from .domain.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
@@ -94,7 +98,6 @@ from .domain.services import (
     async_set_usercode,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
-from .models import LockCodeManagerConfigEntry, LockCodeManagerConfigEntryRuntimeData
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 

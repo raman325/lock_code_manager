@@ -26,7 +26,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.models import SyncState
+from custom_components.lock_code_manager.domain.models import SyncState
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 

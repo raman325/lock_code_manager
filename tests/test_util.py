@@ -9,7 +9,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.util import (
+from custom_components.lock_code_manager.domain.util import (
     async_disable_slot,
     mask_pin,
 )

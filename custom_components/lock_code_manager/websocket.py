@@ -96,6 +96,7 @@ from .const import (
     EVENT_PIN_USED,
 )
 from .domain.locks import get_managed_locks
+from .domain.models import SlotCode, SlotCredential
 from .domain.queries import get_entry_config, get_managed_slots
 from .domain.services import (
     async_clear_slot_condition,
@@ -103,7 +104,6 @@ from .domain.services import (
     async_set_slot_condition,
     async_set_usercode,
 )
-from .models import SlotCode, SlotCredential
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)

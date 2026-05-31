@@ -25,7 +25,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 
 from .common import BASE_CONFIG, LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID
 

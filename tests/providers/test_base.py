@@ -26,7 +26,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import BaseLock
 from tests.common import BASE_CONFIG, LOCK_1_ENTITY_ID, MockLCMLock
 

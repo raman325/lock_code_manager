@@ -4,7 +4,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import LOCK_1_ENTITY_ID

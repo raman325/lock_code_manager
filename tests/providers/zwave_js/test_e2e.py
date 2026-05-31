@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
     EVENT_LOCK_STATE_CHANGED,
 )
-from custom_components.lock_code_manager.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 

@@ -47,9 +47,9 @@ from ..domain.exceptions import (
     LockOperationFailed,
     ProviderNotImplementedError,
 )
+from ..domain.models import SlotCredential
 from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
-from ..models import SlotCredential
-from ..util import mask_pin
+from ..domain.util import mask_pin
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)

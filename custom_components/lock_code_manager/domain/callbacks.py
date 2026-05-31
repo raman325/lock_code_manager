@@ -16,7 +16,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 
 if TYPE_CHECKING:
-    from .providers import BaseLock
+    from ..providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 

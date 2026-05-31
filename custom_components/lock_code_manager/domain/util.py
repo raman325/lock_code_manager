@@ -12,13 +12,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
-from .const import DOMAIN
-from .domain.config import build_slot_unique_id
+from ..const import DOMAIN
+from .config import build_slot_unique_id
 
 if TYPE_CHECKING:
-    from .domain.coordinator import LockUsercodeUpdateCoordinator
+    from ..providers import BaseLock
+    from .coordinator import LockUsercodeUpdateCoordinator
     from .models import LockCodeManagerConfigEntry
-    from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
