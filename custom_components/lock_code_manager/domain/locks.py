@@ -82,7 +82,6 @@ def get_locks_from_targets(
     hass: HomeAssistant, target_data: dict[str, Any]
 ) -> set[BaseLock]:
     """Get lock(s) from target IDs."""
-    # Targets can be a single string or list; normalize for consistent iteration.
     area_ids: list[str] = cv.ensure_list(target_data.get(ATTR_AREA_ID, []))
     device_ids: list[str] = cv.ensure_list(target_data.get(ATTR_DEVICE_ID, []))
     entity_ids: list[str] = cv.ensure_list(target_data.get(ATTR_ENTITY_ID, []))

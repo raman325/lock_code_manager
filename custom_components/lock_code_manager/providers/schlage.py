@@ -304,10 +304,9 @@ class SchlageLock(BaseLock):
 
         codes = await self._async_get_codes()
 
-        # Track which managed slots have tagged codes
         occupied_slots: set[int] = set()
 
-        # Collect tagged codes: keep the first per slot (sorted by code_id for determinism)
+        # Collect tagged codes; keep the first per slot (sort by code_id for determinism).
         tagged: list[tuple[str, int, str]] = []
         for code_id, code_data in codes.items():
             name = code_data.get("name", "")
@@ -338,7 +337,6 @@ class SchlageLock(BaseLock):
             seen_slots.add(slot_num)
             occupied_slots.add(slot_num)
 
-        # Build final result: unreadable() for occupied, empty() for unoccupied managed slots
         return {
             slot: (
                 SlotCredential.unreadable()
@@ -368,8 +366,7 @@ class SchlageLock(BaseLock):
         async with self._serialize_sequence():
             codes = await self._async_get_codes()
 
-            # Look for an existing code on this slot so we can preserve its
-            # friendly name when the caller does not supply one.
+            # Preserve the friendly name from an existing code if the caller doesn't supply one.
             existing_full_name: str | None = None
             existing_friendly_name: str | None = None
             for code_data in codes.values():

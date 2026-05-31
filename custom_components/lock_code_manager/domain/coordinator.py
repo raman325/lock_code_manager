@@ -77,7 +77,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             )
 
         if lock.connection_check_interval:
-            # Periodic connection checks drive reconnect handling for non-push providers.
             self._connection_unsub = async_track_time_interval(
                 hass,
                 self._async_connection_check,
@@ -120,8 +119,6 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             return
 
         new_data = {**self.data, **self._normalize_keys(updates)}
-        # Skip update if data hasn't actually changed to avoid redundant logging
-        # and unnecessary listener notifications
         if new_data == self.data:
             return
 
@@ -207,7 +204,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         )
 
     async def async_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Fetch usercodes from the provider, normalize slot keys to int, and apply backoff handling."""
+        """Fetch usercodes from the provider, normalize slot keys, and apply backoff handling."""
         try:
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
@@ -224,14 +221,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         return self._normalize_keys(data)
 
     async def _async_drift_check(self, now: datetime) -> None:
-        """
-        Perform periodic drift detection.
-
-        Hard refresh re-fetches codes from the lock to detect out-of-band changes
-        (e.g., codes changed at the lock's keypad). If changes are detected,
-        updates coordinator data and notifies listeners.
-        """
-        # Skip if we haven't successfully loaded initial data yet
+        """Perform a hard refresh to detect out-of-band code changes."""
         if not self.last_update_success:
             return
 

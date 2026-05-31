@@ -191,7 +191,6 @@ class ZWaveJSLock(BaseLock):
     @callback
     def _handle_usercode_value_update(self, code_slot: int, new_value: Any) -> None:
         """Handle userCode value update for a code slot."""
-        # Determine the resolved credential
         if not new_value:
             resolved = SlotCredential.empty()
         else:
@@ -209,7 +208,7 @@ class ZWaveJSLock(BaseLock):
             else:
                 resolved = SlotCredential.known(value)
 
-        # Skip if value hasn't changed (Z-Wave JS sends duplicate events)
+        # Z-Wave JS sends duplicate events; skip if the value is unchanged.
         if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
             return
 
@@ -219,14 +218,11 @@ class ZWaveJSLock(BaseLock):
             code_slot,
             "****" if resolved.is_readable else f"({resolved.as_label()})",
         )
-
-        # Push update to coordinator
         self._push_credential_update(code_slot, resolved)
 
     @callback
     def setup_push_subscription(self) -> None:
         """Subscribe to User Code CC value update events."""
-        # Idempotent - skip if already subscribed
         if self._push_unsubs:
             return
 
@@ -238,7 +234,6 @@ class ZWaveJSLock(BaseLock):
         def on_value_updated(event: dict[str, Any]) -> None:
             """Handle value update events from Z-Wave JS."""
             args: dict[str, Any] = event["args"]
-            # Filter for User Code command class
             if args.get("commandClass") != CommandClass.USER_CODE:
                 return
 
@@ -251,7 +246,7 @@ class ZWaveJSLock(BaseLock):
 
             code_slot = int(args["propertyKey"])
 
-            # Slot 0 is not a valid user code slot (used for status/metadata)
+            # Slot 0 is not a valid user code slot.
             if code_slot == 0:
                 return
 
@@ -264,7 +259,6 @@ class ZWaveJSLock(BaseLock):
             ):
                 self._set_in_progress_code_slot = None
 
-            # Delegate to the appropriate handler
             if property_name == LOCK_USERCODE_STATUS_PROPERTY:
                 self._handle_usercode_status_update(code_slot, args.get("newValue"))
             else:
@@ -283,9 +277,7 @@ class ZWaveJSLock(BaseLock):
 
     @callback
     def _zwave_js_event_filter(self, event_data: dict[str, Any]) -> bool:
-        """Filter out events."""
-        # Try to find the lock that we are getting an event for, skipping
-        # ones that don't match
+        """Return True if the event belongs to this lock's node."""
         assert self.node.client.driver
         return (
             event_data[ATTR_HOME_ID] == self.node.client.driver.controller.home_id
@@ -453,9 +445,8 @@ class ZWaveJSLock(BaseLock):
             ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
         )
         await self._async_verify_write(code_slot, "set")
-        # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
-        # value cache updates asynchronously via push notification. Update coordinator
-        # immediately to prevent sync loops from reading stale cache data.
+        # Optimistic update: the value cache updates asynchronously via push
+        # notification; push now to prevent sync loops from reading stale cache.
         self._push_credential_update(code_slot, SlotCredential.known(usercode))
         return True
 
@@ -487,9 +478,7 @@ class ZWaveJSLock(BaseLock):
             ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
         )
         await self._async_verify_write(code_slot, "clear")
-        # Optimistic update: Z-Wave command succeeded (lock acknowledged), but the
-        # value cache updates asynchronously via push notification. Update coordinator
-        # immediately to prevent sync loops from reading stale cache data.
+        # Optimistic update: see async_set_usercode for rationale.
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
@@ -518,11 +507,9 @@ class ZWaveJSLock(BaseLock):
         slots = self._get_usercodes_from_cache()
         slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
 
-        # If any configured slot is missing or has unknown state, do one hard
-        # refresh to populate the cache. This is more efficient than fetching
-        # individual slots and uses Z-Wave JS's checksum optimization.
-        # Note: We call _async_refresh_usercode_cache directly here to avoid
-        # recursion since async_hard_refresh_codes calls async_get_usercodes.
+        # If any managed slot is missing or has unknown in_use state, do one hard
+        # refresh. Call _async_refresh_usercode_cache directly (not
+        # async_hard_refresh_codes) to avoid recursion.
         if any(
             slot_num not in slots_by_num or slots_by_num[slot_num].get("in_use") is None
             for slot_num in code_slots
