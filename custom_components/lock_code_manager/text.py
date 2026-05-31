@@ -71,10 +71,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
 
     async def async_set_value(self, value: str) -> None:
         """Set value of text."""
-        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
-            self.slot_num
-        )
-        if coordinator is None:
+        if self._slot_coordinator is None:
             _LOGGER.warning(
                 "%s (%s): No slot coordinator for slot %s; cannot apply %s update",
                 self.config_entry.entry_id,
@@ -85,20 +82,12 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
             return
 
         if self.key == CONF_PIN:
-            await coordinator.async_request_pin_update(value)
+            await self._slot_coordinator.async_request_pin_update(value)
         else:
-            await coordinator.async_request_name_update(value)
+            await self._slot_coordinator.async_request_name_update(value)
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         await TextEntity.async_added_to_hass(self)
-
-        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
-            self.slot_num
-        )
-        if coordinator is not None:
-            self.async_on_remove(
-                coordinator.register_state_subscriber(self.async_write_ha_state)
-            )

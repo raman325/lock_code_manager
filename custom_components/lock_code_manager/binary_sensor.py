@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
@@ -79,7 +78,6 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _coordinator_view_unsub: Callable[[], None] | None = None
 
     @callback
     def _apply_coordinator_state(
@@ -101,23 +99,12 @@ class LockCodeManagerActiveEntity(BaseLockCodeManagerEntity, BinarySensorEntity)
         await BinarySensorEntity.async_added_to_hass(self)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
 
-        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
-            self.slot_num
+    def _register_slot_coordinator_subscription(self) -> None:
+        """Subscribe to the derived active-state view rather than the generic state poke."""
+        assert self._slot_coordinator is not None
+        self.async_on_remove(
+            self._slot_coordinator.register_active_view(self._apply_coordinator_state)
         )
-        if coordinator is None:
-            _LOGGER.warning(
-                "%s (%s): No slot coordinator for slot %s when registering "
-                "active binary sensor",
-                self.config_entry.entry_id,
-                self.config_entry.title,
-                self.slot_num,
-            )
-            return
-
-        self._coordinator_view_unsub = coordinator.register_active_view(
-            self._apply_coordinator_state
-        )
-        self.async_on_remove(self._coordinator_view_unsub)
 
 
 class LockCodeManagerCodeSlotInSyncEntity(
@@ -128,7 +115,6 @@ class LockCodeManagerCodeSlotInSyncEntity(
     """PIN synced binary sensor entity for lock code manager."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _slot_coordinator_unsub: Callable[[], None] | None = None
 
     def __init__(
         self,
@@ -185,14 +171,14 @@ class LockCodeManagerCodeSlotInSyncEntity(
         await CoordinatorEntity.async_added_to_hass(self)
 
         self.config_entry.runtime_data.sync_managers.add(self._sync_manager)
-        slot_coordinator = self.config_entry.runtime_data.slot_coordinators.get(
-            self.slot_num
-        )
-        if slot_coordinator is not None:
-            self._slot_coordinator_unsub = slot_coordinator.register_sync_manager(
-                self._sync_manager
-            )
         await self._sync_manager.async_start()
+
+    def _register_slot_coordinator_subscription(self) -> None:
+        """Register the per-lock sync manager with the per-slot coordinator."""
+        assert self._slot_coordinator is not None
+        self.async_on_remove(
+            self._slot_coordinator.register_sync_manager(self._sync_manager)
+        )
 
     async def async_will_remove_from_hass(self) -> None:
         """Stop the sync manager and await its in-flight tick before removal."""
@@ -201,9 +187,5 @@ class LockCodeManagerCodeSlotInSyncEntity(
         # removal paths that do not flow through async_unload_entry, such as
         # a slot being removed via the options update listener.
         self.config_entry.runtime_data.sync_managers.discard(self._sync_manager)
-        unsub = getattr(self, "_slot_coordinator_unsub", None)
-        if unsub is not None:
-            unsub()
-            self._slot_coordinator_unsub = None
         await self._sync_manager.async_stop()
         await CoordinatorEntity.async_will_remove_from_hass(self)

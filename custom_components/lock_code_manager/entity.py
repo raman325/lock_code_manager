@@ -27,6 +27,7 @@ from .const import (
 from .data import build_slot_unique_id, get_entry_config
 from .models import LockCodeManagerConfigEntry
 from .providers import BaseLock
+from .slot_manager import SlotEntityCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +73,12 @@ class BaseLockCodeManagerEntity(Entity):
         self._attr_extra_state_attributes: dict[str, int | list[str]] = {
             ATTR_CODE_SLOT: int(slot_num)
         }
+
+        # Resolved in ``async_added_to_hass``; the coordinator instance is
+        # stable across the entity's lifetime because slot removal tears
+        # down the entity, and re-adding the slot creates a new entity
+        # bound to the new coordinator. See ``SlotEntityCoordinator``.
+        self._slot_coordinator: SlotEntityCoordinator | None = None
 
     @final
     @property
@@ -216,6 +223,20 @@ class BaseLockCodeManagerEntity(Entity):
         """Handle entity added to hass."""
         await Entity.async_added_to_hass(self)
 
+        self._slot_coordinator = self.config_entry.runtime_data.slot_coordinators.get(
+            self.slot_num
+        )
+        if self._slot_coordinator is not None:
+            self._register_slot_coordinator_subscription()
+        else:
+            _LOGGER.warning(
+                "%s (%s): No slot coordinator for slot %s when adding entity %s",
+                self.config_entry.entry_id,
+                self.config_entry.title,
+                self.slot_num,
+                self.key,
+            )
+
         self._register_callbacks()
         self.async_on_remove(
             async_track_state_change_filtered(
@@ -231,6 +252,20 @@ class BaseLockCodeManagerEntity(Entity):
             self.config_entry.entry_id,
             self.config_entry.title,
             self.entity_id,
+        )
+
+    def _register_slot_coordinator_subscription(self) -> None:
+        """
+        Subscribe to coordinator-driven state changes.
+
+        Default behavior: write Home Assistant state whenever the
+        coordinator pokes its state subscribers (e.g. a sibling entity's
+        config write). Subclasses that need a different subscription
+        shape (active view, sync manager) override.
+        """
+        assert self._slot_coordinator is not None
+        self.async_on_remove(
+            self._slot_coordinator.register_state_subscriber(self.async_write_ha_state)
         )
 
 
