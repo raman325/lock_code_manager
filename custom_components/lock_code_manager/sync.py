@@ -102,7 +102,7 @@ class SlotSyncManager:
     manager.sync_status for display.
 
     State mutation rules:
-        - ``_request_sync_check`` transitions IN_SYNC -> OUT_OF_SYNC or
+        - ``request_sync_check`` transitions IN_SYNC -> OUT_OF_SYNC or
           SUSPENDED -> OUT_OF_SYNC for immediate UI feedback.
         - ``_async_tick_impl`` is the single authoritative place for all
           other state transitions, circuit breaker, sync operations,
@@ -553,19 +553,7 @@ class SlotSyncManager:
         self._state_writer(self.in_sync)
 
     @callback
-    def request_sync_check(self) -> None:
-        """
-        Public no-arg wrapper over ``_request_sync_check``.
-
-        ``_request_sync_check`` accepts ``*_args`` so it can serve as a
-        coordinator/state-change listener; callers that want to nudge sync
-        directly should not have to pretend to be a listener. Routing
-        through it keeps the state-transition rules in one place.
-        """
-        self._request_sync_check()
-
-    @callback
-    def _request_sync_check(self, *_args: Any) -> None:
+    def request_sync_check(self, *_args: Any) -> None:
         """
         Request a sync check on the next tick.
 
@@ -623,7 +611,7 @@ class SlotSyncManager:
         if not self._tracked_entity_ids or (
             event.data["entity_id"] in self._tracked_entity_ids
         ):
-            self._request_sync_check()
+            self.request_sync_check()
 
     async def _async_tick(self, _now: datetime | None = None) -> None:
         """Periodic reconciliation tick."""
@@ -638,7 +626,7 @@ class SlotSyncManager:
         self._tick_tasks.add(task)
         try:
             # Try upgrading before the state check — catch-all mode may prevent
-            # _request_sync_check from firing for entities not yet tracked
+            # request_sync_check from firing for entities not yet tracked
             self._try_upgrade_state_tracking()
 
             if self._state in (
@@ -661,7 +649,7 @@ class SlotSyncManager:
         changes.
         """
         # Consume any external reset requests before reading breaker state.
-        # ``_request_sync_check`` cannot reset the breaker directly because
+        # ``request_sync_check`` cannot reset the breaker directly because
         # it can fire while a tick is awaiting ``_perform_sync``, and a
         # mid-flight reset would clear failure state the tick is about to
         # read. Coalescing many requests into one reset is intentional.
@@ -753,7 +741,7 @@ class SlotSyncManager:
                 f"Fix the issue and re-enable the slot.",
             )
             # After disable, the slot active switch turns off. The next
-            # _request_sync_check will see the slot as in-sync (no code
+            # request_sync_check will see the slot as in-sync (no code
             # desired, no code on lock). Set to OUT_OF_SYNC so the next
             # tick resolves to IN_SYNC.
             self._state = SyncState.OUT_OF_SYNC
@@ -846,7 +834,7 @@ class SlotSyncManager:
     def _setup_coordinator_listener(self) -> None:
         """Subscribe to coordinator updates."""
         self._coordinator_unsub = self._coordinator.async_add_listener(
-            self._request_sync_check
+            self.request_sync_check
         )
 
     @callback
@@ -873,7 +861,7 @@ class SlotSyncManager:
         self._state_tracking_unsub = async_track_state_change_event(
             self._hass,
             self._tracked_entity_ids,
-            self._request_sync_check,
+            self.request_sync_check,
         )
         self._tracking_all_states = False
         _LOGGER.debug(
@@ -898,7 +886,7 @@ class SlotSyncManager:
             self._state_tracking_unsub = async_track_state_change_event(
                 self._hass,
                 self._tracked_entity_ids,
-                self._request_sync_check,
+                self.request_sync_check,
             )
             self._tracking_all_states = False
         else:

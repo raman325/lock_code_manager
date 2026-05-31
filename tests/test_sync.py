@@ -578,7 +578,7 @@ class TestSyncStateMachine:
         assert manager._state is SyncState.IN_SYNC
 
         manager._coordinator.data[1] = SlotCredential.empty()
-        manager._request_sync_check()
+        manager.request_sync_check()
         assert manager._state is SyncState.OUT_OF_SYNC
 
     async def test_out_of_sync_to_synced_after_successful_sync(
@@ -596,7 +596,7 @@ class TestSyncStateMachine:
         assert manager._state is SyncState.IN_SYNC
 
         manager._coordinator.data[1] = SlotCredential.empty()
-        manager._request_sync_check()
+        manager.request_sync_check()
         assert manager._state is SyncState.OUT_OF_SYNC
 
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
@@ -705,7 +705,7 @@ class TestSyncStateMachine:
 
         # Lock recovers: breaker resets, so the next sync check resumes.
         manager._coordinator._lock_breaker.reset()
-        manager._request_sync_check()
+        manager.request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
 
@@ -723,7 +723,7 @@ class TestSyncStateMachine:
             manager._coordinator._lock_breaker.record_failure()
         manager._state = SyncState.SUSPENDED
 
-        manager._request_sync_check()
+        manager.request_sync_check()
         assert manager._state is SyncState.SUSPENDED
 
     async def test_code_rejected_still_disables_slot(
@@ -947,14 +947,14 @@ class TestSyncStateMachine:
 
         # A sync check with the same desired target must not resume the slot —
         # this is the key fix: it no longer hot-loops on a reachable lock.
-        manager._request_sync_check()
+        manager.request_sync_check()
         assert manager._state is SyncState.SUSPENDED
 
         # Simulate the desired target changing (e.g. the user edits the PIN):
         # the recorded target now differs from the resolved state, so the slot
         # resumes.
         manager._code_suspend_target = (STATE_ON, "0000")
-        manager._request_sync_check()
+        manager.request_sync_check()
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._code_suspend_target is None
 
@@ -1252,10 +1252,10 @@ class TestBreakerTickSoleMutatorInvariant:
             # and is now awaiting the set. Fire callbacks that would, under
             # the old contract, have called reset() directly.
             manager._state = SyncState.IN_SYNC
-            manager._request_sync_check()
+            manager.request_sync_check()
             manager._state = SyncState.SUSPENDED
             manager._code_suspend_target = ("on", "1234")
-            manager._request_sync_check()
+            manager.request_sync_check()
 
             # Mutators must not have fired from the callback path.
             assert reset_spy.call_count == 0
@@ -1343,7 +1343,7 @@ class TestBreakerTickSoleMutatorInvariant:
         with patch.object(
             manager._slot_breaker, "reset", wraps=manager._slot_breaker.reset
         ) as reset_spy:
-            manager._request_sync_check()
+            manager.request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._breaker_reset_requested is True
@@ -1370,7 +1370,7 @@ class TestBreakerTickSoleMutatorInvariant:
         with patch.object(
             manager._slot_breaker, "reset", wraps=manager._slot_breaker.reset
         ) as reset_spy:
-            manager._request_sync_check()
+            manager.request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._breaker_reset_requested is True
@@ -1401,7 +1401,7 @@ class TestBreakerTickSoleMutatorInvariant:
         with patch.object(
             manager._slot_breaker, "reset", wraps=manager._slot_breaker.reset
         ) as reset_spy:
-            manager._request_sync_check()
+            manager.request_sync_check()
 
         assert manager._state is SyncState.OUT_OF_SYNC
         assert manager._breaker_reset_requested is True

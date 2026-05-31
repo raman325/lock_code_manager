@@ -159,12 +159,6 @@ class ZWaveJSLock(BaseLock):
         except KeyError, ValueError:
             return None
 
-    def _slot_expects_pin(self, code_slot: int) -> bool:
-        """Return True if this slot is enabled and has a PIN configured."""
-        if not self.coordinator:
-            return False
-        return self.coordinator.slot_expects_pin(code_slot)
-
     @callback
     def _handle_usercode_status_update(self, code_slot: int, status: Any) -> None:
         """Handle userIdStatus value update for a code slot."""
@@ -172,7 +166,10 @@ class ZWaveJSLock(BaseLock):
             # Ignore AVAILABLE status if Lock Code Manager expects a PIN on this
             # slot. Some locks send stale AVAILABLE events after a code was set,
             # which would cause infinite sync loops.
-            if self._slot_expects_pin(code_slot):
+            if (
+                self.coordinator
+                and self.coordinator.desired_credential(code_slot).is_present
+            ):
                 _LOGGER.debug(
                     "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
                     "(LCM expects PIN on this slot)",

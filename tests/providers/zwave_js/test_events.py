@@ -714,7 +714,7 @@ async def test_push_update_user_id_status_available_clears_slot(
     # Set up a mock coordinator with existing data
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
-    mock_coordinator.slot_expects_pin.return_value = False  # No expected PIN
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
     zwave_js_lock.coordinator = mock_coordinator
 
     # Subscribe to push updates
@@ -876,25 +876,26 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
     # Subscribe to push updates
     zwave_js_lock.subscribe_push_updates()
 
-    # Mock _slot_expects_pin to return True (LCM expects a PIN on this slot)
-    with patch.object(zwave_js_lock, "_slot_expects_pin", return_value=True):
-        # Simulate userIdStatus=AVAILABLE event (stale status from lock)
-        event = ZwaveEvent(
-            type="value updated",
-            data={
-                "args": {
-                    "commandClass": CommandClass.USER_CODE,
-                    "property": LOCK_USERCODE_STATUS_PROPERTY,
-                    "propertyKey": 2,
-                    "newValue": CodeSlotStatus.AVAILABLE,
-                },
-            },
-        )
-        lock_schlage_be469.emit("value updated", event.data)
-        await hass.async_block_till_done()
+    # LCM expects a PIN on this slot
+    mock_coordinator.desired_credential.return_value = SlotCredential.known("1234")
 
-        # Coordinator should NOT be updated (AVAILABLE ignored)
-        mock_coordinator.push_update.assert_not_called()
+    # Simulate userIdStatus=AVAILABLE event (stale status from lock)
+    event = ZwaveEvent(
+        type="value updated",
+        data={
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": LOCK_USERCODE_STATUS_PROPERTY,
+                "propertyKey": 2,
+                "newValue": CodeSlotStatus.AVAILABLE,
+            },
+        },
+    )
+    lock_schlage_be469.emit("value updated", event.data)
+    await hass.async_block_till_done()
+
+    # Coordinator should NOT be updated (AVAILABLE ignored)
+    mock_coordinator.push_update.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
@@ -930,27 +931,26 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
     # Subscribe to push updates
     zwave_js_lock.subscribe_push_updates()
 
-    # Mock _slot_expects_pin to return False (slot is inactive)
-    with patch.object(zwave_js_lock, "_slot_expects_pin", return_value=False):
-        # Simulate userIdStatus=AVAILABLE event
-        event = ZwaveEvent(
-            type="value updated",
-            data={
-                "args": {
-                    "commandClass": CommandClass.USER_CODE,
-                    "property": LOCK_USERCODE_STATUS_PROPERTY,
-                    "propertyKey": 2,
-                    "newValue": CodeSlotStatus.AVAILABLE,
-                },
-            },
-        )
-        lock_schlage_be469.emit("value updated", event.data)
-        await hass.async_block_till_done()
+    # Slot is inactive (no PIN expected)
+    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
 
-        # Coordinator SHOULD be updated (slot cleared)
-        mock_coordinator.push_update.assert_called_once_with(
-            {2: SlotCredential.empty()}
-        )
+    # Simulate userIdStatus=AVAILABLE event
+    event = ZwaveEvent(
+        type="value updated",
+        data={
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": LOCK_USERCODE_STATUS_PROPERTY,
+                "propertyKey": 2,
+                "newValue": CodeSlotStatus.AVAILABLE,
+            },
+        },
+    )
+    lock_schlage_be469.emit("value updated", event.data)
+    await hass.async_block_till_done()
+
+    # Coordinator SHOULD be updated (slot cleared)
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
 
     zwave_js_lock.unsubscribe_push_updates()
     await zwave_js_lock.async_unload(False)
