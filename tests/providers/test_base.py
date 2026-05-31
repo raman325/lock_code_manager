@@ -925,30 +925,6 @@ async def test_execute_rate_limited_raises_when_device_not_available(
 
 
 # =============================================================================
-# is_masked_or_empty tests
-# =============================================================================
-
-
-@pytest.mark.parametrize(
-    ("code", "expected"),
-    [
-        (None, True),
-        ("", True),
-        ("****", True),
-        ("*", True),
-        (SlotCredential.empty(), True),
-        (SlotCredential.unreadable(), True),
-        ("1234", False),
-        ("12*4", False),
-        ("0", False),
-    ],
-)
-def test_is_masked_or_empty(code, expected: bool):
-    """Test BaseLock.is_masked_or_empty for various inputs."""
-    assert BaseLock.is_masked_or_empty(code) is expected
-
-
-# =============================================================================
 # _check_duplicate_code tests
 # =============================================================================
 

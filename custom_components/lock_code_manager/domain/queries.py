@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from typing import Any
+from collections.abc import Iterator
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -76,14 +75,6 @@ def iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
         )
         if entry.state is ConfigEntryState.LOADED
     )
-
-
-def get_slot_config(config_entry: ConfigEntry, slot_num: int) -> Mapping[str, Any]:
-    """Get slot config, raising if not found."""
-    config = get_entry_config(config_entry)
-    if not config.has_slot(slot_num):
-        raise ServiceValidationError(f"Slot {slot_num} not found in config entry")
-    return config.slot(slot_num)
 
 
 def get_loaded_config_entry(hass: HomeAssistant, config_entry_id: str) -> ConfigEntry:

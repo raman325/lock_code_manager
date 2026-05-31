@@ -12,7 +12,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import ATTR_CODE
 from .domain.coordinator import LockUsercodeUpdateCoordinator
 from .domain.models import LockCodeManagerConfigEntry
-from .domain.util import get_slot_coordinator
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
 from .providers import BaseLock
 
@@ -29,7 +28,7 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Add code slot sensor entities for slot."""
-        coordinator = get_slot_coordinator(config_entry, lock, slot_num)
+        coordinator = lock.coordinator
         if coordinator is None:
             return
         async_add_entities(

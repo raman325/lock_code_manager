@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 import zlib
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
@@ -15,35 +14,7 @@ from homeassistant.helpers.issue_registry import IssueSeverity, async_create_iss
 from ..const import DOMAIN
 from .config import build_slot_unique_id
 
-if TYPE_CHECKING:
-    from ..providers import BaseLock
-    from .coordinator import LockUsercodeUpdateCoordinator
-    from .models import LockCodeManagerConfigEntry
-
 _LOGGER = logging.getLogger(__name__)
-
-
-def get_slot_coordinator(
-    config_entry: LockCodeManagerConfigEntry,
-    lock: BaseLock,
-    slot_num: int,
-) -> LockUsercodeUpdateCoordinator | None:
-    """
-    Return the lock's coordinator, or None if it is not yet available.
-
-    When the coordinator is missing a warning is logged so the slot
-    entities are simply skipped rather than raising during setup.
-    """
-    coordinator = lock.coordinator
-    if coordinator is None:
-        _LOGGER.warning(
-            "%s (%s): Coordinator missing for lock %s when adding slot %s entities",
-            config_entry.entry_id,
-            config_entry.title,
-            lock.lock.entity_id,
-            slot_num,
-        )
-    return coordinator
 
 
 def mask_pin(

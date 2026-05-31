@@ -9,7 +9,7 @@ from homeassistant.helpers import entity_registry as er
 
 from ..const import EXCLUDED_CONDITION_PLATFORMS
 from .locks import get_managed_lock
-from .queries import get_entry_config, get_loaded_config_entry, get_slot_config
+from .queries import get_entry_config, get_loaded_config_entry
 
 
 async def async_set_usercode(
@@ -38,7 +38,9 @@ async def async_set_slot_condition(
 ) -> None:
     """Set a condition entity for a slot."""
     config_entry = get_loaded_config_entry(hass, config_entry_id)
-    get_slot_config(config_entry, slot)
+    config = get_entry_config(config_entry)
+    if not config.has_slot(slot):
+        raise ServiceValidationError(f"Slot {slot} not found in config entry")
 
     # Verify entity exists
     if not hass.states.get(entity_id):
@@ -55,9 +57,7 @@ async def async_set_slot_condition(
             "Unsupported-Condition-Entity-Integrations"
         )
 
-    new_config = get_entry_config(config_entry).with_slot_field_set(
-        slot, CONF_ENTITY_ID, entity_id
-    )
+    new_config = config.with_slot_field_set(slot, CONF_ENTITY_ID, entity_id)
     hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())
 
 
@@ -66,9 +66,9 @@ async def async_clear_slot_condition(
 ) -> None:
     """Clear the condition entity from a slot."""
     config_entry = get_loaded_config_entry(hass, config_entry_id)
-    get_slot_config(config_entry, slot)
+    config = get_entry_config(config_entry)
+    if not config.has_slot(slot):
+        raise ServiceValidationError(f"Slot {slot} not found in config entry")
 
-    new_config = get_entry_config(config_entry).with_slot_field_removed(
-        slot, CONF_ENTITY_ID
-    )
+    new_config = config.with_slot_field_removed(slot, CONF_ENTITY_ID)
     hass.config_entries.async_update_entry(config_entry, options=new_config.to_dict())

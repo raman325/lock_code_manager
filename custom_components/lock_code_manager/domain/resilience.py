@@ -56,10 +56,6 @@ class CircuitBreaker:
             self._first_failure = now
         self._failure_count += 1
 
-    def record_success(self) -> None:
-        """Record a success, clearing all failure state."""
-        self.reset()
-
     def reset(self) -> None:
         """Clear all failure state."""
         self._failure_count = 0

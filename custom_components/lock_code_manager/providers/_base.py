@@ -347,15 +347,6 @@ class BaseLock:
             self.hass.data.get(DOMAIN, {}).get("instance_id", ""),
         )
 
-    @staticmethod
-    def is_masked_or_empty(code: str | SlotCredential | None) -> bool:
-        """Return whether a code is masked or empty (not comparable)."""
-        if code is None:
-            return True
-        if isinstance(code, SlotCredential):
-            return not code.is_readable
-        return code == "*" * len(code)
-
     @final
     @callback
     def _push_credential_update(

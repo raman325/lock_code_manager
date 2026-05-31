@@ -201,7 +201,8 @@ class SchlageLock(BaseLock):
                 )
                 continue
 
-            if self.is_masked_or_empty(pin):
+            # Empty or all-asterisk (masked) PINs are untaggable.
+            if pin == "*" * len(pin):
                 LOGGER.debug(
                     "Lock %s: skipping untaggable code '%s' (PIN is masked or empty)",
                     self.lock.entity_id,
