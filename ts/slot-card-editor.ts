@@ -161,14 +161,6 @@ class LcmSlotCardEditor extends LitElement {
 
             <div class="checkbox-row">
                 <ha-checkbox
-                    .checked=${this._config.show_code_sensors !== false}
-                    @change=${this._showCodeSensorsChanged}
-                ></ha-checkbox>
-                <label @click=${this._toggleShowCodeSensors}>Code Sensors in Lock Status</label>
-            </div>
-
-            <div class="checkbox-row">
-                <ha-checkbox
                     .checked=${this._config.show_lock_sync !== false}
                     @change=${this._showLockSyncChanged}
                 ></ha-checkbox>
@@ -323,11 +315,6 @@ class LcmSlotCardEditor extends LitElement {
         this._updateConfig('show_lock_status', target.checked);
     }
 
-    private _showCodeSensorsChanged(ev: Event): void {
-        const target = ev.target as HTMLInputElement;
-        this._updateConfig('show_code_sensors', target.checked);
-    }
-
     private _showLockSyncChanged(ev: Event): void {
         const target = ev.target as HTMLInputElement;
         this._updateConfig('show_lock_sync', target.checked);
@@ -383,10 +370,6 @@ class LcmSlotCardEditor extends LitElement {
 
     private _toggleShowLockStatus(): void {
         this._updateConfig('show_lock_status', this._config?.show_lock_status === false);
-    }
-
-    private _toggleShowCodeSensors(): void {
-        this._updateConfig('show_code_sensors', this._config?.show_code_sensors === false);
     }
 
     private _toggleShowLockSync(): void {

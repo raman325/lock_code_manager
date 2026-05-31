@@ -1,5 +1,10 @@
 // https://medium.com/weekly-webtips/how-to-sort-imports-like-a-pro-in-typescript-4ee8afd7258a
 module.exports = {
+    // Stop ESLint walking up the directory tree. Required when this repo is
+    // checked out as a worktree under a parent that may also contain an
+    // .eslintrc — without this, plugins resolve from two node_modules paths
+    // and ESLint fails with "couldn't determine the plugin uniquely".
+    root: true,
     env: {
         node: true
     },
