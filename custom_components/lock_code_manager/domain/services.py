@@ -42,7 +42,6 @@ async def async_set_slot_condition(
     if not config.has_slot(slot):
         raise ServiceValidationError(f"Slot {slot} not found in config entry")
 
-    # Verify entity exists
     if not hass.states.get(entity_id):
         raise ServiceValidationError(f"Entity {entity_id} not found")
 

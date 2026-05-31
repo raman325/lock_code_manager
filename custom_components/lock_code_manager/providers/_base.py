@@ -314,17 +314,17 @@ class BaseLock:
 
     @final
     def __repr__(self) -> str:
-        """Return string representation of self."""
+        """Return a string representation."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
 
     @final
     def __hash__(self) -> int:
-        """Return hash of self."""
+        """Hash by lock entity ID (one BaseLock instance per physical lock)."""
         return hash(self.lock.entity_id)
 
     @final
     def __eq__(self, other: Any) -> bool:
-        """Return whether self is equal to other."""
+        """Two BaseLock instances are equal when they wrap the same lock entity."""
         if not isinstance(other, BaseLock):
             return False
         return self.lock.entity_id == other.lock.entity_id
@@ -539,7 +539,6 @@ class BaseLock:
             # when that integration reloads or reconnects.
             self._setup_config_entry_state_listener()
 
-            # Reuse existing coordinator or create new one
             if self.coordinator is not None:
                 self.hass.async_create_task(
                     self.coordinator.async_request_refresh(),
@@ -569,8 +568,6 @@ class BaseLock:
                             self.coordinator.last_exception,
                         )
 
-                # Subscribe to push updates after coordinator is ready. If the provider's
-                # config entry isn't loaded yet, defer and let the state listener resubscribe.
                 if self.supports_push:
                     if (
                         self.lock_config_entry
@@ -676,7 +673,6 @@ class BaseLock:
                 )
         self._reconnect_task = None
 
-        # Unsubscribe from push updates before unloading
         if self.supports_push:
             self.unsubscribe_push_updates()
 
@@ -839,12 +835,7 @@ class BaseLock:
         )
 
         def _pre_execute_checks() -> None:
-            """
-            Run pre-execution checks atomically inside the operation lock.
-
-            Checks for duplicate PINs (from coordinator data) and for codes
-            previously rejected by the lock firmware (from event 15).
-            """
+            """Check for duplicate PINs and firmware-rejected codes, atomically inside the lock."""
             # Clear the firmware-rejection flag first so it doesn't persist
             # if _check_duplicate_code raises its own DuplicateCodeError
             firmware_rejected = code_slot in self._rejected_code_slots
@@ -865,11 +856,9 @@ class BaseLock:
             name=name,
             source=source,
         )
-        # Refresh coordinator to update entity states from cache (only if changed).
-        # Skip for push-based providers — they update the coordinator optimistically
-        # via push_update() in their set/clear methods, and refreshing from cache
-        # could overwrite the optimistic update with stale data when the underlying
-        # driver defers cache updates until device confirmation.
+        # Skip coordinator refresh for push providers — they update optimistically
+        # via push_update(), and refreshing from cache could overwrite with stale
+        # data when the driver defers cache updates until device confirmation.
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
@@ -902,7 +891,6 @@ class BaseLock:
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )
-        # Push-based providers handle this via push_update(); see async_internal_set_usercode.
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
@@ -915,11 +903,7 @@ class BaseLock:
 
     @final
     async def async_internal_get_usercodes(self) -> dict[int, SlotCredential]:
-        """
-        Rate-limited wrapper around async_get_usercodes().
-
-        Slot keys are int; values are ``SlotCredential`` instances.
-        """
+        """Rate-limited wrapper around async_get_usercodes()."""
         return await self._execute_rate_limited("get", self.async_get_usercodes)
 
     @final

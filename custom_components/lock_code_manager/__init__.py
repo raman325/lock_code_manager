@@ -322,7 +322,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
     await async_websocket_setup(hass)
     _LOGGER.debug("Finished setting up websocket API")
 
-    # Hard refresh usercodes
     async def _hard_refresh_usercodes(service: ServiceCall) -> None:
         """Hard refresh all usercodes."""
         _LOGGER.debug("Hard refresh usercodes service called: %s", service.data)
@@ -356,7 +355,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    # Set usercode
     async def _set_usercode(service: ServiceCall) -> None:
         """Set a usercode on a lock slot."""
         await async_set_usercode(
@@ -383,7 +381,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    # Clear usercode
     async def _clear_usercode(service: ServiceCall) -> None:
         """Clear a usercode from a lock slot."""
         await async_clear_usercode(
@@ -406,7 +403,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    # Set slot condition
     async def _set_slot_condition(service: ServiceCall) -> None:
         """Set a condition entity for a slot."""
         await async_set_slot_condition(
@@ -433,7 +429,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    # Clear slot condition
     async def _clear_slot_condition(service: ServiceCall) -> None:
         """Clear the condition entity from a slot."""
         await async_clear_slot_condition(
@@ -456,8 +451,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         ),
     )
 
-    # Generate a random PIN that avoids known unsafe patterns. Returns the
-    # value via response_variable since the service has no side effects.
     async def _generate_pin(call: ServiceCall) -> ServiceResponse:
         """Generate a random PIN that avoids known unsafe patterns."""
         return {"pin": generate_pin(call.data[ATTR_LENGTH])}
@@ -520,7 +513,7 @@ def _setup_entry_after_start(
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
-    """Set up is called when Home Assistant is loading our component."""
+    """Set up a config entry."""
     ent_reg = er.async_get(hass)
     entry_id = config_entry.entry_id
     try:
@@ -810,7 +803,6 @@ async def _async_setup_new_locks(
 
         added_locks.append(lock)
 
-        # Check if lock is connected (but don't wait - entity creation doesn't require it)
         if not await lock.async_internal_is_integration_connected():
             _LOGGER.debug(
                 "%s (%s): Lock %s is not connected yet. Entities will be created "
@@ -831,7 +823,6 @@ async def _async_setup_new_locks(
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
-    # Notify existing entities about the new locks
     if added_locks:
         callbacks.invoke_lock_added_handlers(added_locks)
 
@@ -948,16 +939,13 @@ async def async_update_listener(
             hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
         )
 
-    # Notify any existing entities that additional locks have been added then create
-    # slot PIN sensors for the new locks
     if locks_to_add:
         await _async_setup_new_locks(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
 
-    # For each new slot, add standard entities and configuration entities. We also
-    # add slot sensors for existing locks only since new locks were already set up
-    # above.
+    # For each new slot: add standard entities, then per-lock entities for
+    # existing locks (new locks already got their per-lock entities above).
     for slot_num in slots_to_add:
         _LOGGER.debug(
             "%s (%s): Adding standard entities for slot %s",
@@ -965,8 +953,6 @@ async def async_update_listener(
             entry_title,
             slot_num,
         )
-        # Create the per-slot coordinator first so entities can look it
-        # up in their constructor / async_added_to_hass.
         coordinator = SlotEntityCoordinator(hass, config_entry, slot_num)
         runtime_data.slot_coordinators[slot_num] = coordinator
         coordinator.async_start()
@@ -984,7 +970,6 @@ async def async_update_listener(
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
 
-    # Existing entities will listen to updates and act on it.
     # Use to_dict() so the stored data has plain dicts (not the read-only
     # MappingProxyType wrappers EntryConfig uses internally) — HA's
     # storage layer can't serialize MappingProxyType.

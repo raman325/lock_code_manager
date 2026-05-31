@@ -94,12 +94,12 @@ class SlotCredential:
 
     @property
     def is_empty(self) -> bool:
-        """Return True when no code is present on the lock for this slot."""
+        """Return True when the slot holds no code."""
         return not self.present
 
     @property
     def is_present(self) -> bool:
-        """Return True when a code is present on the lock for this slot."""
+        """Return True when the slot holds a code."""
         return self.present
 
     @property

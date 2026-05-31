@@ -265,12 +265,10 @@ class MatterLock(BaseLock):
                 code_slot = cred.get("credentialIndex")
                 break
 
-        # Only fire for PIN credentials
         if code_slot is None:
             return
 
-        # Determine lock/unlock from operation type
-        # 0 = Lock, 1 = Unlock, 2 = NonAccessUserEvent, 3 = ForcedUserEvent, 4 = Unlatch
+        # lockOperationType: 0=Lock, 1=Unlock, 2=NonAccessUserEvent, 3=ForcedUserEvent, 4=Unlatch
         if lock_operation_type == 0:
             to_locked = True
         elif lock_operation_type == 1:
@@ -310,7 +308,6 @@ class MatterLock(BaseLock):
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
 
-        # Only handle PIN credential changes (LockDataType 6 = PIN)
         if data.get("lockDataType") != _LOCK_DATA_TYPE_PIN:
             return
 
@@ -571,8 +568,8 @@ class MatterLock(BaseLock):
         if name is not None and user_index is not None:
             await self._set_user_name(user_index, name, code_slot)
 
-        # Optimistic update: call succeeded, push occupancy state
-        # immediately. The LockUserChange event will confirm later.
+        # Optimistic update: push occupancy state immediately;
+        # the LockUserChange event will confirm.
         self._push_credential_update(code_slot, SlotCredential.unreadable())
         return True
 
@@ -607,8 +604,8 @@ class MatterLock(BaseLock):
             return False
 
         await self._clear_lock_credential(code_slot)
-        # Optimistic update: clear succeeded, push empty state immediately.
-        # The LockUserChange event will confirm later.
+        # Optimistic update: push empty state immediately;
+        # the LockUserChange event will confirm.
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
