@@ -53,7 +53,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
-        coordinator = self._require_coordinator()
+        coordinator = self._require_slot_coordinator()
         try:
             await coordinator.async_request_active_toggle(True)
         except PinRequiredError as err:
@@ -62,28 +62,6 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""
-        coordinator = self._require_coordinator()
+        coordinator = self._require_slot_coordinator()
         await coordinator.async_request_active_toggle(False)
         self.async_write_ha_state()
-
-    def _require_coordinator(self):
-        """Return the slot coordinator, raising if it has not been created."""
-        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
-            self.slot_num
-        )
-        if coordinator is None:
-            raise HomeAssistantError(f"No slot coordinator for slot {self.slot_num}")
-        return coordinator
-
-    async def async_added_to_hass(self) -> None:
-        """Handle entity added to hass."""
-        await BaseLockCodeManagerEntity.async_added_to_hass(self)
-        await SwitchEntity.async_added_to_hass(self)
-
-        coordinator = self.config_entry.runtime_data.slot_coordinators.get(
-            self.slot_num
-        )
-        if coordinator is not None:
-            self.async_on_remove(
-                coordinator.register_state_subscriber(self.async_write_ha_state)
-            )

@@ -28,10 +28,13 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
+from custom_components.lock_code_manager.binary_sensor import (
+    LockCodeManagerActiveEntity,
+)
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
@@ -387,3 +390,501 @@ async def test_condition_entity_swap_resubscribes(
     assert coordinator.is_active is True
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_slot_remove_then_readd_creates_fresh_coordinator(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Re-adding a removed slot creates a NEW coordinator with fresh state.
+
+    A regression that retained a stale coordinator across remove + re-add
+    would let prior state (condition subscription, registered writers,
+    repair-issue history) leak into the new slot lifecycle.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    original_slot_2_coordinator = runtime_data.slot_coordinators[2]
+
+    # Remove slot 2.
+    options_without_2 = {
+        CONF_LOCKS: list(runtime_data.locks.keys()),
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+        },
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=options_without_2
+    )
+    await hass.async_block_till_done()
+    assert 2 not in runtime_data.slot_coordinators
+
+    # Re-add slot 2 with different config.
+    options_with_2 = {
+        CONF_LOCKS: list(runtime_data.locks.keys()),
+        CONF_SLOTS: {
+            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
+            2: {CONF_NAME: "fresh2", CONF_PIN: "9999", CONF_ENABLED: False},
+        },
+    }
+    hass.config_entries.async_update_entry(
+        lock_code_manager_config_entry, options=options_with_2
+    )
+    await hass.async_block_till_done()
+
+    assert 2 in runtime_data.slot_coordinators
+    new_slot_2_coordinator = runtime_data.slot_coordinators[2]
+    assert new_slot_2_coordinator is not original_slot_2_coordinator
+    assert new_slot_2_coordinator.pin_value == "9999"
+    assert new_slot_2_coordinator.is_enabled is False
+    # The discarded coordinator must have been stopped.
+    assert original_slot_2_coordinator._started is False
+
+
+async def test_request_sync_check_public_wrapper_delegates(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The public ``request_sync_check`` forwards to the private handler.
+
+    The wrapper exists so callers that aren't listener-shaped don't have
+    to pretend to be one (``_request_sync_check`` accepts ``*_args`` to
+    serve as a state-change listener). A regression that bypasses the
+    private handler would lose the centralized state-transition rules.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    assert runtime_data.sync_managers
+    manager = next(iter(runtime_data.sync_managers))
+
+    with patch.object(manager, "_request_sync_check") as private:
+        manager.request_sync_check()
+
+    private.assert_called_once_with()
+
+
+async def test_active_binary_sensor_does_not_self_track_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """``LockCodeManagerActiveEntity`` must not subscribe to the condition entity itself.
+
+    The slot coordinator owns the condition-entity subscription. A
+    regression that re-added ``async_track_state_change_event`` inside
+    the entity (under any attribute name) would produce a SECOND
+    subscription for the same condition entity, observable as two
+    listeners on that state-changed event.
+    """
+    condition_entity = "input_boolean.gate_a"
+    hass.states.async_set(condition_entity, STATE_ON)
+    await hass.async_block_till_done()
+
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "alice",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: condition_entity,
+            },
+        },
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="Test Active No Track"
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    assert len(coordinator._active_view_writers) == 1
+
+    active_entity = next(
+        writer.__self__
+        for writer in coordinator._active_view_writers
+        if hasattr(writer, "__self__")
+        and isinstance(writer.__self__, LockCodeManagerActiveEntity)
+    )
+
+    # No attribute on the active entity should hold a tracker we added
+    # ourselves (HA internals like ``_unsub_device_updates`` are allowed).
+    forbidden_prefixes = ("_condition_", "_config_entry_", "_track_", "_state_change_")
+    leaked = [
+        attr
+        for attr in vars(active_entity)
+        if attr.startswith(forbidden_prefixes) and attr.endswith("_unsub")
+    ]
+    assert leaked == [], (
+        f"Active entity holds entity-side tracker unsubs: {leaked} -- the "
+        "coordinator should own all condition-state subscriptions."
+    )
+
+    # And the coordinator's condition subscription is the SOLE wiring: a
+    # state change on the condition entity flips the active state once,
+    # not twice (no double-fire indicating duplicate listeners).
+    flips: list[bool | None] = []
+
+    @callback
+    def record_writer(is_on: bool | None, _inactive: list[str]) -> None:
+        flips.append(is_on)
+
+    coordinator.register_active_view(record_writer)
+    flips.clear()
+    hass.states.async_set(condition_entity, STATE_OFF)
+    await hass.async_block_till_done()
+    assert flips == [False], f"expected single flip, saw {flips}"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_write_config_fields_refreshes_runtime_config_before_notify(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A synchronous notify after async_update_entry sees the fresh config.
+
+    ``async_update_entry`` schedules the listener as a task, so
+    ``runtime_data.config`` is still stale at the synchronous
+    ``_notify_state_subscribers`` call inside ``_write_config_fields``.
+    Subscribers must observe the post-write value, not the pre-write one.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+
+    captured_pin: list[str | None] = []
+
+    def capture_subscriber() -> None:
+        captured_pin.append(coordinator.pin_value)
+
+    unsub = coordinator.register_state_subscriber(capture_subscriber)
+    try:
+        await coordinator.async_request_pin_update("5555")
+        await hass.async_block_till_done()
+    finally:
+        unsub()
+
+    # The subscriber fires twice (synchronous notify after the eager
+    # refresh, plus the listener-task notify). Both must observe the
+    # post-write value; the FIRST one is the load-bearing assertion --
+    # without the eager refresh, that synchronous fire would observe
+    # the stale "1234" because the listener task has not yet run.
+    assert captured_pin, "subscriber must fire at least once"
+    assert captured_pin[0] == "5555"
+    assert all(pin == "5555" for pin in captured_pin)
+
+
+async def test_unload_continues_when_slot_coordinator_stop_raises(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """``async_unload_entry`` clears every slot coordinator even when one stop raises."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinators = list(runtime_data.slot_coordinators.values())
+    assert len(coordinators) >= 2
+
+    failing = coordinators[0]
+    boom = RuntimeError("simulated coordinator stop failure")
+    original_stop = failing.async_stop
+    raised = {"value": False}
+
+    def failing_stop() -> None:
+        original_stop()
+        if not raised["value"]:
+            raised["value"] = True
+            raise boom
+
+    with patch.object(failing, "async_stop", failing_stop):
+        with caplog.at_level(logging.WARNING):
+            await hass.config_entries.async_unload(
+                lock_code_manager_config_entry.entry_id
+            )
+            await hass.async_block_till_done()
+
+    assert raised["value"]
+    assert runtime_data.slot_coordinators == {}
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )
+
+
+async def test_register_active_view_initial_writer_failure_propagates_and_discards(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A raising writer at registration is dropped and the exception propagates.
+
+    Otherwise the platform layer would see a half-added entity that the
+    coordinator kept fanning out to.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+    boom = RuntimeError("simulated writer failure")
+    initial_count = len(coordinator._active_view_writers)
+
+    def failing_writer(_is_on: bool | None, _inactive: list[str]) -> None:
+        raise boom
+
+    with pytest.raises(RuntimeError, match="simulated writer failure"):
+        coordinator.register_active_view(failing_writer)
+
+    assert failing_writer not in coordinator._active_view_writers
+    assert len(coordinator._active_view_writers) == initial_count
+
+
+async def test_active_toggle_enable_survives_repair_issue_delete_failure(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A failure deleting the pin_required repair issue does not unwind the enable."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+    # Disable so the toggle has work to do.
+    await coordinator.async_request_active_toggle(False)
+    await hass.async_block_till_done()
+    assert coordinator.is_enabled is False
+
+    boom = RuntimeError("issue registry boom")
+    with patch(
+        "custom_components.lock_code_manager.slot_manager.async_delete_issue",
+        side_effect=boom,
+    ):
+        with caplog.at_level(logging.ERROR):
+            await coordinator.async_request_active_toggle(True)
+            await hass.async_block_till_done()
+
+    # Write succeeded; the swallowed delete failure was logged.
+    assert coordinator.is_enabled is True
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )
+
+
+async def test_handle_condition_state_change_after_stop_is_noop(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A queued condition-entity callback firing after async_stop must not recompute."""
+    hass.states.async_set("input_boolean.gate_a", STATE_ON)
+    await hass.async_block_till_done()
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {
+            1: {
+                CONF_NAME: "alice",
+                CONF_PIN: "1234",
+                CONF_ENABLED: True,
+                CONF_ENTITY_ID: "input_boolean.gate_a",
+            },
+        },
+    }
+    entry = MockConfigEntry(domain=DOMAIN, data=config, unique_id="Test Stopped Cb")
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    assert coordinator.is_active is True
+
+    coordinator.async_stop()
+    assert coordinator._started is False
+
+    # Simulate a late-firing condition-entity callback. The guard must
+    # short-circuit before _recompute_active runs (and would touch
+    # _active_view_writers etc.).
+    with patch.object(coordinator, "_recompute_active") as recompute:
+        coordinator._handle_condition_state_change(None)  # type: ignore[arg-type]
+
+    recompute.assert_not_called()
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_poke_sync_managers_isolates_individual_failures(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """One raising sync manager does not abort the poke of the others."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+
+    # Inject two stand-in managers so the poke loop has predictable
+    # targets regardless of how many real sync managers ended up wired
+    # to this slot via the fixture entity registrations.
+    boom = RuntimeError("simulated sync manager poke failure")
+    healthy_called = {"value": False}
+
+    class _StandIn:
+        def __init__(self, raise_on_call: bool) -> None:
+            self._raise = raise_on_call
+
+        def request_sync_check(self) -> None:
+            if self._raise:
+                raise boom
+            healthy_called["value"] = True
+
+    failing = _StandIn(raise_on_call=True)
+    healthy = _StandIn(raise_on_call=False)
+    coordinator._sync_managers.add(failing)  # type: ignore[arg-type]
+    coordinator._sync_managers.add(healthy)  # type: ignore[arg-type]
+
+    try:
+        with caplog.at_level(logging.ERROR):
+            coordinator._poke_sync_managers()
+    finally:
+        coordinator._sync_managers.discard(failing)  # type: ignore[arg-type]
+        coordinator._sync_managers.discard(healthy)  # type: ignore[arg-type]
+
+    assert healthy_called["value"] is True
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )
+
+
+async def test_base_entity_caches_slot_coordinator_on_add(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """``async_added_to_hass`` populates ``_slot_coordinator`` from runtime_data.
+
+    Pins the hoist contract: a regression that broke the resolution
+    would leave entities silently coordinator-less even though one
+    exists in the registry.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for slot_num, coordinator in runtime_data.slot_coordinators.items():
+        all_entities = [
+            writer.__self__
+            for writer in coordinator._active_view_writers
+            if hasattr(writer, "__self__")
+        ]
+        all_entities.extend(
+            sub.__self__
+            for sub in coordinator._state_subscribers
+            if hasattr(sub, "__self__")
+        )
+        assert all_entities, (
+            f"Slot {slot_num} coordinator has no registered entity writers"
+        )
+        for entity in all_entities:
+            cached = getattr(entity, "_slot_coordinator", "<missing>")
+            assert cached is coordinator, (
+                f"Entity {type(entity).__name__} for slot {slot_num} cached "
+                f"coordinator {cached!r}, expected {coordinator!r}"
+            )
+
+
+async def test_hook_dispatch_routes_each_entity_kind_to_the_right_collection(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """text/switch -> _state_subscribers; active -> _active_view_writers.
+
+    Pins the polymorphic ``_register_slot_coordinator_subscription`` hook
+    for the slot-scoped entities. A regression that broke either
+    subclass's override would route the entity into the wrong
+    collection. (In-sync per-lock entities go through a separate
+    lock-slot adder path that fires before the slot coordinator exists
+    on initial setup -- a pre-existing D-design limitation; their
+    ``register_sync_manager`` registration is exercised only via the
+    options-flow ``_async_setup_new_locks`` path, covered by the slot
+    add/remove lifecycle tests.)
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+
+    state_subscriber_owners = {
+        type(sub.__self__).__name__
+        for sub in coordinator._state_subscribers
+        if hasattr(sub, "__self__")
+    }
+    active_view_owners = {
+        type(w.__self__).__name__
+        for w in coordinator._active_view_writers
+        if hasattr(w, "__self__")
+    }
+
+    assert "LockCodeManagerText" in state_subscriber_owners
+    assert "LockCodeManagerSwitch" in state_subscriber_owners
+    assert active_view_owners == {"LockCodeManagerActiveEntity"}
+
+
+async def test_text_set_value_raises_when_slot_coordinator_missing(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """text ``async_set_value`` surfaces a HomeAssistantError, not a silent no-op.
+
+    Pins the asymmetry fix where text used to log a WARNING and return
+    while switch raised; both should raise so the user sees the failed
+    service call.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    coordinator = runtime_data.slot_coordinators[1]
+    text_entity = next(
+        sub.__self__
+        for sub in coordinator._state_subscribers
+        if hasattr(sub, "__self__")
+        and type(sub.__self__).__name__ == "LockCodeManagerText"
+    )
+
+    text_entity._slot_coordinator = None
+    with pytest.raises(
+        HomeAssistantError, match=f"No slot coordinator for slot {text_entity.slot_num}"
+    ):
+        await text_entity.async_set_value("9999")
+
+
+async def test_unload_clears_registry_when_coordinator_stop_raises_before_cleanup(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A coordinator whose ``async_stop`` raises BEFORE cleanup is still cleared.
+
+    Complements ``test_unload_continues_when_slot_coordinator_stop_raises``
+    which covers the call-original-then-raise pattern. This variant covers
+    the raise-before-cleanup mode -- proving the registry is cleared
+    regardless of how stop fails.
+    """
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    failing = next(iter(runtime_data.slot_coordinators.values()))
+    boom = RuntimeError("simulated coordinator stop failure (before cleanup)")
+
+    def failing_stop() -> None:
+        # Do NOT call the real stop -- raise immediately so internal
+        # state is left intact, simulating a stop that fails at its
+        # very first statement.
+        raise boom
+
+    with patch.object(failing, "async_stop", failing_stop):
+        with caplog.at_level(logging.ERROR):
+            await hass.config_entries.async_unload(
+                lock_code_manager_config_entry.entry_id
+            )
+            await hass.async_block_till_done()
+
+    assert runtime_data.slot_coordinators == {}
+    assert any(
+        record.exc_info is not None and record.exc_info[1] is boom
+        for record in caplog.records
+        if record.levelname == "ERROR"
+    )

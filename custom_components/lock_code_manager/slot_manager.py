@@ -204,7 +204,7 @@ class SlotEntityCoordinator:
 
     async def async_request_name_update(self, value: str) -> None:
         """Apply a slot name write requested by the text entity."""
-        self._write_config(CONF_NAME, value)
+        self._write_config_fields({CONF_NAME: value})
 
     async def async_request_pin_update(self, value: str) -> None:
         """
@@ -238,7 +238,7 @@ class SlotEntityCoordinator:
         issue registry are logged and do not unwind the write.
         """
         if not enabled:
-            self._write_config(CONF_ENABLED, False)
+            self._write_config_fields({CONF_ENABLED: False})
             return
 
         if not self.pin_value:
@@ -247,7 +247,7 @@ class SlotEntityCoordinator:
                 f"Set a PIN code for slot {self._slot_num} before enabling it"
             )
 
-        self._write_config(CONF_ENABLED, True)
+        self._write_config_fields({CONF_ENABLED: True})
         try:
             async_delete_issue(
                 self._hass,
@@ -283,11 +283,6 @@ class SlotEntityCoordinator:
     def _slot_config(self) -> dict[str, Any]:
         """Return the current slot config dict for this slot number."""
         return dict(get_entry_config(self._config_entry).slot(self._slot_num))
-
-    @callback
-    def _write_config(self, key: str, value: Any) -> None:
-        """Write one slot field to the config entry."""
-        self._write_config_fields({key: value})
 
     @callback
     def _write_config_fields(self, fields: dict[str, Any]) -> None:
