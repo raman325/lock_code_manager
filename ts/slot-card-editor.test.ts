@@ -116,14 +116,9 @@ describe('LcmSlotCardEditor logic', () => {
     });
 
     describe('show section toggles', () => {
-        type ShowSectionKey =
-            | 'show_conditions'
-            | 'show_lock_status'
-            | 'show_code_sensors'
-            | 'show_lock_sync';
+        type ShowSectionKey = 'show_conditions' | 'show_lock_status' | 'show_lock_sync';
 
         interface ShowSectionsConfig {
-            show_code_sensors?: boolean;
             show_conditions?: boolean;
             show_lock_status?: boolean;
             show_lock_sync?: boolean;
@@ -157,12 +152,6 @@ describe('LcmSlotCardEditor logic', () => {
             const config: ShowSectionsConfig = {};
             const result = updateShowSection(config, 'show_lock_status', false);
             expect(result.show_lock_status).toBe(false);
-        });
-
-        it('sets show_code_sensors', () => {
-            const config: ShowSectionsConfig = {};
-            const result = updateShowSection(config, 'show_code_sensors', true);
-            expect(result.show_code_sensors).toBe(true);
         });
 
         it('sets show_lock_sync', () => {

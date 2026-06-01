@@ -643,30 +643,6 @@ describe('LockCodeManagerSlotCard integration', () => {
             await flush();
         });
 
-        /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
-        it('_formatLockCode returns null for "empty" sentinel', () => {
-            const lock = {
-                code: 'empty',
-                entityId: 'lock.test',
-                inSync: true,
-                lockEntityId: 'lock.test',
-                name: 'Test'
-            };
-            expect((card as any)._formatLockCode(lock)).toBeNull();
-        });
-
-        it('_formatLockCode returns spaced bullets for "unreadable_code" sentinel', () => {
-            const lock = {
-                code: 'unreadable_code',
-                entityId: 'lock.test',
-                inSync: true,
-                lockEntityId: 'lock.test',
-                name: 'Test'
-            };
-            expect((card as any)._formatLockCode(lock)).toBe('• • •');
-        });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
-
         it('stores "empty" and "unreadable_code" lock codes in _data', async () => {
             let capturedCallback: ((data: unknown) => void) | undefined;
             const card2 = document.createElement('lcm-slot') as SlotCardElement;
@@ -3057,48 +3033,6 @@ describe('LockCodeManagerSlotCard integration', () => {
         it('returns "in N days" / "N days ago" for multi-day deltas', () => {
             expect((card as any)._formatRelative('2026-05-08T00:00:00Z')).toBe('in 7 days');
             expect((card as any)._formatRelative('2026-04-24T00:00:00Z')).toBe('7 days ago');
-        });
-        /* eslint-enable @typescript-eslint/no-explicit-any */
-    });
-
-    describe('_formatLockCode', () => {
-        /* eslint-disable @typescript-eslint/no-explicit-any */
-        let card: SlotCardElement & Record<string, unknown>;
-
-        beforeEach(async () => {
-            card = document.createElement('lcm-slot') as SlotCardElement & Record<string, unknown>;
-            card.setConfig({ config_entry_id: 'abc', slot: 1, type: 'custom:lcm-slot' });
-            card.hass = createMockHassWithConnection();
-            container.appendChild(card);
-            await flush();
-        });
-
-        it('returns null for empty code', () => {
-            expect((card as any)._formatLockCode({ code: 'empty' })).toBeNull();
-        });
-
-        it('returns bullets for unreadable code', () => {
-            expect((card as any)._formatLockCode({ code: 'unreadable_code' })).toBe('• • •');
-        });
-
-        it('returns masked code when not revealed', () => {
-            (card as any)._revealed = false;
-            expect((card as any)._formatLockCode({ code: '1234' })).toBe('••••');
-        });
-
-        it('returns actual code when revealed', () => {
-            (card as any)._revealed = true;
-            (card as any)._config = {
-                config_entry_id: 'abc',
-                slot: 1,
-                type: 'custom:lcm-slot',
-                code_display: 'masked_with_reveal'
-            };
-            expect((card as any)._formatLockCode({ code: '1234' })).toBe('1234');
-        });
-
-        it('returns null for null code', () => {
-            expect((card as any)._formatLockCode({ code: null })).toBeNull();
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });

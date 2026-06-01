@@ -25,10 +25,8 @@ import {
     ConditionEntityInfo,
     GetConfigEntriesResponse,
     LockCodeManagerSlotCardConfig,
-    SLOT_CODE_UNREADABLE,
     SlotCardConditions,
-    SlotCardData,
-    isSlotEmpty
+    SlotCardData
 } from './types';
 
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
@@ -954,9 +952,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     private _renderLockRow(lock: LockSyncStatus): TemplateResult {
         const showSync = this._config?.show_lock_sync !== false;
-        const showCodeSensors = this._config?.show_code_sensors !== false;
-        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        const showRevealButton = showCodeSensors && mode === 'masked_with_reveal';
 
         let iconClass: string;
         let statusText: string;
@@ -1000,9 +995,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 }
         }
 
-        // Format code display
-        const codeDisplay = this._formatLockCode(lock);
-
         return html`
             <div class="lock-row">
                 ${showSync
@@ -1037,30 +1029,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                           ? html`<span class="lock-synced-time ${iconClass}">${statusText}</span>`
                           : nothing}
                 </div>
-                ${showCodeSensors && codeDisplay
-                    ? html`<div class="lock-code-field">
-                          <span class="lock-code-value">${codeDisplay}</span>
-                          ${showRevealButton
-                              ? html`<ha-icon-button
-                                    class="lcm-reveal-button"
-                                    .path=${this._revealed ? mdiEyeOff : mdiEye}
-                                    @click=${this._toggleReveal}
-                                    .label=${this._revealed ? 'Hide codes' : 'Reveal codes'}
-                                ></ha-icon-button>`
-                              : nothing}
-                      </div>`
-                    : nothing}
             </div>
         `;
-    }
-
-    private _formatLockCode(lock: LockSyncStatus): string | null {
-        const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
-        const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
-
-        if (isSlotEmpty(lock.code)) return null;
-        if (lock.code === SLOT_CODE_UNREADABLE) return '• • •';
-        return shouldMask ? '•'.repeat(String(lock.code).length) : String(lock.code);
     }
 
     // _toggleReveal inherited from mixin

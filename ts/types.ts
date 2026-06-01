@@ -87,7 +87,12 @@ export interface LockCodeManagerSlotSectionStrategyConfig {
     condition_helpers?: string[];
     /** Config entry ID for the LCM instance */
     config_entry_id: string;
-    /** Show code sensors in lock status section */
+    /**
+     * @deprecated No longer used by the slot card; kept so existing dashboard
+     * configurations continue to validate. The slot card's Lock Status section
+     * no longer renders per-lock code sensors (the hero PIN above already shows
+     * the synced code, with show/hide toggle).
+     */
     show_code_sensors?: boolean;
     /** Show conditions section */
     show_conditions?: boolean;
