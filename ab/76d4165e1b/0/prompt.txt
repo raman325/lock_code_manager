@@ -1,0 +1,9 @@
+are there other places where we need to introduce the sleep to mimick what's happening and uncover other races?
+
+---
+
+what would a stronger "drive ticks to completion" helper look like?
+
+---
+
+yes open as its own PR

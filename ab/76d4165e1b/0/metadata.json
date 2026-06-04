@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ab76d4165e1b",
+  "session_id": "6f97b605-d32c-49a3-80e4-d2835dfb7464",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-04T20:22:05.206016Z",
+  "branch": "test-infra/sync-tick-helpers",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/conftest.py",
+    "tests/test_binary_sensor.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "04c991e9cf85",
+  "checkpoint_transcript_start": 342,
+  "transcript_lines_at_start": 342,
+  "token_usage": {
+    "input_tokens": 121,
+    "cache_creation_tokens": 270489,
+    "cache_read_tokens": 23620970,
+    "output_tokens": 66799,
+    "api_call_count": 106
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-04T20:22:04.946999Z",
+    "agent_lines": 0,
+    "human_added": 213,
+    "human_modified": 20,
+    "human_removed": 0,
+    "total_committed": 213,
+    "agent_percentage": 0
+  }
+}
