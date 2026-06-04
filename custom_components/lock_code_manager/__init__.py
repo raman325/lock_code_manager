@@ -964,6 +964,17 @@ async def async_update_listener(
             hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
         )
 
+    # Create per-slot coordinators for new slots BEFORE setting up new
+    # locks. _async_setup_new_locks awaits per-lock connection checks,
+    # giving the event loop opportunities to drain entity-add tasks it
+    # scheduled for prior locks; those per-lock entities (`code`,
+    # `in_sync`) look up the slot coordinator in async_added_to_hass and
+    # would warn if it did not yet exist.
+    for slot_num in slots_to_add:
+        coordinator = SlotEntityCoordinator(hass, config_entry, slot_num)
+        runtime_data.slot_coordinators[slot_num] = coordinator
+        coordinator.async_start()
+
     if locks_to_add:
         await _async_setup_new_locks(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
@@ -978,9 +989,6 @@ async def async_update_listener(
             entry_title,
             slot_num,
         )
-        coordinator = SlotEntityCoordinator(hass, config_entry, slot_num)
-        runtime_data.slot_coordinators[slot_num] = coordinator
-        coordinator.async_start()
         callbacks.invoke_standard_adders(slot_num, ent_reg)
 
         for lock_entity_id, lock in runtime_data.locks.items():

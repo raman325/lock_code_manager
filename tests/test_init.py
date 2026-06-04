@@ -53,6 +53,7 @@ from .common import (
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     SLOT_1_IN_SYNC_ENTITY,
+    MockLCMLock,
 )
 from .conftest import (
     async_initial_tick,
@@ -639,6 +640,46 @@ async def test_coordinator_exists_after_setup(
     runtime_data = lock_code_manager_config_entry.runtime_data
     for lock in runtime_data.locks.values():
         assert lock.coordinator is not None
+
+
+async def test_no_slot_coordinator_warning_during_initial_setup(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression test for issue #1213.
+
+    Before the fix, per-lock entities (``code`` sensor, ``in_sync`` binary
+    sensor) were scheduled by ``_async_setup_new_locks`` while the slot
+    coordinators had not yet been created. The await on
+    ``async_internal_is_integration_connected`` between locks let the event
+    loop drain the entity-add tasks for prior locks, whose
+    ``async_added_to_hass`` then warned about the missing coordinator.
+
+    The race requires the connection check to actually yield to the event
+    loop -- the default mock returns synchronously and so cannot reproduce
+    it. We patch it to force an ``asyncio.sleep(0)`` yield, which is what
+    real provider calls (Z-Wave JS, Matter) do.
+    """
+
+    async def _yielding_is_connected(self: MockLCMLock) -> bool:
+        await asyncio.sleep(0)
+        return self._connected
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Issue 1213"
+    )
+    config_entry.add_to_hass(hass)
+    caplog.set_level(logging.WARNING)
+    with patch.object(
+        MockLCMLock, "async_is_integration_connected", _yielding_is_connected
+    ):
+        assert await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert "No slot coordinator" not in caplog.text
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
 
 
 @pytest.mark.parametrize("config", [{}])
