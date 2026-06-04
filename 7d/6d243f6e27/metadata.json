@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7d6d243f6e27",
+  "strategy": "manual-commit",
+  "branch": "fix/issue-1213-slot-coordinator-race",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/6d243f6e27/0/metadata.json",
+      "transcript": "/7d/6d243f6e27/0/full.jsonl",
+      "content_hash": "/7d/6d243f6e27/0/content_hash.txt",
+      "prompt": "/7d/6d243f6e27/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13957,
+    "cache_creation_tokens": 4214689,
+    "cache_read_tokens": 277357692,
+    "output_tokens": 459809,
+    "api_call_count": 507
+  }
+}

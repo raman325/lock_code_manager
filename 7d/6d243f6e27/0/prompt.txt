@@ -1,0 +1,231 @@
+ff main and clear stale branches including this one. Then analyze the code for sources of potential race conditions or complexity that coudl cause bugs. Identify those places so we can come up with a plan
+
+---
+
+if we addressed A-E, what's left in the itemized list?
+
+---
+
+yes fold them in, do A through F as separate PRs, if necessary create dependency chains between PR merges
+
+---
+
+queue as G in a separate PR. Do A nd C in parlallel followed by B and E, then D, then F and G
+
+---
+
+<task-notification>
+<task-id>ac860e1a55f1af8d4</task-id>
+<tool-use-id>toolu_01A2xMxo5praQyjPjLUu26e4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/60937559-5043-4ccc-8292-921d37b2075d/tasks/ac860e1a55f1af8d4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR C: lock-instance ownership" completed</summary>
+<result>## Summary
+
+**Design choice**: Picked iteration over loaded LCM config entries for both `get_locks_from_targets` and `get_managed_lock`, rather than threading a `config_entry` parameter through call sites. Reasoning: the only direct callers are domain-global service handlers (`_hard_refresh_usercodes`, `set_usercode`, `clear_usercode`) registered once in `async_setup` — they have no natural entry to pass. The new internal helpers `_iter_loaded_lcm_entries` and `get_managed_locks` make the merge cheap (LCM entries are O(few)). At sites that already have a `config_entry` in scope (diagnostics, websocket entry handlers, lock-removal in the listener), I switched directly to `config_entry.runtime_data.locks` — more efficient and removes the redundant `entry_config.has_lock()` filter.
+
+**Files modified**:
+- `custom_components/lock_code_manager/helpers.py` — added `_iter_loaded_lcm_entries`, `get_managed_locks`; rewrote `get_locks_from_targets` and `get_managed_lock` to use them; dropped `CONF_LOCKS` import.
+- `custom_components/lock_code_manager/__init__.py` — removed `CONF_LOCKS: {}` from both `hass.data.setdefault` calls; rewrote `async_unload_lock` to pop only from `runtime_data.locks`; added `_find_shared_lock_instance` for cross-entry BaseLock sharing; rewrote `_async_setup_new_locks` to use it; changed strategy-resource cleanup from "no locks left" to "no other LCM entries loaded"; switched the lock-removal lookup in `async_update_listener` to `runtime_data.locks`; dropped `CONF_LOCKS` import; added `ConfigEntryState` import.
+- `custom_components/lock_code_manager/diagnostics.py` — both `all_locks` reads now come from `config_entry.runtime_data.locks` via `getattr` to stay safe if runtime_data is absent.
+- `custom_components/lock_code_manager/websocket.py` — three `hass.data...get(CONF_LOCKS)` reads replaced (two with `config_entry.runtime_data.locks`, one with `get_managed_locks(hass)`).
+
+**Tests updated**:
+- `tests/test_services.py` — two lock lookups switched to `lock_code_manager_config_entry.runtime_data.locks`; dropped unused `CONF_LOCKS` import.
+- `tests/test_init.py` — added `_loaded_lcm_lock_entity_ids(hass)` helper; the two `assert not hass.data[DOMAIN].get(CONF_LOCKS)` checks now use it.
+- `tests/test_diagnostics.py` — replaced direct `hass.data[DOMAIN]["locks"]` read with `runtime_data.locks`.
+
+`CONF_LOCKS` constant remains (still used by config flow, EntryConfig, websocket payload keys). Full test suite: 908 passed. Python pre-commit hooks pass; yarn-lint failure is pre-existing (duplicate node_modules between the parent repo and worktree — unrelated to Python changes).
+
+**Commit**: `28ee7074` "refactor: make runtime_data.locks the sole source of truth for managed locks".
+
+**Out-of-scope observations**: None worth flagging. Behavior of `_lock_managed_by_other_entry` (config-based) and the `BaseLock` instance-sharing semantics across entries are preserved exactly.</result>
+<usage><total_tokens>166738</total_tokens><tool_uses>108</tool_uses><duration_ms>800106</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a02084c60efc8065b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/60937559-5043-4ccc-8292-921d37b2075d/tasks/a02084c60efc8065b.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR A: lifecycle &amp;amp; tick exclusivity" completed</summary>
+<result>## Summary
+
+### Files modified
+
+- **`.gitignore`** — added `.worktrees/` after `.serena/`.
+- **`custom_components/lock_code_manager/sync.py`** — `SlotSyncManager.async_stop` is now async, records the current tick via `asyncio.current_task()` at the start of `_async_tick`, and awaits the in-flight tick before returning. `_write_state()` short-circuits once `_started` is False.
+- **`custom_components/lock_code_manager/binary_sensor.py`** — `LockCodeManagerCodeSlotInSyncEntity` registers the sync manager in `runtime_data.sync_managers` on add and now uses `async_will_remove_from_hass` (awaited) to call `async_stop`, instead of the sync `async_on_remove` hook.
+- **`custom_components/lock_code_manager/models.py`** — added `sync_managers: set[SlotSyncManager]` and `update_listener_registered: bool` to `LockCodeManagerConfigEntryRuntimeData`.
+- **`custom_components/lock_code_manager/__init__.py`** — `_setup_entry_after_start` guards update-listener registration via `runtime_data.update_listener_registered` (cleared on unload). `async_unload_entry` now stops sync managers up front (awaiting in-flight ticks) before firing lock-removed callbacks and unloading platforms.
+- **`custom_components/lock_code_manager/providers/_base.py`** — `BaseLock._reconnect_task` field; `_handle_state_change` tracks the reconnect task and supersedes any in-flight one when a second LOADED arrives; `async_unload` cancels and awaits the reconnect task.
+
+### Test coverage added
+
+- `tests/test_sync.py::TestAsyncStopAwaitsInFlightTick` — three tests covering tick-in-progress stop ordering, idempotency, and `_write_state` suppression after stop.
+- `tests/providers/test_base.py` — `test_async_unload_cancels_in_flight_reconnect_task`, `test_handle_state_change_supersedes_prior_reconnect_task`.
+- `tests/test_init.py` — `test_setup_entry_after_start_does_not_stack_update_listeners`, `test_unload_stops_sync_managers_before_callbacks_and_platforms`, `test_unload_awaits_in_flight_sync_tick`.
+- `tests/test_binary_sensor.py::test_sync_manager_stop_during_active_sync_does_not_raise` updated to await the now-async `async_stop`.
+
+Full suite: 916 passed in ~34s.
+
+### Commit
+
+- `5e60b985` — "Close lifecycle-seam races around tick stop and reconnect"
+
+### Out-of-scope audit finding worth flagging
+
+Line 502 of `providers/_base.py` contains `except LockDisconnected, LockOperationFailed:` (introduced in PR #1184). Python 3.14 accepts this as a tuple, but it's incorrect style — older Pythons would treat it as `except LockDisconnected as LockOperationFailed:`. Should be `except (LockDisconnected, LockOperationFailed):`. PR E owns provider exception classification, so I left it alone.
+
+### Notes
+
+- Pre-commit's `Lint js with yarn` hook fails in the worktree because ESLint loads `@stylistic/eslint-plugin-js` from both the parent project's `node_modules` and the worktree's `node_modules`. Pure environmental — no TypeScript files were touched. All Python hooks pass.</result>
+<usage><total_tokens>192306</total_tokens><tool_uses>128</tool_uses><duration_ms>986303</duration_ms></usage>
+</task-notification>
+
+---
+
+yes
+
+---
+
+<task-notification>
+<task-id>af7614d56e62ba654</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/60937559-5043-4ccc-8292-921d37b2075d/tasks/af7614d56e62ba654.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR B: single breaker mutator" completed</summary>
+<result>All 924 tests pass. Work is committed on `refactor/single-breaker-mutator`.
+
+## Summary
+
+### Files modified
+- `/Users/raman/projects/lock_code_manager/.worktrees/breaker-B/custom_components/lock_code_manager/sync.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/breaker-B/tests/test_sync.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/breaker-B/tests/test_binary_sensor.py`
+
+### Design choice for the breaker-reset-request mechanism
+**Bool flag `_breaker_reset_requested`**, consumed at the top of `_async_tick_impl`. Chose a flag over a queue because:
+- Resets are idempotent and carry no payload — there is no distinguishing metadata between reset requests.
+- Coalescing many requests into one reset is the desired behavior (multiple callbacks firing across a tick window should collapse to one reset).
+- Cheapest, most readable option; zero allocation cost on the hot callback path.
+
+All non-`_async_tick_impl` mutations route through the flag: `_request_sync_check` (3 branches), `_disable_slot` (finally), `_suspend_slot`. The `async_stop` reset was removed entirely as dead work — the object is being torn down. Within `_async_tick_impl`, direct mutations remain (post-success `reset()`, post-verification-failure `record_failure()`, `LockOperationFailed` `record_failure()`) because those represent the tick's own authoritative decisions.
+
+### Decision on the unconditional `record_failure()`
+**Changed.** Removed the eager `record_failure()` at the end of `_perform_sync`'s set branch. Replaced with a deferred `record_failure()` on the post-verification-failed branch, gated on `was_set` (clears are expected to always succeed; a clear that doesn't read back is a stale-read artifact, not a real failure). Made `_perform_sync` return `bool` (True for set, False for clear) so the tick can branch correctly.
+
+Rationale: the original eager increment caused spurious breaker trips for polling providers with eventual consistency. A successful set followed by a stale `async_refresh()` would record a failure on every tick; 3 ticks in 5 minutes (6s minimum given TICK_INTERVAL=2s) tripped the breaker even when the set genuinely succeeded at the provider. Deferring to the post-verification branch preserves the "code-that-never-converges suspends" semantic while not penalizing successful sets that the next tick will observe converged.
+
+### Test coverage added (in `tests/test_sync.py`)
+New class `TestBreakerTickSoleMutatorInvariant` with three tests:
+- `test_request_sync_check_does_not_mutate_breaker_mid_tick` — uses the existing "paused set" pattern to hold a tick mid-await, fires `_request_sync_check` against IN_SYNC and SUSPENDED states, and asserts that `reset` / `record_failure` spies were never called and `failure_count` stayed at its seeded value.
+- `test_suspend_slot_defers_breaker_reset_to_tick` — calls `_suspend_slot` directly and asserts the flag flipped without mutating the counter.
+- `test_request_sync_check_sets_flag_not_breaker` — spies on `reset` while triggering the IN_SYNC-&gt;OUT_OF_SYNC branch.
+
+Also rewrote `test_disable_slot_*_resets_sync_tracker` (now `test_disable_slot_*_requests_breaker_reset`) to assert the new contract: the flag is set, but the count survives until the next tick. Patched `test_binary_sensor.py::test_sync_attempts_exceeded_suspends_slot` to clear the flag set by the upstream PIN-change `_request_sync_check` so the seeded breaker survives into the tick under test.
+
+### Commit
+- `8749fb80` — `refactor(sync): make _async_tick_impl the sole slot-breaker mutator`
+
+### Out-of-scope findings
+- `CircuitBreaker` itself untouched. No real bug found there.
+- `_perform_sync` now returns `bool` — small public-ish API change, but the method is `_`-prefixed/private. No callers outside the class.
+- One test in `test_binary_sensor.py` had a latent assumption that `_request_sync_check` was a no-op on its breaker pre-seed; the new design makes the prior reset explicit (via the flag). Annotated with a comment.
+
+### Unexpected
+- Initial uv setup required Python 3.14 (worktree's pyproject pinned `&gt;=3.14`, but only 3.13 was installed). Ran `uv python install 3.14`, then the existing `requirements_dev.txt` flow worked.
+- JS pre-commit hook (`Lint js with yarn`) fails because the worktree's `node_modules` collides with the parent repo's — both load `@stylistic/eslint-plugin-js`. Environmental, unrelated to changes; Python files pass cleanly when run scoped to the diff.</result>
+<usage><total_tokens>130265</total_tokens><tool_uses>91</tool_uses><duration_ms>847699</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a612515f83a8f8138</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/60937559-5043-4ccc-8292-921d37b2075d/tasks/a612515f83a8f8138.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR E: provider contract tightening" completed</summary>
+<result>All 931 tests pass. Here is the summary.
+
+## Summary
+
+### Files modified per concern
+
+**Concern 1 — Classification (LockOperationFailed vs LockDisconnected)**
+- `custom_components/lock_code_manager/providers/zha.py`: set/clear bare `Exception → LockDisconnected` (was `LockOperationFailed`)
+- `custom_components/lock_code_manager/providers/zigbee2mqtt.py`: set/clear split `OSError → LockDisconnected`, `HomeAssistantError → LockOperationFailed`
+- Matter: left unchanged (verified contract — see findings below)
+
+**Concern 2 — Multi-step under sequence lock**
+- `custom_components/lock_code_manager/providers/_base.py`: new `_serialize_sequence()` async context manager + `_sequence_lock`
+- `custom_components/lock_code_manager/providers/schlage.py`: wrap `_async_tag_unmanaged_codes`, `async_set_usercode`, `async_clear_usercode`, hard refresh tag pass
+- `custom_components/lock_code_manager/providers/akuvox.py`: same wrapping
+
+**Concern 3 — Schlage/Akuvox setup idempotency**
+- `custom_components/lock_code_manager/providers/schlage.py` + `akuvox.py`: `_tagged_once: bool` field guards the setup tag pass. Hard refresh bypasses the gate via a new `_async_run_tag_pass` body method.
+
+**Concern 4 — Listener-unsub registry**
+- `custom_components/lock_code_manager/providers/_base.py`: `_push_unsubs` list + `_register_push_unsub()` / `_clear_push_unsubs()` helpers (per-unsub exception isolation)
+- Migrated Matter (`_event_unsub`), ZHA (`_cluster_listener_unsub`), Z-Wave JS (`_value_update_unsub`), Zigbee2MQTT (`_unsubscribe`)
+- Z-Wave JS's `_listeners` (HA bus listeners) intentionally kept — separate lifecycle (setup/unload, not push reconnect)
+
+### Design choices
+
+**#2 (sequence-lock API):** Separate `_sequence_lock` (outer) from existing `_aio_lock` (per-call). `_serialize_sequence()` returns the lock as an async-context-manager (no extra wrapper). Concurrent multi-step sequences serialize at the outer lock; leaf `_execute_rate_limited` calls inside each sequence still acquire `_aio_lock` independently — no deadlock since they're different locks.
+
+**#3 (idempotency guard):** Bool `_tagged_once` on the provider instance. Set after first successful setup tag pass; reset naturally when the provider instance is recreated on full reload. Reconnect calls `async_setup` on the same instance → flag stays True → tag pass skipped. Hard refresh deliberately bypasses the gate by calling the internal `_async_run_tag_pass` helper directly.
+
+**#4 (registry API):** Single `list[Callable[[], None]]` named `_push_unsubs`. `_register_push_unsub(unsub)` appends. `_clear_push_unsubs()` iterates, calls each in try/except (warns and continues on individual failure), clears list. Scope is explicitly push-subscription lifecycle (managed by setup_push_subscription/teardown_push_subscription). Z-Wave's HA event-bus listeners stay separate because they're tied to setup/unload, not push reconnect.
+
+### #1 Per-provider classification table
+
+| Provider | Path | Before | After |
+|----------|------|--------|-------|
+| ZHA | set_pin_code/clear_pin_code raw exception | `LockOperationFailed` | `LockDisconnected` |
+| ZHA | non-zero status | `CodeRejectedError` | `CodeRejectedError` (unchanged) |
+| Zigbee2MQTT | publish OSError | `LockOperationFailed` | `LockDisconnected` |
+| Zigbee2MQTT | publish HomeAssistantError | `LockOperationFailed` | `LockOperationFailed` (unchanged) |
+| Matter | helpers HomeAssistantError | `LockDisconnected` | `LockDisconnected` (unchanged — see findings) |
+| Matter | ServiceValidationError | `LockCodeManagerProviderError` | `LockCodeManagerProviderError` (unchanged) |
+| Matter | SetCredentialFailedError | `CodeRejectedError`/`DuplicateCodeError` | unchanged |
+| Z-Wave JS | service-call failure | via `async_call_service` | unchanged |
+| Schlage/Akuvox | service-call failure | via `async_call_service` | unchanged |
+
+### Test coverage added
+
+- **#1**: parameterized OSError vs HomeAssistantError for Z2M set/clear (split into 4 tests). ZHA's `test_set_usercode_generic_exception`/`test_clear_usercode_generic_exception` updated to assert `LockDisconnected`.
+- **#2**: `test_serialize_sequence_serializes_concurrent_blocks` (max overlap == 1), `test_serialize_sequence_allows_rate_limited_inside` (no deadlock), `test_concurrent_set_usercode_serialized_under_sequence_lock` for both Schlage and Akuvox (proves the race is gone).
+- **#3**: `test_async_setup_idempotent_skips_repeat_tag_pass` for Schlage and Akuvox.
+- **#4**: `test_clear_push_unsubs_invokes_and_empties_registry`, `test_clear_push_unsubs_continues_on_individual_failure`. Existing per-provider tests updated to assert against `_push_unsubs` instead of removed private fields.
+
+Test count: 921 → 931 (10 new), all passing in ~33s.
+
+### Commit SHAs and messages
+
+```
+aaba229f refactor(providers): lift push-unsub registry and add sequence lock to base
+38286f1f refactor(providers): migrate Matter and Z-Wave JS push subscriptions to base registry
+ec0eb15a fix(providers): correct ZHA and Zigbee2MQTT failure classification
+99d2861b fix(schlage,akuvox): serialize multi-step ops and guard setup tag pass
+```
+
+### Out-of-scope findings worth flagging
+
+- **`_base.py:508`** has `except LockDisconnected, LockOperationFailed:` (Python 3.14 parses as `except (tuple):` syntactically — semantics unchanged but unconventional). Also `_util.py:48` (`except TypeError, ValueError:`) and `akuvox.py:249`, `zwave_js.py:157`, `zha.py:399, 444`. The 3.14 parser accepts this; runtime behavior is fine. Worth a cosmetic cleanup pass — out of scope here.
+- **Matter classification gap:** Matter's helpers (`get_lock_info`, `get_lock_users`, `set_lock_credential`, `clear_lock_credential`) raise `HomeAssistantError` for both transient comms failure AND operational rejection — Matter has no finer-grained exception type. We currently map all of them to `LockDisconnected`. After #1184 this means Matter operational failures (e.g. PIN rules) get reconnect treatment instead of per-slot break. Flagging for PR F (Matter data-model work) — the proper fix is finer-grained exception types from the Matter helpers, or a status-code wrapper.
+- **Zigbee2MQTT** `async_get_usercodes` per-slot publish failures map to `SlotCode.UNREADABLE_CODE` rather than raising. That's intentional (mentioned in comments) but means a broken broker mid-refresh doesn't surface as `LockDisconnected`. Likely correct as-is.
+- **`teardown_push_subscription` in Matter** previously had a private guard; now it unconditionally calls `_clear_push_unsubs()` (which is a safe no-op on an empty list). Equivalent behavior.
+
+### Anything unexpected
+
+- The worktree had a duplicate `node_modules/` from the parent worktree's symlinked deps, causing `eslint` to refuse to start. Deleted the worktree's `node_modules/` (preserving the parent's); prek then succeeds. No code change required — flagging for the dev-environment docs.</result>
+<usage><total_tokens>257542</total_tokens><tool_uses>171</tool_uses><duration_ms>1406652</duration_ms></usage>
+</task-notification>
+
+---
+
+yes open PRs
