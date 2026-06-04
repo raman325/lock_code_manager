@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7d6d243f6e27",
+  "session_id": "6f97b605-d32c-49a3-80e4-d2835dfb7464",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-04T19:52:50.736024Z",
+  "branch": "fix/issue-1213-slot-coordinator-race",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "tests/test_init.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "7cb9b04c4584",
+  "token_usage": {
+    "input_tokens": 79,
+    "cache_creation_tokens": 151959,
+    "cache_read_tokens": 7523594,
+    "output_tokens": 29445,
+    "api_call_count": 69
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-04T19:52:50.611439Z",
+    "agent_lines": 52,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 52,
+    "agent_percentage": 100
+  }
+}
