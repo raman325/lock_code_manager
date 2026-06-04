@@ -7,10 +7,7 @@ import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_fire_time_changed,
-)
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
@@ -65,6 +62,7 @@ from .common import (
     MockLCMLock,
 )
 from .conftest import (
+    async_advance_time,
     async_initial_tick,
     async_trigger_sync_tick,
     async_trigger_sync_tick_for_manager,
@@ -80,8 +78,7 @@ async def _async_force_sync_cycle(
     """Trigger a coordinator refresh and follow-up entity update."""
     await coordinator.async_refresh()
     await hass.async_block_till_done()
-    async_fire_time_changed(hass, dt_util.utcnow() + coordinator.update_interval)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, coordinator.update_interval)
 
 
 async def test_binary_sensor_entity(
@@ -1201,8 +1198,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     assert coordinator.data[1] == SlotCredential.known("9999")
 
     # Fire the tick timer to let the sync manager detect the mismatch
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 2)
 
     # Sync manager should have called set_usercode to restore "1234"
     assert len(service_calls.get("set_usercode", [])) == 1
@@ -1212,8 +1208,7 @@ async def test_coordinator_poll_detects_external_change_and_syncs(
     assert lock_provider.codes[1] == "1234"
 
     # Fire another tick for the sync manager to verify it is back in sync
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 3)
 
     state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, "Should be back in sync after correction"
@@ -1274,8 +1269,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     # Fire a tick to let the sync manager correct it
     # Also update the mock lock codes so set_usercode can work
     lock_provider.codes[1] = "wrong"
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 2)
 
     # Sync manager should have restored the configured PIN
     assert len(service_calls.get("set_usercode", [])) == 1
@@ -1283,8 +1277,7 @@ async def test_push_update_triggers_sync_state_change_on_binary_sensor(
     assert lock_provider.codes[1] == "1234"
 
     # Fire another tick to verify back in sync
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 3)
 
     state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, "Should be back in sync after tick"
@@ -1390,8 +1383,7 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     assert coordinator.data[1] == SlotCredential.known("5555")
 
     # Fire tick to let the sync manager detect and correct
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 2)
 
     # Sync manager should have restored the configured PIN
     assert len(service_calls.get("set_usercode", [])) == 1
@@ -1399,11 +1391,79 @@ async def test_drift_check_detects_external_change_and_triggers_sync(
     assert lock_provider.codes[1] == "1234"
 
     # Verify back in sync
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 3)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 3)
 
     state = hass.states.get(in_sync_entity)
     assert state.state == STATE_ON, "Should be in sync after drift correction"
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_async_advance_time_drains_background_tick_chain(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+) -> None:
+    """``async_advance_time`` settles a background tick whose mocks yield.
+
+    ``async_track_time_interval`` (used by the sync tick and coordinator
+    update) runs its callback as a background task. The bare
+    ``async_fire_time_changed + async_block_till_done`` pair does not
+    wait for background tasks, so any tick whose chain spans more than
+    one event-loop turn can outlive the wait. This is masked today only
+    because the default mock returns synchronously; the moment a mock
+    or a real provider yields, the bare pattern stops settling. This
+    test forces the issue by patching the connection check to yield,
+    and asserts ``async_advance_time`` still settles correctly.
+    """
+    config = {
+        CONF_LOCKS: [LOCK_1_ENTITY_ID],
+        CONF_SLOTS: {1: {CONF_NAME: "t1", CONF_PIN: "1234", CONF_ENABLED: True}},
+    }
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=config, unique_id="advance_time_test", title="Test"
+    )
+    config_entry.add_to_hass(hass)
+
+    # Reproducing the race requires several mock methods to yield so the
+    # tick chain spans more than one event-loop turn -- a single yield
+    # happens to slip through the bare ``block_till_done``.
+    real_set = MockLCMLock.async_set_usercode
+    real_get = MockLCMLock.async_get_usercodes
+    real_connected = MockLCMLock.async_is_integration_connected
+
+    async def _yielding_set(self: MockLCMLock, *args, **kwargs) -> bool:
+        await asyncio.sleep(0)
+        return await real_set(self, *args, **kwargs)
+
+    async def _yielding_get(self: MockLCMLock) -> dict:
+        await asyncio.sleep(0)
+        return await real_get(self)
+
+    async def _yielding_connected(self: MockLCMLock) -> bool:
+        await asyncio.sleep(0)
+        return await real_connected(self)
+
+    with (
+        patch.object(MockLCMLock, "async_set_usercode", _yielding_set),
+        patch.object(MockLCMLock, "async_get_usercodes", _yielding_get),
+        patch.object(
+            MockLCMLock, "async_is_integration_connected", _yielding_connected
+        ),
+    ):
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        in_sync_entity = "binary_sensor.test_1_code_slot_1_in_sync"
+        await async_initial_tick(hass, in_sync_entity)
+
+        lock_provider = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        lock_provider.service_calls.get("set_usercode", []).clear()
+        lock_provider.codes[1] = "9999"
+        await lock_provider.coordinator.async_refresh()
+        await hass.async_block_till_done()
+
+        await async_advance_time(hass, TICK_INTERVAL * 2)
+
+        assert len(lock_provider.service_calls["set_usercode"]) == 1
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -1459,8 +1519,7 @@ async def test_sync_manager_handles_code_sensor_unknown_state_on_startup(
     await hass.async_block_till_done()
 
     # Trigger a tick so the sync manager can process the new data
-    async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL * 2)
-    await hass.async_block_till_done()
+    await async_advance_time(hass, TICK_INTERVAL * 2)
 
     # Sync manager should have transitioned out of LOADING
     assert mgr._state is not SyncState.LOADING, (

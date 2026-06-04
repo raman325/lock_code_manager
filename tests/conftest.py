@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     MockModule,
     MockPlatform,
+    async_fire_time_changed,
     mock_config_flow,
     mock_integration,
     mock_platform,
@@ -24,6 +26,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.models import SyncState
@@ -261,3 +264,20 @@ async def async_trigger_sync_tick_for_manager(
         sync_manager._state = SyncState.OUT_OF_SYNC
     await sync_manager._async_tick()
     await hass.async_block_till_done()
+
+
+async def async_advance_time(hass: HomeAssistant, delta: timedelta) -> None:
+    """
+    Advance HA's mock clock by ``delta`` and settle pending work.
+
+    Replaces the brittle ``async_fire_time_changed + async_block_till_done``
+    pair. ``async_track_time_interval`` (used for the sync tick and the
+    coordinator update interval) schedules its callback as a background
+    task via ``async_run_hass_job(..., background=True)``. The default
+    ``async_block_till_done`` only waits for foreground tasks, so chains
+    spawned by a timer-fired tick can outlive the wait and leak across
+    assertions. This helper passes ``wait_background_tasks=True`` to
+    cover them.
+    """
+    async_fire_time_changed(hass, dt_util.utcnow() + delta)
+    await hass.async_block_till_done(wait_background_tasks=True)
