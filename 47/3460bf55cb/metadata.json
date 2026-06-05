@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "473460bf55cb",
+  "strategy": "manual-commit",
+  "branch": "feat/deobfuscate-log-service",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/domain/util.py",
+    "custom_components/lock_code_manager/services.yaml",
+    "custom_components/lock_code_manager/strings.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/3460bf55cb/0/metadata.json",
+      "transcript": "/47/3460bf55cb/0/full.jsonl",
+      "content_hash": "/47/3460bf55cb/0/content_hash.txt",
+      "prompt": "/47/3460bf55cb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 319,
+    "cache_creation_tokens": 795079,
+    "cache_read_tokens": 58522563,
+    "output_tokens": 136872,
+    "api_call_count": 260
+  }
+}
