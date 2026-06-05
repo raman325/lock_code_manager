@@ -11,6 +11,8 @@ from homeassistant.helpers.issue_registry import async_get as async_get_issue_re
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.domain.util import (
     async_disable_slot,
+    build_pin_deobfuscation_map,
+    deobfuscate_pins,
     mask_pin,
 )
 
@@ -84,6 +86,82 @@ async def test_async_disable_slot_creates_repair_issue(
     assert issue is not None
     assert issue.severity == "warning"
     assert issue.is_fixable is True
+
+
+def test_deobfuscate_pins_replaces_known_tokens():
+    """Known tokens get replaced; unknown tokens are left verbatim."""
+    pin = "1234"
+    token = mask_pin(pin, 1, INSTANCE_ID)
+    unknown_token = "pin#deadbeef"
+    text = f"Setting usercode on lock.front_door slot 1 (pin={token}) and also {unknown_token}"
+
+    deobfuscated, summary = deobfuscate_pins(text, {token: pin})
+
+    assert pin in deobfuscated
+    assert token not in deobfuscated
+    assert unknown_token in deobfuscated
+    assert summary == {"total": 2, "matched": 1, "unmatched_tokens": [unknown_token]}
+
+
+def test_deobfuscate_pins_no_tokens_in_text():
+    """Empty summary when the input has no pin# tokens at all."""
+    text = "Nothing to deobfuscate here"
+    deobfuscated, summary = deobfuscate_pins(text, {})
+    assert deobfuscated == text
+    assert summary == {"total": 0, "matched": 0, "unmatched_tokens": []}
+
+
+def test_deobfuscate_pins_counts_each_occurrence():
+    """Same token appearing multiple times is replaced each time and counted as multiple."""
+    pin = "5678"
+    token = mask_pin(pin, 2, INSTANCE_ID)
+    text = f"first {token} second {token} third {token}"
+
+    deobfuscated, summary = deobfuscate_pins(text, {token: pin})
+
+    assert deobfuscated.count(pin) == 3
+    assert summary["total"] == 3
+    assert summary["matched"] == 3
+    assert summary["unmatched_tokens"] == []
+
+
+def test_deobfuscate_pins_unmatched_tokens_deduplicated():
+    """Repeated unmatched tokens appear once in the summary list."""
+    text = "pin#aaaaaaaa once, pin#aaaaaaaa twice, pin#bbbbbbbb"
+
+    _deobfuscated, summary = deobfuscate_pins(text, {})
+
+    assert summary["total"] == 3
+    assert summary["matched"] == 0
+    assert summary["unmatched_tokens"] == ["pin#aaaaaaaa", "pin#bbbbbbbb"]
+
+
+def test_deobfuscate_pins_does_not_match_partial_tokens():
+    """Tokens shorter or longer than 8 hex chars are not matched."""
+    text = "pin#abc pin#abcdefgh pin#abcdef0123456789"
+
+    deobfuscated, summary = deobfuscate_pins(text, {})
+
+    # First is too short (3 chars), second has 'g' (non-hex), third is too long.
+    # None should be counted.
+    assert summary["total"] == 0
+    assert deobfuscated == text
+
+
+async def test_build_pin_deobfuscation_map_uses_configured_pins(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Map covers every slot with a non-empty PIN and matches mask_pin output."""
+    entries = hass.config_entries.async_loaded_entries(DOMAIN)
+    table = build_pin_deobfuscation_map(entries, INSTANCE_ID)
+
+    # BASE_CONFIG has slot 1 (pin 1234) and slot 2 (pin 5678) — both should
+    # round-trip through mask_pin to the same tokens this builds.
+    assert table[mask_pin("1234", 1, INSTANCE_ID)] == "1234"
+    assert table[mask_pin("5678", 2, INSTANCE_ID)] == "5678"
+    assert len(table) == 2
 
 
 async def test_async_disable_slot_no_issue_without_reason(

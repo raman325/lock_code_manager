@@ -16,15 +16,18 @@ from custom_components.lock_code_manager.const import (
     ATTR_LENGTH,
     ATTR_LOCK_ENTITY_ID,
     ATTR_SLOT,
+    ATTR_TEXT,
     ATTR_USERCODE,
     DOMAIN,
     SERVICE_CLEAR_SLOT_CONDITION,
     SERVICE_CLEAR_USERCODE,
+    SERVICE_DEOBFUSCATE_LOG,
     SERVICE_GENERATE_PIN,
     SERVICE_SET_SLOT_CONDITION,
     SERVICE_SET_USERCODE,
 )
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.domain.util import mask_pin
 
 from .common import LOCK_1_ENTITY_ID
 
@@ -369,3 +372,46 @@ async def test_generate_pin_service_rejects_invalid_length(
             blocking=True,
             return_response=True,
         )
+
+
+async def test_deobfuscate_log_service_round_trips_configured_pins(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """deobfuscate_log replaces tokens for currently-configured PINs and wraps with sentinels."""
+    instance_id = hass.data[DOMAIN]["instance_id"]
+    # BASE_CONFIG has slot 1 with PIN "1234" and slot 2 with PIN "5678".
+    token_slot_1 = mask_pin("1234", 1, instance_id)
+    token_slot_2 = mask_pin("5678", 2, instance_id)
+    log_excerpt = (
+        f"Setting usercode on lock.test_1 slot 1 (pin={token_slot_1})\n"
+        f"Setting usercode on lock.test_2 slot 2 (pin={token_slot_2})\n"
+        "Unrelated line with no token\n"
+        "Stale token from a rotated PIN: pin#deadbeef"
+    )
+
+    response = await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DEOBFUSCATE_LOG,
+        {ATTR_TEXT: log_excerpt},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert response is not None
+    text = response["deobfuscated_text"]
+    assert "1234" in text
+    assert "5678" in text
+    assert token_slot_1 not in text
+    assert token_slot_2 not in text
+    # Stale token is preserved verbatim so the output remains comparable to the input.
+    assert "pin#deadbeef" in text
+    assert "BEGIN DEOBFUSCATED" in text and "END DEOBFUSCATED" in text
+
+    summary = response["summary"]
+    assert summary == {
+        "total": 3,
+        "matched": 2,
+        "unmatched_tokens": ["pin#deadbeef"],
+    }

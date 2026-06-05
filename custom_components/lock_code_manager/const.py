@@ -20,6 +20,9 @@ SERVICE_CLEAR_USERCODE = "clear_usercode"
 SERVICE_SET_SLOT_CONDITION = "set_slot_condition"
 SERVICE_CLEAR_SLOT_CONDITION = "clear_slot_condition"
 SERVICE_GENERATE_PIN = "generate_pin"
+SERVICE_DEOBFUSCATE_LOG = "deobfuscate_log"
+
+ATTR_TEXT = "text"
 
 ATTR_ENTITIES_ADDED_TRACKER = "entities_added_tracker"
 ATTR_ENTITIES_REMOVED_TRACKER = "entities_removed_tracker"
