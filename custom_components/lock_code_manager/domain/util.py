@@ -57,9 +57,11 @@ def build_pin_deobfuscation_map(
     PIN is empty are skipped because ``mask_pin`` returns ``<empty>`` for
     them and that's not a token we need to reverse.
 
-    Different ``(slot, pin)`` pairs always produce different tokens (slot
-    is part of the salt), so the resulting map has one entry per
-    configured slot with a PIN.
+    Slot is part of the salt, so different ``(slot, pin)`` pairs produce
+    different tokens with overwhelming probability — CRC32 has a 32-bit
+    output so collisions are mathematically possible but vanishingly
+    unlikely at any plausible slot count. The resulting map has one
+    entry per configured slot with a PIN.
     """
     table: dict[str, str] = {}
     for entry in entries:
