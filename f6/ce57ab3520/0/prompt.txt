@@ -1,0 +1,41 @@
+are there other places where we need to introduce the sleep to mimick what's happening and uncover other races?
+
+---
+
+what would a stronger "drive ticks to completion" helper look like?
+
+---
+
+yes open as its own PR
+
+---
+
+ff main and clean up stale branches
+
+---
+
+do we have icons.json defined?
+
+---
+
+lets get missing icons in there for all entities and services
+
+---
+
+yes. Then in a new PR, let's create a new service to help translate the anonymized PINs in logs - I am thinking the user pastes in LCM logs and it deobfuscates them. Thoughts?
+
+---
+
+does homeassistant.const have a CONF_TEST? If so, let's use that as the key
+
+---
+
+let's make an ATTR_TEXT = "text" and call that the field name
+
+---
+
+theres a merge conflict in 1217 because of 1216 being merged
+
+---
+
+check review comment
