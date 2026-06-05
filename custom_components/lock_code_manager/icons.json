@@ -1,6 +1,13 @@
 {
   "entity": {
     "binary_sensor": {
+      "active": {
+        "default": "mdi:account-clock",
+        "state": {
+          "off": "mdi:account-off",
+          "on": "mdi:account-check"
+        }
+      },
       "in_sync": {
         "default": "mdi:sync-alert",
         "state": {
@@ -19,6 +26,11 @@
         "default": "mdi:lock-smart"
       }
     },
+    "switch": {
+      "enabled": {
+        "default": "mdi:account-key"
+      }
+    },
     "text": {
       "name": {
         "default": "mdi:rename"
@@ -29,6 +41,11 @@
     }
   },
   "services": {
-    "hard_refresh_usercodes": "mdi:refresh"
+    "clear_slot_condition": "mdi:calendar-remove",
+    "clear_usercode": "mdi:key-remove",
+    "generate_pin": "mdi:dice-multiple",
+    "hard_refresh_usercodes": "mdi:refresh",
+    "set_slot_condition": "mdi:calendar-edit",
+    "set_usercode": "mdi:key-plus"
   }
 }
