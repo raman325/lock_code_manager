@@ -27,3 +27,7 @@ yes. Then in a new PR, let's create a new service to help translate the anonymiz
 ---
 
 does homeassistant.const have a CONF_TEST? If so, let's use that as the key
+
+---
+
+let's make an ATTR_TEXT = "text" and call that the field name
