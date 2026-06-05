@@ -162,6 +162,16 @@
           "name": "Length"
         }
       }
+    },
+    "deobfuscate_log": {
+      "name": "Deobfuscate log",
+      "description": "Replace mask_pin tokens (pin#xxxxxxxx) in pasted log text with the plaintext PINs configured in any loaded Lock Code Manager entry. WARNING: the response contains plaintext PINs \u2014 do not paste it into public issues, forums, or any shared channel.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "The log text to deobfuscate. Paste raw log lines or a full log file."
+        }
+      }
     }
   },
   "issues": {

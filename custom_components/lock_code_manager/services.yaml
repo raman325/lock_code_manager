@@ -87,3 +87,11 @@ generate_pin:
           max: 12
           step: 1
           mode: box
+
+deobfuscate_log:
+  fields:
+    text:
+      required: true
+      selector:
+        text:
+          multiline: true

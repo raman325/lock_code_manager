@@ -43,6 +43,7 @@
   "services": {
     "clear_slot_condition": "mdi:calendar-remove",
     "clear_usercode": "mdi:key-remove",
+    "deobfuscate_log": "mdi:incognito-off",
     "generate_pin": "mdi:dice-multiple",
     "hard_refresh_usercodes": "mdi:refresh",
     "set_slot_condition": "mdi:calendar-edit",
