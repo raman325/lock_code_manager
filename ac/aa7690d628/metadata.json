@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "acaa7690d628",
+  "strategy": "manual-commit",
+  "branch": "chore/icons-fill-missing",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/icons.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ac/aa7690d628/0/metadata.json",
+      "transcript": "/ac/aa7690d628/0/full.jsonl",
+      "content_hash": "/ac/aa7690d628/0/content_hash.txt",
+      "prompt": "/ac/aa7690d628/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 249,
+    "cache_creation_tokens": 740673,
+    "cache_read_tokens": 38326258,
+    "output_tokens": 109162,
+    "api_call_count": 200
+  }
+}
