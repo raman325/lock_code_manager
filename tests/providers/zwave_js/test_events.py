@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,7 +16,7 @@ from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.node import Node
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
@@ -38,47 +37,15 @@ from custom_components.lock_code_manager.domain.models import (
 )
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
+from .helpers import (
+    async_capture_events,
+    get_enabled_switch_entity_id,
+    make_duplicate_code_event,
+)
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def async_capture_events(
-    hass: HomeAssistant, event_name: str
-) -> list[Event[dict[str, Any]]]:
-    """Create a helper that captures events."""
-    events: list[Event[dict[str, Any]]] = []
-
-    @callback
-    def capture_events(event: Event[dict[str, Any]]) -> None:
-        events.append(event)
-
-    hass.bus.async_listen(event_name, capture_events)
-    return events
-
-
-def _make_duplicate_code_event(node_id: int, user_id: int | None = None) -> ZwaveEvent:
-    """Create a duplicate code notification ZwaveEvent."""
-    params: dict[str, Any] = {}
-    if user_id is not None:
-        params["userId"] = user_id
-    return ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": node_id,
-            "endpointIndex": 0,
-            "ccId": 113,
-            "args": {
-                "type": 6,  # ACCESS_CONTROL
-                "event": 15,  # NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-                "label": "Access Control",
-                "eventLabel": "New user code not added due to duplicate code",
-                "parameters": params,
-            },
-        },
-    )
 
 
 async def _setup_lcm_entry(
@@ -107,15 +74,6 @@ async def _setup_lcm_entry(
     await hass.config_entries.async_setup(lcm_entry.entry_id)
     await hass.async_block_till_done()
     return lcm_entry
-
-
-def _get_enabled_switch_entity_id(hass: HomeAssistant, entry_id: str, slot: int) -> str:
-    """Get the enabled switch entity ID for a slot."""
-    ent_reg = er.async_get(hass)
-    uid = f"{entry_id}|{slot}|{CONF_ENABLED}"
-    entity_id = ent_reg.async_get_entity_id("switch", DOMAIN, uid)
-    assert entity_id, f"Switch entity not found for slot {slot}"
-    return entity_id
 
 
 # ---------------------------------------------------------------------------
@@ -883,7 +841,7 @@ async def test_duplicate_code_notification_marks_rejected(
     lock_instance._set_in_progress_code_slot = 2
 
     lock_schlage_be469.receive_event(
-        _make_duplicate_code_event(lock_schlage_be469.node_id, user_id=2)
+        make_duplicate_code_event(lock_schlage_be469.node_id, user_id=2)
     )
     await hass.async_block_till_done()
 
@@ -916,7 +874,7 @@ async def test_duplicate_code_notification_no_user_id_marks_rejected(
     lock_instance._set_in_progress_code_slot = 3
 
     lock_schlage_be469.receive_event(
-        _make_duplicate_code_event(lock_schlage_be469.node_id)
+        make_duplicate_code_event(lock_schlage_be469.node_id)
     )
     await hass.async_block_till_done()
 
@@ -940,12 +898,12 @@ async def test_duplicate_code_notification_ignored_when_not_in_progress(
         {"2": {CONF_NAME: "test", CONF_PIN: "1234", CONF_ENABLED: True}},
         mock_zwave_usercodes,
     )
-    switch_entity_id = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    switch_entity_id = get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
     assert hass.states.get(switch_entity_id).state == STATE_ON
 
     # Do NOT set _set_in_progress_code_slot (external trigger)
     lock_schlage_be469.receive_event(
-        _make_duplicate_code_event(lock_schlage_be469.node_id, user_id=2)
+        make_duplicate_code_event(lock_schlage_be469.node_id, user_id=2)
     )
     await hass.async_block_till_done()
 
@@ -981,8 +939,8 @@ async def test_duplicate_code_notification_ignored_when_user_id_mismatches(
         },
         mock_zwave_usercodes,
     )
-    switch_2 = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
-    switch_3 = _get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 3)
+    switch_2 = get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 2)
+    switch_3 = get_enabled_switch_entity_id(hass, lcm_entry.entry_id, 3)
 
     runtime_data: LockCodeManagerConfigEntryRuntimeData = lcm_entry.runtime_data
     lock_instance = runtime_data.locks[lock_entity.entity_id]
@@ -991,7 +949,7 @@ async def test_duplicate_code_notification_ignored_when_user_id_mismatches(
     lock_instance._set_in_progress_code_slot = 2
 
     lock_schlage_be469.receive_event(
-        _make_duplicate_code_event(lock_schlage_be469.node_id, user_id=3)
+        make_duplicate_code_event(lock_schlage_be469.node_id, user_id=3)
     )
     await hass.async_block_till_done()
 
