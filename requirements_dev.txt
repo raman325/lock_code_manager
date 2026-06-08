@@ -1,19 +1,19 @@
 -r requirements_lint.txt
 -r requirements_test.txt
-aioesphomeapi==45.0.4
-aiofiles==25.1.0
+aioesphomeapi==45.3.1
+aiofiles==24.1.0
 aiousbwatcher==1.1.2
 colorlog==6.10.1
-debugpy==1.8.21
-ha-silabs-firmware-client>=0.3.0
-homeassistant>=2026.5.4
-matter-python-client==0.8.0
+debugpy==1.8.17
+ha-silabs-firmware-client==0.3.0
+homeassistant>=2026.6.1
+matter-python-client==0.7.1
 pyserial==3.5
 pyudev==0.24.4
-universal-silabs-flasher>=1.1.0
+universal-silabs-flasher==1.1.0
 usb-devices>=0.5.1
 uv
-zeroconf==0.148.0
-zha>=1.3.1,<1.4
+zeroconf==0.149.16
+zha==1.4.1
 zigpy>=1.4.1
-zwave-js-server-python==0.72.0
+zwave-js-server-python==0.71.0
