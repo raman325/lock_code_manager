@@ -14,7 +14,10 @@ do not change ``SlotCredential``, which remains the coordinator's currency.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+
+from .models import SlotCredential
 
 
 class CredentialType(StrEnum):
@@ -59,3 +62,52 @@ class CredentialRule(StrEnum):
     """
 
     SINGLE = "single"
+
+
+# CredentialState is the read-state of a credential value: known(value),
+# unreadable (write-only code present), or empty. It deliberately reuses
+# SlotCredential's existing semantics rather than duplicating them, so the
+# coordinator's currency and the new model never drift. Construct states via
+# SlotCredential.known(value) / .unreadable() / .empty().
+CredentialState = SlotCredential
+
+
+@dataclass(frozen=True, slots=True)
+class Credential:
+    """
+    One credential instance addressed within a user.
+
+    Pairs the credential ``type`` and its lock ``slot`` index with a reused
+    ``CredentialState`` (a ``SlotCredential``). The read-state accessors
+    delegate to that state so there is one source of truth for empty /
+    write-only / readable. Treat as an immutable value; consume via the
+    accessors rather than reaching into ``state``.
+    """
+
+    type: CredentialType
+    slot: int
+    state: CredentialState
+
+    @property
+    def is_empty(self) -> bool:
+        """Return True when the credential's slot holds no code."""
+        return self.state.is_empty
+
+    @property
+    def is_present(self) -> bool:
+        """Return True when the credential's slot holds a code."""
+        return self.state.is_present
+
+    @property
+    def is_readable(self) -> bool:
+        """Return True when the credential exposes a comparable value."""
+        return self.state.is_readable
+
+    @property
+    def readable_pin(self) -> str | None:
+        """Return the value when readable, otherwise ``None``."""
+        return self.state.readable_pin
+
+    def matches(self, pin: str) -> bool:
+        """Return True when this credential is readable and equals ``pin``."""
+        return self.state.matches(pin)

@@ -62,3 +62,58 @@ class TestCredentialRule:
 
     def test_members(self) -> None:
         assert set(CredentialRule.__members__) == {"SINGLE"}
+
+
+from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
+    Credential,
+    CredentialState,
+)
+from custom_components.lock_code_manager.domain.models import (  # noqa: E402
+    SlotCredential,
+)
+
+
+class TestCredentialStateAlias:
+    """CredentialState is a thin reuse of SlotCredential, not a new dataclass."""
+
+    def test_credential_state_is_slot_credential(self) -> None:
+        # Aliasing guarantees there is a single implementation of the three
+        # read-states (known / unreadable / empty) shared with the coordinator.
+        assert CredentialState is SlotCredential
+
+
+class TestCredential:
+    """A Credential pairs a type and slot with a reused SlotCredential state."""
+
+    def test_known_pin_is_readable_and_present(self) -> None:
+        cred = Credential(
+            type=CredentialType.PIN, slot=3, state=SlotCredential.known("1234")
+        )
+        assert cred.is_present
+        assert cred.is_readable
+        assert not cred.is_empty
+        assert cred.readable_pin == "1234"
+        assert cred.matches("1234")
+        assert not cred.matches("0000")
+
+    def test_unreadable_is_present_not_readable(self) -> None:
+        cred = Credential(
+            type=CredentialType.PIN, slot=3, state=SlotCredential.unreadable()
+        )
+        assert cred.is_present
+        assert not cred.is_readable
+        assert not cred.is_empty
+        assert cred.readable_pin is None
+        assert not cred.matches("1234")
+
+    def test_empty_is_neither_present_nor_readable(self) -> None:
+        cred = Credential(type=CredentialType.PIN, slot=3, state=SlotCredential.empty())
+        assert cred.is_empty
+        assert not cred.is_present
+        assert not cred.is_readable
+        assert cred.readable_pin is None
+
+    def test_is_frozen(self) -> None:
+        cred = Credential(type=CredentialType.PIN, slot=3, state=SlotCredential.empty())
+        with pytest.raises((AttributeError, TypeError)):
+            cred.slot = 4  # type: ignore[misc]
