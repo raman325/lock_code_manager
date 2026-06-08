@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -254,3 +255,32 @@ async def test_clear_usercode_native_no_user_op_when_absent(
     assert changed is False
     assert lock.calls == [("delete_credential", 7, 7)]
     assert 7 not in lock._users
+
+
+async def test_internal_set_usercode_drives_orchestration(
+    hass: HomeAssistant,
+) -> None:
+    """The external set wrapper routes through the orchestration to primitives."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_internal_set")
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_set_usercode(4, "4321", "carol")
+    assert ("set_user", 4, "carol") in lock.calls
+    assert ("set_credential", 4, 4) in lock.calls
+
+
+async def test_internal_roundtrip_set_get_clear(hass: HomeAssistant) -> None:
+    """Set then get then clear round-trips through the seam end to end."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_internal_roundtrip")
+    lock._min_operation_delay = 0.0
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_set_usercode(1, "1111", "a")
+        await lock.async_internal_set_usercode(2, "2222", "b")
+        assert await lock.async_internal_get_usercodes() == {
+            1: SlotCredential.known("1111"),
+            2: SlotCredential.known("2222"),
+        }
+        await lock.async_internal_clear_usercode(1)
+        assert await lock.async_internal_get_usercodes() == {
+            2: SlotCredential.known("2222")
+        }
