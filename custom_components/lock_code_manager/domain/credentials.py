@@ -14,7 +14,7 @@ do not change ``SlotCredential``, which remains the coordinator's currency.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -126,3 +126,44 @@ class CredentialRef(NamedTuple):
     user_id: int
     type: CredentialType
     slot: int
+
+
+@dataclass(slots=True)
+class User:
+    """
+    A lock user and the credentials they present.
+
+    Modeled so the future "user is the unit, multiple credentials" world is
+    additive: today every user carries a single Personal Identification
+    Number credential, but ``credentials`` is already a list and the rule and
+    type fields already exist. ``credentials`` is mutable (a list), so this
+    aggregate is intentionally not frozen; the contained ``Credential``
+    values are themselves immutable.
+    """
+
+    user_id: int
+    name: str | None = None
+    user_type: UserType = UserType.UNRESTRICTED
+    active: bool = True
+    credential_rule: CredentialRule = CredentialRule.SINGLE
+    credentials: list[Credential] = field(default_factory=list)
+
+    @property
+    def pin_credentials(self) -> list[Credential]:
+        """Return this user's Personal Identification Number credentials."""
+        return [
+            credential
+            for credential in self.credentials
+            if credential.type is CredentialType.PIN
+        ]
+
+    def credential_for(self, credential_type: CredentialType) -> Credential | None:
+        """Return the first credential of ``credential_type``, else ``None``."""
+        return next(
+            (
+                credential
+                for credential in self.credentials
+                if credential.type is credential_type
+            ),
+            None,
+        )

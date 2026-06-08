@@ -141,3 +141,51 @@ class TestCredentialRef:
         b = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
         assert a == b
         assert len({a, b}) == 1
+
+
+from custom_components.lock_code_manager.domain.credentials import User  # noqa: E402
+
+
+class TestUser:
+    """A User owns a list of credentials; defaults model today's single user."""
+
+    def test_defaults_are_minimal(self) -> None:
+        user = User(user_id=3)
+        assert user.user_id == 3
+        assert user.name is None
+        assert user.user_type is UserType.UNRESTRICTED
+        assert user.active is True
+        assert user.credential_rule is CredentialRule.SINGLE
+        assert user.credentials == []
+
+    def test_each_user_gets_its_own_credentials_list(self) -> None:
+        # A mutable default must not be shared across instances.
+        a = User(user_id=1)
+        b = User(user_id=2)
+        assert a.credentials is not b.credentials
+
+    def test_holds_credentials(self) -> None:
+        cred = Credential(
+            type=CredentialType.PIN, slot=3, state=SlotCredential.known("1234")
+        )
+        user = User(user_id=3, name="alice", credentials=[cred])
+        assert user.credentials == [cred]
+        assert user.name == "alice"
+
+    def test_pin_credentials_filters_by_type(self) -> None:
+        pin = Credential(
+            type=CredentialType.PIN, slot=3, state=SlotCredential.known("1234")
+        )
+        rfid = Credential(
+            type=CredentialType.RFID, slot=3, state=SlotCredential.unreadable()
+        )
+        user = User(user_id=3, credentials=[pin, rfid])
+        assert user.pin_credentials == [pin]
+
+    def test_credential_for_returns_first_match_or_none(self) -> None:
+        empty_pin = Credential(
+            type=CredentialType.PIN, slot=3, state=SlotCredential.empty()
+        )
+        user = User(user_id=3, credentials=[empty_pin])
+        assert user.credential_for(CredentialType.PIN) is empty_pin
+        assert user.credential_for(CredentialType.RFID) is None
