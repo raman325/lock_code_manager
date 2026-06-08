@@ -16,11 +16,14 @@ from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    SetUserResult,
     User,
     credential_from_slot,
     user_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
+    CodeRejectedError,
+    LockOperationFailed,
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -55,12 +58,13 @@ class _NativeStubLock(BaseLock):
     def supports_native_users(self) -> bool:
         return True
 
-    async def async_set_user(self, user: User) -> int:
+    async def async_set_user(self, user: User) -> SetUserResult:
+        created = user.user_id not in self._users
         self.calls.append(("set_user", user.user_id, user.name))
         self._users[user.user_id] = User(
             user_id=user.user_id, name=user.name, active=user.active
         )
-        return user.user_id
+        return SetUserResult(user_id=user.user_id, created=created)
 
     async def async_delete_user(self, user_id: int) -> None:
         self.calls.append(("delete_user", user_id))
@@ -348,3 +352,79 @@ async def test_set_usercode_threads_name_and_source(hass: HomeAssistant) -> None
         "name": None,
         "source": "sync",
     }
+
+
+class _CredentialWriteFailsLock(_NativeStubLock):
+    """Native stub whose credential write always fails."""
+
+    async def async_set_credential(
+        self,
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> bool:
+        self.calls.append(("set_credential", user_id, credential.slot))
+        raise CodeRejectedError(
+            code_slot=credential.slot, lock_entity_id=self.lock.entity_id
+        )
+
+
+async def test_set_usercode_rolls_back_newly_created_user_on_failure(
+    hass: HomeAssistant,
+) -> None:
+    """A failed credential write deletes the user this set just created."""
+    lock = _make_lock(hass, _CredentialWriteFailsLock, "seam_rollback_created")
+    with pytest.raises(CodeRejectedError):
+        await lock.async_set_usercode(3, "9999", name="alice")
+    assert lock.calls == [
+        ("set_user", 3, "alice"),
+        ("set_credential", 3, 3),
+        ("delete_user", 3),
+    ]
+    assert 3 not in lock._users
+
+
+async def test_set_usercode_keeps_pre_existing_user_on_failure(
+    hass: HomeAssistant,
+) -> None:
+    """A failed credential write does not delete a user that already existed."""
+    lock = _make_lock(hass, _CredentialWriteFailsLock, "seam_rollback_existing")
+    lock._users = {
+        3: User(
+            user_id=3,
+            name="bob",
+            credentials=[credential_from_slot(3, SlotCredential.known("0000"))],
+        )
+    }
+    with pytest.raises(CodeRejectedError):
+        await lock.async_set_usercode(3, "9999", name="bob")
+    assert ("delete_user", 3) not in lock.calls
+    assert 3 in lock._users
+
+
+class _UserDeleteFailsLock(_NativeStubLock):
+    """Native stub whose user delete always fails."""
+
+    async def async_delete_user(self, user_id: int) -> None:
+        self.calls.append(("delete_user", user_id))
+        raise LockOperationFailed("user delete failed")
+
+
+async def test_clear_usercode_tolerates_user_delete_failure(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Clear still reports the credential change when the user delete fails."""
+    lock = _make_lock(hass, _UserDeleteFailsLock, "seam_clear_deluser_fail")
+    lock._users = {
+        4: User(
+            user_id=4,
+            credentials=[credential_from_slot(4, SlotCredential.known("1234"))],
+        )
+    }
+    changed = await lock.async_clear_usercode(4)
+    assert changed is True
+    assert ("delete_credential", 4, 4) in lock.calls
+    assert ("delete_user", 4) in lock.calls

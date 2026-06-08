@@ -174,6 +174,24 @@ class User:
 
 
 @dataclass(frozen=True, slots=True)
+class SetUserResult:
+    """
+    Outcome of creating or updating a lock user.
+
+    ``user_id`` is the resolved identifier, which the integration may allocate
+    rather than echo back. ``created`` is True when the call added a new user
+    and False when it updated an existing one. The base orchestration uses
+    ``created`` to roll back -- delete the user -- only when a newly created
+    user would otherwise be left with no credential by a failed credential
+    write, preserving the invariant that a user exists if and only if it owns
+    at least one credential.
+    """
+
+    user_id: int
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CredentialTypeCapability:
     """
     Per-credential-type limits advertised by a lock.

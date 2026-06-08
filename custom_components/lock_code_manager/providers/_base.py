@@ -44,6 +44,7 @@ from ..domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    SetUserResult,
     User,
     credential_from_slot,
     user_from_slot,
@@ -993,11 +994,31 @@ class BaseLock:
         They are independent arguments: the slot adapter's ``user`` happens to
         also list this credential (an artifact of the one-to-one slot
         projection), but only ``credential`` drives the write here.
+
+        If the credential write fails, a user this call newly created is rolled
+        back so the lock is not left with a credential-less user (which the
+        slot-keyed coordinator cannot see and would never reconcile away). A
+        pre-existing user is left untouched -- it may still own other
+        credentials.
         """
-        user_id = await self.async_set_user(user)
-        return await self.async_set_credential(
-            user_id, credential, name=name, source=source
-        )
+        result = await self.async_set_user(user)
+        try:
+            return await self.async_set_credential(
+                result.user_id, credential, name=name, source=source
+            )
+        except Exception:
+            if result.created:
+                try:
+                    await self.async_delete_user(result.user_id)
+                except Exception as rollback_err:
+                    LOGGER.warning(
+                        "Lock %s: failed to roll back newly created user %s "
+                        "after a failed credential write: %s",
+                        self.lock.entity_id,
+                        result.user_id,
+                        rollback_err,
+                    )
+            raise
 
     @final
     async def _drop_credential(self, owner: User, ref: CredentialRef) -> bool:
@@ -1009,27 +1030,49 @@ class BaseLock:
         if it owns at least one credential). The count is read from ``owner``,
         a pre-deletion snapshot, so the decision does not depend on whether the
         provider mutates the user during the delete. Returns True if changed.
+
+        The credential delete is the operation that clears the slot, so a
+        failure of the follow-up user delete is logged rather than raised: the
+        slot is already cleared, and raising would only churn retries that
+        re-resolve to no owner. The leftover empty user is surfaced in the log.
         """
         was_only_credential = len(owner.credentials) <= 1
         changed = await self.async_delete_credential(ref)
         if changed and was_only_credential:
-            await self.async_delete_user(owner.user_id)
+            try:
+                await self.async_delete_user(owner.user_id)
+            except Exception as err:
+                LOGGER.warning(
+                    "Lock %s: cleared the credential at slot %s but failed to "
+                    "remove the now-empty user %s: %s",
+                    self.lock.entity_id,
+                    ref.slot,
+                    owner.user_id,
+                    err,
+                )
         return changed
 
-    async def async_set_user(self, user: User) -> int:
+    async def async_set_user(self, user: User) -> SetUserResult:
         """
-        Create or update a lock user, returning the resolved user identifier.
+        Create or update a lock user.
 
-        Native-user providers only. The returned identifier is threaded into
-        the following ``async_set_credential`` call, so a provider that lets
-        its integration auto-allocate the identifier must return the allocated
-        value. The Z-Wave set-credential command requires an existing user,
-        which is why the base runs this first.
+        Native-user providers only. Returns a ``SetUserResult`` carrying the
+        resolved ``user_id`` (threaded into the following
+        ``async_set_credential`` call, so a provider whose integration
+        auto-allocates the identifier must return the allocated value) and
+        ``created`` -- True when this call added a new user, False when it
+        updated an existing one. ``created`` lets the base roll the user back
+        if the subsequent credential write fails. The Z-Wave set-credential
+        command requires an existing user, which is why the base runs this
+        first.
+
+        ``user.name`` of ``None`` means leave the existing name unchanged (not
+        clear it), matching how the providers already treat an absent name.
         """
         self._raise_not_implemented(
             "async_set_user",
             "Override on native-user providers to create or update a lock "
-            "user and return its resolved user_id.",
+            "user and return a SetUserResult(user_id, created).",
         )
 
     async def async_delete_user(self, user_id: int) -> None:
@@ -1062,7 +1105,8 @@ class BaseLock:
         ``DuplicateCodeError`` when the lock rejects the value as a duplicate.
         Native-user providers carry the user's name on the user record, so they
         may treat ``name`` here as advisory; slot-only providers use it (for
-        example as a tagged code name).
+        example as a tagged code name). A ``name`` of ``None`` means leave any
+        existing name unchanged, never clear it.
         """
         self._raise_not_implemented(
             "async_set_credential",
