@@ -40,6 +40,15 @@ from ..const import (
 )
 from ..domain.config import build_slot_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    CredentialType,
+    SetUserResult,
+    User,
+    credential_from_slot,
+    user_from_slot,
+)
 from ..domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
@@ -428,6 +437,24 @@ class BaseLock:
         return False
 
     @property
+    def supports_native_users(self) -> bool:
+        """
+        Return whether the provider speaks the User->Credential model natively.
+
+        True for providers whose integration manages users and credentials as
+        distinct entities (the Z-Wave unified access control surface, the
+        Matter DoorLock cluster). The base orchestration then runs the
+        user-first lifecycle: create or update the user, then write its
+        credential; delete the user when its last credential is removed.
+
+        False (the default) for slot-only providers (zha, zigbee2mqtt,
+        schlage, akuvox, virtual): the base skips every user operation and
+        addresses the credential by slot, so behavior is identical to the
+        legacy one-Personal-Identification-Number-per-slot model.
+        """
+        return False
+
+    @property
     def supports_code_slot_events(self) -> bool:
         """
         Return whether this lock supports code slot events.
@@ -803,18 +830,27 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """
-        Set a usercode on a code slot.
+        Set a usercode on a code slot via the User->Credential primitives.
 
-        Returns True if the value was changed, False if already set to this
-        value. If the provider cannot determine whether a change occurred,
-        return True so the coordinator refreshes and verifies the state.
-
-        ``source`` indicates whether the call originates from the sync
-        manager ("sync") or a user action ("direct").
+        Projects the slot to a single Personal Identification Number
+        credential. Native-user providers run the create-on-first user
+        lifecycle via ``_put_credential``; slot-only providers write the
+        credential directly, addressing it by slot. Returns True if the value
+        changed, False if it was already set to this value -- and True when the
+        provider cannot determine whether a change occurred, so the coordinator
+        refreshes and verifies the actual state.
         """
-        self._raise_not_implemented(
-            "async_set_usercode",
-            "Override this method to set a usercode on the lock.",
+        state = SlotCredential.known(usercode)
+        credential = credential_from_slot(code_slot, state)
+        if not self.supports_native_users:
+            return await self.async_set_credential(
+                code_slot, credential, name=name, source=source
+            )
+        return await self._put_credential(
+            user_from_slot(code_slot, state, name),
+            credential,
+            name=name,
+            source=source,
         )
 
     @final
@@ -864,16 +900,42 @@ class BaseLock:
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """
-        Clear a usercode on a code slot.
+        Clear a usercode on a code slot via the User->Credential primitives.
 
-        Returns True if the value was changed, False if already cleared.
-        If the provider cannot determine whether a change occurred, return
-        True so the coordinator refreshes and verifies the state.
+        Slot-only providers address the credential by slot and delete it
+        directly. Native-user providers must target the credential's actual
+        owning user, which is not assumed to equal the slot index: a
+        credential may have been created on the lock by another controller, or
+        the integration may have allocated a user identifier that differs from
+        the slot. The owner is resolved from the lock's current users and the
+        delete-on-last user lifecycle runs via ``_drop_credential``. Returns
+        True if the value changed, False if it was already cleared -- and True
+        when the provider cannot determine whether a change occurred, so the
+        coordinator refreshes and verifies the actual state.
         """
-        self._raise_not_implemented(
-            "async_clear_usercode",
-            "Override this method to clear a usercode from the lock.",
+        if not self.supports_native_users:
+            ref = CredentialRef(
+                user_id=code_slot, type=CredentialType.PIN, slot=code_slot
+            )
+            return await self.async_delete_credential(ref)
+
+        owner = next(
+            (
+                user
+                for user in await self.async_get_users()
+                for credential in user.pin_credentials
+                if credential.slot == code_slot
+            ),
+            None,
         )
+        if owner is None:
+            # No user owns this slot's credential -- nothing to clear.
+            return False
+
+        ref = CredentialRef(
+            user_id=owner.user_id, type=CredentialType.PIN, slot=code_slot
+        )
+        return await self._drop_credential(owner, ref)
 
     @final
     async def async_internal_clear_usercode(
@@ -895,10 +957,209 @@ class BaseLock:
             await self.coordinator.async_request_refresh()
 
     async def async_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Return a dict mapping slot numbers to ``SlotCredential`` values for the coordinator."""
+        """
+        Return slot -> ``SlotCredential`` by projecting the lock's users.
+
+        Every managed slot is present even when empty: the projection starts
+        from ``managed_slots`` mapped to ``SlotCredential.empty()`` and then
+        overlays the Personal Identification Number credentials read via
+        ``async_get_users``. This preserves the slot-keyed contract the
+        coordinator, sync manager, and slot entities depend on -- a managed
+        slot missing from the map is treated as unavailable, not empty, so the
+        empty placeholders are load-bearing. Occupied slots the lock reports
+        that are not managed are surfaced too. Non-PIN credentials and the user
+        layer are dropped here: the seam keeps everything below it slot-shaped
+        this round.
+        """
+        codes = {slot: SlotCredential.empty() for slot in self.managed_slots}
+        codes.update(
+            {
+                credential.slot: credential.state
+                for user in await self.async_get_users()
+                for credential in user.pin_credentials
+            }
+        )
+        return codes
+
+    @final
+    async def _put_credential(
+        self,
+        user: User,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> bool:
+        """
+        Run the create-on-first user lifecycle around a credential write.
+
+        Native-user only (the slot adapters call the primitives directly for
+        slot-only providers). The owning user is created or updated first --
+        the Z-Wave set-credential command requires an existing user, and this
+        ordering also sidesteps the User-Code-Command-Class fallback quirk --
+        and its resolved identifier (which the integration may allocate) is
+        threaded into the credential write. Returns True if the value changed.
+
+        ``user`` carries the user record (identifier, name, active state) for
+        ``async_set_user``; ``credential`` is the specific credential to write.
+        They are independent arguments: the slot adapter's ``user`` happens to
+        also list this credential (an artifact of the one-to-one slot
+        projection), but only ``credential`` drives the write here.
+
+        If the credential write fails, a user this call newly created is rolled
+        back so the lock is not left with a credential-less user (which the
+        slot-keyed coordinator cannot see and would never reconcile away). A
+        pre-existing user is left untouched -- it may still own other
+        credentials.
+        """
+        result = await self.async_set_user(user)
+        try:
+            return await self.async_set_credential(
+                result.user_id, credential, name=name, source=source
+            )
+        except Exception:
+            if result.created:
+                try:
+                    await self.async_delete_user(result.user_id)
+                except Exception as rollback_err:
+                    LOGGER.warning(
+                        "Lock %s: failed to roll back newly created user %s "
+                        "after a failed credential write: %s",
+                        self.lock.entity_id,
+                        result.user_id,
+                        rollback_err,
+                    )
+            raise
+
+    @final
+    async def _drop_credential(self, owner: User, ref: CredentialRef) -> bool:
+        """
+        Run the delete-on-last user lifecycle around a credential delete.
+
+        Native-user only. Deletes the credential, then deletes ``owner`` when
+        that was its last credential (the invariant: a user exists if and only
+        if it owns at least one credential). The count is read from ``owner``,
+        a pre-deletion snapshot, so the decision does not depend on whether the
+        provider mutates the user during the delete. Returns True if changed.
+
+        The credential delete is the operation that clears the slot, so a
+        failure of the follow-up user delete is logged rather than raised: the
+        slot is already cleared, and raising would only churn retries that
+        re-resolve to no owner. The leftover empty user is surfaced in the log.
+        """
+        was_only_credential = len(owner.credentials) <= 1
+        changed = await self.async_delete_credential(ref)
+        if changed and was_only_credential:
+            try:
+                await self.async_delete_user(owner.user_id)
+            except Exception as err:
+                LOGGER.warning(
+                    "Lock %s: cleared the credential at slot %s but failed to "
+                    "remove the now-empty user %s: %s",
+                    self.lock.entity_id,
+                    ref.slot,
+                    owner.user_id,
+                    err,
+                )
+        return changed
+
+    async def async_set_user(self, user: User) -> SetUserResult:
+        """
+        Create or update a lock user.
+
+        Native-user providers only. Returns a ``SetUserResult`` carrying the
+        resolved ``user_id`` (threaded into the following
+        ``async_set_credential`` call, so a provider whose integration
+        auto-allocates the identifier must return the allocated value) and
+        ``created`` -- True when this call added a new user, False when it
+        updated an existing one. ``created`` lets the base roll the user back
+        if the subsequent credential write fails. The Z-Wave set-credential
+        command requires an existing user, which is why the base runs this
+        first.
+
+        ``user.name`` of ``None`` means leave the existing name unchanged (not
+        clear it), matching how the providers already treat an absent name.
+        """
         self._raise_not_implemented(
-            "async_get_usercodes",
-            "Override this method to retrieve usercodes from the lock.",
+            "async_set_user",
+            "Override on native-user providers to create or update a lock "
+            "user and return a SetUserResult(user_id, created).",
+        )
+
+    async def async_delete_user(self, user_id: int) -> None:
+        """
+        Delete a lock user (and, per the Z-Wave/Matter spec, its credentials).
+
+        Native-user providers only. The base calls this once a user's last
+        credential has been removed -- the lifecycle invariant is that a user
+        exists if and only if it owns at least one credential.
+        """
+        self._raise_not_implemented(
+            "async_delete_user",
+            "Override on native-user providers to delete a lock user.",
+        )
+
+    async def async_set_credential(
+        self,
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> bool:
+        """
+        Set or update one credential, returning whether the lock changed.
+
+        Every migrated provider implements this. ``user_id`` identifies the
+        owning user for native-user providers; slot-only providers ignore it
+        and address the credential by ``credential.slot``. Providers raise
+        ``DuplicateCodeError`` when the lock rejects the value as a duplicate.
+        Native-user providers carry the user's name on the user record, so they
+        may treat ``name`` here as advisory; slot-only providers use it (for
+        example as a tagged code name). A ``name`` of ``None`` means leave any
+        existing name unchanged, never clear it.
+
+        Return True if the value changed, False if it was already set to this
+        value. When the provider cannot determine whether a change occurred
+        (for example a write-only lock), return True: the returned flag drives
+        the coordinator refresh, so reporting True makes it re-read and verify
+        rather than leaving stale state.
+        """
+        self._raise_not_implemented(
+            "async_set_credential",
+            "Override to write a credential to the lock.",
+        )
+
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
+        """
+        Delete the credential addressed by ``ref``; return whether it changed.
+
+        Every migrated provider implements this. Slot-only providers use
+        ``ref.slot`` and ignore ``ref.user_id``.
+
+        Return True if the credential was removed, False if it was already
+        absent. When the provider cannot determine whether a change occurred,
+        return True: the returned flag drives the coordinator refresh, so
+        reporting True makes it re-read and verify rather than leaving stale
+        state.
+        """
+        self._raise_not_implemented(
+            "async_delete_credential",
+            "Override to delete a credential from the lock.",
+        )
+
+    async def async_get_users(self) -> list[User]:
+        """
+        Read every user and their credentials from the lock.
+
+        Backs the default ``async_get_usercodes`` projection. Native-user
+        providers map their integration's user list; slot-only providers
+        project each occupied slot to a single-credential user via
+        ``user_from_slot``.
+        """
+        self._raise_not_implemented(
+            "async_get_users",
+            "Override to read users and credentials from the lock.",
         )
 
     @final

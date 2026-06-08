@@ -10,6 +10,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SetUserResult,
     User,
     UserType,
     credential_from_slot,
@@ -180,6 +181,20 @@ class TestUser:
         user = User(user_id=3, credentials=[empty_pin])
         assert user.credential_for(CredentialType.PIN) is empty_pin
         assert user.credential_for(CredentialType.RFID) is None
+
+
+class TestSetUserResult:
+    """SetUserResult pairs the resolved user id with whether it was created."""
+
+    def test_fields(self) -> None:
+        result = SetUserResult(user_id=7, created=True)
+        assert result.user_id == 7
+        assert result.created is True
+
+    def test_is_frozen(self) -> None:
+        result = SetUserResult(user_id=7, created=False)
+        with pytest.raises((AttributeError, TypeError)):
+            result.created = True  # type: ignore[misc]
 
 
 class TestLockCapabilities:
