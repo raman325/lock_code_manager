@@ -40,6 +40,11 @@ from ..const import (
 )
 from ..domain.config import build_slot_unique_id
 from ..domain.coordinator import LockUsercodeUpdateCoordinator
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+)
 from ..domain.exceptions import (
     DuplicateCodeError,
     LockCodeManagerError,
@@ -424,6 +429,24 @@ class BaseLock:
         When True, the lock will receive real-time value updates via
         subscribe_push_updates() instead of periodic polling. Polling is
         still used for initial load and drift detection (hard_refresh_interval).
+        """
+        return False
+
+    @property
+    def supports_native_users(self) -> bool:
+        """
+        Return whether the provider speaks the User->Credential model natively.
+
+        True for providers whose integration manages users and credentials as
+        distinct entities (the Z-Wave unified access control surface, the
+        Matter DoorLock cluster). The base orchestration then runs the
+        user-first lifecycle: create or update the user, then write its
+        credential; delete the user when its last credential is removed.
+
+        False (the default) for slot-only providers (zha, zigbee2mqtt,
+        schlage, akuvox, virtual): the base skips every user operation and
+        addresses the credential by slot, so behavior is identical to the
+        legacy one-Personal-Identification-Number-per-slot model.
         """
         return False
 
@@ -899,6 +922,82 @@ class BaseLock:
         self._raise_not_implemented(
             "async_get_usercodes",
             "Override this method to retrieve usercodes from the lock.",
+        )
+
+    async def _set_user(self, user: User) -> int:
+        """
+        Create or update a lock user, returning the resolved user identifier.
+
+        Native-user providers only. The returned identifier is threaded into
+        the following ``_set_credential`` call, so a provider that lets its
+        integration auto-allocate the identifier must return the allocated
+        value. The Z-Wave set-credential command requires an existing user,
+        which is why the base runs this first.
+        """
+        self._raise_not_implemented(
+            "_set_user",
+            "Override on native-user providers to create or update a lock "
+            "user and return its resolved user_id.",
+        )
+
+    async def _delete_user(self, user_id: int) -> None:
+        """
+        Delete a lock user (and, per the Z-Wave/Matter spec, its credentials).
+
+        Native-user providers only. The base calls this once a user's last
+        credential has been removed -- the lifecycle invariant is that a user
+        exists if and only if it owns at least one credential.
+        """
+        self._raise_not_implemented(
+            "_delete_user",
+            "Override on native-user providers to delete a lock user.",
+        )
+
+    async def _set_credential(
+        self,
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> bool:
+        """
+        Set or update one credential, returning whether the lock changed.
+
+        Every migrated provider implements this. ``user_id`` identifies the
+        owning user for native-user providers; slot-only providers ignore it
+        and address the credential by ``credential.slot``. Providers raise
+        ``DuplicateCodeError`` when the lock rejects the value as a duplicate.
+        """
+        self._raise_not_implemented(
+            "_set_credential",
+            "Override to write a credential to the lock.",
+        )
+
+    async def _delete_credential(self, ref: CredentialRef) -> bool:
+        """
+        Delete the credential addressed by ``ref``; return whether it changed.
+
+        Every migrated provider implements this. Slot-only providers use
+        ``ref.slot`` and ignore ``ref.user_id``.
+        """
+        self._raise_not_implemented(
+            "_delete_credential",
+            "Override to delete a credential from the lock.",
+        )
+
+    async def _get_users(self) -> list[User]:
+        """
+        Read every user and their credentials from the lock.
+
+        Backs the default ``async_get_usercodes`` projection. Native-user
+        providers map their integration's user list; slot-only providers
+        project each occupied slot to a single-credential user via
+        ``user_from_slot``.
+        """
+        self._raise_not_implemented(
+            "_get_users",
+            "Override to read users and credentials from the lock.",
         )
 
     @final
