@@ -2,7 +2,21 @@
 
 import pytest
 
-from custom_components.lock_code_manager.domain.credentials import CredentialType
+from custom_components.lock_code_manager.domain.credentials import (
+    Credential,
+    CredentialRef,
+    CredentialRule,
+    CredentialState,
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+    User,
+    UserType,
+    credential_from_slot,
+    slot_credential_of,
+    user_from_slot,
+)
+from custom_components.lock_code_manager.domain.models import SlotCredential
 
 
 class TestCredentialType:
@@ -36,12 +50,6 @@ class TestCredentialType:
         }
 
 
-from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
-    CredentialRule,
-    UserType,
-)
-
-
 class TestUserType:
     """UserType is modeled minimally; UNRESTRICTED is the default we use today."""
 
@@ -62,15 +70,6 @@ class TestCredentialRule:
 
     def test_members(self) -> None:
         assert set(CredentialRule.__members__) == {"SINGLE"}
-
-
-from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
-    Credential,
-    CredentialState,
-)
-from custom_components.lock_code_manager.domain.models import (  # noqa: E402
-    SlotCredential,
-)
 
 
 class TestCredentialStateAlias:
@@ -119,11 +118,6 @@ class TestCredential:
             cred.slot = 4  # type: ignore[misc]
 
 
-from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
-    CredentialRef,
-)
-
-
 class TestCredentialRef:
     """CredentialRef addresses a credential as (user_id, type, slot)."""
 
@@ -141,9 +135,6 @@ class TestCredentialRef:
         b = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
         assert a == b
         assert len({a, b}) == 1
-
-
-from custom_components.lock_code_manager.domain.credentials import User  # noqa: E402
 
 
 class TestUser:
@@ -191,12 +182,6 @@ class TestUser:
         assert user.credential_for(CredentialType.RFID) is None
 
 
-from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
-    CredentialTypeCapability,
-    LockCapabilities,
-)
-
-
 class TestLockCapabilities:
     """LockCapabilities describes user management and per-type slot limits."""
 
@@ -231,13 +216,6 @@ class TestLockCapabilities:
         )
         with pytest.raises((AttributeError, TypeError)):
             caps.max_users = 5  # type: ignore[misc]
-
-
-from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
-    credential_from_slot,
-    slot_credential_of,
-    user_from_slot,
-)
 
 
 class TestProjectionHelpers:
