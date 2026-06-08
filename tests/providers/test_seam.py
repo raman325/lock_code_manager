@@ -182,6 +182,49 @@ async def test_get_usercodes_projects_pin_credentials(hass: HomeAssistant) -> No
     }
 
 
+async def test_get_usercodes_includes_empty_managed_slots(hass: HomeAssistant) -> None:
+    """Managed slots are present as empty even when no user owns them."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_get_managed")
+    lock._users = {
+        1: User(
+            user_id=1,
+            credentials=[credential_from_slot(1, SlotCredential.known("1234"))],
+        )
+    }
+    with patch(
+        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        return_value={1, 2, 3},
+    ):
+        result = await lock.async_get_usercodes()
+    assert result == {
+        1: SlotCredential.known("1234"),  # managed and occupied
+        2: SlotCredential.empty(),  # managed, empty placeholder
+        3: SlotCredential.empty(),  # managed, empty placeholder
+    }
+
+
+async def test_get_usercodes_surfaces_unmanaged_occupied_slots(
+    hass: HomeAssistant,
+) -> None:
+    """A slot the lock reports but LCM does not manage is still surfaced."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_get_unmanaged")
+    lock._users = {
+        9: User(
+            user_id=9,
+            credentials=[credential_from_slot(9, SlotCredential.unreadable())],
+        )
+    }
+    with patch(
+        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        return_value={1},
+    ):
+        result = await lock.async_get_usercodes()
+    assert result == {
+        1: SlotCredential.empty(),  # managed, empty
+        9: SlotCredential.unreadable(),  # unmanaged but occupied
+    }
+
+
 async def test_get_usercodes_drops_non_pin_credentials(hass: HomeAssistant) -> None:
     """Only PIN credentials project to slots this round."""
     lock = _make_lock(hass, _NativeStubLock, "seam_get_nonpin")

@@ -956,19 +956,26 @@ class BaseLock:
         """
         Return slot -> ``SlotCredential`` by projecting the lock's users.
 
-        Reads every user via ``async_get_users`` and flattens their Personal
-        Identification Number credentials to the slot-keyed shape the
-        coordinator consumes. Non-PIN credentials and the user layer are
-        dropped here: the seam keeps everything below it slot-shaped this
-        round. Providers that want empty managed slots surfaced include them
-        in ``async_get_users``.
+        Every managed slot is present even when empty: the projection starts
+        from ``managed_slots`` mapped to ``SlotCredential.empty()`` and then
+        overlays the Personal Identification Number credentials read via
+        ``async_get_users``. This preserves the slot-keyed contract the
+        coordinator, sync manager, and slot entities depend on -- a managed
+        slot missing from the map is treated as unavailable, not empty, so the
+        empty placeholders are load-bearing. Occupied slots the lock reports
+        that are not managed are surfaced too. Non-PIN credentials and the user
+        layer are dropped here: the seam keeps everything below it slot-shaped
+        this round.
         """
-        users = await self.async_get_users()
-        return {
-            credential.slot: credential.state
-            for user in users
-            for credential in user.pin_credentials
-        }
+        codes = {slot: SlotCredential.empty() for slot in self.managed_slots}
+        codes.update(
+            {
+                credential.slot: credential.state
+                for user in await self.async_get_users()
+                for credential in user.pin_credentials
+            }
+        )
+        return codes
 
     @final
     async def _put_credential(
