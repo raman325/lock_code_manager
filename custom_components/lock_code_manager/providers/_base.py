@@ -987,6 +987,12 @@ class BaseLock:
         ordering also sidesteps the User-Code-Command-Class fallback quirk --
         and its resolved identifier (which the integration may allocate) is
         threaded into the credential write. Returns True if the value changed.
+
+        ``user`` carries the user record (identifier, name, active state) for
+        ``async_set_user``; ``credential`` is the specific credential to write.
+        They are independent arguments: the slot adapter's ``user`` happens to
+        also list this credential (an artifact of the one-to-one slot
+        projection), but only ``credential`` drives the write here.
         """
         user_id = await self.async_set_user(user)
         return await self.async_set_credential(
