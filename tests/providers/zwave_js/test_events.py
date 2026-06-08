@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -79,105 +79,6 @@ def _make_duplicate_code_event(node_id: int, user_id: int | None = None) -> Zwav
             },
         },
     )
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def mock_get_usercode_from_node():
-    """
-    Mock get_usercode_from_node for all tests.
-
-    V1 set/clear calls get_usercode_from_node to poll the slot from the device.
-    In tests, the node doesn't have a real Z-Wave JS server connection, so we
-    mock the function. Individual tests can access the mock via parameter name.
-    """
-    with patch(
-        "custom_components.lock_code_manager.providers.zwave_js.get_usercode_from_node",
-        new_callable=AsyncMock,
-    ) as mock:
-        yield mock
-
-
-@pytest.fixture(name="zwave_js_lock")
-async def zwave_js_lock_fixture(
-    hass: HomeAssistant,
-    zwave_integration: MockConfigEntry,
-    lock_entity: er.RegistryEntry,
-    lock_schlage_be469: Node,
-) -> ZWaveJSLock:
-    """Create a ZWaveJSLock instance for testing."""
-    dev_reg = dr.async_get(hass)
-    ent_reg = er.async_get(hass)
-
-    return ZWaveJSLock(
-        hass=hass,
-        dev_reg=dev_reg,
-        ent_reg=ent_reg,
-        lock_config_entry=zwave_integration,
-        lock=lock_entity,
-    )
-
-
-@pytest.fixture
-def mock_zwave_usercodes(zwave_client: MagicMock):
-    """
-    Mock Z-Wave JS usercode functions with mutable state.
-
-    Both ``get_usercodes`` and ``get_usercode`` read from a shared mutable
-    ``codes`` dict.  The client's ``async_send_command`` is wrapped so that
-    set / clear Z-Wave commands automatically update ``codes``, preventing
-    the coordinator refresh from overwriting optimistic push updates with
-    stale data.
-
-    Yields ``(mock_get_usercodes, mock_get_usercode, codes)`` where *codes*
-    is ``dict[int, dict]`` keyed by slot number.
-    """
-    codes: dict[int, dict] = {}
-
-    original_side_effect = zwave_client.async_send_command.side_effect
-
-    async def _send_command_with_codes(message, require_schema=None):
-        if message.get("command") == "node.set_value":
-            vid = message.get("valueId", {})
-            if vid.get("commandClass") == CommandClass.USER_CODE:
-                slot = vid.get("propertyKey")
-                if slot is not None:
-                    prop = vid.get("property")
-                    if prop == "userIdStatus":
-                        # Clear operation
-                        codes[slot] = {
-                            "code_slot": slot,
-                            "in_use": False,
-                            "usercode": "",
-                        }
-                    elif prop == "userCode":
-                        # Set operation
-                        codes[slot] = {
-                            "code_slot": slot,
-                            "in_use": True,
-                            "usercode": str(message["value"]),
-                        }
-        return await original_side_effect(message, require_schema)
-
-    with (
-        patch(
-            "custom_components.lock_code_manager.providers.zwave_js.get_usercodes",
-        ) as mock_all,
-        patch(
-            "custom_components.lock_code_manager.providers.zwave_js.get_usercode",
-        ) as mock_one,
-    ):
-        mock_all.side_effect = lambda node: list(codes.values())
-        mock_one.side_effect = lambda node, slot: codes.get(
-            slot, {"code_slot": slot, "in_use": False, "usercode": ""}
-        )
-        zwave_client.async_send_command.side_effect = _send_command_with_codes
-        yield mock_all, mock_one, codes
-        zwave_client.async_send_command.side_effect = original_side_effect
 
 
 async def _setup_lcm_entry(

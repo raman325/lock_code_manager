@@ -13,7 +13,6 @@ from zwave_js_server.model.node import Node
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
@@ -23,62 +22,6 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
-
-
-@pytest.fixture(name="zwave_js_lock")
-async def zwave_js_lock_fixture(
-    hass: HomeAssistant,
-    zwave_integration: MockConfigEntry,
-    lock_entity: er.RegistryEntry,
-    lock_schlage_be469: Node,
-) -> ZWaveJSLock:
-    """Create a ZWaveJSLock instance for testing."""
-    dev_reg = dr.async_get(hass)
-    ent_reg = er.async_get(hass)
-
-    return ZWaveJSLock(
-        hass=hass,
-        dev_reg=dev_reg,
-        ent_reg=ent_reg,
-        lock_config_entry=zwave_integration,
-        lock=lock_entity,
-    )
-
-
-@pytest.fixture(autouse=True)
-def mock_get_usercode_from_node():
-    """
-    Mock get_usercode_from_node for all tests.
-
-    V1 set/clear calls get_usercode_from_node to poll the slot from the device.
-    In tests, the node doesn't have a real Z-Wave JS server connection, so we
-    mock the function. Individual tests can access the mock via parameter name.
-    """
-    with patch(
-        "custom_components.lock_code_manager.providers.zwave_js.get_usercode_from_node",
-        new_callable=AsyncMock,
-    ) as mock:
-        yield mock
-
-
-@pytest.fixture(name="zwave_js_lock_v2")
-async def zwave_js_lock_v2_fixture(
-    hass: HomeAssistant,
-    zwave_integration: MockConfigEntry,
-    lock_entity: er.RegistryEntry,
-    lock_schlage_be469_v2: Node,
-) -> ZWaveJSLock:
-    """Create a ZWaveJSLock with User Code CC V2 for testing."""
-    dev_reg = dr.async_get(hass)
-    ent_reg = er.async_get(hass)
-    return ZWaveJSLock(
-        hass=hass,
-        dev_reg=dev_reg,
-        ent_reg=ent_reg,
-        lock_config_entry=zwave_integration,
-        lock=lock_entity,
-    )
-
 
 # Properties tests
 

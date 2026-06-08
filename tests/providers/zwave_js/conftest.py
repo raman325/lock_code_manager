@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from zwave_js_server.const import CommandClass
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
@@ -19,13 +20,14 @@ from zwave_js_server.version import VersionInfo
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -295,3 +297,161 @@ def e2e_zwave_lock(
 ) -> ZWaveJSLock:
     """Extract the ZWaveJSLock from the LCM config entry."""
     return get_zwave_lock(hass, lcm_config_entry, lock_entity)
+
+
+# ---------------------------------------------------------------------------
+# Shared provider fixtures (used by both test_provider.py and test_events.py)
+# ---------------------------------------------------------------------------
+
+# Module path where provider functions are imported (for patching in tests).
+_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.zwave_js"
+
+
+@pytest.fixture(name="zwave_js_lock")
+async def zwave_js_lock_fixture(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469: Node,
+) -> ZWaveJSLock:
+    """Create a ZWaveJSLock instance (User Code CC V1) for testing."""
+    return ZWaveJSLock(
+        hass=hass,
+        dev_reg=dr.async_get(hass),
+        ent_reg=er.async_get(hass),
+        lock_config_entry=zwave_integration,
+        lock=lock_entity,
+    )
+
+
+@pytest.fixture(name="zwave_js_lock_v2")
+async def zwave_js_lock_v2_fixture(
+    hass: HomeAssistant,
+    zwave_integration: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    lock_schlage_be469_v2: Node,
+) -> ZWaveJSLock:
+    """Create a ZWaveJSLock with User Code CC V2 for testing."""
+    return ZWaveJSLock(
+        hass=hass,
+        dev_reg=dr.async_get(hass),
+        ent_reg=er.async_get(hass),
+        lock_config_entry=zwave_integration,
+        lock=lock_entity,
+    )
+
+
+@pytest.fixture(name="mock_get_usercode_from_node", autouse=True)
+def mock_get_usercode_from_node_fixture():
+    """
+    Mock get_usercode_from_node for all tests.
+
+    V1 set/clear calls get_usercode_from_node to poll the slot from the device.
+    In tests, the node has no real Z-Wave JS server connection, so we mock the
+    function. Individual tests can access the mock via the parameter name.
+    """
+    with patch(
+        f"{_PROVIDER_MODULE}.get_usercode_from_node",
+        new_callable=AsyncMock,
+    ) as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_coordinator():
+    """
+    Return a factory for mock coordinators preloaded with slot state.
+
+    Replaces the repeated ``MagicMock(); .data = {...}; lock.coordinator = ...``
+    pattern. Call with a slot->SlotCredential dict; assign the result to
+    ``lock.coordinator``.
+    """
+
+    def _make(data: dict[int, SlotCredential] | None = None) -> MagicMock:
+        coordinator = MagicMock()
+        coordinator.data = data or {}
+        return coordinator
+
+    return _make
+
+
+@pytest.fixture
+async def simple_lcm_config_entry(
+    hass: HomeAssistant,
+    lock_entity: er.RegistryEntry,
+) -> MockConfigEntry:
+    """
+    Register a lightweight LCM config entry managing slots 1 and 2.
+
+    Mirrors the Matter provider's ``simple_lcm_config_entry``: it only adds slot
+    configuration data so ``managed_slots`` is populated on the provider. It does
+    NOT go through ``async_setup_internal`` — method-level tests that need
+    managed slots use this instead of the setup/unload lifecycle boilerplate.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [lock_entity.entity_id],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "slot1", CONF_PIN: "9999", CONF_ENABLED: True},
+                2: {CONF_NAME: "slot2", CONF_PIN: "1234", CONF_ENABLED: True},
+            },
+        },
+        unique_id="test_zwave_js_simple_lcm",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def mock_zwave_usercodes(zwave_client: MagicMock):
+    """
+    Mock Z-Wave JS usercode functions with mutable state.
+
+    Both ``get_usercodes`` and ``get_usercode`` read from a shared mutable
+    ``codes`` dict. The client's ``async_send_command`` is wrapped so that
+    set / clear Z-Wave commands automatically update ``codes``, preventing
+    the coordinator refresh from overwriting optimistic push updates with
+    stale data.
+
+    Yields ``(mock_get_usercodes, mock_get_usercode, codes)`` where *codes*
+    is ``dict[int, dict]`` keyed by slot number.
+    """
+    codes: dict[int, dict] = {}
+
+    original_side_effect = zwave_client.async_send_command.side_effect
+
+    async def _send_command_with_codes(message, require_schema=None):
+        if message.get("command") == "node.set_value":
+            vid = message.get("valueId", {})
+            if vid.get("commandClass") == CommandClass.USER_CODE:
+                slot = vid.get("propertyKey")
+                if slot is not None:
+                    prop = vid.get("property")
+                    if prop == "userIdStatus":
+                        # Clear operation
+                        codes[slot] = {
+                            "code_slot": slot,
+                            "in_use": False,
+                            "usercode": "",
+                        }
+                    elif prop == "userCode":
+                        # Set operation
+                        codes[slot] = {
+                            "code_slot": slot,
+                            "in_use": True,
+                            "usercode": str(message["value"]),
+                        }
+        return await original_side_effect(message, require_schema)
+
+    with (
+        patch(f"{_PROVIDER_MODULE}.get_usercodes") as mock_all,
+        patch(f"{_PROVIDER_MODULE}.get_usercode") as mock_one,
+    ):
+        mock_all.side_effect = lambda node: list(codes.values())
+        mock_one.side_effect = lambda node, slot: codes.get(
+            slot, {"code_slot": slot, "in_use": False, "usercode": ""}
+        )
+        zwave_client.async_send_command.side_effect = _send_command_with_codes
+        yield mock_all, mock_one, codes
+        zwave_client.async_send_command.side_effect = original_side_effect
