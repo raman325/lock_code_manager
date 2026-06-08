@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8a26d0643282",
+  "strategy": "manual-commit",
+  "branch": "bump-hacs-min-ha-2026.6.0",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "hacs.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8a/26d0643282/0/metadata.json",
+      "transcript": "/8a/26d0643282/0/full.jsonl",
+      "content_hash": "/8a/26d0643282/0/content_hash.txt",
+      "prompt": "/8a/26d0643282/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 82431,
+    "cache_read_tokens": 1001828,
+    "output_tokens": 4426,
+    "api_call_count": 14
+  }
+}

@@ -1,0 +1,1 @@
+open a PR that bumps the minimum HA version to 2026.6.0 in hacs.json. This is in preparation for using the new credfential management APIs

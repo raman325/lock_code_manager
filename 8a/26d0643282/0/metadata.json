@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8a26d0643282",
+  "session_id": "dd8e2ca5-afbe-478e-9f73-d76e35961c30",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-08T14:54:35.515642Z",
+  "branch": "bump-hacs-min-ha-2026.6.0",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "hacs.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "2971bde076b1",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 82431,
+    "cache_read_tokens": 1001828,
+    "output_tokens": 4426,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-08T14:54:35.451102Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}
