@@ -185,3 +185,26 @@ async def test_get_usercodes_drops_non_pin_credentials(hass: HomeAssistant) -> N
         )
     }
     assert await lock.async_get_usercodes() == {1: SlotCredential.known("1234")}
+
+
+async def test_set_usercode_native_user_first_and_threads_id(
+    hass: HomeAssistant,
+) -> None:
+    """Native set creates the user first, then its credential, threading the id."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_set_native")
+    changed = await lock.async_set_usercode(3, "9999", name="alice")
+    assert changed is True
+    assert lock.calls == [
+        ("set_user", 3, "alice"),
+        ("set_credential", 3, 3),
+    ]
+    assert lock._users[3].credentials[0].matches("9999")
+
+
+async def test_set_usercode_degenerate_skips_user(hass: HomeAssistant) -> None:
+    """Slot-only set writes the credential directly, no user operation."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_set_degen")
+    changed = await lock.async_set_usercode(3, "9999")
+    assert changed is True
+    assert lock.calls == [("set_credential", 3, 3)]
+    assert lock._slots[3].matches("9999")

@@ -44,6 +44,8 @@ from ..domain.credentials import (
     Credential,
     CredentialRef,
     User,
+    credential_from_slot,
+    user_from_slot,
 )
 from ..domain.exceptions import (
     DuplicateCodeError,
@@ -826,18 +828,27 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> bool:
         """
-        Set a usercode on a code slot.
+        Set a usercode on a code slot via the User->Credential primitives.
 
-        Returns True if the value was changed, False if already set to this
-        value. If the provider cannot determine whether a change occurred,
-        return True so the coordinator refreshes and verifies the state.
-
-        ``source`` indicates whether the call originates from the sync
-        manager ("sync") or a user action ("direct").
+        Projects the slot to a single Personal Identification Number
+        credential. On native-user providers the owning user is created or
+        updated first (user-first ordering, which the Z-Wave set-credential
+        command requires and which sidesteps the User-Code-Command-Class
+        fallback ordering quirk) and its resolved identifier is threaded into
+        the credential write. Slot-only providers skip the user step and
+        address the credential by slot. Returns True if the value changed.
         """
-        self._raise_not_implemented(
-            "async_set_usercode",
-            "Override this method to set a usercode on the lock.",
+        state = SlotCredential.known(usercode)
+        user_id = (
+            await self._set_user(user_from_slot(code_slot, state, name))
+            if self.supports_native_users
+            else code_slot
+        )
+        return await self._set_credential(
+            user_id,
+            credential_from_slot(code_slot, state),
+            name=name,
+            source=source,
         )
 
     @final
