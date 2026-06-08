@@ -231,3 +231,74 @@ class TestLockCapabilities:
         )
         with pytest.raises((AttributeError, TypeError)):
             caps.max_users = 5  # type: ignore[misc]
+
+
+from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
+    credential_from_slot,
+    slot_credential_of,
+    user_from_slot,
+)
+
+
+class TestProjectionHelpers:
+    """Pure 1:1:1 projection between a managed slot and the User/Credential model."""
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            SlotCredential.known("1234"),
+            SlotCredential.unreadable(),
+            SlotCredential.empty(),
+        ],
+    )
+    def test_credential_from_slot_shares_index_and_state(
+        self, state: SlotCredential
+    ) -> None:
+        cred = credential_from_slot(5, state)
+        assert cred.type is CredentialType.PIN
+        assert cred.slot == 5
+        # The SlotCredential is reused verbatim as the credential state.
+        assert cred.state is state
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            SlotCredential.known("1234"),
+            SlotCredential.unreadable(),
+            SlotCredential.empty(),
+        ],
+    )
+    def test_slot_credential_of_round_trips(self, state: SlotCredential) -> None:
+        cred = credential_from_slot(5, state)
+        # Projecting the PIN credential back to a SlotCredential is identity.
+        assert slot_credential_of(cred) is state
+
+    def test_slot_credential_of_rejects_non_pin(self) -> None:
+        rfid = Credential(
+            type=CredentialType.RFID, slot=5, state=SlotCredential.unreadable()
+        )
+        with pytest.raises(ValueError):
+            slot_credential_of(rfid)
+
+    def test_user_from_slot_is_single_pin_user_sharing_index(self) -> None:
+        state = SlotCredential.known("1234")
+        user = user_from_slot(5, state)
+        assert user.user_id == 5
+        assert user.user_type is UserType.UNRESTRICTED
+        assert user.credential_rule is CredentialRule.SINGLE
+        # Active mirrors presence: an empty slot is an inactive user today.
+        assert user.active is True
+        assert len(user.credentials) == 1
+        cred = user.credentials[0]
+        assert cred.type is CredentialType.PIN
+        assert cred.slot == 5
+        assert cred.state is state
+
+    def test_user_from_slot_empty_is_inactive(self) -> None:
+        user = user_from_slot(5, SlotCredential.empty())
+        assert user.active is False
+        assert user.credentials[0].is_empty
+
+    def test_user_from_slot_accepts_optional_name(self) -> None:
+        user = user_from_slot(5, SlotCredential.known("1234"), name="alice")
+        assert user.name == "alice"

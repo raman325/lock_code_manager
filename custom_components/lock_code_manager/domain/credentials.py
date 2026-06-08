@@ -212,3 +212,48 @@ class LockCapabilities:
     def supports(self, credential_type: CredentialType) -> bool:
         """Return True when the lock advertises ``credential_type``."""
         return credential_type in self.credential_types
+
+
+def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
+    """
+    Build the Personal Identification Number credential for a managed slot.
+
+    The new model relates to the coordinator's ``SlotCredential`` by a
+    one-to-one projection: a managed slot index becomes a PIN ``Credential``
+    at the same index, reusing the ``SlotCredential`` verbatim as its state.
+    """
+    return Credential(type=CredentialType.PIN, slot=slot, state=state)
+
+
+def slot_credential_of(credential: Credential) -> SlotCredential:
+    """
+    Project a Personal Identification Number credential back to a SlotCredential.
+
+    This is the inverse of ``credential_from_slot`` and is identity on the
+    state, so the coordinator can keep consuming ``SlotCredential`` unchanged.
+    It rejects non-PIN credentials because only PIN projects one-to-one onto a
+    managed slot today.
+    """
+    if credential.type is not CredentialType.PIN:
+        raise ValueError(
+            f"Only PIN credentials project to a slot, got {credential.type}"
+        )
+    return credential.state
+
+
+def user_from_slot(slot: int, state: SlotCredential, name: str | None = None) -> User:
+    """
+    Build the single-credential user for a managed slot.
+
+    Realizes today's one-managed-slot to one-user to one-PIN-credential
+    projection: the user identifier shares the slot index, the user owns
+    exactly one PIN credential at that index, and the user is active exactly
+    when the slot holds a code. A future multi-credential world only appends
+    to ``credentials`` -- no field changes here.
+    """
+    return User(
+        user_id=slot,
+        name=name,
+        active=state.is_present,
+        credentials=[credential_from_slot(slot, state)],
+    )
