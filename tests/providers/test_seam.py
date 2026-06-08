@@ -263,6 +263,8 @@ async def test_internal_set_usercode_drives_orchestration(
     """The external set wrapper routes through the orchestration to primitives."""
     lock = _make_lock(hass, _NativeStubLock, "seam_internal_set")
     lock._min_operation_delay = 0.0
+    # async_is_device_available is intentionally left at its default (True);
+    # only the connection gate needs forcing to reach the orchestration.
     with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
         await lock.async_internal_set_usercode(4, "4321", "carol")
     assert ("set_user", 4, "carol") in lock.calls
