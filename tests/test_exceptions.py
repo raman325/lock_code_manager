@@ -106,27 +106,50 @@ def test_provider_not_implemented_error_inherits_correctly():
 
 
 @pytest.mark.parametrize(
-    ("method_name", "call"),
+    ("method_name", "call", "expected_method"),
     [
-        ("async_get_usercodes", lambda lock: lock.async_get_usercodes()),
-        ("async_set_usercode", lambda lock: lock.async_set_usercode(1, "1234")),
-        ("async_clear_usercode", lambda lock: lock.async_clear_usercode(1)),
-        ("async_hard_refresh_codes", lambda lock: lock.async_hard_refresh_codes()),
+        # The slot-facing entry points now route through the User->Credential
+        # primitives, so a provider that implements nothing is told which
+        # PRIMITIVE to implement, not the slot method that was called.
+        (
+            "async_get_usercodes",
+            lambda lock: lock.async_get_usercodes(),
+            "_get_users",
+        ),
+        (
+            "async_set_usercode",
+            lambda lock: lock.async_set_usercode(1, "1234"),
+            "_set_credential",
+        ),
+        (
+            "async_clear_usercode",
+            lambda lock: lock.async_clear_usercode(1),
+            "_delete_credential",
+        ),
+        # async_hard_refresh_codes is not part of the seam; it still raises
+        # naming itself.
+        (
+            "async_hard_refresh_codes",
+            lambda lock: lock.async_hard_refresh_codes(),
+            "async_hard_refresh_codes",
+        ),
         # setup_push_subscription / teardown_push_subscription are still sync
         # — they're called synchronously in the push lifecycle code paths and
         # raise NotImplementedError directly when not overridden.
         (
             "setup_push_subscription",
             lambda lock: lock.setup_push_subscription(),
+            "setup_push_subscription",
         ),
         (
             "teardown_push_subscription",
             lambda lock: lock.teardown_push_subscription(),
+            "teardown_push_subscription",
         ),
     ],
 )
 async def test_base_lock_raises_provider_not_implemented(
-    hass: HomeAssistant, method_name: str, call
+    hass: HomeAssistant, method_name: str, call, expected_method: str
 ):
     """Test BaseLock raises ProviderNotImplementedError for unimplemented methods."""
     config_entry = MockConfigEntry(domain=DOMAIN)
@@ -142,7 +165,7 @@ async def test_base_lock_raises_provider_not_implemented(
             await result
 
     assert "MinimalMockLock" in str(exc_info.value)
-    assert method_name in str(exc_info.value)
+    assert expected_method in str(exc_info.value)
 
 
 # =============================================================================
