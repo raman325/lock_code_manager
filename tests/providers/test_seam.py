@@ -55,18 +55,18 @@ class _NativeStubLock(BaseLock):
     def supports_native_users(self) -> bool:
         return True
 
-    async def _set_user(self, user: User) -> int:
+    async def async_set_user(self, user: User) -> int:
         self.calls.append(("set_user", user.user_id, user.name))
         self._users[user.user_id] = User(
             user_id=user.user_id, name=user.name, active=user.active
         )
         return user.user_id
 
-    async def _delete_user(self, user_id: int) -> None:
+    async def async_delete_user(self, user_id: int) -> None:
         self.calls.append(("delete_user", user_id))
         self._users.pop(user_id, None)
 
-    async def _set_credential(
+    async def async_set_credential(
         self,
         user_id: int,
         credential: Credential,
@@ -84,7 +84,7 @@ class _NativeStubLock(BaseLock):
         self._users[user_id].credentials = [credential]
         return True
 
-    async def _delete_credential(self, ref: CredentialRef) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         self.calls.append(("delete_credential", ref.user_id, ref.slot))
         user = self._users.get(ref.user_id)
         if user is None:
@@ -92,7 +92,7 @@ class _NativeStubLock(BaseLock):
         user.credentials = []
         return True
 
-    async def _get_users(self) -> list[User]:
+    async def async_get_users(self) -> list[User]:
         return list(self._users.values())
 
 
@@ -108,7 +108,7 @@ class _DegenerateStubLock(BaseLock):
     def domain(self) -> str:
         return "test"
 
-    async def _set_credential(
+    async def async_set_credential(
         self,
         user_id: int,
         credential: Credential,
@@ -120,11 +120,11 @@ class _DegenerateStubLock(BaseLock):
         self._slots[credential.slot] = credential.state
         return True
 
-    async def _delete_credential(self, ref: CredentialRef) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         self.calls.append(("delete_credential", ref.user_id, ref.slot))
         return self._slots.pop(ref.slot, None) is not None
 
-    async def _get_users(self) -> list[User]:
+    async def async_get_users(self) -> list[User]:
         return [user_from_slot(slot, state) for slot, state in self._slots.items()]
 
 
@@ -138,20 +138,20 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
     """A bare BaseLock provides no primitives; each default raises."""
     lock = _make_lock(hass, BaseLock, "seam_defaults")
     with pytest.raises(ProviderNotImplementedError):
-        await lock._set_user(User(user_id=1))
+        await lock.async_set_user(User(user_id=1))
     with pytest.raises(ProviderNotImplementedError):
-        await lock._delete_user(1)
+        await lock.async_delete_user(1)
     with pytest.raises(ProviderNotImplementedError):
-        await lock._set_credential(
+        await lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("1")),
             name=None,
             source="direct",
         )
     with pytest.raises(ProviderNotImplementedError):
-        await lock._delete_credential(CredentialRef(1, CredentialType.PIN, 1))
+        await lock.async_delete_credential(CredentialRef(1, CredentialType.PIN, 1))
     with pytest.raises(ProviderNotImplementedError):
-        await lock._get_users()
+        await lock.async_get_users()
 
 
 async def test_get_usercodes_projects_pin_credentials(hass: HomeAssistant) -> None:

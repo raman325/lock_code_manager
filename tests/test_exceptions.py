@@ -114,17 +114,17 @@ def test_provider_not_implemented_error_inherits_correctly():
         (
             "async_get_usercodes",
             lambda lock: lock.async_get_usercodes(),
-            "_get_users",
+            "async_get_users",
         ),
         (
             "async_set_usercode",
             lambda lock: lock.async_set_usercode(1, "1234"),
-            "_set_credential",
+            "async_set_credential",
         ),
         (
             "async_clear_usercode",
             lambda lock: lock.async_clear_usercode(1),
-            "_delete_credential",
+            "async_delete_credential",
         ),
         # async_hard_refresh_codes is not part of the seam; it still raises
         # naming itself.

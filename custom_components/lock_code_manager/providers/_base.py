@@ -841,11 +841,11 @@ class BaseLock:
         """
         state = SlotCredential.known(usercode)
         user_id = (
-            await self._set_user(user_from_slot(code_slot, state, name))
+            await self.async_set_user(user_from_slot(code_slot, state, name))
             if self.supports_native_users
             else code_slot
         )
-        return await self._set_credential(
+        return await self.async_set_credential(
             user_id,
             credential_from_slot(code_slot, state),
             name=name,
@@ -916,12 +916,12 @@ class BaseLock:
             ref = CredentialRef(
                 user_id=code_slot, type=CredentialType.PIN, slot=code_slot
             )
-            return await self._delete_credential(ref)
+            return await self.async_delete_credential(ref)
 
         owner = next(
             (
                 user
-                for user in await self._get_users()
+                for user in await self.async_get_users()
                 for credential in user.pin_credentials
                 if credential.slot == code_slot
             ),
@@ -938,12 +938,12 @@ class BaseLock:
         ref = CredentialRef(
             user_id=owner.user_id, type=CredentialType.PIN, slot=code_slot
         )
-        changed = await self._delete_credential(ref)
+        changed = await self.async_delete_credential(ref)
         # Delete the user only when removing this credential leaves it empty
         # (lifecycle invariant). In this round's one-to-one mapping that is
         # always the case; the check generalizes to multi-credential users.
         if changed and was_only_credential:
-            await self._delete_user(owner.user_id)
+            await self.async_delete_user(owner.user_id)
         return changed
 
     @final
@@ -969,37 +969,37 @@ class BaseLock:
         """
         Return slot -> ``SlotCredential`` by projecting the lock's users.
 
-        Reads every user via ``_get_users`` and flattens their Personal
+        Reads every user via ``async_get_users`` and flattens their Personal
         Identification Number credentials to the slot-keyed shape the
         coordinator consumes. Non-PIN credentials and the user layer are
         dropped here: the seam keeps everything below it slot-shaped this
         round. Providers that want empty managed slots surfaced include them
-        in ``_get_users``.
+        in ``async_get_users``.
         """
-        users = await self._get_users()
+        users = await self.async_get_users()
         return {
             credential.slot: credential.state
             for user in users
             for credential in user.pin_credentials
         }
 
-    async def _set_user(self, user: User) -> int:
+    async def async_set_user(self, user: User) -> int:
         """
         Create or update a lock user, returning the resolved user identifier.
 
         Native-user providers only. The returned identifier is threaded into
-        the following ``_set_credential`` call, so a provider that lets its
-        integration auto-allocate the identifier must return the allocated
+        the following ``async_set_credential`` call, so a provider that lets
+        its integration auto-allocate the identifier must return the allocated
         value. The Z-Wave set-credential command requires an existing user,
         which is why the base runs this first.
         """
         self._raise_not_implemented(
-            "_set_user",
+            "async_set_user",
             "Override on native-user providers to create or update a lock "
             "user and return its resolved user_id.",
         )
 
-    async def _delete_user(self, user_id: int) -> None:
+    async def async_delete_user(self, user_id: int) -> None:
         """
         Delete a lock user (and, per the Z-Wave/Matter spec, its credentials).
 
@@ -1008,11 +1008,11 @@ class BaseLock:
         exists if and only if it owns at least one credential.
         """
         self._raise_not_implemented(
-            "_delete_user",
+            "async_delete_user",
             "Override on native-user providers to delete a lock user.",
         )
 
-    async def _set_credential(
+    async def async_set_credential(
         self,
         user_id: int,
         credential: Credential,
@@ -1032,11 +1032,11 @@ class BaseLock:
         example as a tagged code name).
         """
         self._raise_not_implemented(
-            "_set_credential",
+            "async_set_credential",
             "Override to write a credential to the lock.",
         )
 
-    async def _delete_credential(self, ref: CredentialRef) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ``ref``; return whether it changed.
 
@@ -1044,11 +1044,11 @@ class BaseLock:
         ``ref.slot`` and ignore ``ref.user_id``.
         """
         self._raise_not_implemented(
-            "_delete_credential",
+            "async_delete_credential",
             "Override to delete a credential from the lock.",
         )
 
-    async def _get_users(self) -> list[User]:
+    async def async_get_users(self) -> list[User]:
         """
         Read every user and their credentials from the lock.
 
@@ -1058,7 +1058,7 @@ class BaseLock:
         ``user_from_slot``.
         """
         self._raise_not_implemented(
-            "_get_users",
+            "async_get_users",
             "Override to read users and credentials from the lock.",
         )
 
