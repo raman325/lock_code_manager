@@ -14,6 +14,7 @@ do not change ``SlotCredential``, which remains the coordinator's currency.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NamedTuple
@@ -167,3 +168,47 @@ class User:
             ),
             None,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialTypeCapability:
+    """
+    Per-credential-type limits advertised by a lock.
+
+    ``num_slots`` is the number of slots the lock exposes for this credential
+    type, ``min_length`` / ``max_length`` bound an acceptable value, and
+    ``supports_learn`` is True when the lock can enroll the credential at the
+    device (for example a fingerprint learn flow) rather than being told the
+    value.
+    """
+
+    num_slots: int
+    min_length: int
+    max_length: int
+    supports_learn: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LockCapabilities:
+    """
+    What a lock can do, as a platform-neutral snapshot.
+
+    ``supports_user_management`` mirrors the providers' existing gate;
+    ``max_users`` is the total number of users the lock can hold; and
+    ``credential_types`` maps each supported ``CredentialType`` to its
+    per-type limits. A type absent from the mapping is unsupported.
+    """
+
+    supports_user_management: bool
+    max_users: int
+    credential_types: Mapping[CredentialType, CredentialTypeCapability]
+
+    def capability_for(
+        self, credential_type: CredentialType
+    ) -> CredentialTypeCapability | None:
+        """Return the per-type limits for ``credential_type``, else ``None``."""
+        return self.credential_types.get(credential_type)
+
+    def supports(self, credential_type: CredentialType) -> bool:
+        """Return True when the lock advertises ``credential_type``."""
+        return credential_type in self.credential_types

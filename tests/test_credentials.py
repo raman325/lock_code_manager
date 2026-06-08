@@ -189,3 +189,45 @@ class TestUser:
         user = User(user_id=3, credentials=[empty_pin])
         assert user.credential_for(CredentialType.PIN) is empty_pin
         assert user.credential_for(CredentialType.RFID) is None
+
+
+from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
+    CredentialTypeCapability,
+    LockCapabilities,
+)
+
+
+class TestLockCapabilities:
+    """LockCapabilities describes user management and per-type slot limits."""
+
+    def test_per_type_capability_fields(self) -> None:
+        cap = CredentialTypeCapability(
+            num_slots=30, min_length=4, max_length=8, supports_learn=False
+        )
+        assert cap.num_slots == 30
+        assert cap.min_length == 4
+        assert cap.max_length == 8
+        assert cap.supports_learn is False
+
+    def test_capabilities_expose_per_type_lookup(self) -> None:
+        pin_cap = CredentialTypeCapability(
+            num_slots=30, min_length=4, max_length=8, supports_learn=False
+        )
+        caps = LockCapabilities(
+            supports_user_management=True,
+            max_users=30,
+            credential_types={CredentialType.PIN: pin_cap},
+        )
+        assert caps.supports_user_management is True
+        assert caps.max_users == 30
+        assert caps.capability_for(CredentialType.PIN) is pin_cap
+        assert caps.capability_for(CredentialType.RFID) is None
+        assert caps.supports(CredentialType.PIN)
+        assert not caps.supports(CredentialType.RFID)
+
+    def test_capabilities_are_frozen(self) -> None:
+        caps = LockCapabilities(
+            supports_user_management=False, max_users=0, credential_types={}
+        )
+        with pytest.raises((AttributeError, TypeError)):
+            caps.max_users = 5  # type: ignore[misc]
