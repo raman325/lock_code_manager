@@ -836,7 +836,9 @@ class BaseLock:
         credential. Native-user providers run the create-on-first user
         lifecycle via ``_put_credential``; slot-only providers write the
         credential directly, addressing it by slot. Returns True if the value
-        changed.
+        changed, False if it was already set to this value -- and True when the
+        provider cannot determine whether a change occurred, so the coordinator
+        refreshes and verifies the actual state.
         """
         state = SlotCredential.known(usercode)
         credential = credential_from_slot(code_slot, state)
@@ -907,7 +909,9 @@ class BaseLock:
         the integration may have allocated a user identifier that differs from
         the slot. The owner is resolved from the lock's current users and the
         delete-on-last user lifecycle runs via ``_drop_credential``. Returns
-        True if the value changed.
+        True if the value changed, False if it was already cleared -- and True
+        when the provider cannot determine whether a change occurred, so the
+        coordinator refreshes and verifies the actual state.
         """
         if not self.supports_native_users:
             ref = CredentialRef(
@@ -1114,6 +1118,12 @@ class BaseLock:
         may treat ``name`` here as advisory; slot-only providers use it (for
         example as a tagged code name). A ``name`` of ``None`` means leave any
         existing name unchanged, never clear it.
+
+        Return True if the value changed, False if it was already set to this
+        value. When the provider cannot determine whether a change occurred
+        (for example a write-only lock), return True: the returned flag drives
+        the coordinator refresh, so reporting True makes it re-read and verify
+        rather than leaving stale state.
         """
         self._raise_not_implemented(
             "async_set_credential",
@@ -1126,6 +1136,12 @@ class BaseLock:
 
         Every migrated provider implements this. Slot-only providers use
         ``ref.slot`` and ignore ``ref.user_id``.
+
+        Return True if the credential was removed, False if it was already
+        absent. When the provider cannot determine whether a change occurred,
+        return True: the returned flag drives the coordinator refresh, so
+        reporting True makes it re-read and verify rather than leaving stale
+        state.
         """
         self._raise_not_implemented(
             "async_delete_credential",

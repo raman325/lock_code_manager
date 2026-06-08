@@ -457,7 +457,6 @@ class _UserDeleteFailsLock(_NativeStubLock):
 
 async def test_clear_usercode_tolerates_user_delete_failure(
     hass: HomeAssistant,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Clear still reports the credential change when the user delete fails."""
     lock = _make_lock(hass, _UserDeleteFailsLock, "seam_clear_deluser_fail")
