@@ -43,6 +43,7 @@ from ..domain.coordinator import LockUsercodeUpdateCoordinator
 from ..domain.credentials import (
     Credential,
     CredentialRef,
+    CredentialType,
     User,
     credential_from_slot,
     user_from_slot,
@@ -898,16 +899,20 @@ class BaseLock:
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """
-        Clear a usercode on a code slot.
+        Clear a usercode on a code slot via the User->Credential primitives.
 
-        Returns True if the value was changed, False if already cleared.
-        If the provider cannot determine whether a change occurred, return
-        True so the coordinator refreshes and verifies the state.
+        Deletes the slot's Personal Identification Number credential. On
+        native-user providers the slot's user owns exactly that one credential
+        in this round's one-to-one mapping, so removing it empties the user
+        and the base deletes the user too (lifecycle invariant: a user exists
+        if and only if it owns at least one credential). Slot-only providers
+        just delete the credential. Returns True if the value changed.
         """
-        self._raise_not_implemented(
-            "async_clear_usercode",
-            "Override this method to clear a usercode from the lock.",
-        )
+        ref = CredentialRef(user_id=code_slot, type=CredentialType.PIN, slot=code_slot)
+        changed = await self._delete_credential(ref)
+        if self.supports_native_users:
+            await self._delete_user(code_slot)
+        return changed
 
     @final
     async def async_internal_clear_usercode(

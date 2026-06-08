@@ -208,3 +208,38 @@ async def test_set_usercode_degenerate_skips_user(hass: HomeAssistant) -> None:
     assert changed is True
     assert lock.calls == [("set_credential", 3, 3)]
     assert lock._slots[3].matches("9999")
+
+
+async def test_clear_usercode_native_deletes_user_on_last_credential(
+    hass: HomeAssistant,
+) -> None:
+    """Native clear removes the credential then the now-empty user."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_native")
+    await lock.async_set_usercode(3, "9999", name="alice")
+    lock.calls.clear()
+    changed = await lock.async_clear_usercode(3)
+    assert changed is True
+    assert lock.calls == [
+        ("delete_credential", 3, 3),
+        ("delete_user", 3),
+    ]
+    assert 3 not in lock._users
+
+
+async def test_clear_usercode_degenerate_no_user_op(hass: HomeAssistant) -> None:
+    """Slot-only clear deletes the credential and performs no user operation."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_clear_degen")
+    await lock.async_set_usercode(3, "9999")
+    lock.calls.clear()
+    changed = await lock.async_clear_usercode(3)
+    assert changed is True
+    assert lock.calls == [("delete_credential", 3, 3)]
+
+
+async def test_clear_usercode_degenerate_returns_false_when_absent(
+    hass: HomeAssistant,
+) -> None:
+    """Clearing an empty slot reports no change."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_clear_absent")
+    assert await lock.async_clear_usercode(7) is False
+    assert lock.calls == [("delete_credential", 7, 7)]
