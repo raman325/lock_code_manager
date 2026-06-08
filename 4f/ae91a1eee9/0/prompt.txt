@@ -1,0 +1,1 @@
+can we bump HA to 2026.6.1 and the corresponding versions for libs and the pytest plugin? do it all in one PR, this one was merged

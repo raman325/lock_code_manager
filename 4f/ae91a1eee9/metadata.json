@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "4fae91a1eee9",
+  "strategy": "manual-commit",
+  "branch": "bump-ha-2026.6.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "requirements_dev.txt",
+    "requirements_test.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4f/ae91a1eee9/0/metadata.json",
+      "transcript": "/4f/ae91a1eee9/0/full.jsonl",
+      "content_hash": "/4f/ae91a1eee9/0/content_hash.txt",
+      "prompt": "/4f/ae91a1eee9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 51,
+    "cache_creation_tokens": 43344,
+    "cache_read_tokens": 4803523,
+    "output_tokens": 26566,
+    "api_call_count": 46
+  }
+}
