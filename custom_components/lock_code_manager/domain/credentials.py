@@ -1,0 +1,270 @@
+"""
+Cross-platform User and Credential domain model.
+
+A first-class internal abstraction over the per-platform credential
+vocabularies (the Z-Wave User Credential Command Class and the Matter
+DoorLock cluster). The model is shaped so the current one-managed-slot to
+one-user to one-Personal-Identification-Number-credential projection is a
+thin pure function, while a future "user is the unit, multiple credentials"
+world only needs to append to ``User.credentials`` -- no field changes.
+
+These are pure value types with no Home Assistant dependencies. The credential
+and capability types are immutable; ``User`` is a mutable aggregate of immutable
+credentials. They do not change ``SlotCredential``, which remains the
+coordinator's currency.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from enum import StrEnum
+from types import MappingProxyType
+from typing import NamedTuple
+
+from .models import SlotCredential
+
+
+class CredentialType(StrEnum):
+    """
+    Kind of credential a user presents to a lock.
+
+    Only ``PIN`` is exercised today. The remaining members are reserved so a
+    future expansion to multiple credential kinds is additive: they map
+    cleanly to both the Z-Wave User Credential Command Class and the Matter
+    DoorLock cluster credential-type vocabularies. ``PIN`` deliberately
+    serializes to the lowercase wire value the providers already send.
+    """
+
+    PIN = "pin"
+    RFID = "rfid"  # Radio Frequency Identification tag/card.
+    FINGERPRINT = "fingerprint"
+    FACE = "face"
+    PASSWORD = "password"
+    NFC = "nfc"  # Near Field Communication tag.
+
+
+class UserType(StrEnum):
+    """
+    How a user is constrained on the lock.
+
+    Modeled minimally for now. ``UNRESTRICTED`` matches the Matter and Z-Wave
+    "normal" user with no schedule restrictions, which is the only kind Lock
+    Code Manager manages today. Additional kinds (for example schedule- or
+    duress-restricted users) can be appended without breaking callers.
+    """
+
+    UNRESTRICTED = "unrestricted"
+
+
+class CredentialRule(StrEnum):
+    """
+    How many credentials a user must present to operate the lock.
+
+    Modeled minimally for now. ``SINGLE`` means one credential is sufficient,
+    matching today's one-PIN-per-user reality. Multi-credential rules can be
+    appended later without breaking callers.
+    """
+
+    SINGLE = "single"
+
+
+# CredentialState is the read-state of a credential value: known(value),
+# unreadable (write-only code present), or empty. It deliberately reuses
+# SlotCredential's existing semantics rather than duplicating them, so the
+# coordinator's currency and the new model never drift. Construct states via
+# SlotCredential.known(value) / .unreadable() / .empty().
+CredentialState = SlotCredential
+
+
+@dataclass(frozen=True, slots=True)
+class Credential:
+    """
+    One credential instance addressed within a user.
+
+    Pairs the credential ``type`` and its lock ``slot`` index with a reused
+    ``CredentialState`` (a ``SlotCredential``). The read-state accessors
+    delegate to that state so there is one source of truth for empty /
+    write-only / readable. Treat as an immutable value; consume via the
+    accessors rather than reaching into ``state``.
+    """
+
+    type: CredentialType
+    slot: int
+    state: CredentialState
+
+    @property
+    def is_empty(self) -> bool:
+        """Return True when the credential's slot holds no code."""
+        return self.state.is_empty
+
+    @property
+    def is_present(self) -> bool:
+        """Return True when the credential's slot holds a code."""
+        return self.state.is_present
+
+    @property
+    def is_readable(self) -> bool:
+        """Return True when the credential exposes a comparable value."""
+        return self.state.is_readable
+
+    @property
+    def readable_pin(self) -> str | None:
+        """Return the value when readable, otherwise ``None``."""
+        return self.state.readable_pin
+
+    def matches(self, pin: str) -> bool:
+        """Return True when this credential is readable and equals ``pin``."""
+        return self.state.matches(pin)
+
+
+class CredentialRef(NamedTuple):
+    """
+    Stable address for a single credential.
+
+    A lightweight ``(user_id, type, slot)`` tuple used to point at a
+    credential without carrying its state. Hashable, so it works as a
+    dictionary key or set member when correlating credentials across reads.
+    """
+
+    user_id: int
+    type: CredentialType
+    slot: int
+
+
+@dataclass(slots=True)
+class User:
+    """
+    A lock user and the credentials they present.
+
+    Modeled so the future "user is the unit, multiple credentials" world is
+    additive: today every user carries a single Personal Identification
+    Number credential, but ``credentials`` is already a list and the rule and
+    type fields already exist. ``credentials`` is mutable (a list), so this
+    aggregate is intentionally not frozen; the contained ``Credential``
+    values are themselves immutable.
+    """
+
+    user_id: int
+    name: str | None = None
+    user_type: UserType = UserType.UNRESTRICTED
+    active: bool = True
+    credential_rule: CredentialRule = CredentialRule.SINGLE
+    credentials: list[Credential] = field(default_factory=list)
+
+    @property
+    def pin_credentials(self) -> list[Credential]:
+        """Return this user's Personal Identification Number credentials."""
+        return [
+            credential
+            for credential in self.credentials
+            if credential.type is CredentialType.PIN
+        ]
+
+    def credential_for(self, credential_type: CredentialType) -> Credential | None:
+        """Return the first credential of ``credential_type``, else ``None``."""
+        return next(
+            (
+                credential
+                for credential in self.credentials
+                if credential.type is credential_type
+            ),
+            None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialTypeCapability:
+    """
+    Per-credential-type limits advertised by a lock.
+
+    ``num_slots`` is the number of slots the lock exposes for this credential
+    type, ``min_length`` / ``max_length`` bound an acceptable value, and
+    ``supports_learn`` is True when the lock can enroll the credential at the
+    device (for example a fingerprint learn flow) rather than being told the
+    value.
+    """
+
+    num_slots: int
+    min_length: int
+    max_length: int
+    supports_learn: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LockCapabilities:
+    """
+    What a lock can do, as a platform-neutral snapshot.
+
+    ``supports_user_management`` mirrors the providers' existing gate;
+    ``max_users`` is the total number of users the lock can hold; and
+    ``credential_types`` maps each supported ``CredentialType`` to its
+    per-type limits. A type absent from the mapping is unsupported.
+    """
+
+    supports_user_management: bool
+    max_users: int
+    credential_types: Mapping[CredentialType, CredentialTypeCapability]
+
+    def __post_init__(self) -> None:
+        """Snapshot credential_types so the value object cannot be mutated later."""
+        object.__setattr__(
+            self,
+            "credential_types",
+            MappingProxyType(dict(self.credential_types)),
+        )
+
+    def capability_for(
+        self, credential_type: CredentialType
+    ) -> CredentialTypeCapability | None:
+        """Return the per-type limits for ``credential_type``, else ``None``."""
+        return self.credential_types.get(credential_type)
+
+    def supports(self, credential_type: CredentialType) -> bool:
+        """Return True when the lock advertises ``credential_type``."""
+        return credential_type in self.credential_types
+
+
+def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
+    """
+    Build the Personal Identification Number credential for a managed slot.
+
+    The new model relates to the coordinator's ``SlotCredential`` by a
+    one-to-one projection: a managed slot index becomes a PIN ``Credential``
+    at the same index, reusing the ``SlotCredential`` verbatim as its state.
+    """
+    return Credential(type=CredentialType.PIN, slot=slot, state=state)
+
+
+def slot_credential_of(credential: Credential) -> SlotCredential:
+    """
+    Project a Personal Identification Number credential back to a SlotCredential.
+
+    This is the inverse of ``credential_from_slot`` and is identity on the
+    state, so the coordinator can keep consuming ``SlotCredential`` unchanged.
+    It rejects non-PIN credentials because only PIN projects one-to-one onto a
+    managed slot today.
+    """
+    if credential.type is not CredentialType.PIN:
+        raise ValueError(
+            f"Only PIN credentials project to a slot, got {credential.type}"
+        )
+    return credential.state
+
+
+def user_from_slot(slot: int, state: SlotCredential, name: str | None = None) -> User:
+    """
+    Build the single-credential user for a managed slot.
+
+    Realizes today's one-managed-slot to one-user to one-PIN-credential
+    projection: the user identifier shares the slot index, the user owns
+    exactly one PIN credential at that index, and the user is active exactly
+    when the slot holds a code. A future multi-credential world only appends
+    to ``credentials`` -- no field changes here.
+    """
+    return User(
+        user_id=slot,
+        name=name,
+        active=state.is_present,
+        credentials=[credential_from_slot(slot, state)],
+    )
