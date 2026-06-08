@@ -144,3 +144,44 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
         await lock._delete_credential(CredentialRef(1, CredentialType.PIN, 1))
     with pytest.raises(ProviderNotImplementedError):
         await lock._get_users()
+
+
+async def test_get_usercodes_projects_pin_credentials(hass: HomeAssistant) -> None:
+    """async_get_usercodes flattens users' PIN credentials to slot -> state."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_get")
+    lock._users = {
+        1: User(
+            user_id=1,
+            credentials=[credential_from_slot(1, SlotCredential.known("1234"))],
+        ),
+        2: User(
+            user_id=2,
+            credentials=[credential_from_slot(2, SlotCredential.unreadable())],
+        ),
+        5: User(
+            user_id=5,
+            credentials=[credential_from_slot(5, SlotCredential.empty())],
+        ),
+    }
+    assert await lock.async_get_usercodes() == {
+        1: SlotCredential.known("1234"),
+        2: SlotCredential.unreadable(),
+        5: SlotCredential.empty(),
+    }
+
+
+async def test_get_usercodes_drops_non_pin_credentials(hass: HomeAssistant) -> None:
+    """Only PIN credentials project to slots this round."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_get_nonpin")
+    lock._users = {
+        1: User(
+            user_id=1,
+            credentials=[
+                credential_from_slot(1, SlotCredential.known("1234")),
+                Credential(
+                    type=CredentialType.RFID, slot=1, state=SlotCredential.unreadable()
+                ),
+            ],
+        )
+    }
+    assert await lock.async_get_usercodes() == {1: SlotCredential.known("1234")}

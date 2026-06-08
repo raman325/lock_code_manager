@@ -918,11 +918,22 @@ class BaseLock:
             await self.coordinator.async_request_refresh()
 
     async def async_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Return a dict mapping slot numbers to ``SlotCredential`` values for the coordinator."""
-        self._raise_not_implemented(
-            "async_get_usercodes",
-            "Override this method to retrieve usercodes from the lock.",
-        )
+        """
+        Return slot -> ``SlotCredential`` by projecting the lock's users.
+
+        Reads every user via ``_get_users`` and flattens their Personal
+        Identification Number credentials to the slot-keyed shape the
+        coordinator consumes. Non-PIN credentials and the user layer are
+        dropped here: the seam keeps everything below it slot-shaped this
+        round. Providers that want empty managed slots surfaced include them
+        in ``_get_users``.
+        """
+        users = await self._get_users()
+        return {
+            credential.slot: credential.state
+            for user in users
+            for credential in user.pin_credentials
+        }
 
     async def _set_user(self, user: User) -> int:
         """
