@@ -217,6 +217,21 @@ class TestLockCapabilities:
         with pytest.raises((AttributeError, TypeError)):
             caps.max_users = 5  # type: ignore[misc]
 
+    def test_credential_types_is_snapshotted(self) -> None:
+        # A snapshot value object must not reflect later mutation of the
+        # caller's dict, and its stored mapping must itself be read-only.
+        pin_cap = CredentialTypeCapability(
+            num_slots=30, min_length=4, max_length=8, supports_learn=False
+        )
+        source = {CredentialType.PIN: pin_cap}
+        caps = LockCapabilities(
+            supports_user_management=True, max_users=30, credential_types=source
+        )
+        source[CredentialType.RFID] = pin_cap
+        assert not caps.supports(CredentialType.RFID)
+        with pytest.raises(TypeError):
+            caps.credential_types[CredentialType.RFID] = pin_cap  # type: ignore[index]
+
 
 class TestProjectionHelpers:
     """Pure 1:1:1 projection between a managed slot and the User/Credential model."""

@@ -8,8 +8,10 @@ one-user to one-Personal-Identification-Number-credential projection is a
 thin pure function, while a future "user is the unit, multiple credentials"
 world only needs to append to ``User.credentials`` -- no field changes.
 
-These are pure, immutable value types. They do not import Home Assistant and
-do not change ``SlotCredential``, which remains the coordinator's currency.
+These are pure value types with no Home Assistant dependencies. The credential
+and capability types are immutable; ``User`` is a mutable aggregate of immutable
+credentials. They do not change ``SlotCredential``, which remains the
+coordinator's currency.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import NamedTuple
 
 from .models import SlotCredential
@@ -202,6 +205,14 @@ class LockCapabilities:
     supports_user_management: bool
     max_users: int
     credential_types: Mapping[CredentialType, CredentialTypeCapability]
+
+    def __post_init__(self) -> None:
+        """Snapshot credential_types so the value object cannot be mutated later."""
+        object.__setattr__(
+            self,
+            "credential_types",
+            MappingProxyType(dict(self.credential_types)),
+        )
 
     def capability_for(
         self, credential_type: CredentialType
