@@ -117,3 +117,27 @@ class TestCredential:
         cred = Credential(type=CredentialType.PIN, slot=3, state=SlotCredential.empty())
         with pytest.raises((AttributeError, TypeError)):
             cred.slot = 4  # type: ignore[misc]
+
+
+from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
+    CredentialRef,
+)
+
+
+class TestCredentialRef:
+    """CredentialRef addresses a credential as (user_id, type, slot)."""
+
+    def test_field_order_and_values(self) -> None:
+        ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+        assert ref.user_id == 3
+        assert ref.type == CredentialType.PIN
+        assert ref.slot == 3
+        # NamedTuple positional order is part of the contract.
+        assert tuple(ref) == (3, CredentialType.PIN, 3)
+
+    def test_is_hashable_and_value_equal(self) -> None:
+        # Usable as a dict key / set member for addressing.
+        a = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
+        b = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
+        assert a == b
+        assert len({a, b}) == 1

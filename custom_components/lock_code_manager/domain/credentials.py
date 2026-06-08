@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import NamedTuple
 
 from .models import SlotCredential
 
@@ -111,3 +112,17 @@ class Credential:
     def matches(self, pin: str) -> bool:
         """Return True when this credential is readable and equals ``pin``."""
         return self.state.matches(pin)
+
+
+class CredentialRef(NamedTuple):
+    """
+    Stable address for a single credential.
+
+    A lightweight ``(user_id, type, slot)`` tuple used to point at a
+    credential without carrying its state. Hashable, so it works as a
+    dictionary key or set member when correlating credentials across reads.
+    """
+
+    user_id: int
+    type: CredentialType
+    slot: int
