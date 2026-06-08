@@ -44,6 +44,7 @@ class _NativeStubLock(BaseLock):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.calls: list[tuple] = []
+        self.last_set_credential: dict | None = None
         self._users: dict[int, User] = {}
 
     @property
@@ -74,6 +75,12 @@ class _NativeStubLock(BaseLock):
         source: Literal["sync", "direct"],
     ) -> bool:
         self.calls.append(("set_credential", user_id, credential.slot))
+        self.last_set_credential = {
+            "user_id": user_id,
+            "slot": credential.slot,
+            "name": name,
+            "source": source,
+        }
         self._users[user_id].credentials = [credential]
         return True
 
@@ -286,3 +293,15 @@ async def test_internal_roundtrip_set_get_clear(hass: HomeAssistant) -> None:
         assert await lock.async_internal_get_usercodes() == {
             2: SlotCredential.known("2222")
         }
+
+
+async def test_set_usercode_threads_name_and_source(hass: HomeAssistant) -> None:
+    """name and source flow through the orchestration into _set_credential."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_thread_kwargs")
+    await lock.async_set_usercode(2, "2468", name=None, source="sync")
+    assert lock.last_set_credential == {
+        "user_id": 2,
+        "slot": 2,
+        "name": None,
+        "source": "sync",
+    }

@@ -998,6 +998,9 @@ class BaseLock:
         owning user for native-user providers; slot-only providers ignore it
         and address the credential by ``credential.slot``. Providers raise
         ``DuplicateCodeError`` when the lock rejects the value as a duplicate.
+        Native-user providers carry the user's name on the user record, so they
+        may treat ``name`` here as advisory; slot-only providers use it (for
+        example as a tagged code name).
         """
         self._raise_not_implemented(
             "_set_credential",
