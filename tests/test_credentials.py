@@ -34,3 +34,31 @@ class TestCredentialType:
             "PASSWORD",
             "NFC",
         }
+
+
+from custom_components.lock_code_manager.domain.credentials import (  # noqa: E402
+    CredentialRule,
+    UserType,
+)
+
+
+class TestUserType:
+    """UserType is modeled minimally; UNRESTRICTED is the default we use today."""
+
+    def test_unrestricted_present_and_is_str(self) -> None:
+        assert UserType.UNRESTRICTED == "unrestricted"
+        assert isinstance(UserType.UNRESTRICTED, str)
+
+    def test_members(self) -> None:
+        assert set(UserType.__members__) == {"UNRESTRICTED"}
+
+
+class TestCredentialRule:
+    """CredentialRule is modeled minimally; SINGLE is the rule we use today."""
+
+    def test_single_present_and_is_str(self) -> None:
+        assert CredentialRule.SINGLE == "single"
+        assert isinstance(CredentialRule.SINGLE, str)
+
+    def test_members(self) -> None:
+        assert set(CredentialRule.__members__) == {"SINGLE"}

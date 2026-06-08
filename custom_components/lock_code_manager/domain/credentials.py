@@ -34,3 +34,28 @@ class CredentialType(StrEnum):
     FACE = "face"
     PASSWORD = "password"
     NFC = "nfc"  # Near Field Communication tag.
+
+
+class UserType(StrEnum):
+    """
+    How a user is constrained on the lock.
+
+    Modeled minimally for now. ``UNRESTRICTED`` matches the Matter and Z-Wave
+    "normal" user with no schedule restrictions, which is the only kind Lock
+    Code Manager manages today. Additional kinds (for example schedule- or
+    duress-restricted users) can be appended without breaking callers.
+    """
+
+    UNRESTRICTED = "unrestricted"
+
+
+class CredentialRule(StrEnum):
+    """
+    How many credentials a user must present to operate the lock.
+
+    Modeled minimally for now. ``SINGLE`` means one credential is sufficient,
+    matching today's one-PIN-per-user reality. Multi-credential rules can be
+    appended later without breaking callers.
+    """
+
+    SINGLE = "single"
