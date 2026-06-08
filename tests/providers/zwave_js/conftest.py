@@ -30,6 +30,8 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
+from .helpers import _PROVIDER_MODULE
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -302,9 +304,6 @@ def e2e_zwave_lock(
 # ---------------------------------------------------------------------------
 # Shared provider fixtures (used by both test_provider.py and test_events.py)
 # ---------------------------------------------------------------------------
-
-# Module path where provider functions are imported (for patching in tests).
-_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.zwave_js"
 
 
 @pytest.fixture(name="zwave_js_lock")

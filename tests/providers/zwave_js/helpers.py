@@ -1,4 +1,4 @@
-"""Z-Wave JS provider test helpers — event factories and entity-id lookups."""
+"""Shared Z-Wave JS provider test helpers: patch paths, event factories, entity lookups."""
 
 from __future__ import annotations
 
@@ -11,6 +11,9 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
+
+# Module path where provider functions are imported (used as a patch target).
+_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.zwave_js"
 
 
 def async_capture_events(

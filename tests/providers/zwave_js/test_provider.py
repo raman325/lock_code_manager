@@ -23,8 +23,7 @@ from custom_components.lock_code_manager.domain.exceptions import LockDisconnect
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
-# Module path where provider functions are imported (for patching in tests).
-_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.zwave_js"
+from .helpers import _PROVIDER_MODULE
 
 # Properties tests
 
