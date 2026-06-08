@@ -179,14 +179,9 @@ async def test_subscribe_push_no_crash_on_node_error(
 async def test_event_filter_matches_correct_node(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """Test that event filter matches events for the correct node."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     dev_reg = dr.async_get(hass)
     device = dev_reg.async_get(zwave_js_lock.lock.device_id)
     assert device is not None
@@ -205,8 +200,6 @@ async def test_event_filter_matches_correct_node(
         "device_id": zwave_js_lock.lock.device_id,
     }
     assert zwave_js_lock._zwave_js_event_filter(event_data_wrong_node) is False
-
-    await zwave_js_lock.async_unload(False)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +304,6 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
 async def test_push_update_masked_code_sends_unknown(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """
@@ -320,16 +312,6 @@ async def test_push_update_masked_code_sends_unknown(
     When a push update arrives with a masked code (all asterisks) and the slot
     is in use, the coordinator should receive SlotCredential.unreadable().
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     # Set up a mock coordinator (push_update is synchronous)
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
@@ -367,20 +349,9 @@ async def test_push_update_masked_code_sends_unknown(
 async def test_push_update_falsy_value_sends_empty(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """Test that push updates with falsy values send SlotCredential.empty()."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
@@ -410,20 +381,9 @@ async def test_push_update_falsy_value_sends_empty(
 async def test_push_update_all_zeros_not_in_use_sends_empty(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """Test that all-zeros with slot_in_use=False sends SlotCredential.empty()."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}
     zwave_js_lock.coordinator = mock_coordinator
@@ -455,20 +415,9 @@ async def test_push_update_all_zeros_not_in_use_sends_empty(
 async def test_push_update_duplicate_value_skipped(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """Test that duplicate push updates are silently skipped."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}  # Already has this value
     zwave_js_lock.coordinator = mock_coordinator
@@ -499,20 +448,9 @@ async def test_push_update_duplicate_value_skipped(
 async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """Test that masked codes with slot_in_use=None still send UNREADABLE_CODE."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
     zwave_js_lock.coordinator = mock_coordinator
@@ -550,7 +488,6 @@ async def test_push_update_masked_code_with_unknown_in_use_sends_unknown(
 async def test_push_update_user_id_status_available_clears_slot(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """
@@ -560,16 +497,6 @@ async def test_push_update_user_id_status_available_clears_slot(
     it means the slot has been cleared. This should update the coordinator
     to mark the slot as empty.
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     # Set up a mock coordinator with existing data
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
@@ -598,13 +525,11 @@ async def test_push_update_user_id_status_available_clears_slot(
     mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
 
     zwave_js_lock.unsubscribe_push_updates()
-    await zwave_js_lock.async_unload(False)
 
 
 async def test_push_update_user_id_status_available_skipped_when_already_empty(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """
@@ -613,16 +538,6 @@ async def test_push_update_user_id_status_available_skipped_when_already_empty(
     If the coordinator already shows the slot as empty, we shouldn't
     push another update.
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     # Set up a mock coordinator - slot already empty
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.empty()}  # Slot already empty
@@ -650,13 +565,11 @@ async def test_push_update_user_id_status_available_skipped_when_already_empty(
     mock_coordinator.push_update.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
-    await zwave_js_lock.async_unload(False)
 
 
 async def test_push_update_user_id_status_enabled_ignored(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """
@@ -665,16 +578,6 @@ async def test_push_update_user_id_status_enabled_ignored(
     We only care about AVAILABLE status for clearing slots.
     ENABLED status doesn't tell us the PIN value.
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     # Set up a mock coordinator
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.empty()}
@@ -702,13 +605,11 @@ async def test_push_update_user_id_status_enabled_ignored(
     mock_coordinator.push_update.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
-    await zwave_js_lock.async_unload(False)
 
 
 async def test_push_update_user_id_status_available_ignored_when_slot_expects_pin(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """
@@ -717,16 +618,6 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
     This prevents sync loops where the lock sends stale AVAILABLE status
     after a code was successfully set.
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     # Set up a mock coordinator with existing PIN
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
@@ -757,13 +648,11 @@ async def test_push_update_user_id_status_available_ignored_when_slot_expects_pi
     mock_coordinator.push_update.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
-    await zwave_js_lock.async_unload(False)
 
 
 async def test_push_update_user_id_status_available_clears_when_slot_inactive(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """
@@ -772,16 +661,6 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
     When the slot is inactive (active=OFF), AVAILABLE status should clear
     the coordinator as expected.
     """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
     # Set up a mock coordinator with existing PIN
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.known("1234")}  # Slot has a PIN
@@ -812,7 +691,6 @@ async def test_push_update_user_id_status_available_clears_when_slot_inactive(
     mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
 
     zwave_js_lock.unsubscribe_push_updates()
-    await zwave_js_lock.async_unload(False)
 
 
 # ---------------------------------------------------------------------------
@@ -971,20 +849,9 @@ async def test_duplicate_code_notification_ignored_when_user_id_mismatches(
 async def test_set_in_progress_cleared_on_value_update(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
 ) -> None:
     """Test that a push value update for the in-progress slot clears the field."""
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"2": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup(lcm_entry)
-
     mock_coordinator = MagicMock()
     mock_coordinator.data = {2: SlotCredential.empty()}
     zwave_js_lock.coordinator = mock_coordinator
@@ -1013,7 +880,6 @@ async def test_set_in_progress_cleared_on_value_update(
     assert zwave_js_lock._set_in_progress_code_slot is None
 
     zwave_js_lock.unsubscribe_push_updates()
-    await zwave_js_lock.async_unload(False)
 
 
 async def test_internal_set_usercode_raises_duplicate_for_rejected_slot(
