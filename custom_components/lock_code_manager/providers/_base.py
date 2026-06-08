@@ -910,7 +910,10 @@ class BaseLock:
         """
         ref = CredentialRef(user_id=code_slot, type=CredentialType.PIN, slot=code_slot)
         changed = await self._delete_credential(ref)
-        if self.supports_native_users:
+        # Only the user whose last credential was just removed is deleted
+        # (lifecycle invariant). If nothing changed, the slot was already
+        # empty, so there is no user to clean up.
+        if self.supports_native_users and changed:
             await self._delete_user(code_slot)
         return changed
 
