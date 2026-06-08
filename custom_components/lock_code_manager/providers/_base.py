@@ -832,22 +832,20 @@ class BaseLock:
         Set a usercode on a code slot via the User->Credential primitives.
 
         Projects the slot to a single Personal Identification Number
-        credential. On native-user providers the owning user is created or
-        updated first (user-first ordering, which the Z-Wave set-credential
-        command requires and which sidesteps the User-Code-Command-Class
-        fallback ordering quirk) and its resolved identifier is threaded into
-        the credential write. Slot-only providers skip the user step and
-        address the credential by slot. Returns True if the value changed.
+        credential. Native-user providers run the create-on-first user
+        lifecycle via ``_put_credential``; slot-only providers write the
+        credential directly, addressing it by slot. Returns True if the value
+        changed.
         """
         state = SlotCredential.known(usercode)
-        user_id = (
-            await self.async_set_user(user_from_slot(code_slot, state, name))
-            if self.supports_native_users
-            else code_slot
-        )
-        return await self.async_set_credential(
-            user_id,
-            credential_from_slot(code_slot, state),
+        credential = credential_from_slot(code_slot, state)
+        if not self.supports_native_users:
+            return await self.async_set_credential(
+                code_slot, credential, name=name, source=source
+            )
+        return await self._put_credential(
+            user_from_slot(code_slot, state, name),
+            credential,
             name=name,
             source=source,
         )
@@ -906,11 +904,9 @@ class BaseLock:
         owning user, which is not assumed to equal the slot index: a
         credential may have been created on the lock by another controller, or
         the integration may have allocated a user identifier that differs from
-        the slot. The owner is resolved from the lock's current users, the
-        credential is deleted under that user, and the user itself is deleted
-        only when this removal leaves it with no credentials (lifecycle
-        invariant: a user exists if and only if it owns at least one
-        credential). Returns True if the value changed.
+        the slot. The owner is resolved from the lock's current users and the
+        delete-on-last user lifecycle runs via ``_drop_credential``. Returns
+        True if the value changed.
         """
         if not self.supports_native_users:
             ref = CredentialRef(
@@ -931,20 +927,10 @@ class BaseLock:
             # No user owns this slot's credential -- nothing to clear.
             return False
 
-        # Decide from the pre-deletion snapshot whether this credential is the
-        # user's last one, so the choice does not depend on whether the
-        # provider mutates the user record during the delete.
-        was_only_credential = len(owner.credentials) <= 1
         ref = CredentialRef(
             user_id=owner.user_id, type=CredentialType.PIN, slot=code_slot
         )
-        changed = await self.async_delete_credential(ref)
-        # Delete the user only when removing this credential leaves it empty
-        # (lifecycle invariant). In this round's one-to-one mapping that is
-        # always the case; the check generalizes to multi-credential users.
-        if changed and was_only_credential:
-            await self.async_delete_user(owner.user_id)
-        return changed
+        return await self._drop_credential(owner, ref)
 
     @final
     async def async_internal_clear_usercode(
@@ -982,6 +968,47 @@ class BaseLock:
             for user in users
             for credential in user.pin_credentials
         }
+
+    @final
+    async def _put_credential(
+        self,
+        user: User,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> bool:
+        """
+        Run the create-on-first user lifecycle around a credential write.
+
+        Native-user only (the slot adapters call the primitives directly for
+        slot-only providers). The owning user is created or updated first --
+        the Z-Wave set-credential command requires an existing user, and this
+        ordering also sidesteps the User-Code-Command-Class fallback quirk --
+        and its resolved identifier (which the integration may allocate) is
+        threaded into the credential write. Returns True if the value changed.
+        """
+        user_id = await self.async_set_user(user)
+        return await self.async_set_credential(
+            user_id, credential, name=name, source=source
+        )
+
+    @final
+    async def _drop_credential(self, owner: User, ref: CredentialRef) -> bool:
+        """
+        Run the delete-on-last user lifecycle around a credential delete.
+
+        Native-user only. Deletes the credential, then deletes ``owner`` when
+        that was its last credential (the invariant: a user exists if and only
+        if it owns at least one credential). The count is read from ``owner``,
+        a pre-deletion snapshot, so the decision does not depend on whether the
+        provider mutates the user during the delete. Returns True if changed.
+        """
+        was_only_credential = len(owner.credentials) <= 1
+        changed = await self.async_delete_credential(ref)
+        if changed and was_only_credential:
+            await self.async_delete_user(owner.user_id)
+        return changed
 
     async def async_set_user(self, user: User) -> int:
         """
