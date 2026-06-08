@@ -901,20 +901,49 @@ class BaseLock:
         """
         Clear a usercode on a code slot via the User->Credential primitives.
 
-        Deletes the slot's Personal Identification Number credential. On
-        native-user providers the slot's user owns exactly that one credential
-        in this round's one-to-one mapping, so removing it empties the user
-        and the base deletes the user too (lifecycle invariant: a user exists
-        if and only if it owns at least one credential). Slot-only providers
-        just delete the credential. Returns True if the value changed.
+        Slot-only providers address the credential by slot and delete it
+        directly. Native-user providers must target the credential's actual
+        owning user, which is not assumed to equal the slot index: a
+        credential may have been created on the lock by another controller, or
+        the integration may have allocated a user identifier that differs from
+        the slot. The owner is resolved from the lock's current users, the
+        credential is deleted under that user, and the user itself is deleted
+        only when this removal leaves it with no credentials (lifecycle
+        invariant: a user exists if and only if it owns at least one
+        credential). Returns True if the value changed.
         """
-        ref = CredentialRef(user_id=code_slot, type=CredentialType.PIN, slot=code_slot)
+        if not self.supports_native_users:
+            ref = CredentialRef(
+                user_id=code_slot, type=CredentialType.PIN, slot=code_slot
+            )
+            return await self._delete_credential(ref)
+
+        owner = next(
+            (
+                user
+                for user in await self._get_users()
+                for credential in user.pin_credentials
+                if credential.slot == code_slot
+            ),
+            None,
+        )
+        if owner is None:
+            # No user owns this slot's credential -- nothing to clear.
+            return False
+
+        # Decide from the pre-deletion snapshot whether this credential is the
+        # user's last one, so the choice does not depend on whether the
+        # provider mutates the user record during the delete.
+        was_only_credential = len(owner.credentials) <= 1
+        ref = CredentialRef(
+            user_id=owner.user_id, type=CredentialType.PIN, slot=code_slot
+        )
         changed = await self._delete_credential(ref)
-        # Only the user whose last credential was just removed is deleted
-        # (lifecycle invariant). If nothing changed, the slot was already
-        # empty, so there is no user to clean up.
-        if self.supports_native_users and changed:
-            await self._delete_user(code_slot)
+        # Delete the user only when removing this credential leaves it empty
+        # (lifecycle invariant). In this round's one-to-one mapping that is
+        # always the case; the check generalizes to multi-credential users.
+        if changed and was_only_credential:
+            await self._delete_user(owner.user_id)
         return changed
 
     @final

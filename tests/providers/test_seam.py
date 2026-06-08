@@ -253,15 +253,58 @@ async def test_clear_usercode_degenerate_returns_false_when_absent(
     assert lock.calls == [("delete_credential", 7, 7)]
 
 
-async def test_clear_usercode_native_no_user_op_when_absent(
+async def test_clear_usercode_native_no_op_when_no_owner(
     hass: HomeAssistant,
 ) -> None:
-    """Native clear of an empty slot deletes no credential and no user."""
+    """Native clear of a slot no user owns issues no delete at all."""
     lock = _make_lock(hass, _NativeStubLock, "seam_clear_native_absent")
     changed = await lock.async_clear_usercode(7)
     assert changed is False
-    assert lock.calls == [("delete_credential", 7, 7)]
+    assert lock.calls == []
     assert 7 not in lock._users
+
+
+async def test_clear_usercode_native_resolves_owner_when_user_id_not_slot(
+    hass: HomeAssistant,
+) -> None:
+    """Native clear targets the credential's real owner, not the slot index."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_foreign_owner")
+    # A user whose id differs from the credential slot (e.g. created by another
+    # controller or auto-allocated by the integration).
+    lock._users = {
+        12: User(
+            user_id=12,
+            name="bob",
+            credentials=[credential_from_slot(5, SlotCredential.known("1234"))],
+        )
+    }
+    changed = await lock.async_clear_usercode(5)
+    assert changed is True
+    assert lock.calls == [
+        ("delete_credential", 12, 5),
+        ("delete_user", 12),
+    ]
+    assert 12 not in lock._users
+
+
+async def test_clear_usercode_native_keeps_user_with_other_credentials(
+    hass: HomeAssistant,
+) -> None:
+    """Native clear deletes only the credential when the user has others."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_multi_cred")
+    lock._users = {
+        4: User(
+            user_id=4,
+            credentials=[
+                credential_from_slot(4, SlotCredential.known("1234")),
+                credential_from_slot(8, SlotCredential.known("5678")),
+            ],
+        )
+    }
+    changed = await lock.async_clear_usercode(4)
+    assert changed is True
+    assert lock.calls == [("delete_credential", 4, 4)]
+    assert ("delete_user", 4) not in lock.calls
 
 
 async def test_internal_set_usercode_drives_orchestration(
