@@ -477,7 +477,13 @@ def mock_lock_helpers():
 
 @pytest.fixture
 def mock_access_control(lock_schlage_be469: Node):
-    """Give the node a mock access_control with READ methods (Option B)."""
+    """
+    Give the node a mock access_control with READ methods (Option B).
+
+    ``access_control`` is a property on ``Node``, so this patches it at the
+    CLASS level for the fixture's scope -- every ``Node`` instance sees the
+    mock while the fixture is active, not just ``lock_schlage_be469``.
+    """
     ac = MagicMock()
     ac.get_user_cached = AsyncMock(return_value=None)
     ac.get_users_cached = AsyncMock(return_value=[])

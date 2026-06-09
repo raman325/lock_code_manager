@@ -751,6 +751,13 @@ async def test_async_get_users_maps_users_and_pin_credentials(
             user_type=UserCredentialUserType.GENERAL,
             user_name=None,
         ),
+        # User with no credentials at all -> projects to an empty list.
+        UserData(
+            user_id=3,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="carol",
+        ),
     ]
     mock_access_control.get_all_credentials_cached.return_value = [
         CredentialData(
@@ -776,7 +783,9 @@ async def test_async_get_users_maps_users_and_pin_credentials(
 
     users = await zwave_js_lock.async_get_users()
 
-    assert len(users) == 2
+    assert len(users) == 3
+    user3 = next(u for u in users if u.user_id == 3)
+    assert user3.credentials == []
 
     user1 = next(u for u in users if u.user_id == 1)
     assert user1.name == "alice"

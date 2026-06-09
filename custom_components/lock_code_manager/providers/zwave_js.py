@@ -148,9 +148,13 @@ class ZWaveJSLock(BaseLock):
         """Return True: this provider implements the credential primitives."""
         return True
 
-    def _pin_state(self, data: object) -> SlotCredential:
+    def _pin_state(self, data: str | bytes | None) -> SlotCredential:
         """Project Z-Wave credential data to a SlotCredential (readable when present)."""
-        return SlotCredential.known(str(data)) if data else SlotCredential.unreadable()
+        if not data:
+            return SlotCredential.unreadable()
+        # CredentialData.data is str | bytes; decode bytes so a Personal
+        # Identification Number is the digit string, not "b'1234'".
+        return SlotCredential.known(data if isinstance(data, str) else data.decode())
 
     async def async_get_users(self) -> list[User]:
         """Read users and their PIN credentials (with values) from the lock."""
