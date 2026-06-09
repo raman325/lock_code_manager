@@ -1,8 +1,9 @@
 """
 Z-Wave JS lock provider.
 
-Handles push updates, duplicate code detection, and rate-limited set/clear operations.
-See ARCHITECTURE.md for the provider's role in the data flow.
+Handles push updates via access-control credential node events and operation
+notifications for lock/unlock state changes. See ARCHITECTURE.md for the
+provider's role in the data flow.
 """
 
 from __future__ import annotations
@@ -14,20 +15,13 @@ import logging
 from typing import Any, Literal
 
 from zwave_js_server.client import Client
-from zwave_js_server.const import CommandClass, NodeStatus
+from zwave_js_server.const import NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
-from zwave_js_server.const.command_class.lock import (
-    ATTR_IN_USE,
-    LOCK_USERCODE_PROPERTY,
-    LOCK_USERCODE_STATUS_PROPERTY,
-    CodeSlotStatus,
-)
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercode
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -96,7 +90,6 @@ class ZWaveJSLock(BaseLock):
     # subscriptions: registered in ``async_setup``, released in
     # ``async_unload``).
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
-    _set_in_progress_code_slot: int | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -266,84 +259,9 @@ class ZWaveJSLock(BaseLock):
 
         return True, ""
 
-    # --- Legacy User Code CC push path (interim; replaced in PR 4 Task 4) ---
-    # The methods below (code_slot_in_use, _handle_usercode_*, the User Code CC
-    # value-event subscription in setup_push_subscription, and the
-    # _set_in_progress_code_slot duplicate-notification sniffing) still observe
-    # the legacy User Code CC value events. Task 4 replaces them with
-    # access-control credential node events; they are kept here only so the
-    # provider keeps receiving push updates until that lands.
-    def code_slot_in_use(self, code_slot: int) -> bool | None:
-        """Return whether a code slot is in use."""
-        try:
-            return get_usercode(self.node, code_slot)[ATTR_IN_USE]
-        except KeyError, ValueError:
-            return None
-
-    @callback
-    def _handle_usercode_status_update(self, code_slot: int, status: Any) -> None:
-        """Handle userIdStatus value update for a code slot."""
-        if status == CodeSlotStatus.AVAILABLE:
-            # Ignore AVAILABLE status if Lock Code Manager expects a PIN on this
-            # slot. Some locks send stale AVAILABLE events after a code was set,
-            # which would cause infinite sync loops.
-            if (
-                self.coordinator
-                and self.coordinator.desired_credential(code_slot).is_present
-            ):
-                _LOGGER.debug(
-                    "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
-                    "(LCM expects PIN on this slot)",
-                    self.lock.entity_id,
-                    code_slot,
-                )
-                return
-
-            # Slot was cleared - update coordinator if needed
-            current = self.coordinator.data.get(code_slot) if self.coordinator else None
-            if self.coordinator and (current is None or not current.is_empty):
-                _LOGGER.debug(
-                    "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
-                    self.lock.entity_id,
-                    code_slot,
-                )
-                self._push_credential_update(code_slot, SlotCredential.empty())
-
-    @callback
-    def _handle_usercode_value_update(self, code_slot: int, new_value: Any) -> None:
-        """Handle userCode value update for a code slot."""
-        if not new_value:
-            resolved = SlotCredential.empty()
-        else:
-            value = str(new_value)
-            slot_in_use = self.code_slot_in_use(code_slot)
-            # Asymmetric in_use checks: masked codes count as unreadable even
-            # when in_use is None (some firmwares mask before reporting
-            # status), but all-zeros only counts as empty when in_use is
-            # explicitly False (zeros from a partially-loaded cache must
-            # not be misread as cleared).
-            if value == "*" * len(value) and slot_in_use is not False:
-                resolved = SlotCredential.unreadable()
-            elif value.strip("0") == "" and slot_in_use is False:
-                resolved = SlotCredential.empty()
-            else:
-                resolved = SlotCredential.known(value)
-
-        # Z-Wave JS sends duplicate events; skip if the value is unchanged.
-        if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
-            return
-
-        _LOGGER.debug(
-            "Lock %s received push update for slot %s: %s",
-            self.lock.entity_id,
-            code_slot,
-            "****" if resolved.is_readable else f"({resolved.as_label()})",
-        )
-        self._push_credential_update(code_slot, resolved)
-
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe to User Code CC value update events."""
+        """Subscribe to access-control credential change events."""
         if self._push_unsubs:
             return
 
@@ -352,44 +270,33 @@ class ZWaveJSLock(BaseLock):
             raise LockDisconnected(reason)
 
         @callback
-        def on_value_updated(event: dict[str, Any]) -> None:
-            """Handle value update events from Z-Wave JS."""
-            args: dict[str, Any] = event["args"]
-            if args.get("commandClass") != CommandClass.USER_CODE:
+        def on_credential_changed(event: dict[str, Any]) -> None:
+            """Handle credential added/modified events from the node."""
+            args = event["args"]  # CredentialChangedArgs (pre-parsed by the library)
+            if args.credential_type != UserCredentialType.PIN_CODE:
                 return
+            self._push_credential_update(
+                args.credential_slot, SlotCredential.unreadable()
+            )
 
-            property_name = args.get("property")
-            if property_name not in (
-                LOCK_USERCODE_PROPERTY,
-                LOCK_USERCODE_STATUS_PROPERTY,
-            ):
+        @callback
+        def on_credential_deleted(event: dict[str, Any]) -> None:
+            """Handle credential deleted events from the node."""
+            args = event["args"]  # CredentialDeletedArgs (pre-parsed by the library)
+            if args.credential_type != UserCredentialType.PIN_CODE:
                 return
-
-            code_slot = int(args["propertyKey"])
-
-            # Slot 0 is not a valid user code slot.
-            if code_slot == 0:
-                return
-
-            # Clear in-progress tracking only on userCode updates for the slot
-            # we were setting. userIdStatus updates don't confirm acceptance and
-            # could race with duplicate-code notifications.
-            if (
-                property_name == LOCK_USERCODE_PROPERTY
-                and code_slot == self._set_in_progress_code_slot
-            ):
-                self._set_in_progress_code_slot = None
-
-            if property_name == LOCK_USERCODE_STATUS_PROPERTY:
-                self._handle_usercode_status_update(code_slot, args.get("newValue"))
-            else:
-                self._handle_usercode_value_update(code_slot, args.get("newValue"))
+            self._push_credential_update(args.credential_slot, SlotCredential.empty())
 
         try:
-            unsub = self.node.on("value updated", on_value_updated)
+            for name, handler in (
+                ("credential added", on_credential_changed),
+                ("credential modified", on_credential_changed),
+                ("credential deleted", on_credential_deleted),
+            ):
+                self._register_push_unsub(self.node.on(name, handler))
         except ValueError as err:
+            self._clear_push_unsubs()
             raise LockDisconnected(f"node not ready: {err}") from err
-        self._register_push_unsub(unsub)
 
     @callback
     def teardown_push_subscription(self) -> None:
@@ -419,24 +326,6 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
-
-        # Handle duplicate code rejection — only when LCM initiated the set.
-        # Mark the slot as rejected so the sync manager raises DuplicateCodeError
-        # on the next tick, routing through the standard CodeRejectedError flow
-        # (tracker reset, circuit breaker awareness, notification).
-        # Some Z-Wave lock firmwares report this notification with userId=0
-        # instead of the offending slot; treat 0 as referring to the slot
-        # we're currently setting.
-        if (
-            evt.data[ATTR_EVENT]
-            == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-            and self._set_in_progress_code_slot is not None
-            and code_slot in (0, self._set_in_progress_code_slot)
-        ):
-            slot = self._set_in_progress_code_slot
-            self._set_in_progress_code_slot = None
-            self.mark_code_rejected(slot)
-            return
 
         self.async_fire_code_slot_event(
             code_slot=code_slot,

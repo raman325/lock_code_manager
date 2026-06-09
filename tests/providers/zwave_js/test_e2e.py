@@ -6,7 +6,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
@@ -246,28 +245,30 @@ class TestEvents:
         assert len(events) == 1
         assert events[0].data[ATTR_CODE_SLOT] == 1
 
-    async def test_push_value_update_reaches_coordinator(
+    async def test_push_credential_added_reaches_coordinator(
         self,
         hass: HomeAssistant,
         e2e_zwave_lock: ZWaveJSLock,
         lock_schlage_be469: Node,
     ) -> None:
-        """A Z-Wave value update event for a usercode updates the coordinator."""
+        """A credential-added node event for a Personal Identification Number updates the coordinator."""
         event = ZwaveEvent(
-            type="value updated",
+            type="credential added",
             data={
                 "source": "node",
-                "event": "value updated",
+                "event": "credential added",
                 "nodeId": lock_schlage_be469.node_id,
+                "endpointIndex": 0,
                 "args": {
-                    "commandClass": CommandClass.USER_CODE,
-                    "property": "userCode",
-                    "propertyKey": 1,
-                    "newValue": "4321",
+                    "userId": 1,
+                    "credentialType": UserCredentialType.PIN_CODE,
+                    "credentialSlot": 1,
                 },
             },
         )
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        assert e2e_zwave_lock.coordinator.data.get(1) == SlotCredential.known("4321")
+        # Credential events push unreadable (the lock doesn't expose the Personal
+        # Identification Number value in the event; a coordinator refresh reads it).
+        assert e2e_zwave_lock.coordinator.data.get(1) == SlotCredential.unreadable()
