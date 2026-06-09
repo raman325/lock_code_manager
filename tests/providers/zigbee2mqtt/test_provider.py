@@ -13,6 +13,11 @@ from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialRef,
+    CredentialType,
+    credential_from_slot,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
@@ -187,8 +192,8 @@ class TestPushSubscription:
         assert fut.cancelled()
 
 
-class TestAsyncGetUsercodes:
-    """Request/response path for async_get_usercodes via MQTT get + pin_code futures."""
+class TestAsyncGetUsers:
+    """Request/response path for async_get_users via MQTT get + pin_code futures."""
 
     async def test_wait_for_timeout_maps_slot_to_unreadable(
         self,
@@ -225,9 +230,10 @@ class TestAsyncGetUsercodes:
                 side_effect=fast_pin_timeout,
             ),
         ):
-            result = await lock.async_get_usercodes()
+            users = await lock.async_get_users()
 
-        assert result == {11: SlotCredential.unreadable()}
+        by_slot = {u.user_id: u for u in users}
+        assert by_slot[11].pin_credentials[0].state is SlotCredential.unreadable()
 
     async def test_publish_failure_maps_slot_to_unreadable(
         self,
@@ -255,16 +261,17 @@ class TestAsyncGetUsercodes:
                 side_effect=boom,
             ),
         ):
-            result = await lock.async_get_usercodes()
+            users = await lock.async_get_users()
 
-        assert result == {7: SlotCredential.unreadable()}
+        by_slot = {u.user_id: u for u in users}
+        assert by_slot[7].pin_credentials[0].state is SlotCredential.unreadable()
 
-    async def test_async_get_usercodes_raises_when_lock_not_connected(
+    async def test_async_get_users_raises_when_lock_not_connected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """When the lock is not considered connected, get usercodes does not run."""
+        """When the lock is not considered connected, get users does not run."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         with (
@@ -279,9 +286,9 @@ class TestAsyncGetUsercodes:
             ),
             pytest.raises(LockDisconnected, match="Lock not connected"),
         ):
-            await lock.async_get_usercodes()
+            await lock.async_get_users()
 
-    async def test_async_get_usercodes_raises_when_not_zigbee2mqtt_bridge(
+    async def test_async_get_users_raises_when_not_zigbee2mqtt_bridge(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock,
@@ -300,9 +307,9 @@ class TestAsyncGetUsercodes:
             ),
             pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
         ):
-            await lock.async_get_usercodes()
+            await lock.async_get_users()
 
-    async def test_async_get_usercodes_raises_when_get_topic_unavailable(
+    async def test_async_get_users_raises_when_get_topic_unavailable(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -318,9 +325,9 @@ class TestAsyncGetUsercodes:
             patch.object(lock, "_get_topic", return_value=None),
             pytest.raises(LockDisconnected, match="Could not determine MQTT topic"),
         ):
-            await lock.async_get_usercodes()
+            await lock.async_get_users()
 
-    async def test_async_get_usercodes_raises_when_device_unavailable(
+    async def test_async_get_users_raises_when_device_unavailable(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -335,7 +342,7 @@ class TestAsyncGetUsercodes:
             ),
             pytest.raises(LockDisconnected, match="Device not available"),
         ):
-            await lock.async_get_usercodes()
+            await lock.async_get_users()
 
     async def test_wait_pin_non_timeout_exception_maps_slot_to_unreadable(
         self,
@@ -367,20 +374,21 @@ class TestAsyncGetUsercodes:
                 side_effect=boom,
             ),
         ):
-            result = await lock.async_get_usercodes()
+            users = await lock.async_get_users()
 
-        assert result == {21: SlotCredential.unreadable()}
+        by_slot = {u.user_id: u for u in users}
+        assert by_slot[21].pin_credentials[0].state is SlotCredential.unreadable()
 
 
 class TestAsyncSetClearHardRefresh:
-    """Cover async_set_usercode, async_clear_usercode, mqtt errors, and teardown."""
+    """Cover async_set_credential, async_delete_credential, mqtt errors, and teardown."""
 
-    async def test_async_get_usercodes_empty_managed_returns_empty_dict(
+    async def test_async_get_users_empty_managed_returns_empty_list(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
-        """No managed slots yields an empty mapping without publishing."""
+        """No managed slots yields an empty list without publishing."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         with (
@@ -397,12 +405,12 @@ class TestAsyncSetClearHardRefresh:
                 new_callable=AsyncMock,
             ) as mock_pub,
         ):
-            result = await lock.async_get_usercodes()
+            result = await lock.async_get_users()
 
-        assert result == {}
+        assert result == []
         mock_pub.assert_not_called()
 
-    async def test_async_get_usercodes_mqtt_disabled_raises(
+    async def test_async_get_users_mqtt_disabled_raises(
         self,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
@@ -415,14 +423,15 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected),
         ):
-            await lock.async_get_usercodes()
+            await lock.async_get_users()
 
-    async def test_async_set_usercode_raises_when_mqtt_disabled(
+    async def test_async_set_credential_raises_when_mqtt_disabled(
         self,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
         """MQTT integration disabled rejects set before connectivity checks."""
         lock = zigbee2mqtt_lock_with_device
+        credential = credential_from_slot(1, SlotCredential.known("1234"))
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -430,14 +439,15 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="MQTT component not available"),
         ):
-            await lock.async_set_usercode(1, "1234")
+            await lock.async_set_credential(1, credential, name=None, source="direct")
 
-    async def test_async_clear_usercode_raises_when_mqtt_disabled(
+    async def test_async_delete_credential_raises_when_mqtt_disabled(
         self,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
     ) -> None:
         """MQTT integration disabled rejects clear before connectivity checks."""
         lock = zigbee2mqtt_lock_with_device
+        ref = CredentialRef(user_id=5, type=CredentialType.PIN, slot=5)
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -445,9 +455,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="MQTT component not available"),
         ):
-            await lock.async_clear_usercode(5)
+            await lock.async_delete_credential(ref)
 
-    async def test_async_set_usercode_raises_when_not_connected(
+    async def test_async_set_credential_raises_when_not_connected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -455,6 +465,7 @@ class TestAsyncSetClearHardRefresh:
         """Disconnected lock raises before publishing a set PIN payload."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        credential = credential_from_slot(3, SlotCredential.known("9999"))
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -467,9 +478,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="Lock not connected"),
         ):
-            await lock.async_set_usercode(3, "9999")
+            await lock.async_set_credential(3, credential, name=None, source="direct")
 
-    async def test_async_clear_usercode_raises_when_not_connected(
+    async def test_async_delete_credential_raises_when_not_connected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -477,6 +488,7 @@ class TestAsyncSetClearHardRefresh:
         """Disconnected lock raises before publishing a clear PIN payload."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        ref = CredentialRef(user_id=9, type=CredentialType.PIN, slot=9)
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -489,9 +501,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="Lock not connected"),
         ):
-            await lock.async_clear_usercode(9)
+            await lock.async_delete_credential(ref)
 
-    async def test_async_set_usercode_raises_when_not_zigbee2mqtt_bridge(
+    async def test_async_set_credential_raises_when_not_zigbee2mqtt_bridge(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_wrong_identifier: Zigbee2MQTTLock,
@@ -499,6 +511,7 @@ class TestAsyncSetClearHardRefresh:
         """MQTT lock without zigbee2mqtt_* id fails set with the same hint as reads."""
         lock = zigbee2mqtt_lock_wrong_identifier
         hass.states.async_set(lock.lock.entity_id, "locked")
+        credential = credential_from_slot(1, SlotCredential.known("1234"))
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -506,9 +519,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
         ):
-            await lock.async_set_usercode(1, "1234")
+            await lock.async_set_credential(1, credential, name=None, source="direct")
 
-    async def test_async_set_usercode_raises_when_topic_unavailable(
+    async def test_async_set_credential_raises_when_topic_unavailable(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -516,6 +529,7 @@ class TestAsyncSetClearHardRefresh:
         """If the MQTT topic cannot be resolved, set PIN fails early."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        credential = credential_from_slot(2, SlotCredential.known("8888"))
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -529,9 +543,9 @@ class TestAsyncSetClearHardRefresh:
             patch.object(lock, "_get_topic", return_value=None),
             pytest.raises(LockDisconnected, match="Could not determine MQTT topic"),
         ):
-            await lock.async_set_usercode(2, "8888")
+            await lock.async_set_credential(2, credential, name=None, source="direct")
 
-    async def test_async_clear_usercode_raises_when_topic_unavailable(
+    async def test_async_delete_credential_raises_when_topic_unavailable(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -539,6 +553,7 @@ class TestAsyncSetClearHardRefresh:
         """If the MQTT topic cannot be resolved, clear PIN fails early."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        ref = CredentialRef(user_id=6, type=CredentialType.PIN, slot=6)
         with (
             patch(
                 "custom_components.lock_code_manager.providers.zigbee2mqtt.mqtt_config_entry_enabled",
@@ -552,9 +567,9 @@ class TestAsyncSetClearHardRefresh:
             patch.object(lock, "_get_topic", return_value=None),
             pytest.raises(LockDisconnected, match="Could not determine MQTT topic"),
         ):
-            await lock.async_clear_usercode(6)
+            await lock.async_delete_credential(ref)
 
-    async def test_async_set_usercode_without_coordinator_still_true(
+    async def test_async_set_credential_without_coordinator_still_true(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -563,6 +578,7 @@ class TestAsyncSetClearHardRefresh:
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
         lock.coordinator = None
+        credential = credential_from_slot(2, SlotCredential.known("9999"))
         mock_pub = AsyncMock()
         with (
             patch(
@@ -574,9 +590,14 @@ class TestAsyncSetClearHardRefresh:
                 mock_pub,
             ),
         ):
-            assert await lock.async_set_usercode(2, "9999") is True
+            assert (
+                await lock.async_set_credential(
+                    2, credential, name=None, source="direct"
+                )
+                is True
+            )
 
-    async def test_async_set_usercode_publish_oserror_raises_lock_disconnected(
+    async def test_async_set_credential_publish_oserror_raises_lock_disconnected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -589,6 +610,7 @@ class TestAsyncSetClearHardRefresh:
         """
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        credential = credential_from_slot(1, SlotCredential.known("1111"))
         mock_pub = AsyncMock(side_effect=OSError("broker"))
 
         with (
@@ -602,9 +624,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="Failed to set PIN"),
         ):
-            await lock.async_set_usercode(1, "1111")
+            await lock.async_set_credential(1, credential, name=None, source="direct")
 
-    async def test_async_set_usercode_publish_ha_error_raises_operation_failed(
+    async def test_async_set_credential_publish_ha_error_raises_operation_failed(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -612,6 +634,7 @@ class TestAsyncSetClearHardRefresh:
         """HomeAssistantError from publish surfaces as LockOperationFailed."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        credential = credential_from_slot(1, SlotCredential.known("1111"))
         mock_pub = AsyncMock(side_effect=HomeAssistantError("payload rejected"))
 
         with (
@@ -625,9 +648,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockOperationFailed, match="Failed to set PIN"),
         ):
-            await lock.async_set_usercode(1, "1111")
+            await lock.async_set_credential(1, credential, name=None, source="direct")
 
-    async def test_async_clear_usercode_publish_failure_raises(
+    async def test_async_delete_credential_publish_failure_raises(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -635,6 +658,7 @@ class TestAsyncSetClearHardRefresh:
         """Non-MQTT publish failures propagate for visibility (not masked as disconnected)."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
         mock_pub = AsyncMock(side_effect=RuntimeError("fail"))
 
         with (
@@ -648,9 +672,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(RuntimeError, match="fail"),
         ):
-            await lock.async_clear_usercode(4)
+            await lock.async_delete_credential(ref)
 
-    async def test_async_clear_usercode_publish_oserror_raises_lock_disconnected(
+    async def test_async_delete_credential_publish_oserror_raises_lock_disconnected(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -658,6 +682,7 @@ class TestAsyncSetClearHardRefresh:
         """Clear path maps MQTT OSError publish failures to LockDisconnected."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
         mock_pub = AsyncMock(side_effect=OSError("broker"))
 
         with (
@@ -671,9 +696,9 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockDisconnected, match="Failed to clear PIN"),
         ):
-            await lock.async_clear_usercode(4)
+            await lock.async_delete_credential(ref)
 
-    async def test_async_clear_usercode_publish_ha_error_raises_operation_failed(
+    async def test_async_delete_credential_publish_ha_error_raises_operation_failed(
         self,
         hass: HomeAssistant,
         zigbee2mqtt_lock_with_device: Zigbee2MQTTLock,
@@ -681,6 +706,7 @@ class TestAsyncSetClearHardRefresh:
         """HomeAssistantError from publish surfaces as LockOperationFailed."""
         lock = zigbee2mqtt_lock_with_device
         hass.states.async_set(lock.lock.entity_id, "locked")
+        ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
         mock_pub = AsyncMock(side_effect=HomeAssistantError("payload rejected"))
 
         with (
@@ -694,7 +720,7 @@ class TestAsyncSetClearHardRefresh:
             ),
             pytest.raises(LockOperationFailed, match="Failed to clear PIN"),
         ):
-            await lock.async_clear_usercode(4)
+            await lock.async_delete_credential(ref)
 
     async def test_async_hard_refresh_delegates_to_get_usercodes(
         self,

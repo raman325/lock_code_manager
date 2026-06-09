@@ -12,6 +12,11 @@ from zigpy.zcl.clusters.closures import DoorLock
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
 from homeassistant.core import HomeAssistant
 
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialRef,
+    CredentialType,
+    credential_from_slot,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -85,16 +90,47 @@ async def test_get_door_lock_cluster_caches_result(
 
 
 # ---------------------------------------------------------------------------
-# Usercode tests
+# Credential primitive tests
 # ---------------------------------------------------------------------------
 
 
-async def test_get_usercodes(
+async def test_get_users(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test reading usercodes from the lock."""
+    """Test async_get_users reads from the cluster and returns a user per slot."""
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+
+    async def mock_get_pin_code(slot_num):
+        if slot_num == 1:
+            return type(
+                "Response",
+                (),
+                {"user_status": DoorLock.UserStatus.Enabled, "code": "1234"},
+            )()
+        return type(
+            "Response",
+            (),
+            {"user_status": DoorLock.UserStatus.Available, "code": ""},
+        )()
+
+    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
+
+    users = await zha_lock.async_get_users()
+
+    by_slot = {u.user_id: u for u in users}
+    assert by_slot[1].pin_credentials[0].state == SlotCredential.known("1234")
+    assert by_slot[2].pin_credentials[0].state is SlotCredential.empty()
+
+
+async def test_get_usercodes_via_base_projection(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Base async_get_usercodes projection surfaces all managed slots."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
 
@@ -119,18 +155,21 @@ async def test_get_usercodes(
     assert codes[2] is SlotCredential.empty()
 
 
-async def test_set_usercode(
+async def test_set_credential(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode calls the cluster and pushes optimistic update."""
+    """Test async_set_credential calls the cluster and pushes optimistic update."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(return_value=type("Response", (), {"status": 0})())
     zha_lock.coordinator = MagicMock()
 
-    result = await zha_lock.async_set_usercode(3, "5678", "Test User")
+    credential = credential_from_slot(3, SlotCredential.known("5678"))
+    result = await zha_lock.async_set_credential(
+        3, credential, name="Test User", source="direct"
+    )
 
     assert result is True
     cluster.set_pin_code.assert_called_once_with(
@@ -144,26 +183,27 @@ async def test_set_usercode(
     )
 
 
-async def test_set_usercode_failure(
+async def test_set_credential_failure(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode raises CodeRejectedError on non-zero status."""
+    """Test async_set_credential raises CodeRejectedError on non-zero status."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(return_value=type("Response", (), {"status": 1})())
 
+    credential = credential_from_slot(3, SlotCredential.known("5678"))
     with pytest.raises(CodeRejectedError, match="set_pin_code rejected"):
-        await zha_lock.async_set_usercode(3, "5678")
+        await zha_lock.async_set_credential(3, credential, name=None, source="direct")
 
 
-async def test_clear_usercode(
+async def test_delete_credential(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode calls the cluster and pushes optimistic update."""
+    """Test async_delete_credential calls the cluster and pushes optimistic update."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(
@@ -171,7 +211,8 @@ async def test_clear_usercode(
     )
     zha_lock.coordinator = MagicMock()
 
-    result = await zha_lock.async_clear_usercode(3)
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    result = await zha_lock.async_delete_credential(ref)
 
     assert result is True
     cluster.clear_pin_code.assert_called_once_with(3)
@@ -180,20 +221,21 @@ async def test_clear_usercode(
     )
 
 
-async def test_clear_usercode_failure(
+async def test_delete_credential_failure(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode raises CodeRejectedError on non-zero status."""
+    """Test async_delete_credential raises CodeRejectedError on non-zero status."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(
         return_value=type("Response", (), {"status": 1})()
     )
 
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
     with pytest.raises(CodeRejectedError, match="clear_pin_code rejected"):
-        await zha_lock.async_clear_usercode(3)
+        await zha_lock.async_delete_credential(ref)
 
 
 # ---------------------------------------------------------------------------
@@ -576,57 +618,59 @@ async def test_check_programming_support_read_failure(
 
 
 # ---------------------------------------------------------------------------
-# get_usercodes error handling
+# Primitive error handling
 # ---------------------------------------------------------------------------
 
 
-async def test_get_usercodes_slot_read_failure(
+async def test_get_users_slot_read_failure(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test get_usercodes returns UNREADABLE_CODE for slots that fail to read."""
+    """Test async_get_users marks unreadable for slots that fail to read."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(side_effect=RuntimeError("zigpy timeout"))
 
-    codes = await zha_lock.async_get_usercodes()
+    users = await zha_lock.async_get_users()
+    by_slot = {u.user_id: u for u in users}
+    assert by_slot[1].pin_credentials[0].state is SlotCredential.unreadable()
+    assert by_slot[2].pin_credentials[0].state is SlotCredential.unreadable()
 
-    assert codes[1] is SlotCredential.unreadable()
-    assert codes[2] is SlotCredential.unreadable()
 
-
-async def test_get_usercodes_no_managed_slots(
+async def test_get_users_no_managed_slots(
     hass: HomeAssistant, zha_lock: ZHALock
 ) -> None:
-    """Test get_usercodes returns empty dict with no managed slots."""
-    codes = await zha_lock.async_get_usercodes()
-    assert codes == {}
+    """Test async_get_users returns empty list with no managed slots."""
+    users = await zha_lock.async_get_users()
+    assert users == []
 
 
-async def test_set_usercode_generic_exception(
+async def test_set_credential_generic_exception(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test set_usercode wraps zigpy comms failures as LockDisconnected."""
+    """Test async_set_credential wraps zigpy comms failures as LockDisconnected."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.set_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
 
+    credential = credential_from_slot(1, SlotCredential.known("1234"))
     with pytest.raises(LockDisconnected, match="Failed to set PIN"):
-        await zha_lock.async_set_usercode(1, "1234")
+        await zha_lock.async_set_credential(1, credential, name=None, source="direct")
 
 
-async def test_clear_usercode_generic_exception(
+async def test_delete_credential_generic_exception(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test clear_usercode wraps zigpy comms failures as LockDisconnected."""
+    """Test async_delete_credential wraps zigpy comms failures as LockDisconnected."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.clear_pin_code = AsyncMock(side_effect=RuntimeError("zigpy error"))
 
+    ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
     with pytest.raises(LockDisconnected, match="Failed to clear PIN"):
-        await zha_lock.async_clear_usercode(1)
+        await zha_lock.async_delete_credential(ref)
