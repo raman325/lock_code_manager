@@ -29,8 +29,6 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
-from .helpers import _PROVIDER_MODULE
-
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -407,30 +405,6 @@ async def simple_lcm_config_entry(
     )
     entry.add_to_hass(hass)
     return entry
-
-
-@pytest.fixture
-def mock_zwave_usercodes(zwave_client: MagicMock):
-    """
-    Mock Z-Wave JS usercode cache functions with mutable state.
-
-    ``get_usercode`` reads from a shared mutable ``codes`` dict. The client's
-    ``async_send_command`` is wrapped so that access_control commands return
-    an empty users/credentials list by default (tests override via
-    ``mock_access_control`` when they need specific credential data).
-
-    Yields ``(None, mock_get_usercode, codes)`` where ``None`` is a placeholder
-    for the removed ``get_usercodes`` mock (kept so call sites using tuple
-    unpacking as ``_mock_all, _mock_one, codes`` continue to work), and
-    *codes* is ``dict[int, dict]`` keyed by slot number.
-    """
-    codes: dict[int, dict] = {}
-
-    with patch(f"{_PROVIDER_MODULE}.get_usercode") as mock_one:
-        mock_one.side_effect = lambda node, slot: codes.get(
-            slot, {"code_slot": slot, "in_use": False, "usercode": ""}
-        )
-        yield None, mock_one, codes
 
 
 @pytest.fixture

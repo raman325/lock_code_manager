@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.event import Event as ZwaveEvent
@@ -22,6 +23,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
@@ -118,6 +120,39 @@ async def test_subscribe_push_no_crash_on_node_error(
         zwave_js_lock.subscribe_push_updates()
 
     assert not zwave_js_lock._push_unsubs
+
+
+async def test_subscribe_push_cleans_up_partial_subscription_on_error(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """A failure partway through subscribing releases the unsubs already registered."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    zwave_js_lock.unsubscribe_push_updates()
+    assert not zwave_js_lock._push_unsubs
+
+    # First node.on succeeds (registers an unsub), the second raises -> the
+    # partial registration must be cleaned up, not leaked.
+    first_unsub = MagicMock()
+    with (
+        patch.object(
+            lock_schlage_be469,
+            "on",
+            side_effect=[first_unsub, ValueError("not ready")],
+        ),
+        pytest.raises(LockDisconnected),
+    ):
+        # Call the raw subscriber directly; the public wrapper swallows
+        # LockDisconnected, so it would hide the raise we want to assert.
+        zwave_js_lock.setup_push_subscription()
+
+    assert not zwave_js_lock._push_unsubs
+    first_unsub.assert_called_once()
 
     await zwave_js_lock.async_unload(False)
 
