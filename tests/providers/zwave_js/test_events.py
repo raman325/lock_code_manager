@@ -314,8 +314,16 @@ def _make_credential_added_event(
     credential_slot: int,
     credential_type: int = UserCredentialType.PIN_CODE,
     user_id: int = 1,
+    credential_data: str | None = None,
 ) -> ZwaveEvent:
     """Build a 'credential added' ZwaveEvent for a given slot."""
+    args: dict = {
+        "userId": user_id,
+        "credentialType": credential_type,
+        "credentialSlot": credential_slot,
+    }
+    if credential_data is not None:
+        args["data"] = credential_data
     return ZwaveEvent(
         type="credential added",
         data={
@@ -323,11 +331,7 @@ def _make_credential_added_event(
             "event": "credential added",
             "nodeId": node_id,
             "endpointIndex": 0,
-            "args": {
-                "userId": user_id,
-                "credentialType": credential_type,
-                "credentialSlot": credential_slot,
-            },
+            "args": args,
         },
     )
 
@@ -397,6 +401,32 @@ async def test_credential_added_pin_pushes_unreadable(
 
     mock_coordinator.push_update.assert_called_once_with(
         {2: SlotCredential.unreadable()}
+    )
+
+    zwave_js_lock.unsubscribe_push_updates()
+
+
+async def test_credential_added_pin_with_data_pushes_known(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_schlage_be469: Node,
+) -> None:
+    """A credential event that carries the value pushes the readable state."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    zwave_js_lock.coordinator = mock_coordinator
+
+    zwave_js_lock.subscribe_push_updates()
+
+    lock_schlage_be469.receive_event(
+        _make_credential_added_event(
+            lock_schlage_be469.node_id, credential_slot=2, credential_data="1234"
+        )
+    )
+    await hass.async_block_till_done()
+
+    mock_coordinator.push_update.assert_called_once_with(
+        {2: SlotCredential.known("1234")}
     )
 
     zwave_js_lock.unsubscribe_push_updates()

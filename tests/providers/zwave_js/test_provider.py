@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
 )
+from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
@@ -698,6 +700,50 @@ async def test_async_set_credential_rejects_unreadable_credential(
 
     assert exc_info.value.code_slot == 4
     mock_lock_helpers["async_set_credential"].assert_not_called()
+
+
+async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A transient Z-Wave command failure routes to the retry path, not a suspend.
+
+    FailedZWaveCommand is not a HomeAssistantError; if it escaped, the sync
+    manager would treat it as an unexpected bug and suspend the slot. It must
+    surface as LockDisconnected so the lock is retried instead.
+    """
+    mock_lock_helpers["async_set_credential"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "lock asleep"
+    )
+    credential = Credential(
+        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
+    )
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_set_credential(
+            user_id=1, credential=credential, name=None, source="sync"
+        )
+
+
+async def test_async_delete_credential_maps_failed_command_to_lock_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A transient delete failure also routes to the retry path."""
+    mock_lock_helpers["async_delete_credential"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "lock asleep"
+    )
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_delete_credential(
+            CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
+        )
+
+
+async def test_hard_refresh_interval_is_hourly(zwave_js_lock: ZWaveJSLock) -> None:
+    """The drift-recovery backstop is scheduled (not disabled)."""
+    assert zwave_js_lock.hard_refresh_interval == timedelta(hours=1)
 
 
 async def test_async_delete_user_calls_helper(

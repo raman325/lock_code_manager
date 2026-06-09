@@ -21,6 +21,7 @@ from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
+from zwave_js_server.exceptions import BaseZwaveJSServerError
 from zwave_js_server.model.node import Node
 
 from homeassistant.components.zwave_js import lock_helpers
@@ -50,7 +51,12 @@ from ..domain.credentials import (
     SetUserResult,
     User,
 )
-from ..domain.exceptions import CodeRejectedError, DuplicateCodeError, LockDisconnected
+from ..domain.exceptions import (
+    CodeRejectedError,
+    DuplicateCodeError,
+    LockDisconnected,
+    LockOperationFailed,
+)
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 
@@ -107,6 +113,17 @@ class ZWaveJSLock(BaseLock):
     def connection_check_interval(self) -> timedelta | None:
         """Z-Wave JS exposes config entry state changes, so skip polling."""
         return None
+
+    @property
+    def hard_refresh_interval(self) -> timedelta | None:
+        """
+        Re-read all credentials hourly to recover from missed push events.
+
+        Credentials are normally kept current by the access-control node-event
+        push, but a missed or value-less event would otherwise strand a slot
+        (for example as unreadable). This periodic drift refresh is the backstop.
+        """
+        return timedelta(hours=1)
 
     @property
     def supports_native_users(self) -> bool:
@@ -177,18 +194,28 @@ class ZWaveJSLock(BaseLock):
         here), not from the helper's return value, so the base orchestration
         can roll back a user this call newly created.
         """
-        existing = await self.node.access_control.get_user_cached(user.user_id)
-        result = await lock_helpers.async_set_user(
-            self.node,
-            user_id=user.user_id,
-            user_name=user.name,
-            active=user.active,
-        )
+        try:
+            existing = await self.node.access_control.get_user_cached(user.user_id)
+            result = await lock_helpers.async_set_user(
+                self.node,
+                user_id=user.user_id,
+                user_name=user.name,
+                active=user.active,
+            )
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"set user {user.user_id} failed: {err}") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"set user {user.user_id} failed: {err}") from err
         return SetUserResult(user_id=result["user_id"], created=existing is None)
 
     async def async_delete_user(self, user_id: int) -> None:
         """Delete the lock user (cascades its credentials)."""
-        await lock_helpers.async_delete_user(self.node, user_id)
+        try:
+            await lock_helpers.async_delete_user(self.node, user_id)
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"delete user {user_id} failed: {err}") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"delete user {user_id} failed: {err}") from err
 
     async def async_set_credential(
         self,
@@ -217,6 +244,12 @@ class ZWaveJSLock(BaseLock):
                 pin,
                 credential_slot=credential.slot,
             )
+        except BaseZwaveJSServerError as err:
+            # Transient Z-Wave command failure (e.g. a sleeping/battery lock):
+            # route to the retry path rather than a slot suspension.
+            raise LockDisconnected(
+                f"set credential slot {credential.slot} failed: {err}"
+            ) from err
         except HomeAssistantError as err:
             if getattr(err, "translation_key", None) == "credential_rejected_duplicate":
                 raise DuplicateCodeError(
@@ -232,9 +265,18 @@ class ZWaveJSLock(BaseLock):
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """Delete the Personal Identification Number credential addressed by ref."""
-        await lock_helpers.async_delete_credential(
-            self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
-        )
+        try:
+            await lock_helpers.async_delete_credential(
+                self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
+            )
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(
+                f"delete credential slot {ref.slot} failed: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(
+                f"delete credential slot {ref.slot} failed: {err}"
+            ) from err
         return True
 
     def _get_client_state(self) -> tuple[bool, str]:
@@ -275,8 +317,12 @@ class ZWaveJSLock(BaseLock):
             args = event["args"]  # CredentialChangedArgs (pre-parsed by the library)
             if args.credential_type != UserCredentialType.PIN_CODE:
                 return
+            # The event carries the value when the lock includes it (e.g. an
+            # out-of-band keypad change), so push the readable state rather than
+            # always unreadable -- otherwise the slot would be stranded as
+            # unreadable until the next set/clear or hard refresh.
             self._push_credential_update(
-                args.credential_slot, SlotCredential.unreadable()
+                args.credential_slot, self._pin_state(args.data)
             )
 
         @callback
