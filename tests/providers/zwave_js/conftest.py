@@ -410,8 +410,23 @@ async def simple_lcm_config_entry(
 @pytest.fixture
 def mock_lock_helpers():
     """Patch the write/capability lock_helpers the provider calls."""
+    pin_type_str = "pin"
     mocks = {
-        "async_get_credential_capabilities": AsyncMock(),
+        "async_get_credential_capabilities": AsyncMock(return_value={
+            "supports_user_management": True,
+            "max_users": 30,
+            "supported_user_types": [],
+            "max_user_name_length": 10,
+            "supported_credential_rules": [],
+            "supported_credential_types": {
+                pin_type_str: {
+                    "num_slots": 30,
+                    "min_length": 4,
+                    "max_length": 8,
+                    "supports_learn": False,
+                }
+            },
+        }),
         "async_set_user": AsyncMock(return_value={"user_id": 1}),
         "async_delete_user": AsyncMock(),
         "async_set_credential": AsyncMock(

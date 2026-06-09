@@ -40,6 +40,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -784,3 +785,212 @@ async def test_async_delete_credential_calls_helper_and_returns_true(
         UserCredentialType.PIN_CODE,
         5,
     )
+
+
+# ── Exception wrapping for read primitives ──────────────────────────
+
+
+async def test_async_get_users_raises_lock_disconnected_on_zwave_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+) -> None:
+    """BaseZwaveJSServerError from access_control reads surfaces as LockDisconnected."""
+    mock_access_control.get_users_cached.side_effect = FailedZWaveCommand(
+        "cmd", 1, "server error"
+    )
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_get_users()
+
+
+async def test_async_get_users_raises_lock_operation_failed_on_ha_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+) -> None:
+    """HomeAssistantError from access_control reads surfaces as LockOperationFailed."""
+    mock_access_control.get_users_cached.side_effect = HomeAssistantError("boom")
+    with pytest.raises(LockOperationFailed):
+        await zwave_js_lock.async_get_users()
+
+
+async def test_async_get_capabilities_raises_lock_disconnected_on_zwave_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_lock_helpers: dict,
+) -> None:
+    """BaseZwaveJSServerError from lock_helpers surfaces as LockDisconnected."""
+    mock_lock_helpers["async_get_credential_capabilities"].side_effect = (
+        FailedZWaveCommand("cmd", 1, "server error")
+    )
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_get_capabilities()
+
+
+async def test_async_get_capabilities_raises_lock_operation_failed_on_ha_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_lock_helpers: dict,
+) -> None:
+    """HomeAssistantError from lock_helpers surfaces as LockOperationFailed."""
+    mock_lock_helpers["async_get_credential_capabilities"].side_effect = (
+        HomeAssistantError("boom")
+    )
+    with pytest.raises(LockOperationFailed):
+        await zwave_js_lock.async_get_capabilities()
+
+
+# ── Name length validation in async_set_user ───────────────────────
+
+
+async def test_async_set_user_omits_name_when_max_name_length_is_zero(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """When max_user_name_length is 0, user_name is passed as None."""
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+        "supports_user_management": True,
+        "max_users": 30,
+        "supported_user_types": [],
+        "max_user_name_length": 0,
+        "supported_credential_rules": [],
+        "supported_credential_types": {
+            pin_type_str: {
+                "num_slots": 30,
+                "min_length": 4,
+                "max_length": 8,
+                "supports_learn": False,
+            }
+        },
+    }
+    mock_access_control.get_user_cached.return_value = None
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 5}
+
+    # Name is provided, but the lock doesn't support names → pass None
+    user = User(user_id=5, name="alice", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    assert result == SetUserResult(user_id=5, created=True)
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=5,
+        user_name=None,
+        active=True,
+    )
+
+
+async def test_async_set_user_truncates_name_when_too_long(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """When user name exceeds max_user_name_length, it is truncated."""
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+        "supports_user_management": True,
+        "max_users": 30,
+        "supported_user_types": [],
+        "max_user_name_length": 3,
+        "supported_credential_rules": [],
+        "supported_credential_types": {
+            pin_type_str: {
+                "num_slots": 30,
+                "min_length": 4,
+                "max_length": 8,
+                "supports_learn": False,
+            }
+        },
+    }
+    mock_access_control.get_user_cached.return_value = None
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 5}
+
+    # Name "alice" (5 chars) truncated to "ali" (3 chars)
+    user = User(user_id=5, name="alice", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    assert result == SetUserResult(user_id=5, created=True)
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=5,
+        user_name="ali",
+        active=True,
+    )
+
+
+async def test_async_set_user_uses_cached_max_name_length(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """After async_get_capabilities, async_set_user reuses the cached max name length."""
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+        "supports_user_management": True,
+        "max_users": 30,
+        "supported_user_types": [],
+        "max_user_name_length": 5,
+        "supported_credential_rules": [],
+        "supported_credential_types": {
+            pin_type_str: {
+                "num_slots": 30,
+                "min_length": 4,
+                "max_length": 8,
+                "supports_learn": False,
+            }
+        },
+    }
+    # First call: async_get_capabilities populates the cache
+    await zwave_js_lock.async_get_capabilities()
+
+    mock_access_control.get_user_cached.return_value = None
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 1}
+
+    # Name "alexandra" (10 chars) truncated to "alex" (5 chars, matching cache)
+    user = User(user_id=1, name="alexandra", active=True)
+    await zwave_js_lock.async_set_user(user)
+
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=1,
+        user_name="alexa",
+        active=True,
+    )
+    # async_get_credential_capabilities should NOT have been called again
+    # (the cache was already populated by async_get_capabilities)
+    assert mock_lock_helpers["async_get_credential_capabilities"].call_count == 1
+
+
+# ── Credential type validation ──────────────────────────────────────
+
+
+async def test_async_set_credential_rejects_non_pin_type(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A non-PIN credential type is rejected before reaching the helper."""
+    credential = Credential(
+        type=CredentialType.RFID, slot=1, state=SlotCredential.known("AABB")
+    )
+    with pytest.raises(CodeRejectedError) as exc_info:
+        await zwave_js_lock.async_set_credential(
+            user_id=1, credential=credential, name=None, source="sync"
+        )
+
+    assert exc_info.value.code_slot == 1
+    assert "unsupported credential type" in str(exc_info.value)
+    mock_lock_helpers["async_set_credential"].assert_not_called()
+
+
+async def test_async_delete_credential_rejects_non_pin_type(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A non-PIN CredentialRef type is rejected before reaching the helper."""
+    ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=1)
+    with pytest.raises(CodeRejectedError) as exc_info:
+        await zwave_js_lock.async_delete_credential(ref)
+
+    assert exc_info.value.code_slot == 1
+    assert "unsupported credential type" in str(exc_info.value)
+    mock_lock_helpers["async_delete_credential"].assert_not_called()
+

@@ -96,6 +96,10 @@ class ZWaveJSLock(BaseLock):
     # subscriptions: registered in ``async_setup``, released in
     # ``async_unload``).
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
+    # Cached max user name length from lock_helpers capabilities. Populated
+    # lazily on first async_set_user call (or by async_get_capabilities).
+    # ``None`` means "not yet queried"; the value is always an int once set.
+    _max_user_name_length: int | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -140,8 +144,13 @@ class ZWaveJSLock(BaseLock):
 
     async def async_get_users(self) -> list[User]:
         """Read users and their PIN credentials (with values) from the lock."""
-        users = await self.node.access_control.get_users_cached()
-        credentials = await self.node.access_control.get_all_credentials_cached()
+        try:
+            users = await self.node.access_control.get_users_cached()
+            credentials = await self.node.access_control.get_all_credentials_cached()
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"get users failed: {err}") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"get users failed: {err}") from err
         pins_by_user: dict[int, list[Credential]] = {}
         for cred in credentials:
             if cred.type is not UserCredentialType.PIN_CODE:
@@ -165,7 +174,14 @@ class ZWaveJSLock(BaseLock):
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """Report the lock's user/credential capabilities."""
-        caps = await lock_helpers.async_get_credential_capabilities(self.node)
+        try:
+            caps = await lock_helpers.async_get_credential_capabilities(self.node)
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"get capabilities failed: {err}") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"get capabilities failed: {err}") from err
+        # Cache max name length for async_set_user name validation.
+        self._max_user_name_length = caps.get("max_user_name_length", 0)
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
         credential_types = (
             {
@@ -194,12 +210,37 @@ class ZWaveJSLock(BaseLock):
         here), not from the helper's return value, so the base orchestration
         can roll back a user this call newly created.
         """
+        # Resolve the max user name length. If async_get_capabilities has
+        # not yet been called (or the cache is stale), fetch capabilities
+        # so the name is always validated against the lock's actual limit.
+        if self._max_user_name_length is None:
+            try:
+                raw_caps = await lock_helpers.async_get_credential_capabilities(
+                    self.node
+                )
+                self._max_user_name_length = raw_caps.get(
+                    "max_user_name_length", 0
+                )
+            except (BaseZwaveJSServerError, HomeAssistantError):
+                # Capabilities fetch failed — proceed without a name guard
+                # so the write is not blocked by a read failure.
+                self._max_user_name_length = 0
+        max_name_len: int = self._max_user_name_length or 0
+        # Enforce the lock's name length constraint:
+        # - max_name_len == 0: the lock does not support user names; omit it
+        # - name exceeds max_name_len: truncate to the allowed length
+        user_name = user.name
+        if user_name is not None:
+            if max_name_len == 0:
+                user_name = None
+            elif len(user_name) > max_name_len:
+                user_name = user_name[:max_name_len]
         try:
             existing = await self.node.access_control.get_user_cached(user.user_id)
             result = await lock_helpers.async_set_user(
                 self.node,
                 user_id=user.user_id,
-                user_name=user.name,
+                user_name=user_name,
                 active=user.active,
             )
         except BaseZwaveJSServerError as err:
@@ -226,6 +267,12 @@ class ZWaveJSLock(BaseLock):
         source: Literal["sync", "direct"],
     ) -> bool:
         """Write the Personal Identification Number credential under user_id; map device rejections."""
+        if credential.type is not CredentialType.PIN:
+            raise CodeRejectedError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=f"unsupported credential type: {credential.type}",
+            )
         pin = credential.readable_pin
         if pin is None:
             # The set path only ever carries a readable Personal Identification
@@ -265,6 +312,12 @@ class ZWaveJSLock(BaseLock):
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """Delete the Personal Identification Number credential addressed by ref."""
+        if ref.type is not CredentialType.PIN:
+            raise CodeRejectedError(
+                code_slot=ref.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=f"unsupported credential type: {ref.type}",
+            )
         try:
             await lock_helpers.async_delete_credential(
                 self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
