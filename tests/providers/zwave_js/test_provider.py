@@ -817,9 +817,9 @@ async def test_async_get_capabilities_raises_lock_disconnected_on_zwave_error(
     mock_lock_helpers: dict,
 ) -> None:
     """BaseZwaveJSServerError from lock_helpers surfaces as LockDisconnected."""
-    mock_lock_helpers["async_get_credential_capabilities"].side_effect = (
-        FailedZWaveCommand("cmd", 1, "server error")
-    )
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].side_effect = FailedZWaveCommand("cmd", 1, "server error")
     with pytest.raises(LockDisconnected):
         await zwave_js_lock.async_get_capabilities()
 
@@ -829,9 +829,9 @@ async def test_async_get_capabilities_raises_lock_operation_failed_on_ha_error(
     mock_lock_helpers: dict,
 ) -> None:
     """HomeAssistantError from lock_helpers surfaces as LockOperationFailed."""
-    mock_lock_helpers["async_get_credential_capabilities"].side_effect = (
-        HomeAssistantError("boom")
-    )
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].side_effect = HomeAssistantError("boom")
     with pytest.raises(LockOperationFailed):
         await zwave_js_lock.async_get_capabilities()
 
@@ -993,4 +993,3 @@ async def test_async_delete_credential_rejects_non_pin_type(
     assert exc_info.value.code_slot == 1
     assert "unsupported credential type" in str(exc_info.value)
     mock_lock_helpers["async_delete_credential"].assert_not_called()
-

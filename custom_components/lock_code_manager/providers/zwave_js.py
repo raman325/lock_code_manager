@@ -218,10 +218,8 @@ class ZWaveJSLock(BaseLock):
                 raw_caps = await lock_helpers.async_get_credential_capabilities(
                     self.node
                 )
-                self._max_user_name_length = raw_caps.get(
-                    "max_user_name_length", 0
-                )
-            except (BaseZwaveJSServerError, HomeAssistantError):
+                self._max_user_name_length = raw_caps.get("max_user_name_length", 0)
+            except BaseZwaveJSServerError, HomeAssistantError:
                 # Capabilities fetch failed — proceed without a name guard
                 # so the write is not blocked by a read failure.
                 self._max_user_name_length = 0
