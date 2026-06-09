@@ -174,6 +174,10 @@ class MatterLock(BaseLock):
         client, node = self._require_client_and_node()
         try:
             lock_data = await get_lock_users(client, node)
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter get_lock_users rejected input for {self.lock.entity_id}: {err}"
+            ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
@@ -221,6 +225,10 @@ class MatterLock(BaseLock):
         client, node = self._require_client_and_node()
         try:
             info = await get_lock_info(client, node)
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter get_lock_info rejected input for {self.lock.entity_id}: {err}"
+            ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter get_lock_info failed for {self.lock.entity_id}: {err}"
@@ -267,6 +275,11 @@ class MatterLock(BaseLock):
                 credential_type="pin",
                 credential_index=user.user_id,
             )
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter get_lock_credential_status rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter get_lock_credential_status failed for "
@@ -275,6 +288,17 @@ class MatterLock(BaseLock):
 
         credential_exists = status.get("credential_exists", False)
         existing_user_index = status.get("user_index")
+
+        if credential_exists and existing_user_index is None:
+            # The credential is reportedly occupied but the lock did not
+            # surface its owner. Falling through to CREATE would orphan
+            # the original user (it would still exist with zero credentials)
+            # and break the user-per-credential invariant, so refuse the
+            # write and let the caller decide how to recover.
+            raise LockOperationFailed(
+                f"Matter lock {self.lock.entity_id} slot {user.user_id} reports "
+                "credential_exists=True but no user_index"
+            )
 
         if credential_exists and existing_user_index is not None:
             # UPDATE: the slot is occupied — modify the existing user record.
@@ -324,6 +348,10 @@ class MatterLock(BaseLock):
         client, node = self._require_client_and_node()
         try:
             await clear_lock_user(client, node, user_id)
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter clear_lock_user rejected input for {self.lock.entity_id}: {err}"
+            ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter clear_lock_user failed for {self.lock.entity_id}: {err}"
@@ -422,9 +450,20 @@ class MatterLock(BaseLock):
                 self.lock.entity_id,
                 slot,
             )
-            await clear_lock_credential(
-                client, node, credential_type="pin", credential_index=slot
-            )
+            try:
+                await clear_lock_credential(
+                    client, node, credential_type="pin", credential_index=slot
+                )
+            except ServiceValidationError as clear_err:
+                raise LockOperationFailed(
+                    f"Matter clear_lock_credential rejected input for "
+                    f"{self.lock.entity_id} during sync-duplicate retry: {clear_err}"
+                ) from clear_err
+            except HomeAssistantError as clear_err:
+                raise LockDisconnected(
+                    f"Matter clear_lock_credential failed for "
+                    f"{self.lock.entity_id} during sync-duplicate retry: {clear_err}"
+                ) from clear_err
             try:
                 await self._send_set_credential(client, node, slot, pin, user_id)
             except SetCredentialFailedError as retry_err:
