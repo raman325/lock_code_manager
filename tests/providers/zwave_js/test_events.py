@@ -425,12 +425,11 @@ async def test_credential_added_non_pin_ignored(
 
     zwave_js_lock.subscribe_push_updates()
 
-    # Use a non-PIN credential type (e.g. RFID = 2)
     lock_schlage_be469.receive_event(
         _make_credential_added_event(
             lock_schlage_be469.node_id,
             credential_slot=2,
-            credential_type=2,  # not PIN_CODE (1)
+            credential_type=UserCredentialType.PASSWORD,  # not PIN_CODE
         )
     )
     await hass.async_block_till_done()
@@ -456,7 +455,7 @@ async def test_credential_deleted_non_pin_ignored(
         _make_credential_deleted_event(
             lock_schlage_be469.node_id,
             credential_slot=4,
-            credential_type=2,  # not PIN_CODE (1)
+            credential_type=UserCredentialType.PASSWORD,  # not PIN_CODE
         )
     )
     await hass.async_block_till_done()

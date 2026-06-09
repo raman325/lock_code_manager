@@ -300,7 +300,7 @@ class ZWaveJSLock(BaseLock):
 
     @callback
     def teardown_push_subscription(self) -> None:
-        """Unsubscribe from value update events."""
+        """Unsubscribe from credential change events."""
         self._clear_push_unsubs()
 
     @callback
