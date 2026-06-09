@@ -12,6 +12,12 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from custom_components.lock_code_manager.domain.credentials import (
+    Credential,
+    CredentialRef,
+    CredentialType,
+    credential_from_slot,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
@@ -31,6 +37,17 @@ from tests.providers.helpers import (
 )
 
 from .conftest import LOCK_ENTITY_ID
+
+
+def _pin_cred(slot: int, pin: str) -> Credential:
+    """Build a known-Personal-Identification-Number credential for a slot."""
+    return credential_from_slot(slot, SlotCredential.known(pin))
+
+
+def _cred_ref(slot: int) -> CredentialRef:
+    """Build a CredentialRef for a slot."""
+    return CredentialRef(user_id=slot, type=CredentialType.PIN, slot=slot)
+
 
 # ---------------------------------------------------------------------------
 # Helper function tests
@@ -106,16 +123,42 @@ class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
 
 
 # ---------------------------------------------------------------------------
-# get_usercodes tests
+# async_get_users / async_get_usercodes tests
 # ---------------------------------------------------------------------------
 
 
-async def test_get_usercodes_no_codes(
+async def test_get_users_no_codes(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test get_usercodes when no codes exist on the lock."""
+    """Test async_get_users when no codes exist on the lock returns empty users for managed slots."""
+    mock_response = {LOCK_ENTITY_ID: {}}
+    handler = AsyncMock(return_value=mock_response)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
+
+    users = await schlage_lock.async_get_users()
+    user_map = {u.user_id: u for u in users}
+
+    assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+    assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
+
+
+async def test_get_users_no_configured_slots(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+) -> None:
+    """Test async_get_users returns empty list when no slots are configured."""
+    users = await schlage_lock.async_get_users()
+    assert users == []
+
+
+async def test_get_usercodes_base_projection_no_codes(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """Test async_get_usercodes base projection returns empty for managed slots with no codes."""
     mock_response = {LOCK_ENTITY_ID: {}}
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
@@ -130,17 +173,17 @@ async def test_get_usercodes_no_configured_slots(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
 ) -> None:
-    """Test get_usercodes returns empty dict when no slots are configured."""
+    """Test async_get_usercodes returns empty dict when no slots are configured."""
     codes = await schlage_lock.async_get_usercodes()
     assert codes == {}
 
 
-async def test_get_usercodes_does_not_auto_tag(
+async def test_get_users_does_not_auto_tag(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that get_usercodes does not auto-tag untagged codes."""
+    """Test that async_get_users does not auto-tag untagged codes."""
     get_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "Guest", "code": "1234"},
@@ -151,17 +194,18 @@ async def test_get_usercodes_does_not_auto_tag(
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
-    codes = await schlage_lock.async_get_usercodes()
+    users = await schlage_lock.async_get_users()
+    user_map = {u.user_id: u for u in users}
 
     # Untagged codes are not counted as occupied
-    assert codes[1] is SlotCredential.empty()
-    assert codes[2] is SlotCredential.empty()
+    assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+    assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
 
     # No add_code call should have been made
     assert add_handler.call_count == 0
 
 
-async def test_get_usercodes_duplicate_tag_uses_first(
+async def test_get_users_duplicate_tag_uses_first(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
@@ -176,13 +220,14 @@ async def test_get_usercodes_duplicate_tag_uses_first(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
-    codes = await schlage_lock.async_get_usercodes()
+    users = await schlage_lock.async_get_users()
+    user_map = {u.user_id: u for u in users}
 
-    assert codes[1] is SlotCredential.unreadable()
-    assert codes[2] is SlotCredential.empty()
+    assert user_map[1].pin_credentials[0].state is SlotCredential.unreadable()
+    assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
 
 
-async def test_get_usercodes_ignores_tags_outside_managed_range(
+async def test_get_users_ignores_tags_outside_managed_range(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
@@ -196,10 +241,11 @@ async def test_get_usercodes_ignores_tags_outside_managed_range(
     handler = AsyncMock(return_value=mock_response)
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
-    codes = await schlage_lock.async_get_usercodes()
+    users = await schlage_lock.async_get_users()
+    user_map = {u.user_id: u for u in users}
 
-    assert codes[1] is SlotCredential.empty()
-    assert codes[2] is SlotCredential.empty()
+    assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+    assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
 
 
 # ---------------------------------------------------------------------------
@@ -412,12 +458,12 @@ async def test_async_setup_retries_after_disconnect_on_delete_step(
     assert schlage_lock._tagged_once is False
 
 
-async def test_concurrent_set_usercode_serialized_under_sequence_lock(
+async def test_concurrent_set_credential_serialized_under_sequence_lock(
     hass: HomeAssistant,
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Concurrent set_usercode calls must not interleave their read-modify-write."""
+    """Concurrent async_set_credential calls must not interleave their read-modify-write."""
     in_section = [0]
     max_overlap = [0]
 
@@ -438,23 +484,29 @@ async def test_concurrent_set_usercode_serialized_under_sequence_lock(
     )
 
     await asyncio.gather(
-        schlage_lock.async_set_usercode(1, "1111"),
-        schlage_lock.async_set_usercode(2, "2222"),
-        schlage_lock.async_set_usercode(3, "3333"),
+        schlage_lock.async_set_credential(
+            1, _pin_cred(1, "1111"), name=None, source="direct"
+        ),
+        schlage_lock.async_set_credential(
+            2, _pin_cred(2, "2222"), name=None, source="direct"
+        ),
+        schlage_lock.async_set_credential(
+            3, _pin_cred(3, "3333"), name=None, source="direct"
+        ),
     )
 
     assert max_overlap[0] == 1
 
 
 # ---------------------------------------------------------------------------
-# set_usercode tests
+# async_set_credential tests
 # ---------------------------------------------------------------------------
 
 
-async def test_set_usercode_replaces_existing(
+async def test_set_credential_replaces_existing(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test set_usercode replaces an existing code on the same slot."""
+    """Test async_set_credential replaces an existing code on the same slot."""
     get_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:1] Old Name", "code": "****"},
@@ -467,7 +519,9 @@ async def test_set_usercode_replaces_existing(
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
-    result = await schlage_lock.async_set_usercode(1, "5678", "New Name")
+    result = await schlage_lock.async_set_credential(
+        1, _pin_cred(1, "5678"), name="New Name", source="direct"
+    )
 
     assert result is True
     # add_code called with new tagged name
@@ -480,14 +534,14 @@ async def test_set_usercode_replaces_existing(
     assert deleted_names == {"[LCM:1] Old Name", "[LCM:1] New Name"}
 
 
-async def test_set_usercode_preserves_existing_name(
+async def test_set_credential_preserves_existing_name(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
     """
-    Test set_usercode preserves the existing friendly name when no name is provided.
+    Test async_set_credential preserves the existing friendly name when no name is provided.
 
-    When the name does not change (PIN-only update), the old code must be deleted
-    first because Schlage rejects add_code with a duplicate name.
+    When the name does not change (Personal Identification Number-only update), the old
+    code must be deleted first because Schlage rejects add_code with a duplicate name.
     """
     get_response = {
         LOCK_ENTITY_ID: {
@@ -506,7 +560,9 @@ async def test_set_usercode_preserves_existing_name(
     add_handler.side_effect = lambda _: call_order.append("add")
     delete_handler.side_effect = lambda _: call_order.append("delete")
 
-    result = await schlage_lock.async_set_usercode(1, "9999")
+    result = await schlage_lock.async_set_credential(
+        1, _pin_cred(1, "9999"), name=None, source="direct"
+    )
 
     assert result is True
     # Name unchanged so existing_full_name == tagged_name, deduplicated to 1 delete
@@ -520,15 +576,15 @@ async def test_set_usercode_preserves_existing_name(
     assert call_order == ["delete", "add"]
 
 
-async def test_set_usercode_already_exists_treated_as_success(
+async def test_set_credential_already_exists_treated_as_success(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
     """
     Test that 'already exists' on add_code is treated as success.
 
     Schlage's cloud API has eventual consistency: a delete may not propagate
-    before the add, causing 'already exists'.  Since PINs are write-only,
-    we can't verify the value but the code IS on the lock.
+    before the add, causing 'already exists'.  Since Personal Identification
+    Numbers are write-only, we can't verify the value but the code IS on the lock.
     """
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
@@ -542,12 +598,14 @@ async def test_set_usercode_already_exists_treated_as_success(
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
-    result = await schlage_lock.async_set_usercode(1, "1234", "Guest")
+    result = await schlage_lock.async_set_credential(
+        1, _pin_cred(1, "1234"), name="Guest", source="direct"
+    )
 
     assert result is True
 
 
-async def test_set_usercode_non_exists_error_still_raises(
+async def test_set_credential_non_exists_error_still_raises(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
     """Test that add_code errors other than 'already exists' still raise."""
@@ -560,13 +618,15 @@ async def test_set_usercode_non_exists_error_still_raises(
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     with pytest.raises(LockOperationFailed, match="connection lost"):
-        await schlage_lock.async_set_usercode(1, "1234")
+        await schlage_lock.async_set_credential(
+            1, _pin_cred(1, "1234"), name=None, source="direct"
+        )
 
 
-async def test_set_usercode_service_failure(
+async def test_set_credential_service_failure(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test that set_usercode raises LockOperationFailed on service failure."""
+    """Test that async_set_credential raises LockOperationFailed on service failure."""
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
@@ -574,31 +634,33 @@ async def test_set_usercode_service_failure(
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
 
     with pytest.raises(LockOperationFailed, match="connection lost"):
-        await schlage_lock.async_set_usercode(1, "1234")
+        await schlage_lock.async_set_credential(
+            1, _pin_cred(1, "1234"), name=None, source="direct"
+        )
 
 
 # ---------------------------------------------------------------------------
-# clear_usercode tests
+# async_delete_credential tests
 # ---------------------------------------------------------------------------
 
 
-async def test_clear_usercode_already_empty(
+async def test_delete_credential_already_empty(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test clear_usercode returns False when no code exists for the slot."""
+    """Test async_delete_credential returns False when no code exists for the slot."""
     get_response = {LOCK_ENTITY_ID: {}}
     get_handler = AsyncMock(return_value=get_response)
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
 
-    result = await schlage_lock.async_clear_usercode(1)
+    result = await schlage_lock.async_delete_credential(_cred_ref(1))
 
     assert result is False
 
 
-async def test_clear_usercode_service_failure(
+async def test_delete_credential_service_failure(
     hass: HomeAssistant, schlage_lock: SchlageLock
 ) -> None:
-    """Test that clear_usercode raises LockOperationFailed on service failure."""
+    """Test that async_delete_credential raises LockOperationFailed on service failure."""
     get_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:1] Guest", "code": "****"},
@@ -610,7 +672,7 @@ async def test_clear_usercode_service_failure(
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     with pytest.raises(LockOperationFailed, match="connection lost"):
-        await schlage_lock.async_clear_usercode(1)
+        await schlage_lock.async_delete_credential(_cred_ref(1))
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +685,7 @@ async def test_hard_refresh_codes(
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test hard_refresh_codes calls tagging then returns usercodes."""
+    """Test hard_refresh_codes calls tagging then returns usercodes via base projection."""
     mock_response = {
         LOCK_ENTITY_ID: {
             "code1": {"name": "[LCM:2] Family", "code": "****"},
@@ -650,12 +712,12 @@ async def test_get_codes_service_failure(
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that get_usercodes raises LockOperationFailed on service failure."""
+    """Test that async_get_users raises LockOperationFailed on service failure."""
     handler = AsyncMock(side_effect=HomeAssistantError("connection lost"))
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with pytest.raises(LockOperationFailed, match="connection lost"):
-        await schlage_lock.async_get_usercodes()
+        await schlage_lock.async_get_users()
 
 
 async def test_get_codes_service_validation_error(
@@ -663,12 +725,12 @@ async def test_get_codes_service_validation_error(
     schlage_lock: SchlageLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that get_usercodes raises LockOperationFailed on ServiceValidationError."""
+    """Test that async_get_users raises LockOperationFailed on ServiceValidationError."""
     handler = AsyncMock(side_effect=ServiceValidationError("invalid entity"))
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with pytest.raises(LockOperationFailed, match="invalid entity"):
-        await schlage_lock.async_get_usercodes()
+        await schlage_lock.async_get_users()
 
 
 async def test_get_codes_malformed_entity_response(
@@ -682,4 +744,67 @@ async def test_get_codes_malformed_entity_response(
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", handler)
 
     with pytest.raises(LockCodeManagerError, match="malformed entity response"):
-        await schlage_lock.async_get_usercodes()
+        await schlage_lock.async_get_users()
+
+
+# ---------------------------------------------------------------------------
+# Base orchestration end-to-end (primitive layer, no connection guard)
+# ---------------------------------------------------------------------------
+
+
+async def test_base_orchestration_set_and_get(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """async_set_credential + async_get_usercodes (base projection) shows unreadable after set."""
+    get_response = {LOCK_ENTITY_ID: {}}
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "add_code", AsyncMock(return_value=None)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    await schlage_lock.async_set_credential(
+        1, _pin_cred(1, "9999"), name="test", source="direct"
+    )
+
+    # After setting, the lock reports the slot as unreadable (write-only Personal Identification Number)
+    mock_after = {LOCK_ENTITY_ID: {"c1": {"name": "[LCM:1] test", "code": "****"}}}
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=mock_after)
+    )
+
+    codes = await schlage_lock.async_get_usercodes()
+    assert codes[1] is SlotCredential.unreadable()
+    assert codes[2] is SlotCredential.empty()
+
+
+async def test_base_orchestration_clear(
+    hass: HomeAssistant,
+    schlage_lock: SchlageLock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """async_delete_credential + async_get_usercodes (base projection) shows empty after clear."""
+    get_response = {LOCK_ENTITY_ID: {"c1": {"name": "[LCM:1] Guest", "code": "****"}}}
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
+    )
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "delete_code", AsyncMock(return_value=None)
+    )
+
+    await schlage_lock.async_delete_credential(_cred_ref(1))
+
+    # After clearing, the lock reports empty
+    empty_response = {LOCK_ENTITY_ID: {}}
+    register_mock_service(
+        hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=empty_response)
+    )
+    codes = await schlage_lock.async_get_usercodes()
+    assert codes[1] is SlotCredential.empty()
+    assert codes[2] is SlotCredential.empty()

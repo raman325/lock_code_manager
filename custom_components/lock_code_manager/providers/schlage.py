@@ -26,6 +26,7 @@ from typing import Literal
 
 from homeassistant.config_entries import ConfigEntry
 
+from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
 from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -287,20 +288,20 @@ class SchlageLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_users(self) -> list[User]:
         """
-        Get dictionary of code slots and usercodes.
+        Return users by reading all tagged codes from the Schlage lock.
 
-        Schlage PINs are write-only (returned as masked values), so occupied
-        slots return ``SlotCredential.unreadable()`` and cleared slots return
-        ``SlotCredential.empty()``.
-
-        This method only reads and classifies codes; auto-tagging of unmanaged
-        codes is handled by ``_async_tag_unmanaged_codes()``.
+        Schlage Personal Identification Numbers are write-only (returned as
+        masked values by ``get_codes``), so occupied slots surface as
+        ``SlotCredential.unreadable()`` users and empty managed slots surface
+        as ``SlotCredential.empty()`` users. Only codes whose slot numbers
+        fall within the managed set are returned. Auto-tagging of unmanaged
+        codes is handled separately by ``_async_tag_unmanaged_codes()``.
         """
         managed_slots = self.managed_slots
         if not managed_slots:
-            return {}
+            return []
 
         codes = await self._async_get_codes()
 
@@ -337,7 +338,7 @@ class SchlageLock(BaseLock):
             seen_slots.add(slot_num)
             occupied_slots.add(slot_num)
 
-        return {
+        slot_states = {
             slot: (
                 SlotCredential.unreadable()
                 if slot in occupied_slots
@@ -345,24 +346,29 @@ class SchlageLock(BaseLock):
             )
             for slot in managed_slots
         }
+        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
-    async def async_set_usercode(
+    async def async_set_credential(
         self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
     ) -> bool:
         """
-        Set user code on a virtual slot.
+        Set a Personal Identification Number credential on a slot.
 
         If a code already exists for the given slot it is replaced.
-        Returns True unconditionally because Schlage PINs are write-only
-        and we cannot determine whether the value actually changed. The
-        get/delete/add sequence runs under the sequence lock so concurrent
-        sync ticks cannot interleave their own multi-step writes against
-        the same slot.
+        Returns True unconditionally because Schlage Personal Identification
+        Numbers are write-only and we cannot determine whether the value
+        actually changed. The get/delete/add sequence runs under the sequence
+        lock so concurrent sync ticks cannot interleave their own multi-step
+        writes against the same slot. Ignores ``user_id``; slot-only providers
+        address the credential by slot.
         """
+        code_slot = credential.slot
+        usercode = credential.readable_pin or ""
         async with self._serialize_sequence():
             codes = await self._async_get_codes()
 
@@ -393,10 +399,10 @@ class SchlageLock(BaseLock):
                 await self._async_add_code(tagged_name, usercode)
             except (LockDisconnected, LockOperationFailed) as err:
                 # Schlage's cloud API has eventual consistency: a delete may not
-                # propagate before the add, causing "already exists".  Since PINs
-                # are write-only we can't verify the value, but the code IS on the
-                # lock — treat it as success so _last_set_pin gets recorded and the
-                # sync manager doesn't loop.
+                # propagate before the add, causing "already exists".  Since Personal
+                # Identification Numbers are write-only we can't verify the value,
+                # but the code IS on the lock — treat it as success so the sync
+                # manager doesn't loop.
                 if "already exists" not in str(err).lower():
                     raise
 
@@ -414,14 +420,16 @@ class SchlageLock(BaseLock):
         )
         return True
 
-    async def async_clear_usercode(self, code_slot: int) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
-        Clear user code from a virtual slot.
+        Delete the credential addressed by ``ref``; return whether it changed.
 
         Returns True if a code was deleted, False if the slot was already
-        empty. The get/delete sequence runs under the sequence lock for
-        the same reason ``async_set_usercode`` does.
+        empty. The get/delete sequence runs under the sequence lock so
+        concurrent callers cannot interleave their own multi-step reads
+        against the same slot.
         """
+        code_slot = ref.slot
         async with self._serialize_sequence():
             codes = await self._async_get_codes()
             target_name: str | None = None
