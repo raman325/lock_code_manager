@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2a5e0f3b6d41",
+  "strategy": "manual-commit",
+  "branch": "degenerate-providers-credential-migration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/schlage.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/5e0f3b6d41/0/metadata.json",
+      "transcript": "/2a/5e0f3b6d41/0/full.jsonl",
+      "content_hash": "/2a/5e0f3b6d41/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 8032,
+    "cache_read_tokens": 2643147,
+    "output_tokens": 3453,
+    "api_call_count": 13
+  }
+}
