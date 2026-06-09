@@ -233,12 +233,19 @@ class MatterLock(BaseLock):
         """
         Create or update a lock user, returning whether it was newly created.
 
-        Uses the 1:1:1 mapping (user_index == credential_index == slot): a user
-        exists on the lock if and only if its Personal Identification Number
-        credential slot is occupied. The credential status is checked first to
-        determine whether this is a create or update, and the result is returned
-        so the base orchestration can roll back a newly created user if the
-        subsequent credential write fails.
+        The user.user_id here is the slot (credential_index). Matter allocates
+        user_index independently: you cannot create a user at a chosen index —
+        set_lock_user raises UserSlotEmptyError when user_index is given for an
+        empty slot. So the flow is:
+
+        1. Check the credential slot's current owner via get_lock_credential_status.
+        2. If the slot is occupied (UPDATE): call set_lock_user with the existing
+           user_index from the status response.
+        3. If the slot is empty (CREATE): call set_lock_user with user_index=None
+           so Matter auto-allocates a free user slot and returns the new index.
+
+        The returned SetUserResult carries the real Matter user_index, which the
+        base orchestration passes into async_set_credential as the user_id.
         """
         client, node = self._require_client_and_node()
         try:
@@ -254,20 +261,46 @@ class MatterLock(BaseLock):
                 f"{self.lock.entity_id}: {err}"
             ) from err
 
-        created = not status.get("credential_exists", False)
+        credential_exists = status.get("credential_exists", False)
+        existing_user_index = status.get("user_index")
+
+        if credential_exists and existing_user_index is not None:
+            # UPDATE: the slot is occupied — modify the existing user record.
+            try:
+                await set_lock_user(
+                    client,
+                    node,
+                    user_index=existing_user_index,
+                    user_name=user.name,
+                )
+            except ServiceValidationError as err:
+                raise LockOperationFailed(
+                    f"Matter set_lock_user rejected input for "
+                    f"{self.lock.entity_id}: {err}"
+                ) from err
+            except HomeAssistantError as err:
+                raise LockDisconnected(
+                    f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
+                ) from err
+            return SetUserResult(user_id=existing_user_index, created=False)
+
+        # CREATE: the slot is empty — let Matter auto-allocate a user_index.
         try:
-            await set_lock_user(
+            result = await set_lock_user(
                 client,
                 node,
-                user_index=user.user_id,
+                user_index=None,
                 user_name=user.name,
             )
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter set_lock_user rejected input for {self.lock.entity_id}: {err}"
+            ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
-
-        return SetUserResult(user_id=user.user_id, created=created)
+        return SetUserResult(user_id=result["user_index"], created=True)
 
     async def async_delete_user(self, user_id: int) -> None:
         """
@@ -310,11 +343,18 @@ class MatterLock(BaseLock):
             )
         except SetCredentialFailedError:
             raise
-        except HomeAssistantError as err:
+        except ServiceValidationError as err:
+            # Bad Personal Identification Number / unsupported type -> the lock
+            # rejects the value; surface as a code rejection.
             raise CodeRejectedError(
                 code_slot=code_slot,
                 lock_entity_id=self.lock.entity_id,
                 reason=str(err),
+            ) from err
+        except HomeAssistantError as err:
+            # Transport / endpoint failure -> route to the retry path.
+            raise LockDisconnected(
+                f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
             ) from err
 
     async def async_set_credential(
@@ -409,8 +449,13 @@ class MatterLock(BaseLock):
                 credential_type="pin",
                 credential_index=ref.slot,
             )
-        except HomeAssistantError as err:
+        except ServiceValidationError as err:
             raise LockOperationFailed(
+                f"Matter clear_lock_credential rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
                 f"Matter clear_lock_credential failed for {self.lock.entity_id}: {err}"
             ) from err
 
