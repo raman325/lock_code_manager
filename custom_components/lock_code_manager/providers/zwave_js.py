@@ -207,7 +207,14 @@ class ZWaveJSLock(BaseLock):
         )
 
     async def async_set_user(self, user: User) -> SetUserResult:
-        """Create or update the lock user; report whether it was created."""
+        """
+        Create or update the lock user; report whether it was created.
+
+        ``created`` is derived from a pre-write cache read of the explicit
+        ``user.user_id`` (which the helper always honors, never auto-allocating
+        here), not from the helper's return value, so the base orchestration
+        can roll back a user this call newly created.
+        """
         existing = await self.node.access_control.get_user_cached(user.user_id)
         result = await lock_helpers.async_set_user(
             self.node,
@@ -227,15 +234,25 @@ class ZWaveJSLock(BaseLock):
         credential: Credential,
         *,
         name: str | None,
-        source: str,
+        source: Literal["sync", "direct"],
     ) -> bool:
         """Write the Personal Identification Number credential under user_id; map device rejections."""
+        pin = credential.readable_pin
+        if pin is None:
+            # The set path only ever carries a readable Personal Identification
+            # Number; guard so an unreadable credential fails cleanly rather
+            # than passing None into the helper's str-only signature.
+            raise CodeRejectedError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason="cannot write an unreadable credential",
+            )
         try:
             await lock_helpers.async_set_credential(
                 self.node,
                 user_id,
                 UserCredentialType.PIN_CODE,
-                credential.readable_pin,
+                pin,
                 credential_slot=credential.slot,
             )
         except HomeAssistantError as err:

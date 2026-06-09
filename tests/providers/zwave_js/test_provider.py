@@ -1000,6 +1000,24 @@ async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error
     assert not isinstance(exc_info.value, DuplicateCodeError)
 
 
+async def test_async_set_credential_rejects_unreadable_credential(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """An unreadable credential (no Personal Identification Number) is rejected cleanly."""
+    credential = Credential(
+        type=CredentialType.PIN, slot=4, state=SlotCredential.unreadable()
+    )
+    with pytest.raises(CodeRejectedError) as exc_info:
+        await zwave_js_lock.async_set_credential(
+            user_id=1, credential=credential, name=None, source="sync"
+        )
+
+    assert exc_info.value.code_slot == 4
+    mock_lock_helpers["async_set_credential"].assert_not_called()
+
+
 async def test_async_delete_user_calls_helper(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
