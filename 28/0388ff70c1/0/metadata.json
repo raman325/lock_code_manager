@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "280388ff70c1",
+  "session_id": "f007f8e0-8e15-49f8-9b78-ca4730e9a56f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-09T13:03:02.099677Z",
+  "branch": "degenerate-providers-credential-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "4010f21504f3",
+  "token_usage": {
+    "input_tokens": 231,
+    "cache_creation_tokens": 380430,
+    "cache_read_tokens": 27281734,
+    "output_tokens": 90261,
+    "api_call_count": 138
+  },
+  "session_metrics": {
+    "turn_count": 4
+  }
+}
