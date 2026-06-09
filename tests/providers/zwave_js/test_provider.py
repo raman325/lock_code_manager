@@ -993,3 +993,150 @@ async def test_async_delete_credential_rejects_non_pin_type(
     assert exc_info.value.code_slot == 1
     assert "unsupported credential type" in str(exc_info.value)
     mock_lock_helpers["async_delete_credential"].assert_not_called()
+
+
+# ── Exception wrapping for write primitives ─────────────────────────
+
+
+async def test_async_set_user_falls_back_when_capabilities_fetch_fails(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A capabilities read failure must not block the write.
+
+    When the lazy max-name-length lookup raises, async_set_user proceeds with a
+    max length of 0 (names unsupported) rather than propagating a read error
+    out of a write path.
+    """
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].side_effect = FailedZWaveCommand("cmd", 1, "caps unavailable")
+    mock_access_control.get_user_cached.return_value = None
+
+    user = User(user_id=1, name="alice", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    assert result == SetUserResult(user_id=1, created=True)
+    assert zwave_js_lock._max_user_name_length == 0
+    # max length 0 → the name is omitted
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=1,
+        user_name=None,
+        active=True,
+    )
+
+
+async def test_async_set_user_maps_failed_command_to_lock_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A transient Z-Wave failure during set surfaces as LockDisconnected (retry)."""
+    mock_access_control.get_user_cached.return_value = None
+    mock_lock_helpers["async_set_user"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "lock asleep"
+    )
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_set_user(User(user_id=1, name="alice", active=True))
+
+
+async def test_async_set_user_maps_ha_error_to_operation_failed(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A reachable-lock HomeAssistantError during set surfaces as LockOperationFailed."""
+    mock_access_control.get_user_cached.return_value = None
+    mock_lock_helpers["async_set_user"].side_effect = HomeAssistantError("nope")
+    with pytest.raises(LockOperationFailed):
+        await zwave_js_lock.async_set_user(User(user_id=1, name="alice", active=True))
+
+
+async def test_async_delete_user_maps_failed_command_to_lock_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A transient Z-Wave failure during delete-user surfaces as LockDisconnected."""
+    mock_lock_helpers["async_delete_user"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "lock asleep"
+    )
+    with pytest.raises(LockDisconnected):
+        await zwave_js_lock.async_delete_user(7)
+
+
+async def test_async_delete_user_maps_ha_error_to_operation_failed(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A reachable-lock HomeAssistantError during delete-user surfaces as LockOperationFailed."""
+    mock_lock_helpers["async_delete_user"].side_effect = HomeAssistantError("nope")
+    with pytest.raises(LockOperationFailed):
+        await zwave_js_lock.async_delete_user(7)
+
+
+async def test_async_delete_credential_maps_ha_error_to_operation_failed(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """A reachable-lock HomeAssistantError during delete-credential surfaces as LockOperationFailed."""
+    mock_lock_helpers["async_delete_credential"].side_effect = HomeAssistantError(
+        "nope"
+    )
+    with pytest.raises(LockOperationFailed):
+        await zwave_js_lock.async_delete_credential(
+            CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
+        )
+
+
+# ── Client-readiness gating ─────────────────────────────────────────
+
+
+async def test_get_client_state_not_ready_when_client_missing(
+    zwave_js_lock: ZWaveJSLock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loaded entry with no client reports not-ready."""
+    runtime_data = MagicMock()
+    runtime_data.client = None
+    monkeypatch.setattr(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data)
+
+    ready, reason = zwave_js_lock._get_client_state()
+
+    assert ready is False
+    assert "not ready" in reason
+
+
+async def test_get_client_state_not_ready_when_disconnected(
+    zwave_js_lock: ZWaveJSLock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A client that is present but disconnected reports not-ready."""
+    runtime_data = MagicMock()
+    runtime_data.client = MagicMock(connected=False)
+    monkeypatch.setattr(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data)
+
+    ready, reason = zwave_js_lock._get_client_state()
+
+    assert ready is False
+    assert "not connected" in reason
+
+
+async def test_get_client_state_not_ready_when_driver_missing(
+    zwave_js_lock: ZWaveJSLock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connected client with no driver reports not-ready."""
+    runtime_data = MagicMock()
+    runtime_data.client = MagicMock(connected=True, driver=None)
+    monkeypatch.setattr(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data)
+
+    ready, reason = zwave_js_lock._get_client_state()
+
+    assert ready is False
+    assert "driver not ready" in reason

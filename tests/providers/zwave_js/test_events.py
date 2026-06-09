@@ -304,6 +304,45 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
     await zwave_js_lock.async_unload(False)
 
 
+async def test_notification_event_non_access_control_ignored(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+    lock_schlage_be469: Node,
+) -> None:
+    """A notification of a non Access Control type is ignored (no LCM event)."""
+    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
+    lcm_entry.add_to_hass(hass)
+    await zwave_js_lock.async_setup_internal(lcm_entry)
+
+    events = async_capture_events(hass, EVENT_LOCK_STATE_CHANGED)
+
+    # Type 8 = POWER_MANAGEMENT (not ACCESS_CONTROL) → handler returns early
+    event = ZwaveEvent(
+        type="notification",
+        data={
+            "source": "node",
+            "event": "notification",
+            "nodeId": lock_schlage_be469.node_id,
+            "endpointIndex": 0,
+            "ccId": 113,
+            "args": {
+                "type": 8,
+                "event": 1,
+                "label": "Power Management",
+                "eventLabel": "Power has been applied",
+                "parameters": {},
+            },
+        },
+    )
+    lock_schlage_be469.receive_event(event)
+    await hass.async_block_till_done()
+
+    assert events == []
+
+    await zwave_js_lock.async_unload(False)
+
+
 # ---------------------------------------------------------------------------
 # Credential node event push tests
 # ---------------------------------------------------------------------------
