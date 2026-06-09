@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import CommandClass
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
@@ -152,6 +151,30 @@ def mock_zwave_client_fixture(
                 return {"changed": False}
             if message["command"] == "endpoint.invoke_cc_api":
                 return {"response": None}
+            if message["command"] in (
+                "endpoint.access_control.get_users_cached",
+                "endpoint.access_control.get_users",
+            ):
+                return {"users": []}
+            if message["command"] in (
+                "endpoint.access_control.get_all_credentials_cached",
+                "endpoint.access_control.get_all_credentials",
+            ):
+                return {"credentials": []}
+            if message["command"] == "endpoint.access_control.get_user_cached":
+                return {"user": None}
+            if message["command"] == "endpoint.access_control.is_supported":
+                return {"supported": True}
+            if message["command"] in (
+                "endpoint.access_control.set_user",
+                "endpoint.access_control.delete_user",
+            ):
+                return {"result": {"success": True, "userId": message.get("userId", 1)}}
+            if message["command"] in (
+                "endpoint.access_control.set_credential",
+                "endpoint.access_control.delete_credential",
+            ):
+                return {"result": {"success": True}}
             return {"result": {"success": True, "status": 255}}
 
         client.async_send_command = AsyncMock(
@@ -340,22 +363,6 @@ async def zwave_js_lock_v2_fixture(
     )
 
 
-@pytest.fixture(name="mock_get_usercode_from_node", autouse=True)
-def mock_get_usercode_from_node_fixture():
-    """
-    Mock get_usercode_from_node for all tests.
-
-    V1 set/clear calls get_usercode_from_node to poll the slot from the device.
-    In tests, the node has no real Z-Wave JS server connection, so we mock the
-    function. Individual tests can access the mock via the parameter name.
-    """
-    with patch(
-        f"{_PROVIDER_MODULE}.get_usercode_from_node",
-        new_callable=AsyncMock,
-    ) as mock:
-        yield mock
-
-
 @pytest.fixture
 def mock_coordinator():
     """
@@ -405,55 +412,25 @@ async def simple_lcm_config_entry(
 @pytest.fixture
 def mock_zwave_usercodes(zwave_client: MagicMock):
     """
-    Mock Z-Wave JS usercode functions with mutable state.
+    Mock Z-Wave JS usercode cache functions with mutable state.
 
-    Both ``get_usercodes`` and ``get_usercode`` read from a shared mutable
-    ``codes`` dict. The client's ``async_send_command`` is wrapped so that
-    set / clear Z-Wave commands automatically update ``codes``, preventing
-    the coordinator refresh from overwriting optimistic push updates with
-    stale data.
+    ``get_usercode`` reads from a shared mutable ``codes`` dict. The client's
+    ``async_send_command`` is wrapped so that access_control commands return
+    an empty users/credentials list by default (tests override via
+    ``mock_access_control`` when they need specific credential data).
 
-    Yields ``(mock_get_usercodes, mock_get_usercode, codes)`` where *codes*
-    is ``dict[int, dict]`` keyed by slot number.
+    Yields ``(None, mock_get_usercode, codes)`` where ``None`` is a placeholder
+    for the removed ``get_usercodes`` mock (kept so call sites using tuple
+    unpacking as ``_mock_all, _mock_one, codes`` continue to work), and
+    *codes* is ``dict[int, dict]`` keyed by slot number.
     """
     codes: dict[int, dict] = {}
 
-    original_side_effect = zwave_client.async_send_command.side_effect
-
-    async def _send_command_with_codes(message, require_schema=None):
-        if message.get("command") == "node.set_value":
-            vid = message.get("valueId", {})
-            if vid.get("commandClass") == CommandClass.USER_CODE:
-                slot = vid.get("propertyKey")
-                if slot is not None:
-                    prop = vid.get("property")
-                    if prop == "userIdStatus":
-                        # Clear operation
-                        codes[slot] = {
-                            "code_slot": slot,
-                            "in_use": False,
-                            "usercode": "",
-                        }
-                    elif prop == "userCode":
-                        # Set operation
-                        codes[slot] = {
-                            "code_slot": slot,
-                            "in_use": True,
-                            "usercode": str(message["value"]),
-                        }
-        return await original_side_effect(message, require_schema)
-
-    with (
-        patch(f"{_PROVIDER_MODULE}.get_usercodes") as mock_all,
-        patch(f"{_PROVIDER_MODULE}.get_usercode") as mock_one,
-    ):
-        mock_all.side_effect = lambda node: list(codes.values())
+    with patch(f"{_PROVIDER_MODULE}.get_usercode") as mock_one:
         mock_one.side_effect = lambda node, slot: codes.get(
             slot, {"code_slot": slot, "in_use": False, "usercode": ""}
         )
-        zwave_client.async_send_command.side_effect = _send_command_with_codes
-        yield mock_all, mock_one, codes
-        zwave_client.async_send_command.side_effect = original_side_effect
+        yield None, mock_one, codes
 
 
 @pytest.fixture

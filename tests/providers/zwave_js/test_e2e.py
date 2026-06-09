@@ -5,8 +5,14 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const import CommandClass
+from zwave_js_server.const.command_class.access_control import (
+    UserCredentialType,
+    UserCredentialUserType,
+)
 from zwave_js_server.event import Event as ZwaveEvent
+from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
 from homeassistant.core import Event, HomeAssistant, callback
@@ -14,6 +20,9 @@ from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -66,72 +75,132 @@ class TestFullSetupLifecycle:
 
 
 class TestSetAndClearUsercodes:
-    """Verify set/clear operations send proper Z-Wave commands."""
+    """Verify set/clear operations invoke the unified access-control primitives."""
 
-    async def test_set_usercode(
+    async def test_set_usercode_calls_lock_helpers(
         self,
         hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-        zwave_client: MagicMock,
+        zwave_js_lock: ZWaveJSLock,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        zwave_integration: MockConfigEntry,
     ) -> None:
-        """Set a code via the provider and verify the Z-Wave command was sent."""
-        zwave_client.async_send_command.reset_mock()
-        result = await e2e_zwave_lock.async_set_usercode(4, "5678", "Test User")
+        """Setting a code drives async_set_user then async_set_credential via lock_helpers."""
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+                CONF_SLOTS: {"4": {}},
+            },
+        )
+        lcm_entry.add_to_hass(hass)
+        zwave_js_lock._min_operation_delay = 0.0
+        mock_access_control.get_user_cached.return_value = None
+        mock_lock_helpers["async_set_user"].return_value = {"user_id": 4}
+
+        result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
         assert result is True
-        assert zwave_client.async_send_command.call_count >= 1
+        mock_lock_helpers["async_set_user"].assert_called_once()
+        mock_lock_helpers["async_set_credential"].assert_called_once()
 
-    async def test_clear_usercode(
+    async def test_clear_usercode_calls_lock_helpers(
         self,
         hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-        zwave_client: MagicMock,
+        zwave_js_lock: ZWaveJSLock,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        zwave_integration: MockConfigEntry,
     ) -> None:
-        """Clear a code via the provider and verify the Z-Wave command was sent."""
-        zwave_client.async_send_command.reset_mock()
-        result = await e2e_zwave_lock.async_clear_usercode(2)
+        """Clearing a slot resolves the owner then calls async_delete_credential."""
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+                CONF_SLOTS: {"2": {}},
+            },
+        )
+        lcm_entry.add_to_hass(hass)
+        zwave_js_lock._min_operation_delay = 0.0
+        mock_access_control.get_users_cached.return_value = [
+            UserData(
+                user_id=2,
+                active=True,
+                user_type=UserCredentialUserType.GENERAL,
+                user_name="bob",
+            ),
+        ]
+        mock_access_control.get_all_credentials_cached.return_value = [
+            CredentialData(
+                user_id=2,
+                type=UserCredentialType.PIN_CODE,
+                slot=2,
+                data="1234",
+            ),
+        ]
+
+        result = await zwave_js_lock.async_clear_usercode(2)
 
         assert result is True
-        assert zwave_client.async_send_command.call_count >= 1
-
-    async def test_set_usercode_optimistic_update(
-        self,
-        hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-    ) -> None:
-        """After set, the coordinator has the optimistic value."""
-        await e2e_zwave_lock.async_set_usercode(4, "5678", "Test User")
-
-        assert e2e_zwave_lock.coordinator.data.get(4) == SlotCredential.known("5678")
-
-    async def test_clear_usercode_optimistic_update(
-        self,
-        hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-    ) -> None:
-        """After clear, the coordinator has SlotCredential.empty()."""
-        await e2e_zwave_lock.async_clear_usercode(2)
-
-        assert e2e_zwave_lock.coordinator.data.get(2) is SlotCredential.empty()
+        mock_lock_helpers["async_delete_credential"].assert_called_once()
 
 
 class TestGetUsercodes:
-    """Verify reading usercodes from the Z-Wave JS value cache."""
+    """Verify reading usercodes from the access_control API."""
 
-    async def test_get_usercodes_returns_codes(
+    async def test_get_usercodes_returns_codes_from_access_control(
         self,
         hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
+        zwave_js_lock: ZWaveJSLock,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        zwave_integration: MockConfigEntry,
     ) -> None:
         """
-        Get usercodes returns the fixture's cached codes.
+        async_get_usercodes projects access_control users and credentials to slots.
 
-        The node fixture has slot 1="9999" (in_use), slot 2="1234" (in_use),
-        and slot 3=empty (not in_use).
+        The access_control fixture is seeded with two users at slots 1 and 2.
+        The result maps each slot to the readable Personal Identification Number.
         """
-        codes = await e2e_zwave_lock.async_get_usercodes()
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+                CONF_SLOTS: {"1": {}, "2": {}},
+            },
+        )
+        lcm_entry.add_to_hass(hass)
+        mock_access_control.get_users_cached.return_value = [
+            UserData(
+                user_id=1,
+                active=True,
+                user_type=UserCredentialUserType.GENERAL,
+                user_name="alice",
+            ),
+            UserData(
+                user_id=2,
+                active=True,
+                user_type=UserCredentialUserType.GENERAL,
+                user_name="bob",
+            ),
+        ]
+        mock_access_control.get_all_credentials_cached.return_value = [
+            CredentialData(
+                user_id=1,
+                type=UserCredentialType.PIN_CODE,
+                slot=1,
+                data="9999",
+            ),
+            CredentialData(
+                user_id=2,
+                type=UserCredentialType.PIN_CODE,
+                slot=2,
+                data="1234",
+            ),
+        ]
 
-        # Slots 1 and 2 are managed by the LCM config
+        codes = await zwave_js_lock.async_get_usercodes()
+
         assert codes[1] == SlotCredential.known("9999")
         assert codes[2] == SlotCredential.known("1234")
 

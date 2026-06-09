@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-import functools
 import logging
 from typing import Any, Literal
 
@@ -18,9 +17,7 @@ from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.const.command_class.lock import (
-    ATTR_CODE_SLOT,
     ATTR_IN_USE,
-    ATTR_USERCODE,
     LOCK_USERCODE_PROPERTY,
     LOCK_USERCODE_STATUS_PROPERTY,
     CodeSlotStatus,
@@ -29,13 +26,8 @@ from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
-from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import (
-    get_usercode,
-    get_usercode_from_node,
-    get_usercodes,
-)
+from zwave_js_server.util.lock import get_usercode
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -46,14 +38,12 @@ from homeassistant.components.zwave_js.const import (
     ATTR_PARAMETERS,
     ATTR_TYPE,
     DOMAIN as ZWAVE_JS_DOMAIN,
-    SERVICE_CLEAR_LOCK_USERCODE,
-    SERVICE_SET_LOCK_USERCODE,
     ZWAVE_JS_NOTIFICATION_EVENT,
 )
 from homeassistant.components.zwave_js.helpers import async_get_node_from_entity_id
 from homeassistant.components.zwave_js.models import ZwaveJSData
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
+from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Event, callback
 from homeassistant.exceptions import HomeAssistantError
 
@@ -114,27 +104,6 @@ class ZWaveJSLock(BaseLock):
         return async_get_node_from_entity_id(
             self.hass, self.lock.entity_id, self.ent_reg
         )
-
-    @functools.cached_property
-    def _usercode_cc_version(self) -> int:
-        """Return the User Code CC version supported by this node."""
-        version = next(
-            (
-                cc.version
-                for cc in self.node.command_classes
-                if cc.id == CommandClass.USER_CODE
-            ),
-            0,
-        )
-        if version == 0:
-            _LOGGER.warning(
-                "Lock %s: User Code CC not found on node %s. This may "
-                "indicate an incomplete interview. Defaulting to V1 behavior",
-                self.lock.entity_id,
-                self.node.node_id,
-            )
-            return 1
-        return version
 
     @property
     def supports_push(self) -> bool:
@@ -525,173 +494,10 @@ class ZWaveJSLock(BaseLock):
             return False
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
-        """Refresh the User Code CC cache from the device and return all codes."""
-        await self._async_refresh_usercode_cache()
+        """Re-read users AND credentials fresh from the device, then project to slots."""
+        try:
+            await self.node.access_control.get_users()
+            await self.node.access_control.get_all_credentials()
+        except Exception as err:
+            raise LockDisconnected from err
         return await self.async_get_usercodes()
-
-    async def _async_verify_write(
-        self, code_slot: int, operation: Literal["set", "clear"]
-    ) -> None:
-        """
-        Force-update the value cache after a set/clear on a V1 lock.
-
-        V1 locks don't reliably update the Z-Wave JS value cache after a write.
-        Poll the slot directly from the device to force-update the cache before
-        the coordinator reads it, preventing sync loops. Wrap failures as
-        LockDisconnected so they route to the retry path instead of leaking a
-        raw FailedZWaveCommand into the generic exception handler, which would
-        otherwise suspend the lock.
-        """
-        if self._usercode_cc_version >= 2:
-            return
-        try:
-            await get_usercode_from_node(self.node, code_slot)
-        except FailedZWaveCommand as err:
-            raise LockDisconnected(
-                f"Post-{operation} verification poll failed for "
-                f"{self.lock.entity_id} slot {code_slot}: {err}"
-            ) from err
-
-    async def async_set_usercode(
-        self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
-    ) -> bool:
-        """
-        Set a usercode on a code slot.
-
-        Returns True if the value was changed, False if already set to this value.
-        """
-        # Cache lookup short-circuits no-op writes. Bare-except is intentional:
-        # a stale or missing cache entry must not block the set operation.
-        try:
-            if (current := get_usercode(self.node, code_slot)).get("in_use"):
-                current_code = str(current.get("usercode", ""))
-                # Skip the duplicate check if the current code is masked.
-                if current_code != "*" * len(current_code) and usercode == current_code:
-                    _LOGGER.debug(
-                        "Lock %s slot %s already has this PIN, skipping set",
-                        self.lock.entity_id,
-                        code_slot,
-                    )
-                    return False
-        except Exception:
-            pass
-
-        self._set_in_progress_code_slot = code_slot
-        service_data = {
-            ATTR_ENTITY_ID: self.lock.entity_id,
-            ATTR_CODE_SLOT: code_slot,
-            ATTR_USERCODE: usercode,
-        }
-        await self.async_call_service(
-            ZWAVE_JS_DOMAIN, SERVICE_SET_LOCK_USERCODE, service_data
-        )
-        await self._async_verify_write(code_slot, "set")
-        # Optimistic update: the value cache updates asynchronously via push
-        # notification; push now to prevent sync loops from reading stale cache.
-        self._push_credential_update(code_slot, SlotCredential.known(usercode))
-        return True
-
-    async def async_clear_usercode(self, code_slot: int) -> bool:
-        """
-        Clear a usercode on a code slot.
-
-        Returns True if the value was changed, False if already cleared.
-        """
-        # Cache lookup short-circuits no-op clears. Bare-except is intentional:
-        # see async_set_usercode for rationale.
-        try:
-            current = get_usercode(self.node, code_slot)
-            if not current.get("in_use"):
-                _LOGGER.debug(
-                    "Lock %s slot %s already cleared, skipping clear",
-                    self.lock.entity_id,
-                    code_slot,
-                )
-                return False
-        except Exception:
-            pass
-
-        service_data = {
-            ATTR_ENTITY_ID: self.lock.entity_id,
-            ATTR_CODE_SLOT: code_slot,
-        }
-        await self.async_call_service(
-            ZWAVE_JS_DOMAIN, SERVICE_CLEAR_LOCK_USERCODE, service_data
-        )
-        await self._async_verify_write(code_slot, "clear")
-        # Optimistic update: see async_set_usercode for rationale.
-        self._push_credential_update(code_slot, SlotCredential.empty())
-        return True
-
-    def _get_usercodes_from_cache(self) -> list[dict[str, Any]]:
-        """Get usercodes from Z-Wave JS value DB cache."""
-        try:
-            return list(get_usercodes(self.node) or [])
-        except Exception as err:
-            raise LockDisconnected from err
-
-    async def _async_refresh_usercode_cache(self) -> None:
-        """Refresh usercode cache from the device."""
-        try:
-            await self.node.async_refresh_cc_values(CommandClass.USER_CODE)
-        except Exception as err:
-            raise LockDisconnected from err
-
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Get dictionary of code slots and usercodes."""
-        code_slots = self.managed_slots
-        data: dict[int, SlotCredential] = {}
-
-        if not await self.async_is_integration_connected():
-            raise LockDisconnected
-
-        slots = self._get_usercodes_from_cache()
-        slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
-
-        # If any managed slot is missing or has unknown in_use state, do one hard
-        # refresh. Call _async_refresh_usercode_cache directly (not
-        # async_hard_refresh_codes) to avoid recursion.
-        if any(
-            slot_num not in slots_by_num or slots_by_num[slot_num].get("in_use") is None
-            for slot_num in code_slots
-        ):
-            _LOGGER.debug(
-                "Lock %s has missing/unknown slots, performing hard refresh",
-                self.lock.entity_id,
-            )
-            await self._async_refresh_usercode_cache()
-            slots = self._get_usercodes_from_cache()
-            slots_by_num = {int(slot["code_slot"]): slot for slot in slots}
-
-        for slot in slots:
-            code_slot = int(slot["code_slot"])
-            usercode: str = slot["usercode"] or ""
-            in_use: bool | None = slot["in_use"]
-
-            if not in_use:
-                data[code_slot] = SlotCredential.empty()
-            elif not usercode:
-                # in_use but no code content (cache partially populated); skip
-                continue
-            elif usercode == "*" * len(usercode):
-                # Masked code (all asterisks with slot in use)
-                data[code_slot] = SlotCredential.unreadable()
-            else:
-                # Unmasked code
-                data[code_slot] = SlotCredential.known(usercode)
-
-        slots_with_pin = [s for s, v in data.items() if v.is_present]
-        slots_empty = [s for s, v in data.items() if v.is_empty]
-        _LOGGER.debug(
-            "Lock %s: %s slots with PIN %s, %s slots empty %s",
-            self.lock.entity_id,
-            len(slots_with_pin),
-            slots_with_pin,
-            len(slots_empty),
-            slots_empty,
-        )
-        return data
