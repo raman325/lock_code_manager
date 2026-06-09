@@ -55,15 +55,18 @@ from homeassistant.components.zwave_js.models import ZwaveJSData
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
+from homeassistant.exceptions import HomeAssistantError
 
 from ..domain.credentials import (
     Credential,
+    CredentialRef,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SetUserResult,
     User,
 )
-from ..domain.exceptions import LockDisconnected
+from ..domain.exceptions import CodeRejectedError, DuplicateCodeError, LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 
@@ -202,6 +205,58 @@ class ZWaveJSLock(BaseLock):
             max_users=caps["max_users"],
             credential_types=credential_types,
         )
+
+    async def async_set_user(self, user: User) -> SetUserResult:
+        """Create or update the lock user; report whether it was created."""
+        existing = await self.node.access_control.get_user_cached(user.user_id)
+        result = await lock_helpers.async_set_user(
+            self.node,
+            user_id=user.user_id,
+            user_name=user.name,
+            active=user.active,
+        )
+        return SetUserResult(user_id=result["user_id"], created=existing is None)
+
+    async def async_delete_user(self, user_id: int) -> None:
+        """Delete the lock user (cascades its credentials)."""
+        await lock_helpers.async_delete_user(self.node, user_id)
+
+    async def async_set_credential(
+        self,
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: str,
+    ) -> bool:
+        """Write the Personal Identification Number credential under user_id; map device rejections."""
+        try:
+            await lock_helpers.async_set_credential(
+                self.node,
+                user_id,
+                UserCredentialType.PIN_CODE,
+                credential.readable_pin,
+                credential_slot=credential.slot,
+            )
+        except HomeAssistantError as err:
+            if getattr(err, "translation_key", None) == "credential_rejected_duplicate":
+                raise DuplicateCodeError(
+                    code_slot=credential.slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
+            raise CodeRejectedError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=str(err),
+            ) from err
+        return True
+
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
+        """Delete the Personal Identification Number credential addressed by ref."""
+        await lock_helpers.async_delete_credential(
+            self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
+        )
+        return True
 
     def _get_client_state(self) -> tuple[bool, str]:
         """Return whether the Z-Wave JS client is ready and a retry reason."""

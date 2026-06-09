@@ -19,6 +19,7 @@ from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
@@ -27,11 +28,18 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
+    CredentialRef,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SetUserResult,
+    User,
 )
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
+from custom_components.lock_code_manager.domain.exceptions import (
+    CodeRejectedError,
+    DuplicateCodeError,
+    LockDisconnected,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
@@ -847,4 +855,186 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
                 supports_learn=False,
             )
         },
+    )
+
+
+# Write primitive tests (Task 2)
+
+
+async def test_async_set_user_returns_created_when_user_absent(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_set_user reports created=True when no existing user is found.
+
+    When get_user_cached returns None the user does not yet exist on the lock,
+    so SetUserResult.created must be True. The helper is called with the correct
+    node, user_id, user_name, and active values.
+    """
+    mock_access_control.get_user_cached.return_value = None
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 5}
+
+    user = User(user_id=5, name="alice", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    assert result == SetUserResult(user_id=5, created=True)
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=5,
+        user_name="alice",
+        active=True,
+    )
+
+
+async def test_async_set_user_returns_not_created_when_user_exists(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_set_user reports created=False when the user already exists.
+
+    When get_user_cached returns a UserData object the slot is being updated,
+    not created, so SetUserResult.created must be False.
+    """
+    mock_access_control.get_user_cached.return_value = UserData(
+        user_id=3,
+        active=True,
+        user_type=UserCredentialUserType.GENERAL,
+        user_name="bob",
+    )
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 3}
+
+    user = User(user_id=3, name="bob", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    assert result == SetUserResult(user_id=3, created=False)
+
+
+async def test_async_set_credential_returns_true_on_success(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_set_credential returns True and calls the helper with the right args.
+
+    The helper is called with the node, user_id, PIN_CODE credential type, the
+    readable Personal Identification Number string, and the credential slot.
+    """
+    mock_lock_helpers["async_set_credential"].return_value = {
+        "credential_slot": 2,
+        "user_id": 1,
+    }
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
+    )
+    result = await zwave_js_lock.async_set_credential(
+        user_id=1, credential=credential, name="alice", source="sync"
+    )
+
+    assert result is True
+    mock_lock_helpers["async_set_credential"].assert_called_once_with(
+        zwave_js_lock.node,
+        1,
+        UserCredentialType.PIN_CODE,
+        "5678",
+        credential_slot=2,
+    )
+
+
+async def test_async_set_credential_raises_duplicate_code_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_set_credential raises DuplicateCodeError on duplicate rejection.
+
+    When the lock_helpers helper raises HomeAssistantError with
+    translation_key="credential_rejected_duplicate", the provider must re-raise
+    as DuplicateCodeError so the seam's orchestration can handle it correctly.
+    """
+    err = HomeAssistantError(translation_key="credential_rejected_duplicate")
+    mock_lock_helpers["async_set_credential"].side_effect = err
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=3, state=SlotCredential.known("1111")
+    )
+    with pytest.raises(DuplicateCodeError) as exc_info:
+        await zwave_js_lock.async_set_credential(
+            user_id=1, credential=credential, name=None, source="sync"
+        )
+
+    assert exc_info.value.code_slot == 3
+    assert exc_info.value.lock_entity_id == zwave_js_lock.lock.entity_id
+
+
+async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_set_credential raises CodeRejectedError for non-duplicate rejections.
+
+    When the lock_helpers helper raises HomeAssistantError with any other
+    translation_key (for example "credential_rejected_unknown"), the provider
+    must re-raise as CodeRejectedError.
+    """
+    err = HomeAssistantError(translation_key="credential_rejected_unknown")
+    mock_lock_helpers["async_set_credential"].side_effect = err
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
+    )
+    with pytest.raises(CodeRejectedError) as exc_info:
+        await zwave_js_lock.async_set_credential(
+            user_id=1, credential=credential, name=None, source="sync"
+        )
+
+    assert exc_info.value.code_slot == 4
+    assert not isinstance(exc_info.value, DuplicateCodeError)
+
+
+async def test_async_delete_user_calls_helper(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_delete_user calls lock_helpers.async_delete_user with correct args.
+
+    The method delegates directly to the helper with the node and user_id.
+    """
+    await zwave_js_lock.async_delete_user(7)
+
+    mock_lock_helpers["async_delete_user"].assert_called_once_with(
+        zwave_js_lock.node, 7
+    )
+
+
+async def test_async_delete_credential_calls_helper_and_returns_true(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_delete_credential calls the helper and returns True on success.
+
+    The helper is called with the node, user_id, PIN_CODE credential type, and
+    the credential slot resolved from the CredentialRef.
+    """
+    ref = CredentialRef(user_id=2, type=CredentialType.PIN, slot=5)
+    result = await zwave_js_lock.async_delete_credential(ref)
+
+    assert result is True
+    mock_lock_helpers["async_delete_credential"].assert_called_once_with(
+        zwave_js_lock.node,
+        2,
+        UserCredentialType.PIN_CODE,
+        5,
     )
