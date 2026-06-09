@@ -179,23 +179,35 @@ class MatterLock(BaseLock):
                 f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
             ) from err
 
-        return [
-            User(
-                user_id=raw_user["user_index"],
-                name=raw_user.get("user_name"),
-                active=True,
-                credentials=[
+        # A for-loop (not a comprehension) so the int-or-None user_index and
+        # credential index are narrowed by explicit guards before use: the
+        # Matter helper types both as ``int | None``.
+        users: list[User] = []
+        for raw_user in lock_data.get("users", []):
+            user_index = raw_user.get("user_index")
+            if user_index is None:
+                continue
+            pin_credentials: list[Credential] = []
+            for cred in raw_user.get("credentials", []):
+                slot = cred.get("index")
+                if cred.get("type") != "pin" or slot is None:
+                    continue
+                pin_credentials.append(
                     Credential(
                         type=CredentialType.PIN,
-                        slot=cred["index"],
+                        slot=slot,
                         state=SlotCredential.unreadable(),
                     )
-                    for cred in raw_user.get("credentials", [])
-                    if cred.get("type") == "pin" and cred.get("index") is not None
-                ],
+                )
+            users.append(
+                User(
+                    user_id=user_index,
+                    name=raw_user.get("user_name"),
+                    active=True,
+                    credentials=pin_credentials,
+                )
             )
-            for raw_user in lock_data.get("users", [])
-        ]
+        return users
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """
