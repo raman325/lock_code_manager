@@ -192,14 +192,27 @@ async def test_hard_refresh_codes_calls_access_control(
     assert 2 in codes
 
 
-async def test_hard_refresh_codes_raises_lock_disconnected_on_error(
+async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
 ) -> None:
-    """Test that async_hard_refresh_codes wraps any exception as LockDisconnected."""
-    mock_access_control.get_users.side_effect = RuntimeError("node gone")
+    """Z-Wave transport failure during hard refresh surfaces as LockDisconnected."""
+    mock_access_control.get_users.side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
 
-    with pytest.raises(LockDisconnected):
+    with pytest.raises(LockDisconnected, match="hard refresh failed"):
+        await zwave_js_lock.async_hard_refresh_codes()
+
+
+async def test_hard_refresh_codes_maps_ha_error_to_operation_failed(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+) -> None:
+    """A reachable-but-rejected hard refresh surfaces as LockOperationFailed."""
+    mock_access_control.get_users.side_effect = HomeAssistantError("rejected")
+
+    with pytest.raises(LockOperationFailed, match="hard refresh failed"):
         await zwave_js_lock.async_hard_refresh_codes()
 
 
@@ -1004,11 +1017,13 @@ async def test_async_set_user_falls_back_when_capabilities_fetch_fails(
     mock_lock_helpers: dict,
 ) -> None:
     """
-    A capabilities read failure must not block the write.
+    A capabilities read failure must not block the write or poison the cache.
 
     When the lazy max-name-length lookup raises, async_set_user proceeds with a
-    max length of 0 (names unsupported) rather than propagating a read error
-    out of a write path.
+    max length of 0 (names omitted) for this call but leaves the cache unset so
+    the next call retries the lookup. Caching a 0 sentinel on failure would
+    silently strip all user names for the provider instance after a single
+    transient disconnect.
     """
     mock_lock_helpers[
         "async_get_credential_capabilities"
@@ -1019,14 +1034,50 @@ async def test_async_set_user_falls_back_when_capabilities_fetch_fails(
     result = await zwave_js_lock.async_set_user(user)
 
     assert result == SetUserResult(user_id=1, created=True)
-    assert zwave_js_lock._max_user_name_length == 0
-    # max length 0 → the name is omitted
+    # Cache stays None on failure so the next call retries; the failed read
+    # only suppresses the name guard for THIS call.
+    assert zwave_js_lock._max_user_name_length is None
+    # max length 0 → the name is omitted on this call
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
         user_id=1,
         user_name=None,
         active=True,
     )
+
+
+async def test_async_set_user_retries_capabilities_after_failure(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    After a transient capabilities-fetch failure, the next call retries.
+
+    Regression guard for the bug where caching a 0 sentinel on failure would
+    permanently disable user-name validation until the integration reloaded.
+    """
+    mock_lock_helpers["async_get_credential_capabilities"].side_effect = [
+        FailedZWaveCommand("cmd", 1, "caps unavailable"),
+        {
+            "max_user_name_length": 10,
+            "supports_user_management": True,
+            "max_users": 5,
+            "supported_credential_types": {},
+        },
+    ]
+    mock_access_control.get_user_cached.return_value = None
+
+    # First call: caps fetch fails, name dropped, cache stays unset.
+    await zwave_js_lock.async_set_user(User(user_id=1, name="alice", active=True))
+    assert zwave_js_lock._max_user_name_length is None
+
+    # Second call: caps fetch retries and succeeds, name is now written.
+    await zwave_js_lock.async_set_user(User(user_id=2, name="bob", active=True))
+    assert zwave_js_lock._max_user_name_length == 10
+    assert mock_lock_helpers["async_get_credential_capabilities"].call_count == 2
+    last_call = mock_lock_helpers["async_set_user"].call_args_list[-1]
+    assert last_call.kwargs["user_name"] == "bob"
 
 
 async def test_async_set_user_maps_failed_command_to_lock_disconnected(

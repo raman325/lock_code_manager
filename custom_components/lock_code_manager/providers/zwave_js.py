@@ -98,7 +98,9 @@ class ZWaveJSLock(BaseLock):
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
     # Cached max user name length from lock_helpers capabilities. Populated
     # lazily on first async_set_user call (or by async_get_capabilities).
-    # ``None`` means "not yet queried"; the value is always an int once set.
+    # ``None`` means "not yet queried"; on capabilities-fetch failure the
+    # cache stays None so the next call retries (rather than getting stuck
+    # at a sentinel that would silently drop all user names).
     _max_user_name_length: int | None = field(init=False, default=None)
 
     @property
@@ -143,7 +145,7 @@ class ZWaveJSLock(BaseLock):
         return SlotCredential.known(data if isinstance(data, str) else data.decode())
 
     async def async_get_users(self) -> list[User]:
-        """Read users and their PIN credentials (with values) from the lock."""
+        """Read users and their Personal Identification Number credentials from the lock."""
         try:
             users = await self.node.access_control.get_users_cached()
             credentials = await self.node.access_control.get_all_credentials_cached()
@@ -218,11 +220,15 @@ class ZWaveJSLock(BaseLock):
                 raw_caps = await lock_helpers.async_get_credential_capabilities(
                     self.node
                 )
-                self._max_user_name_length = raw_caps.get("max_user_name_length", 0)
             except BaseZwaveJSServerError, HomeAssistantError:
-                # Capabilities fetch failed — proceed without a name guard
-                # so the write is not blocked by a read failure.
-                self._max_user_name_length = 0
+                # Capabilities fetch failed — proceed for this call without
+                # a name guard, but leave the cache unset so the next call
+                # retries. Caching a 0 sentinel here would silently strip
+                # all user names for the lifetime of the provider instance
+                # after a single transient disconnect.
+                pass
+            else:
+                self._max_user_name_length = raw_caps.get("max_user_name_length", 0)
         max_name_len: int = self._max_user_name_length or 0
         # Enforce the lock's name length constraint:
         # - max_name_len == 0: the lock does not support user names; omit it
@@ -491,6 +497,8 @@ class ZWaveJSLock(BaseLock):
         try:
             await self.node.access_control.get_users()
             await self.node.access_control.get_all_credentials()
-        except Exception as err:
+        except BaseZwaveJSServerError as err:
             raise LockDisconnected(f"hard refresh failed: {err}") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"hard refresh failed: {err}") from err
         return await self.async_get_usercodes()
