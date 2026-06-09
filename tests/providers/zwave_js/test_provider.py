@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from zwave_js_server.const import CommandClass, NodeStatus
+from zwave_js_server.const.command_class.access_control import (
+    UserCredentialType,
+    UserCredentialUserType,
+)
 from zwave_js_server.exceptions import FailedZWaveCommand
+from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
+from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -18,6 +24,12 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+)
+from custom_components.lock_code_manager.domain.credentials import (
+    Credential,
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
 )
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -709,3 +721,121 @@ async def test_is_device_available_returns_false_on_exception(
         new_callable=lambda: property(raise_error),
     ):
         assert await zwave_js_lock.async_is_device_available() is False
+
+
+# Credential API tests (Option B: readable PINs via node.access_control)
+
+
+async def test_async_get_users_maps_users_and_pin_credentials(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_get_users returns users with PIN credentials correctly projected.
+
+    Given two users and three credentials (two PINs, one non-PIN), the result
+    maps each user to its PIN credentials only. Readable data becomes
+    SlotCredential.known; absent data becomes SlotCredential.unreadable.
+    """
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=1,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="alice",
+        ),
+        UserData(
+            user_id=2,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name=None,
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = [
+        CredentialData(
+            user_id=1,
+            type=UserCredentialType.PIN_CODE,
+            slot=1,
+            data="1234",
+        ),
+        CredentialData(
+            user_id=2,
+            type=UserCredentialType.PIN_CODE,
+            slot=2,
+            data=None,
+        ),
+        # Non-PIN credential — must be filtered out.
+        CredentialData(
+            user_id=1,
+            type=UserCredentialType.RFID_CODE,
+            slot=1,
+            data="AABB",
+        ),
+    ]
+
+    users = await zwave_js_lock.async_get_users()
+
+    assert len(users) == 2
+
+    user1 = next(u for u in users if u.user_id == 1)
+    assert user1.name == "alice"
+    assert len(user1.credentials) == 1
+    assert user1.credentials[0] == Credential(
+        type=CredentialType.PIN,
+        slot=1,
+        state=SlotCredential.known("1234"),
+    )
+
+    user2 = next(u for u in users if u.user_id == 2)
+    assert len(user2.credentials) == 1
+    assert user2.credentials[0] == Credential(
+        type=CredentialType.PIN,
+        slot=2,
+        state=SlotCredential.unreadable(),
+    )
+
+
+async def test_async_get_capabilities_maps_lock_helpers_response(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Test async_get_capabilities maps the lock_helpers response to LockCapabilities.
+
+    The raw dict from async_get_credential_capabilities is projected to the
+    domain LockCapabilities type, pulling the Personal Identification Number
+    entry from supported_credential_types.
+    """
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+        "supports_user_management": True,
+        "max_users": 30,
+        "supported_user_types": [],
+        "max_user_name_length": 10,
+        "supported_credential_rules": [],
+        "supported_credential_types": {
+            pin_type_str: {
+                "num_slots": 30,
+                "min_length": 4,
+                "max_length": 8,
+                "supports_learn": False,
+            }
+        },
+    }
+
+    caps = await zwave_js_lock.async_get_capabilities()
+
+    assert caps == LockCapabilities(
+        supports_user_management=True,
+        max_users=30,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=30,
+                min_length=4,
+                max_length=8,
+                supports_learn=False,
+            )
+        },
+    )

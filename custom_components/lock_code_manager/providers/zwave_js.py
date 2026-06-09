@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
+from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.const.command_class.lock import (
     ATTR_CODE_SLOT,
     ATTR_IN_USE,
@@ -36,6 +37,7 @@ from zwave_js_server.util.lock import (
     get_usercodes,
 )
 
+from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
     ATTR_EVENT_LABEL,
@@ -54,11 +56,22 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID
 from homeassistant.core import Event, callback
 
+from ..domain.credentials import (
+    Credential,
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+    User,
+)
 from ..domain.exceptions import LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
+
+# String key used by lock_helpers for Personal Identification Number credentials
+# in the supported_credential_types dict returned by async_get_credential_capabilities.
+_PIN_TYPE_STR = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
 
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
@@ -129,6 +142,62 @@ class ZWaveJSLock(BaseLock):
     def connection_check_interval(self) -> timedelta | None:
         """Z-Wave JS exposes config entry state changes, so skip polling."""
         return None
+
+    @property
+    def supports_native_users(self) -> bool:
+        """Return True: this provider implements the credential primitives."""
+        return True
+
+    def _pin_state(self, data: object) -> SlotCredential:
+        """Project Z-Wave credential data to a SlotCredential (readable when present)."""
+        return SlotCredential.known(str(data)) if data else SlotCredential.unreadable()
+
+    async def async_get_users(self) -> list[User]:
+        """Read users and their PIN credentials (with values) from the lock."""
+        users = await self.node.access_control.get_users_cached()
+        credentials = await self.node.access_control.get_all_credentials_cached()
+        pins_by_user: dict[int, list[Credential]] = {}
+        for cred in credentials:
+            if cred.type is not UserCredentialType.PIN_CODE:
+                continue
+            pins_by_user.setdefault(cred.user_id, []).append(
+                Credential(
+                    type=CredentialType.PIN,
+                    slot=cred.slot,
+                    state=self._pin_state(cred.data),
+                )
+            )
+        return [
+            User(
+                user_id=user.user_id,
+                name=user.user_name,
+                active=user.active,
+                credentials=pins_by_user.get(user.user_id, []),
+            )
+            for user in users
+        ]
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """Report the lock's user/credential capabilities."""
+        caps = await lock_helpers.async_get_credential_capabilities(self.node)
+        pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
+        credential_types = (
+            {
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=pin["num_slots"],
+                    min_length=pin["min_length"],
+                    max_length=pin["max_length"],
+                    supports_learn=pin["supports_learn"],
+                )
+            }
+            if pin
+            else {}
+        )
+        return LockCapabilities(
+            supports_user_management=caps["supports_user_management"],
+            max_users=caps["max_users"],
+            credential_types=credential_types,
+        )
 
     def _get_client_state(self) -> tuple[bool, str]:
         """Return whether the Z-Wave JS client is ready and a retry reason."""

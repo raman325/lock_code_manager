@@ -454,3 +454,35 @@ def mock_zwave_usercodes(zwave_client: MagicMock):
         zwave_client.async_send_command.side_effect = _send_command_with_codes
         yield mock_all, mock_one, codes
         zwave_client.async_send_command.side_effect = original_side_effect
+
+
+@pytest.fixture
+def mock_lock_helpers():
+    """Patch the write/capability lock_helpers the provider calls."""
+    mocks = {
+        "async_get_credential_capabilities": AsyncMock(),
+        "async_set_user": AsyncMock(return_value={"user_id": 1}),
+        "async_delete_user": AsyncMock(),
+        "async_set_credential": AsyncMock(
+            return_value={"credential_slot": 1, "user_id": 1}
+        ),
+        "async_delete_credential": AsyncMock(),
+    }
+    with patch.multiple(
+        "custom_components.lock_code_manager.providers.zwave_js.lock_helpers",
+        **mocks,
+    ):
+        yield mocks
+
+
+@pytest.fixture
+def mock_access_control(lock_schlage_be469: Node):
+    """Give the node a mock access_control with READ methods (Option B)."""
+    ac = MagicMock()
+    ac.get_user_cached = AsyncMock(return_value=None)
+    ac.get_users_cached = AsyncMock(return_value=[])
+    ac.get_all_credentials_cached = AsyncMock(return_value=[])
+    ac.get_users = AsyncMock(return_value=[])
+    ac.get_all_credentials = AsyncMock(return_value=[])
+    with patch.object(type(lock_schlage_be469), "access_control", ac):
+        yield ac
