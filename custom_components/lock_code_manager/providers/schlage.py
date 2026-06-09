@@ -414,7 +414,7 @@ class SchlageLock(BaseLock):
                 )
 
         LOGGER.debug(
-            "Lock %s: set usercode on slot %s",
+            "Lock %s: set Personal Identification Number credential on slot %s",
             self.lock.entity_id,
             code_slot,
         )
@@ -450,7 +450,7 @@ class SchlageLock(BaseLock):
             await self._async_delete_code(target_name)
 
         LOGGER.debug(
-            "Lock %s: cleared usercode from slot %s",
+            "Lock %s: deleted Personal Identification Number credential on slot %s",
             self.lock.entity_id,
             code_slot,
         )

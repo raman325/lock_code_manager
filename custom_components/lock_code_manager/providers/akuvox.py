@@ -376,7 +376,7 @@ class AkuvoxLock(BaseLock):
                 await self._async_add_user(tagged_name, usercode)
 
         LOGGER.debug(
-            "Lock %s: set usercode on slot %s",
+            "Lock %s: set Personal Identification Number credential on slot %s",
             self.lock.entity_id,
             code_slot,
         )
@@ -407,7 +407,7 @@ class AkuvoxLock(BaseLock):
 
             await self._async_delete_user(target_device_id)
         LOGGER.debug(
-            "Lock %s: cleared usercode from slot %s",
+            "Lock %s: deleted Personal Identification Number credential on slot %s",
             self.lock.entity_id,
             code_slot,
         )
