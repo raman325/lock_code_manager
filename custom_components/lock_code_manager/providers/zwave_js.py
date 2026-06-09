@@ -266,6 +266,13 @@ class ZWaveJSLock(BaseLock):
 
         return True, ""
 
+    # --- Legacy User Code CC push path (interim; replaced in PR 4 Task 4) ---
+    # The methods below (code_slot_in_use, _handle_usercode_*, the User Code CC
+    # value-event subscription in setup_push_subscription, and the
+    # _set_in_progress_code_slot duplicate-notification sniffing) still observe
+    # the legacy User Code CC value events. Task 4 replaces them with
+    # access-control credential node events; they are kept here only so the
+    # provider keeps receiving push updates until that lands.
     def code_slot_in_use(self, code_slot: int) -> bool | None:
         """Return whether a code slot is in use."""
         try:
@@ -499,5 +506,5 @@ class ZWaveJSLock(BaseLock):
             await self.node.access_control.get_users()
             await self.node.access_control.get_all_credentials()
         except Exception as err:
-            raise LockDisconnected from err
+            raise LockDisconnected(f"hard refresh failed: {err}") from err
         return await self.async_get_usercodes()

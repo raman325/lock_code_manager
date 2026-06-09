@@ -74,6 +74,21 @@ async def test_node_property(
     assert node.node_id == lock_schlage_be469.node_id
 
 
+async def test_setup_is_idempotent(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    lock_code_manager_config_entry: MockConfigEntry,
+) -> None:
+    """Test that async_setup clears old listeners before re-registering."""
+    await zwave_js_lock.async_setup(lock_code_manager_config_entry)
+    assert len(zwave_js_lock._listeners) >= 1
+    count_after_first = len(zwave_js_lock._listeners)
+
+    # Call again -- should not accumulate listeners.
+    await zwave_js_lock.async_setup(lock_code_manager_config_entry)
+    assert len(zwave_js_lock._listeners) == count_after_first
+
+
 # Connection tests
 
 
