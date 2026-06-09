@@ -228,7 +228,7 @@ class ZWaveJSLock(BaseLock):
                 # after a single transient disconnect.
                 pass
             else:
-                self._max_user_name_length = raw_caps.get("max_user_name_length", 0)
+                self._max_user_name_length = raw_caps.get("max_user_name_length")
         max_name_len: int = self._max_user_name_length or 0
         # Enforce the lock's name length constraint:
         # - max_name_len == 0: the lock does not support user names; omit it
