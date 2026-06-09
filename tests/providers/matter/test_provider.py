@@ -1474,6 +1474,44 @@ class TestSetUser:
         ):
             await matter_lock_simple.async_set_user(user)
 
+    async def test_set_user_update_tolerates_name_set_failure(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+    ) -> None:
+        """
+        UPDATE branch: name-set failure is logged as a warning and the
+        existing user_index is returned, so the orchestration still
+        proceeds to write the credential.
+
+        This preserves the historical contract from PR #1077 — the
+        DoorLock SetUser command on an existing user is a metadata-only
+        update (the user already exists), and a transient 500 or a name
+        the lock rejects should not block the subsequent credential
+        write. Regression guard against treating that failure as
+        LockDisconnected and aborting _put_credential.
+        """
+        mock_get_status = AsyncMock(
+            return_value={"credential_exists": True, "user_index": 7}
+        )
+        mock_set_user = AsyncMock(side_effect=HomeAssistantError("500"))
+        user = User(user_id=2, name="Updated Name")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", mock_get_status),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        # Existing user_index returned; created=False so no rollback in
+        # the seam if the credential write itself fails downstream.
+        assert result == SetUserResult(user_id=7, created=False)
+        mock_set_user.assert_called_once()
+        assert "failed to update user name" in caplog.text
+
     async def test_set_user_orphan_guard_raises(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:

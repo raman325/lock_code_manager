@@ -302,6 +302,12 @@ class MatterLock(BaseLock):
 
         if credential_exists and existing_user_index is not None:
             # UPDATE: the slot is occupied — modify the existing user record.
+            # set_lock_user here is a metadata-only name update. The historical
+            # Matter contract (PR #1077) tolerated name-set failures so a
+            # transient 500 or a name the lock rejects does not block the
+            # subsequent credential write; the user still exists at the
+            # known index, the only thing lost is the name update. Log a
+            # warning and fall through.
             try:
                 await set_lock_user(
                     client,
@@ -309,15 +315,15 @@ class MatterLock(BaseLock):
                     user_index=existing_user_index,
                     user_name=user.name,
                 )
-            except ServiceValidationError as err:
-                raise LockOperationFailed(
-                    f"Matter set_lock_user rejected input for "
-                    f"{self.lock.entity_id}: {err}"
-                ) from err
             except HomeAssistantError as err:
-                raise LockDisconnected(
-                    f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
-                ) from err
+                LOGGER.warning(
+                    "Lock %s: failed to update user name on slot %s "
+                    "(user_index=%s); continuing without name update: %s",
+                    self.lock.entity_id,
+                    user.user_id,
+                    existing_user_index,
+                    err,
+                )
             return SetUserResult(user_id=existing_user_index, created=False)
 
         # CREATE: the slot is empty — let Matter auto-allocate a user_index.
