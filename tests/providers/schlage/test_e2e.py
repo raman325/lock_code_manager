@@ -67,7 +67,7 @@ class TestSetAndClearCredentials:
         assert result is True
         assert schlage_mock_services["add_code"].call_count >= 1
         add_call = schlage_mock_services["add_code"].call_args[0][0]
-        assert add_call.data["name"] == "[LCM:1] Test User"
+        assert add_call.data["name"] == "lcm:1:Test User"
         assert add_call.data["code"] == "9999"
 
     async def test_delete_credential(
@@ -84,7 +84,7 @@ class TestSetAndClearCredentials:
         schlage_mock_services["get_codes"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "code1": {"name": "[LCM:1] Guest", "code": "****"},
+                    "code1": {"name": "lcm:1:Guest", "code": "****"},
                 },
             }
         )
@@ -113,7 +113,7 @@ class TestSetAndClearCredentials:
         # internal returns None (fires coordinator refresh) — check service call
         assert schlage_mock_services["add_code"].call_count >= 1
         add_call = schlage_mock_services["add_code"].call_args[0][0]
-        assert add_call.data["name"] == "[LCM:1] Test User"
+        assert add_call.data["name"] == "lcm:1:Test User"
         assert add_call.data["code"] == "9999"
 
     async def test_coordinator_reflects_set_credential(
@@ -135,7 +135,7 @@ class TestSetAndClearCredentials:
         schlage_mock_services["get_codes"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "code1": {"name": "[LCM:1] Test User", "code": "****"},
+                    "code1": {"name": "lcm:1:Test User", "code": "****"},
                 },
             }
         )
@@ -193,7 +193,7 @@ class TestGetUsers:
         schlage_mock_services["get_codes"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "code1": {"name": "[LCM:1] Guest", "code": "****"},
+                    "code1": {"name": "lcm:1:Guest", "code": "****"},
                 },
             }
         )
@@ -225,7 +225,7 @@ class TestGetUsers:
         schlage_mock_services["get_codes"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "code1": {"name": "[LCM:1] Guest", "code": "****"},
+                    "code1": {"name": "lcm:1:Guest", "code": "****"},
                 },
             }
         )

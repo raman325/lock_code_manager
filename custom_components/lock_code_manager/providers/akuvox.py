@@ -28,7 +28,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import make_legacy_tagged_name as _make_tagged_name, parse_tag as _parse_tag
+from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER
 
 AKUVOX_DOMAIN = "local_akuvox"

@@ -61,9 +61,9 @@ class TestHelperFunctions:
     @pytest.mark.parametrize(
         ("slot", "name", "expected"),
         [
-            pytest.param(1, "Guest", "[LCM:1] Guest", id="with-name"),
-            pytest.param(5, None, "[LCM:5] Code Slot 5", id="without-name"),
-            pytest.param(3, None, "[LCM:3] Code Slot 3", id="none-name"),
+            pytest.param(1, "Guest", "lcm:1:Guest", id="with-name"),
+            pytest.param(5, None, "lcm:5:Code Slot 5", id="without-name"),
+            pytest.param(3, None, "lcm:3:Code Slot 3", id="none-name"),
         ],
     )
     def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
@@ -275,7 +275,7 @@ class TestGetUsers:
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
-                    make_user("400", "[LCM:1] Empty Slot", ""),
+                    make_user("400", "lcm:1:Empty Slot", ""),
                 ],
             },
         }
@@ -297,7 +297,7 @@ class TestGetUsers:
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
-                    make_user("500", "[LCM:99] Outside", "5555"),
+                    make_user("500", "lcm:99:Outside", "5555"),
                 ],
             },
         }
@@ -322,7 +322,7 @@ class TestGetUsers:
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
-                    make_user("100", "[LCM:1] Guest", "4321"),
+                    make_user("100", "lcm:1:Guest", "4321"),
                 ],
             },
         }
@@ -348,6 +348,50 @@ class TestSetCredential:
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
         """Test setting a credential without a name preserves the existing name."""
+        list_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    make_user("100", "lcm:1:Guest", "1234"),
+                ],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
+        )
+
+        modify_calls: list[dict[str, Any]] = []
+
+        async def _capture_modify(call):
+            modify_calls.append(dict(call.data))
+
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
+        )
+
+        result = await akuvox_lock.async_set_credential(
+            1,
+            _pin_cred(1, "9999"),
+            "9999",
+            name=None,
+            source="direct",
+        )
+
+        assert result is True
+        assert modify_calls[0]["name"] == "lcm:1:Guest"
+
+    async def test_set_credential_migrates_legacy_format_tag_on_write(
+        self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
+    ) -> None:
+        """
+        Touching a legacy ``[LCM:<slot>]``-tagged user rewrites it to canonical.
+
+        Pre-PR-C installs have users named ``[LCM:1] Guest``. The
+        tolerant parser (added in #1238) discovers them by slot, so
+        the provider finds the user at slot 1; the rewrite happens
+        implicitly because ``_make_tagged_name`` now produces the
+        canonical format. The next modify_user call carries the
+        canonical name, completing the per-user migration.
+        """
         list_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -377,7 +421,8 @@ class TestSetCredential:
         )
 
         assert result is True
-        assert modify_calls[0]["name"] == "[LCM:1] Guest"
+        # Friendly portion preserved verbatim; only the format changed.
+        assert modify_calls[0]["name"] == "lcm:1:Guest"
 
     async def test_set_credential_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
@@ -431,7 +476,7 @@ class TestDeleteCredential:
         list_response = {
             LOCK_ENTITY_ID: {
                 "users": [
-                    make_user("100", "[LCM:1] Guest", "1234"),
+                    make_user("100", "lcm:1:Guest", "1234"),
                 ],
             },
         }
@@ -557,7 +602,7 @@ class TestAutoTagging:
 
         assert len(modify_calls) == 1
         assert modify_calls[0]["id"] == "200"
-        assert modify_calls[0]["name"] == "[LCM:1] Visitor"
+        assert modify_calls[0]["name"] == "lcm:1:Visitor"
 
     async def test_failed_modify_does_not_consume_slot(
         self,
@@ -596,7 +641,7 @@ class TestAutoTagging:
         # First modify failed so slot 1 should be reused for the second user
         assert len(modify_calls) == 1
         assert modify_calls[0]["id"] == "201"
-        assert modify_calls[0]["name"] == "[LCM:1] Visitor B"
+        assert modify_calls[0]["name"] == "lcm:1:Visitor B"
 
     async def test_no_managed_slots_is_noop(
         self,
@@ -730,7 +775,7 @@ class TestHardRefresh:
         }
         tagged_response = {
             LOCK_ENTITY_ID: {
-                "users": [make_user("200", "[LCM:1] Visitor", "9999")],
+                "users": [make_user("200", "lcm:1:Visitor", "9999")],
             },
         }
         list_handler = AsyncMock(side_effect=[untagged_response, tagged_response])
@@ -777,7 +822,7 @@ class TestBaseOrchestration:
         # After setting, the mock now returns the tagged user with the PIN
         after_response = {
             LOCK_ENTITY_ID: {
-                "users": [make_user("100", "[LCM:1] base_test", "7777")],
+                "users": [make_user("100", "lcm:1:base_test", "7777")],
             },
         }
         register_mock_service(
@@ -797,7 +842,7 @@ class TestBaseOrchestration:
         """async_delete_credential + async_get_usercodes base projection shows empty."""
         with_user = {
             LOCK_ENTITY_ID: {
-                "users": [make_user("100", "[LCM:1] Guest", "1234")],
+                "users": [make_user("100", "lcm:1:Guest", "1234")],
             },
         }
         register_mock_service(
