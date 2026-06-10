@@ -347,11 +347,13 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test that async_internal_clear_usercode drives the base drop-credential lifecycle.
+    Test that async_internal_clear_usercode deletes only the credential.
 
-    With supports_native_users=True, the base class resolves the credential owner
-    from async_get_users, then calls async_delete_credential and (when the user has no
-    remaining credentials) async_delete_user.
+    With supports_native_users=True the base class resolves the credential
+    owner from async_get_users and calls async_delete_credential. The user
+    record is now an LCM-managed slot anchor (per the user-tag idempotency
+    design) and survives PIN clear cycles -- teardown happens only via
+    async_release_managed_slot when the slot itself is removed from LCM.
     """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -384,10 +386,7 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
     await zwave_js_lock.async_internal_clear_usercode(1, source="sync")
 
     mock_lock_helpers["async_delete_credential"].assert_called_once()
-    # The user had exactly one credential so it should be deleted too
-    mock_lock_helpers["async_delete_user"].assert_called_once_with(
-        zwave_js_lock.node, 1
-    )
+    mock_lock_helpers["async_delete_user"].assert_not_called()
 
 
 # Device availability tests
@@ -1009,13 +1008,18 @@ async def test_async_set_user_writes_name_verbatim(
     )
 
 
-async def test_async_set_usercode_truncates_name_to_lock_limit(
+async def test_async_set_usercode_builds_tagged_name_within_lock_limit(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """End-to-end: ``async_set_usercode`` truncates per the cached limit."""
+    """End-to-end: ``async_set_usercode`` writes the LCM-tagged user name.
+
+    The base seam builds ``lcm:<slot>:<display>`` via
+    ``_build_tagged_user_name``, truncating the display so the full
+    tagged name fits the lock's advertised ``max_user_name_length``.
+    """
     lcm_entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -1029,7 +1033,8 @@ async def test_async_set_usercode_truncates_name_to_lock_limit(
         "supports_user_management": True,
         "max_users": 30,
         "supported_user_types": [],
-        "max_user_name_length": 5,
+        # "lcm:1:" prefix is 6 chars; 10-char limit leaves 4 for the display.
+        "max_user_name_length": 10,
         "supported_credential_rules": [],
         "supported_credential_types": {
             pin_type_str: {
@@ -1043,13 +1048,14 @@ async def test_async_set_usercode_truncates_name_to_lock_limit(
     mock_access_control.get_user_cached.return_value = None
     mock_lock_helpers["async_set_user"].return_value = {"user_id": 1}
 
-    # "alexandra" (9 chars) → truncated to "alexa" (5 chars) by the base.
+    # "alexandra" (9 chars) is the display; only "alex" fits after the
+    # tag prefix, so the lock-side name becomes "lcm:1:alex".
     await zwave_js_lock.async_set_usercode(1, "1234", name="alexandra")
 
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
         user_id=1,
-        user_name="alexa",
+        user_name="lcm:1:alex",
         active=True,
     )
 
