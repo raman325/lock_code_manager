@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.lock_code_manager.providers._util import (
-    make_new_tagged_name,
+    make_legacy_tagged_name,
     make_tagged_name,
     parse_slot_num,
     parse_tag,
@@ -14,7 +14,24 @@ from custom_components.lock_code_manager.providers._util import (
 
 
 class TestMakeTaggedName:
-    """Legacy ``[LCM:<slot>]`` builder; preserved for Schlage/Akuvox writes."""
+    """Canonical ``lcm:<slot>:`` builder."""
+
+    @pytest.mark.parametrize(
+        ("slot", "name", "expected"),
+        [
+            pytest.param(1, "Guest", "lcm:1:Guest", id="with-name"),
+            pytest.param(5, None, "lcm:5:Code Slot 5", id="default-name"),
+            pytest.param(255, "X", "lcm:255:X", id="max-slot-min-name"),
+            pytest.param(7, "Bob Jones", "lcm:7:Bob Jones", id="multi-word"),
+            pytest.param(3, "", "lcm:3:Code Slot 3", id="empty-name-uses-default"),
+        ],
+    )
+    def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
+        assert make_tagged_name(slot, name) == expected
+
+
+class TestMakeLegacyTaggedName:
+    """Deprecated ``[LCM:<slot>]`` builder; preserved for Schlage/Akuvox writes."""
 
     @pytest.mark.parametrize(
         ("slot", "name", "expected"),
@@ -26,27 +43,10 @@ class TestMakeTaggedName:
             ),
         ],
     )
-    def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
-        assert make_tagged_name(slot, name) == expected
-
-
-class TestMakeNewTaggedName:
-    """New compact ``lcm<slot>:`` builder."""
-
-    @pytest.mark.parametrize(
-        ("slot", "name", "expected"),
-        [
-            pytest.param(1, "Guest", "lcm1:Guest", id="with-name"),
-            pytest.param(5, None, "lcm5:Code Slot 5", id="default-name"),
-            pytest.param(255, "X", "lcm255:X", id="max-slot-min-name"),
-            pytest.param(7, "Bob Jones", "lcm7:Bob Jones", id="multi-word"),
-            pytest.param(3, "", "lcm3:Code Slot 3", id="empty-name-uses-default"),
-        ],
-    )
-    def test_make_new_tagged_name(
+    def test_make_legacy_tagged_name(
         self, slot: int, name: str | None, expected: str
     ) -> None:
-        assert make_new_tagged_name(slot, name) == expected
+        assert make_legacy_tagged_name(slot, name) == expected
 
 
 class TestParseTagWithRewrite:
@@ -56,14 +56,14 @@ class TestParseTagWithRewrite:
         ("input_name", "expected"),
         [
             # New format -- no rewrite needed.
-            pytest.param("lcm1:Guest", (1, "Guest", False), id="new-simple"),
-            pytest.param("lcm255:Family", (255, "Family", False), id="new-large-slot"),
+            pytest.param("lcm:1:Guest", (1, "Guest", False), id="new-simple"),
+            pytest.param("lcm:255:Family", (255, "Family", False), id="new-large-slot"),
             pytest.param(
-                "lcm7:Bob Jones", (7, "Bob Jones", False), id="new-multi-word"
+                "lcm:7:Bob Jones", (7, "Bob Jones", False), id="new-multi-word"
             ),
-            pytest.param("lcm5:", (5, "", False), id="new-empty-display"),
+            pytest.param("lcm:5:", (5, "", False), id="new-empty-display"),
             pytest.param(
-                "lcm5:lcm6:nested",
+                "lcm:5:lcm6:nested",
                 (5, "lcm6:nested", False),
                 id="new-display-looks-like-tag",
             ),
@@ -114,7 +114,7 @@ class TestParseTagWithRewrite:
         # The new-format regex matches eagerly from the start of the string;
         # the legacy regex would not match this input, but the test asserts
         # that the new-format check runs first.
-        assert parse_tag_with_rewrite("lcm5:[LCM:6] x") == (5, "[LCM:6] x", False)
+        assert parse_tag_with_rewrite("lcm:5:[LCM:6] x") == (5, "[LCM:6] x", False)
 
 
 class TestParseTag:
@@ -123,7 +123,7 @@ class TestParseTag:
     @pytest.mark.parametrize(
         ("input_name", "expected"),
         [
-            pytest.param("lcm5:Alice", (5, "Alice"), id="new-format"),
+            pytest.param("lcm:5:Alice", (5, "Alice"), id="new-format"),
             pytest.param("[LCM:5] Alice", (5, "Alice"), id="legacy-format"),
             pytest.param("Alice", (None, "Alice"), id="untagged"),
             pytest.param("", (None, ""), id="empty"),
