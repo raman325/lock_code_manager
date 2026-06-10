@@ -1,0 +1,35 @@
+so nothing from 1225 to address?
+
+---
+
+pull latest from 1227. I don't think we need to loop twice in async_get_users. In fact, I think we should store all credential types regardless of what type they are and filter as needed. We have to do that anyway right?
+
+---
+
+lets do A now since we only support PIN, but add B as a TODO as part of expanding beyond PINs. at a minimum, I think we want to expand to passwords because the z-wave user credential CC supports it. I am just not sure how to think about it or how to model it from a user/configuration standpoint
+
+---
+
+two things we need to figure out as part of this transition:
+1. what happens the first time someone upgrades to use this from their existing configuration?
+2. what happens if there is an existing user with multiple existing credentials that we now want to manage. Do we just clear the PINs? Probably, but give me your thoughts
+
+---
+
+for 700/800, we should check that the user name matches as well and fix that if not (user name based on max characters supported). for 500, the question is do we need to know the CC? the point of the abstract API is to not have to know this
+
+---
+
+also we don't want to drop support for anything. We are adding support for a new CC but its not a good idea to drop support for older versions when the majority of users will be using said older versions
+
+---
+
+for the gap, I think in sync/out of sync should be based on both name and the credentials right? We can smartly only set the thing we need to, but until they are all set and matching what we expect, they should be out of sync. For capabilities, zwave hardcodes support_user_management to True so the clue is supports_user_management but max_length of the name is 0. In this case zwave-js is projecting the slot into a user and pin pair
+
+---
+
+wait so did we actually check through zwave-js back through the API to check what is_supported means? I think it means that it's either User Code or User Credential CC. It's important to trace the code through both the library (../zwave-js-server-python), the server (../zwave-js-server), and potentially the driver (../node-zwave-js)
+
+---
+
+pull latest in each before searching
