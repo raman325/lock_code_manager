@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2a0cca3bc821",
+  "strategy": "manual-commit",
+  "branch": "feat/akuvox-schlage-tag-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/schlage.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/0cca3bc821/0/metadata.json",
+      "transcript": "/2a/0cca3bc821/0/full.jsonl",
+      "content_hash": "/2a/0cca3bc821/0/content_hash.txt",
+      "prompt": "/2a/0cca3bc821/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2737,
+    "cache_creation_tokens": 4768642,
+    "cache_read_tokens": 743338196,
+    "output_tokens": 1006736,
+    "api_call_count": 1511
+  }
+}

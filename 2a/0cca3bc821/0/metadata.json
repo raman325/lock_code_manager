@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "2a0cca3bc821",
+  "session_id": "f007f8e0-8e15-49f8-9b78-ca4730e9a56f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T21:01:05.333211Z",
+  "branch": "feat/akuvox-schlage-tag-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/schlage.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "b711ca78cd45",
+  "token_usage": {
+    "input_tokens": 2737,
+    "cache_creation_tokens": 4768642,
+    "cache_read_tokens": 743338196,
+    "output_tokens": 1006736,
+    "api_call_count": 1511
+  },
+  "session_metrics": {
+    "turn_count": 81
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T21:01:02.555373Z",
+    "agent_lines": 0,
+    "human_added": 179,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 179,
+    "agent_percentage": 0
+  }
+}
