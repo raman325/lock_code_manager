@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
+    LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
 )
@@ -321,6 +322,115 @@ async def test_project_users_to_slots_is_type_parametric(
         2: SlotCredential.empty(),
         3: SlotCredential.known("hunter2"),
     }
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Base capability-derived helpers
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _caps(
+    *, supports_user_management: bool, max_user_name_length: int
+) -> LockCapabilities:
+    return LockCapabilities(
+        supports_user_management=supports_user_management,
+        max_users=30,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=30,
+                min_length=4,
+                max_length=8,
+                supports_learn=False,
+            ),
+        },
+        max_user_name_length=max_user_name_length,
+    )
+
+
+async def test_supports_user_records_true_when_management_and_named(
+    hass: HomeAssistant,
+) -> None:
+    """``supports_user_management AND max_user_name_length > 0`` → True."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_supports_users_true")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=16
+    )
+    assert await lock._supports_user_records() is True
+
+
+async def test_supports_user_records_false_when_max_name_length_zero(
+    hass: HomeAssistant,
+) -> None:
+    """Implicit-user lock (e.g. Z-Wave User Code CC) → False."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_supports_users_uc")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=0
+    )
+    assert await lock._supports_user_records() is False
+
+
+async def test_supports_user_records_false_when_management_disabled(
+    hass: HomeAssistant,
+) -> None:
+    """A lock that doesn't expose user management → False."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_supports_users_no_mgmt")
+    lock._capabilities_cache = _caps(
+        supports_user_management=False, max_user_name_length=16
+    )
+    assert await lock._supports_user_records() is False
+
+
+async def test_truncate_user_name_within_limit_is_unchanged(
+    hass: HomeAssistant,
+) -> None:
+    """A name within ``max_user_name_length`` passes through unchanged."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_within")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=16
+    )
+    assert await lock._truncate_user_name("alice") == "alice"
+
+
+async def test_truncate_user_name_truncates_to_limit(hass: HomeAssistant) -> None:
+    """A name longer than ``max_user_name_length`` is truncated."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_long")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=5
+    )
+    assert await lock._truncate_user_name("alexandra") == "alexa"
+
+
+async def test_truncate_user_name_returns_none_when_max_zero(
+    hass: HomeAssistant,
+) -> None:
+    """Locks without named users drop the name entirely."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_zero")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=0
+    )
+    assert await lock._truncate_user_name("alice") is None
+
+
+async def test_truncate_user_name_none_input_is_none(hass: HomeAssistant) -> None:
+    """A ``None`` name stays ``None`` without touching the capability cache."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_none")
+    # No capabilities cache primed; helper short-circuits on None input.
+    assert await lock._truncate_user_name(None) is None
+
+
+async def test_truncate_user_name_returns_none_when_caps_fetch_fails(
+    hass: HomeAssistant,
+) -> None:
+    """Caps-read failure falls back to None instead of blocking the write."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_fail")
+    with patch.object(
+        type(lock),
+        "async_get_capabilities",
+        AsyncMock(side_effect=LockDisconnected("unreachable")),
+    ):
+        assert await lock._truncate_user_name("alice") is None
+    # Cache stays unset so the next call retries.
+    assert lock._capabilities_cache is None
 
 
 async def test_set_usercode_native_user_first_and_threads_id(

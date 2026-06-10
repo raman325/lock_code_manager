@@ -1028,6 +1028,35 @@ class BaseLock:
             self._capabilities_cache = await self.async_get_capabilities()
         return self._capabilities_cache
 
+    async def _supports_user_records(self) -> bool:
+        """
+        Return whether the lock exposes a separate user-record write path.
+
+        False covers both no-user-management locks and the implicit-user
+        case (e.g. Z-Wave User Code CC: the user IS the credential).
+        """
+        caps = await self._get_cached_capabilities()
+        return caps.supports_user_management and caps.max_user_name_length > 0
+
+    async def _truncate_user_name(self, name: str | None) -> str | None:
+        """
+        Truncate ``name`` to the lock's advertised user-name length.
+
+        Returns ``None`` when the lock has no concept of named users
+        (``max_user_name_length == 0``). A best-effort capabilities-fetch
+        failure also returns ``None`` rather than blocking the write --
+        the cache stays unset so the next call retries.
+        """
+        if name is None:
+            return None
+        try:
+            caps = await self._get_cached_capabilities()
+        except LockDisconnected, LockOperationFailed:
+            return None
+        if caps.max_user_name_length <= 0:
+            return None
+        return name[: caps.max_user_name_length]
+
     @final
     async def _put_credential(
         self,
@@ -1046,11 +1075,7 @@ class BaseLock:
         the slot-keyed coordinator can't reconcile. Returns True if the
         value changed.
         """
-        caps = await self._get_cached_capabilities()
-        needs_user_write = (
-            caps.supports_user_management and caps.max_user_name_length > 0
-        )
-        if needs_user_write:
+        if await self._supports_user_records():
             result = await self.async_set_user(user)
             credential_user_id = result.user_id
             rollback_user_id = result.user_id if result.created else None

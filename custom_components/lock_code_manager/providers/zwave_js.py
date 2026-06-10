@@ -9,7 +9,6 @@ provider's role in the data flow.
 from __future__ import annotations
 
 from collections.abc import Callable
-import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -115,10 +114,6 @@ class ZWaveJSLock(BaseLock):
     # subscriptions: registered in ``async_setup``, released in
     # ``async_unload``).
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
-    # Driven by ``async_get_capabilities``. ``None`` means "not yet
-    # queried" so a failed capabilities read retries on the next call
-    # instead of pinning a 0 sentinel that would silently drop names.
-    _max_user_name_length: int | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -220,7 +215,6 @@ class ZWaveJSLock(BaseLock):
             raise LockDisconnected(f"get capabilities failed: {err}") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get capabilities failed: {err}") from err
-        self._max_user_name_length = caps.get("max_user_name_length", 0)
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
         credential_types = (
             {
@@ -238,7 +232,7 @@ class ZWaveJSLock(BaseLock):
             supports_user_management=caps["supports_user_management"],
             max_users=caps["max_users"],
             credential_types=credential_types,
-            max_user_name_length=self._max_user_name_length,
+            max_user_name_length=caps.get("max_user_name_length", 0),
         )
 
     async def async_set_user(self, user: User) -> SetUserResult:
@@ -247,24 +241,9 @@ class ZWaveJSLock(BaseLock):
 
         ``created`` reflects whether the user existed BEFORE this call so
         the base orchestration can roll back a user only newly created
-        here. Names are truncated to the lock's advertised limit.
+        here. Names are truncated via the base helper.
         """
-        # Prime the truncation bound on first call; failures fall through
-        # to the ``max_name_len or 0`` default so a read miss doesn't
-        # block the write.
-        if self._max_user_name_length is None:
-            with contextlib.suppress(LockDisconnected, LockOperationFailed):
-                await self.async_get_capabilities()
-        max_name_len: int = self._max_user_name_length or 0
-        # Enforce the lock's name length constraint:
-        # - max_name_len == 0: the lock does not support user names; omit it
-        # - name exceeds max_name_len: truncate to the allowed length
-        user_name = user.name
-        if user_name is not None:
-            if max_name_len == 0:
-                user_name = None
-            elif len(user_name) > max_name_len:
-                user_name = user_name[:max_name_len]
+        user_name = await self._truncate_user_name(user.name)
         try:
             existing = await self.node.access_control.get_user_cached(user.user_id)
             result = await lock_helpers.async_set_user(
