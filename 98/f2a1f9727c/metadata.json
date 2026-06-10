@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "98f2a1f9727c",
+  "strategy": "manual-commit",
+  "branch": "feat/matter-user-tag-adoption",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/98/f2a1f9727c/0/metadata.json",
+      "transcript": "/98/f2a1f9727c/0/full.jsonl",
+      "content_hash": "/98/f2a1f9727c/0/content_hash.txt",
+      "prompt": "/98/f2a1f9727c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2378,
+    "cache_creation_tokens": 4069731,
+    "cache_read_tokens": 628067348,
+    "output_tokens": 843544,
+    "api_call_count": 1241
+  }
+}
