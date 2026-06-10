@@ -59,6 +59,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
+from ._util import parse_tag
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -237,26 +238,109 @@ class ZWaveJSLock(BaseLock):
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
-        Create or update the lock user; report whether it was created.
+        Find-or-create the lock user for the LCM slot encoded in ``user.name``.
 
-        ``created`` reflects whether the user existed BEFORE this call so
-        the base orchestration can roll back a user only newly created
-        here. Receives ``user`` with a name already truncated to the
-        lock's advertised limit by the base orchestration.
+        The base seam passes a tagged ``user.name`` (``lcm:<slot>:<display>``)
+        whose slot is the LCM-side identity for this credential. The Z-Wave
+        lock's own ``user_id`` is whatever Z-Wave happens to allocate; LCM
+        no longer pins it to the slot. Discovery on every call:
+
+        1. Scan the lock's current user list for a user whose name carries
+           the same ``lcm:<slot>:`` tag.
+        2. If found (UPDATE): rename via ``async_set_user`` with the
+           existing ``user_id``, return that id.
+        3. If not (legacy adoption): scan for an *untagged* user whose
+           ``user_id == slot`` that also owns a PIN at ``credential.slot
+           == slot``. Pre-PR-C LCM pinned ``user_id`` to the slot, so
+           such a user is almost certainly the LCM 2.0 user for this
+           slot. Adopting it preserves a single per-slot anchor across
+           the upgrade.
+        4. Otherwise (CREATE): allocate a fresh ``user_id`` via
+           ``async_set_user(user_id=None)`` (Z-Wave finds first free).
+
+        ``user.user_id`` set by the seam is used only as the slot identity
+        when ``user.name`` is untagged (defensive fallback; the seam
+        always passes a tagged name on this code path).
         """
+        slot = self._slot_from_seam_user(user)
+        existing_user_id = await self._find_user_index_for_slot(slot)
+        write_user_id: int | None = existing_user_id
         try:
-            existing = await self.node.access_control.get_user_cached(user.user_id)
             result = await lock_helpers.async_set_user(
                 self.node,
-                user_id=user.user_id,
+                user_id=write_user_id,
                 user_name=user.name,
                 active=user.active,
             )
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"set user {user.user_id} failed: {err}") from err
+            raise LockDisconnected(f"set user for slot {slot} failed: {err}") from err
         except HomeAssistantError as err:
-            raise LockOperationFailed(f"set user {user.user_id} failed: {err}") from err
-        return SetUserResult(user_id=result["user_id"], created=existing is None)
+            raise LockOperationFailed(
+                f"set user for slot {slot} failed: {err}"
+            ) from err
+        return SetUserResult(
+            user_id=result["user_id"], created=existing_user_id is None
+        )
+
+    def _slot_from_seam_user(self, user: User) -> int:
+        """
+        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
+
+        The base seam always passes a tagged name; this helper centralizes
+        the fallback so the rest of the provider can treat the resolved
+        slot as a single value.
+        """
+        if user.name:
+            slot, _ = parse_tag(user.name)
+            if slot is not None:
+                return slot
+        return user.user_id
+
+    async def _find_user_index_for_slot(self, slot: int) -> int | None:
+        """
+        Return the lock ``user_id`` LCM owns for ``slot``, if any.
+
+        Two lookups, in priority order:
+
+        1. **Canonical** -- a user whose name carries the ``lcm:<slot>:``
+           tag. This is the post-PR-C identity rule.
+        2. **Legacy adoption** -- an *untagged* user whose ``user_id ==
+           slot`` AND who owns a Personal Identification Number
+           credential at ``credential.slot == slot``. Pre-PR-C LCM pinned
+           ``user_id`` to the slot, so a user matching both halves of the
+           old invariant is almost certainly the LCM 2.0 user for this
+           slot. Adopting it (the subsequent ``async_set_user`` rewrites
+           the name to the tagged form) preserves a single identifiable
+           user per slot across the upgrade. Without this fallback the
+           new model would CREATE a second user every time, silently
+           leaving the pre-upgrade Personal Identification Number active
+           on the lock.
+
+           The legacy pass MUST skip users whose names already parse to
+           ANY LCM slot, so a user tagged for slot A is never adopted as
+           slot B's anchor.
+
+        Returns ``None`` when neither lookup matches.
+        """
+        users = await self.async_get_users()
+        try:
+            return next(
+                existing.user_id
+                for existing in users
+                if existing.name and parse_tag(existing.name)[0] == slot
+            )
+        except StopIteration:
+            return next(
+                (
+                    existing.user_id
+                    for existing in users
+                    if existing.user_id == slot
+                    and parse_tag(existing.name or "")[0] is None
+                    for cred in existing.pin_credentials
+                    if cred.slot == slot
+                ),
+                None,
+            )
 
     async def async_delete_user(self, user_id: int) -> None:
         """Delete the lock user (cascades its credentials)."""
