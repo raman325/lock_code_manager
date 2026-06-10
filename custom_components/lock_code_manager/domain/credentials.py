@@ -152,25 +152,39 @@ class User:
     credential_rule: CredentialRule = CredentialRule.SINGLE
     credentials: list[Credential] = field(default_factory=list)
 
-    @property
-    def pin_credentials(self) -> list[Credential]:
-        """Return this user's Personal Identification Number credentials."""
+    def credentials_of_type(self, credential_type: CredentialType) -> list[Credential]:
+        """
+        Return this user's credentials of ``credential_type``.
+
+        Generic per-type accessor used by the base orchestration to project
+        users into a slot-shaped view for a given credential kind. Providers
+        store every type they can map (see each provider's ``async_get_users``);
+        this accessor is the seam where the integration narrows that store to
+        the type the caller cares about, which today is always Personal
+        Identification Number but is wired through here so that adding a
+        second supported type (Z-Wave User Credential CC also exposes
+        ``PASSWORD``) is a caller-side change, not a provider-side change.
+        """
         return [
             credential
             for credential in self.credentials
-            if credential.type is CredentialType.PIN
+            if credential.type is credential_type
         ]
+
+    @property
+    def pin_credentials(self) -> list[Credential]:
+        """
+        Return this user's Personal Identification Number credentials.
+
+        Thin alias for ``credentials_of_type(CredentialType.PIN)``; kept as
+        a property because most call sites are written against the PIN-only
+        world and read cleanly that way.
+        """
+        return self.credentials_of_type(CredentialType.PIN)
 
     def credential_for(self, credential_type: CredentialType) -> Credential | None:
         """Return the first credential of ``credential_type``, else ``None``."""
-        return next(
-            (
-                credential
-                for credential in self.credentials
-                if credential.type is credential_type
-            ),
-            None,
-        )
+        return next(iter(self.credentials_of_type(credential_type)), None)
 
 
 @dataclass(frozen=True, slots=True)

@@ -174,6 +174,34 @@ class TestUser:
         user = User(user_id=3, credentials=[pin, rfid])
         assert user.pin_credentials == [pin]
 
+    def test_credentials_of_type_filters_generically(self) -> None:
+        pin = Credential(
+            type=CredentialType.PIN, slot=1, state=SlotCredential.known("1234")
+        )
+        password = Credential(
+            type=CredentialType.PASSWORD, slot=2, state=SlotCredential.known("hunter2")
+        )
+        rfid = Credential(
+            type=CredentialType.RFID, slot=3, state=SlotCredential.unreadable()
+        )
+        user = User(user_id=3, credentials=[pin, password, rfid])
+        assert user.credentials_of_type(CredentialType.PIN) == [pin]
+        assert user.credentials_of_type(CredentialType.PASSWORD) == [password]
+        assert user.credentials_of_type(CredentialType.RFID) == [rfid]
+        # An unrepresented credential type returns an empty list, not None.
+        assert user.credentials_of_type(CredentialType.NFC) == []
+
+    def test_pin_credentials_delegates_to_credentials_of_type(self) -> None:
+        """pin_credentials is the Personal Identification Number flavor of the generic accessor."""
+        pin = Credential(
+            type=CredentialType.PIN, slot=3, state=SlotCredential.known("1234")
+        )
+        password = Credential(
+            type=CredentialType.PASSWORD, slot=4, state=SlotCredential.known("pwd")
+        )
+        user = User(user_id=3, credentials=[pin, password])
+        assert user.pin_credentials == user.credentials_of_type(CredentialType.PIN)
+
     def test_credential_for_returns_first_match_or_none(self) -> None:
         empty_pin = Credential(
             type=CredentialType.PIN, slot=3, state=SlotCredential.empty()

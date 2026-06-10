@@ -432,17 +432,20 @@ async def test_is_device_available_returns_false_on_exception(
 # Credential API tests (Option B: readable PINs via node.access_control)
 
 
-async def test_async_get_users_maps_users_and_pin_credentials(
+async def test_async_get_users_returns_all_mappable_credential_types(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Test async_get_users returns users with PIN credentials correctly projected.
+    async_get_users returns every credential type the domain represents.
 
-    Given two users and three credentials (two PINs, one non-PIN), the result
-    maps each user to its PIN credentials only. Readable data becomes
-    SlotCredential.known; absent data becomes SlotCredential.unreadable.
+    The base orchestration filters to Personal Identification Number at
+    the slot-projection layer via ``user.pin_credentials``, so the
+    provider stores RFID/NFC/etc. alongside PINs rather than dropping
+    them up front. Readable Personal Identification Number data becomes
+    SlotCredential.known; non-PIN data is opaque to the integration so
+    those credentials surface as SlotCredential.unreadable.
     """
     mock_access_control.get_users_cached.return_value = [
         UserData(
@@ -478,12 +481,21 @@ async def test_async_get_users_maps_users_and_pin_credentials(
             slot=2,
             data=None,
         ),
-        # Non-PIN credential — must be filtered out.
+        # Non-PIN credential — now retained alongside the PIN, surfaced
+        # as unreadable so direct callers see it without exposing an
+        # opaque tag identifier to the slot-projection layer.
         CredentialData(
             user_id=1,
             type=UserCredentialType.RFID_CODE,
             slot=1,
             data="AABB",
+        ),
+        # Z-Wave type with no domain equivalent — dropped.
+        CredentialData(
+            user_id=1,
+            type=UserCredentialType.BLE,
+            slot=2,
+            data="raw",
         ),
     ]
 
@@ -495,20 +507,81 @@ async def test_async_get_users_maps_users_and_pin_credentials(
 
     user1 = next(u for u in users if u.user_id == 1)
     assert user1.name == "alice"
-    assert len(user1.credentials) == 1
-    assert user1.credentials[0] == Credential(
-        type=CredentialType.PIN,
-        slot=1,
-        state=SlotCredential.known("1234"),
-    )
+    # PIN_CODE -> CredentialType.PIN (known), RFID_CODE -> CredentialType.RFID
+    # (unreadable, opaque tag), BLE dropped.
+    assert user1.credentials == [
+        Credential(
+            type=CredentialType.PIN,
+            slot=1,
+            state=SlotCredential.known("1234"),
+        ),
+        Credential(
+            type=CredentialType.RFID,
+            slot=1,
+            state=SlotCredential.unreadable(),
+        ),
+    ]
+    # And pin_credentials still surfaces only the PIN so the base
+    # orchestration's slot projection is unaffected.
+    assert user1.pin_credentials == [
+        Credential(
+            type=CredentialType.PIN,
+            slot=1,
+            state=SlotCredential.known("1234"),
+        ),
+    ]
 
     user2 = next(u for u in users if u.user_id == 2)
-    assert len(user2.credentials) == 1
-    assert user2.credentials[0] == Credential(
-        type=CredentialType.PIN,
-        slot=2,
-        state=SlotCredential.unreadable(),
-    )
+    assert user2.credentials == [
+        Credential(
+            type=CredentialType.PIN,
+            slot=2,
+            state=SlotCredential.unreadable(),
+        ),
+    ]
+
+
+async def test_async_get_users_drops_orphan_credentials(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A credential whose user_id is not in the users list is silently dropped.
+
+    This is the Z-Wave equivalent of a stale credential row that lost its
+    owner; surfacing it under a synthetic user would invent state, so the
+    safer projection is to ignore it and let the next hard refresh clean
+    things up.
+    """
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=1,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="alice",
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = [
+        CredentialData(
+            user_id=1,
+            type=UserCredentialType.PIN_CODE,
+            slot=1,
+            data="1234",
+        ),
+        # Orphan: no matching user record.
+        CredentialData(
+            user_id=99,
+            type=UserCredentialType.PIN_CODE,
+            slot=2,
+            data="9999",
+        ),
+    ]
+
+    users = await zwave_js_lock.async_get_users()
+    assert len(users) == 1
+    assert users[0].user_id == 1
+    assert len(users[0].credentials) == 1
 
 
 async def test_async_get_capabilities_maps_lock_helpers_response(

@@ -242,6 +242,68 @@ async def test_get_usercodes_drops_non_pin_credentials(hass: HomeAssistant) -> N
     assert await lock.async_get_usercodes() == {1: SlotCredential.known("1234")}
 
 
+async def test_project_users_to_slots_is_type_parametric(
+    hass: HomeAssistant,
+) -> None:
+    """
+    The base projection helper isolates one credential type per call.
+
+    Option A wiring: ``async_get_usercodes`` is a thin Personal Identification
+    Number-shaped wrapper over ``_project_users_to_slots``; calling the helper
+    with a different ``CredentialType`` returns the slot view for that type.
+    Regression guard for the chokepoint -- if a future caller needs the
+    Radio Frequency Identification view, it goes through this same code path
+    rather than a parallel projection.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_project_typed")
+    lock._users = {
+        1: User(
+            user_id=1,
+            credentials=[
+                credential_from_slot(1, SlotCredential.known("1234")),
+                Credential(
+                    type=CredentialType.RFID,
+                    slot=2,
+                    state=SlotCredential.unreadable(),
+                ),
+                Credential(
+                    type=CredentialType.PASSWORD,
+                    slot=3,
+                    state=SlotCredential.known("hunter2"),
+                ),
+            ],
+        ),
+    }
+
+    with patch(
+        "custom_components.lock_code_manager.providers._base.get_managed_slots",
+        return_value={1, 2, 3},
+    ):
+        pin_slots = await lock._project_users_to_slots(CredentialType.PIN)
+        rfid_slots = await lock._project_users_to_slots(CredentialType.RFID)
+        password_slots = await lock._project_users_to_slots(CredentialType.PASSWORD)
+        # async_get_usercodes() is the PIN wrapper.
+        assert await lock.async_get_usercodes() == pin_slots
+
+    # Each projection only sees its own credential type; the managed-slot
+    # empty placeholders persist across all of them.
+    assert pin_slots == {
+        1: SlotCredential.known("1234"),
+        2: SlotCredential.empty(),
+        3: SlotCredential.empty(),
+    }
+    assert rfid_slots == {
+        1: SlotCredential.empty(),
+        2: SlotCredential.unreadable(),
+        3: SlotCredential.empty(),
+    }
+    assert password_slots == {
+        1: SlotCredential.empty(),
+        2: SlotCredential.empty(),
+        3: SlotCredential.known("hunter2"),
+    }
+
+
 async def test_set_usercode_native_user_first_and_threads_id(
     hass: HomeAssistant,
 ) -> None:

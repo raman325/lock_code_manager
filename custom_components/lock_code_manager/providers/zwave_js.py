@@ -66,6 +66,23 @@ _LOGGER = logging.getLogger(__name__)
 # in the supported_credential_types dict returned by async_get_credential_capabilities.
 _PIN_TYPE_STR = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
 
+# Z-Wave UserCredentialType -> domain CredentialType. The domain vocabulary
+# is intentionally narrower than the Z-Wave one: types with no domain
+# equivalent (BLE, UWB, DESFIRE, unspecified/eye/hand biometrics) are
+# omitted and silently dropped by async_get_users. The base orchestration
+# only acts on Personal Identification Number credentials today, but the
+# non-PIN types we can represent are surfaced so direct callers (and a
+# future expansion past PIN-only) see the full picture without another
+# read.
+_ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE: dict[UserCredentialType, CredentialType] = {
+    UserCredentialType.PIN_CODE: CredentialType.PIN,
+    UserCredentialType.PASSWORD: CredentialType.PASSWORD,
+    UserCredentialType.RFID_CODE: CredentialType.RFID,
+    UserCredentialType.NFC: CredentialType.NFC,
+    UserCredentialType.FACE_BIOMETRIC: CredentialType.FACE,
+    UserCredentialType.FINGER_BIOMETRIC: CredentialType.FINGERPRINT,
+}
+
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
 ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
@@ -145,7 +162,20 @@ class ZWaveJSLock(BaseLock):
         return SlotCredential.known(data if isinstance(data, str) else data.decode())
 
     async def async_get_users(self) -> list[User]:
-        """Read users and their Personal Identification Number credentials from the lock."""
+        """
+        Read every user and all of their credentials from the lock.
+
+        Returns users carrying every credential type the domain model can
+        represent (Personal Identification Number, Radio Frequency
+        Identification, Near Field Communication, password, face,
+        fingerprint). The base orchestration filters to Personal
+        Identification Number at the slot-projection layer via
+        ``user.pin_credentials``, so this method does no type-specific
+        filtering -- direct callers see the full picture without an
+        extra read. Z-Wave credential types with no domain equivalent
+        (BLE, UWB, DESFIRE, unspecified/eye/hand biometrics) are
+        dropped.
+        """
         try:
             users = await self.node.access_control.get_users_cached()
             credentials = await self.node.access_control.get_all_credentials_cached()
@@ -153,26 +183,34 @@ class ZWaveJSLock(BaseLock):
             raise LockDisconnected(f"get users failed: {err}") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get users failed: {err}") from err
-        pins_by_user: dict[int, list[Credential]] = {}
-        for cred in credentials:
-            if cred.type is not UserCredentialType.PIN_CODE:
-                continue
-            pins_by_user.setdefault(cred.user_id, []).append(
-                Credential(
-                    type=CredentialType.PIN,
-                    slot=cred.slot,
-                    state=self._pin_state(cred.data),
-                )
-            )
-        return [
-            User(
+        users_by_id: dict[int, User] = {
+            user.user_id: User(
                 user_id=user.user_id,
                 name=user.user_name,
                 active=user.active,
-                credentials=pins_by_user.get(user.user_id, []),
             )
             for user in users
-        ]
+        }
+        for cred in credentials:
+            domain_type = _ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE.get(cred.type)
+            owner = users_by_id.get(cred.user_id)
+            if domain_type is None or owner is None:
+                continue
+            # _pin_state decodes the Personal Identification Number value
+            # so the slot-projection sees a comparable string. For other
+            # credential types the data is opaque to Lock Code Manager
+            # (an RFID tag identifier, a biometric hash, ...), so they
+            # surface as unreadable -- "the slot is occupied" without
+            # revealing a value the integration would not act on anyway.
+            state = (
+                self._pin_state(cred.data)
+                if cred.type is UserCredentialType.PIN_CODE
+                else SlotCredential.unreadable()
+            )
+            owner.credentials.append(
+                Credential(type=domain_type, slot=cred.slot, state=state)
+            )
+        return list(users_by_id.values())
 
     async def async_get_capabilities(self) -> LockCapabilities:
         """Report the lock's user/credential capabilities."""

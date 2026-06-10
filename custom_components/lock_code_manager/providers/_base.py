@@ -956,30 +956,59 @@ class BaseLock:
         if changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def _project_users_to_slots(
+        self, credential_type: CredentialType
+    ) -> dict[int, SlotCredential]:
         """
-        Return slot -> ``SlotCredential`` by projecting the lock's users.
+        Project the lock's users to a slot -> ``SlotCredential`` map.
 
-        Every managed slot is present even when empty: the projection starts
-        from ``managed_slots`` mapped to ``SlotCredential.empty()`` and then
-        overlays the Personal Identification Number credentials read via
+        Every managed slot is present even when empty: the projection
+        starts from ``managed_slots`` mapped to ``SlotCredential.empty()``
+        and then overlays the credentials of ``credential_type`` read via
         ``async_get_users``. This preserves the slot-keyed contract the
-        coordinator, sync manager, and slot entities depend on -- a managed
-        slot missing from the map is treated as unavailable, not empty, so the
-        empty placeholders are load-bearing. Occupied slots the lock reports
-        that are not managed are surfaced too. Non-PIN credentials and the user
-        layer are dropped here: the seam keeps everything below it slot-shaped
-        this round.
+        coordinator, sync manager, and slot entities depend on -- a
+        managed slot missing from the map is treated as unavailable, not
+        empty, so the empty placeholders are load-bearing. Occupied slots
+        the lock reports that are not managed are surfaced too.
+        Credentials of other types are dropped here -- the seam keeps
+        everything below it slot-shaped and single-type this round.
+
+        This is the chokepoint for "the base class filters per credential
+        type before passing to the coordinator/entities" (Option A in the
+        design discussion). Adding a second supported type means calling
+        this helper from a second projection method -- providers store
+        every type they can map, so no provider changes are required.
+
+        TODO(option-b): when the integration adds a second supported
+        credential type (Z-Wave User Credential CC also exposes
+        ``PASSWORD``), revisit whether the coordinator/entities should
+        instead be type-scoped from the top -- one set of slot entities
+        per credential type -- rather than threading the type through a
+        single projection. The provider-side model is already ready for
+        that move; the open question is configuration / user experience
+        (do users configure "PIN slots 1-10" and "password slots 1-5"
+        separately, or is each slot polymorphic?).
         """
         codes = {slot: SlotCredential.empty() for slot in self.managed_slots}
         codes.update(
             {
                 credential.slot: credential.state
                 for user in await self.async_get_users()
-                for credential in user.pin_credentials
+                for credential in user.credentials_of_type(credential_type)
             }
         )
         return codes
+
+    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+        """
+        Return the slot -> ``SlotCredential`` map for Personal Identification Numbers.
+
+        Thin Personal-Identification-Number-shaped wrapper over
+        ``_project_users_to_slots``; preserved as a stable name because
+        the coordinator, sync manager, and slot entities are all
+        Personal Identification Number-scoped today.
+        """
+        return await self._project_users_to_slots(CredentialType.PIN)
 
     @final
     async def _put_credential(
