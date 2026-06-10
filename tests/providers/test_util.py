@@ -63,6 +63,16 @@ class TestParseTagWithRewrite:
             ),
             pytest.param("lcm:5:", (5, "", False), id="new-empty-display"),
             pytest.param(
+                "lcm:5: Alice",
+                (5, "Alice", False),
+                id="new-trims-whitespace-after-colon",
+            ),
+            pytest.param(
+                "lcm:5:   Alice",
+                (5, "Alice", False),
+                id="new-trims-multiple-whitespace-after-colon",
+            ),
+            pytest.param(
                 "lcm:5:lcm6:nested",
                 (5, "lcm6:nested", False),
                 id="new-display-looks-like-tag",
@@ -105,15 +115,17 @@ class TestParseTagWithRewrite:
     ) -> None:
         assert parse_tag_with_rewrite(input_name) == expected
 
-    def test_new_format_preferred_when_ambiguous(self) -> None:
-        """A name that happens to satisfy both regexes uses the new format match.
+    def test_canonical_prefix_wins_when_display_contains_legacy_text(self) -> None:
+        """The canonical prefix is consumed first; the display is taken verbatim.
 
-        Not a realistic name, but pins the precedence so reviewers know which
-        branch wins if the parser is fed an oddball value.
+        Both regexes are anchored to the start of the string, so only one can
+        match a given input -- this isn't an ambiguity case. The test pins the
+        intended behavior when the *display portion* (everything after
+        ``lcm:<slot>:``) happens to contain something that looks like a legacy
+        tag: the canonical prefix wins, slot 5 is the LCM slot, and the rest
+        (including the literal ``[LCM:6] x``) is returned as the friendly name
+        without further parsing.
         """
-        # The new-format regex matches eagerly from the start of the string;
-        # the legacy regex would not match this input, but the test asserts
-        # that the new-format check runs first.
         assert parse_tag_with_rewrite("lcm:5:[LCM:6] x") == (5, "[LCM:6] x", False)
 
 

@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
-_TAG_RE = re.compile(r"^lcm:(\d+):(.*)")
+_TAG_RE = re.compile(r"^lcm:(\d+):\s*(.*)")
 
 
 def make_tagged_name(slot_num: int, name: str | None = None) -> str:
