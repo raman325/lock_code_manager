@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e3e46bb437b7",
+  "session_id": "f007f8e0-8e15-49f8-9b78-ca4730e9a56f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T20:17:56.798981Z",
+  "branch": "docs/readme-ai-usage",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "135eac7f8954",
+  "token_usage": {
+    "input_tokens": 2565,
+    "cache_creation_tokens": 4353123,
+    "cache_read_tokens": 709012335,
+    "output_tokens": 932254,
+    "api_call_count": 1384
+  },
+  "session_metrics": {
+    "turn_count": 76
+  }
+}

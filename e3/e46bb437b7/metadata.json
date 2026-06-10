@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e3e46bb437b7",
+  "strategy": "manual-commit",
+  "branch": "docs/readme-ai-usage",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e3/e46bb437b7/0/metadata.json",
+      "transcript": "/e3/e46bb437b7/0/full.jsonl",
+      "content_hash": "/e3/e46bb437b7/0/content_hash.txt",
+      "prompt": "/e3/e46bb437b7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2565,
+    "cache_creation_tokens": 4353123,
+    "cache_read_tokens": 709012335,
+    "output_tokens": 932254,
+    "api_call_count": 1384
+  }
+}
