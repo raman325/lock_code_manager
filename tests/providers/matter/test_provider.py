@@ -33,6 +33,8 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.matter import (
     MatterLock,
     SetCredentialFailedError,
+    _lcm_slot_from_raw_users_by_credential_index,
+    _lcm_slot_from_raw_users_by_user_index,
 )
 from tests.providers.helpers import ServiceProviderConnectionTests
 
@@ -491,6 +493,55 @@ async def test_require_client_and_node_no_node(
 
 
 # =============================================================================
+# Tag resolver helpers (pure functions over the raw user list)
+# =============================================================================
+
+
+class TestLcmSlotResolvers:
+    """Unit tests for ``_lcm_slot_from_raw_users_by_*`` helpers."""
+
+    _USERS: list[dict[str, Any]] = [
+        {
+            "user_index": 1,
+            "user_name": "lcm:5:Alice",
+            "credentials": [{"type": "pin", "index": 7}],
+        },
+        {
+            "user_index": 2,
+            "user_name": "External",  # untagged
+            "credentials": [{"type": "pin", "index": 3}],
+        },
+        {
+            "user_index": 3,
+            "user_name": "lcm:8:Bob",
+            "credentials": [],  # no credentials -- persistent anchor
+        },
+    ]
+
+    def test_by_user_index_resolves_tagged(self) -> None:
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 1) == 5
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 3) == 8
+
+    def test_by_user_index_returns_none_for_untagged(self) -> None:
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 2) is None
+
+    def test_by_user_index_returns_none_for_unknown(self) -> None:
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 99) is None
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, None) is None
+
+    def test_by_credential_index_resolves_tagged(self) -> None:
+        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 7) == 5
+
+    def test_by_credential_index_returns_none_for_untagged_owner(self) -> None:
+        # credential index 3 belongs to "External" (untagged) -- resolves to None.
+        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 3) is None
+
+    def test_by_credential_index_returns_none_for_unknown(self) -> None:
+        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 99) is None
+        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, None) is None
+
+
+# =============================================================================
 # LockOperation event tests
 # =============================================================================
 
@@ -515,119 +566,358 @@ def _make_node_event(
 
 
 class TestLockOperationEvent:
-    """Test _on_node_event callback filtering and event firing."""
+    """Test _handle_lock_operation callback and code-slot event firing."""
 
-    def test_unlock_with_pin_credential(self, matter_lock_simple: MatterLock) -> None:
-        """Unlock with PIN credential fires code slot event."""
+    @pytest.fixture(autouse=True)
+    def _stub_matter_client_and_node(
+        self, matter_lock_simple: MatterLock
+    ) -> Generator[None]:
+        """LockOperation dispatch needs to reach ``_raw_lock_users``."""
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+        ):
+            yield
+
+    @staticmethod
+    def _patch_users(users: list[dict]) -> Any:
+        """Patch get_lock_users so the async dispatch can resolve owners."""
+        return patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(return_value={"max_users": 10, "users": users}),
+        )
+
+    async def test_unlock_with_pin_credential(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Unlock with PIN credential fires a code slot event.
+
+        Resolution: ``userIndex`` -> tagged user.name -> LCM slot. The
+        Matter ``credentialIndex`` may differ from the LCM slot and must
+        not be used as the code slot directly.
+        """
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                data={
-                    "lockOperationType": 1,  # kUnlock
-                    "credentials": [
-                        {"credentialType": 1, "credentialIndex": 2},  # PIN, slot 2
-                    ],
-                }
-            ),
-        )
+        with self._patch_users(
+            [
+                {
+                    "user_index": 99,
+                    "user_name": "lcm:2:Alice",
+                    "credentials": [{"type": "pin", "index": 7}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,  # kUnlock
+                        "userIndex": 99,
+                        "credentials": [
+                            # Matter credential index is opaque; the LCM slot
+                            # is resolved from the owning user's tag.
+                            {"credentialType": 1, "credentialIndex": 7},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
 
         assert len(fired) == 1
         assert fired[0]["code_slot"] == 2
         assert fired[0]["to_locked"] is False
         assert fired[0]["action_text"] == "unlocked"
 
-    def test_lock_with_pin_credential(self, matter_lock_simple: MatterLock) -> None:
-        """Lock with PIN credential fires code slot event."""
+    async def test_lock_with_pin_credential(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Lock with PIN credential fires a code slot event."""
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                data={
-                    "lockOperationType": 0,  # kLock
-                    "credentials": [
-                        {"credentialType": 1, "credentialIndex": 5},
-                    ],
-                }
-            ),
-        )
+        with self._patch_users(
+            [
+                {
+                    "user_index": 4,
+                    "user_name": "lcm:5:Bob",
+                    "credentials": [{"type": "pin", "index": 2}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 0,  # kLock
+                        "userIndex": 4,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 2},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
 
         assert len(fired) == 1
         assert fired[0]["code_slot"] == 5
         assert fired[0]["to_locked"] is True
         assert fired[0]["action_text"] == "locked"
 
-    def test_rfid_credential_ignored(self, matter_lock_simple: MatterLock) -> None:
-        """RFID credential does not fire pin_used event."""
-        fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
-
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                data={
-                    "lockOperationType": 1,
-                    "credentials": [
-                        {"credentialType": 2, "credentialIndex": 3},  # RFID
-                    ],
-                }
-            ),
-        )
-
-        assert len(fired) == 0
-
-    def test_fingerprint_credential_ignored(
-        self, matter_lock_simple: MatterLock
+    async def test_projects_lcm_slot_from_tag_when_credential_index_differs(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
-        """Fingerprint credential does not fire pin_used event."""
+        """The regression: Matter-auto-allocated credential index must not become the LCM slot.
+
+        Pre-PR-B, LCM pinned ``credentialIndex == LCM slot``, so firing
+        ``code_slot=credentialIndex`` was correct. Under the user-tag
+        model the Matter credential index is opaque and auto-allocated.
+        Here LCM slot 3 owns Matter credential index 11; the event must
+        fire on slot 3 (from the owning user's tag), NOT slot 11.
+        """
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                data={
-                    "lockOperationType": 1,
-                    "credentials": [
-                        {"credentialType": 3, "credentialIndex": 1},  # Fingerprint
-                    ],
-                }
-            ),
-        )
+        with self._patch_users(
+            [
+                {
+                    "user_index": 1,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 11}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 1,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 11},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 3
+
+    async def test_falls_back_to_credential_index_walk_when_user_index_missing(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Matter spec allows ``userIndex`` to be omitted on LockOperation.
+
+        When it's absent we walk the user list to find the PIN credential at
+        ``credentialIndex`` and parse the owning user's tag. Without this
+        fallback the event would silently drop when a lock implementation
+        elides ``userIndex`` from PIN operations.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 50,
+                    "user_name": "lcm:7:Dave",
+                    "credentials": [{"type": "pin", "index": 4}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        # userIndex omitted -- fallback to credentialIndex walk.
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 4},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 7
+
+    async def test_lock_op_for_untagged_user_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """LockOperation on a non-LCM-tagged user fires no code slot event.
+
+        Another controller (or keypad-enrolled user) using a PIN must not
+        push a code slot event into LCM; firing with the wrong slot is
+        worse than not firing.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 9,
+                    "user_name": "Visitor",  # untagged
+                    "credentials": [{"type": "pin", "index": 9}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 9,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 9},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
 
         assert len(fired) == 0
 
-    def test_wrong_cluster_ignored(self, matter_lock_simple: MatterLock) -> None:
-        """Events from non-DoorLock clusters are ignored."""
+    async def test_lock_op_with_no_resolvable_owner_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Neither ``userIndex`` nor ``credentialIndex`` matches a known user."""
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                cluster_id=6,  # OnOff cluster
-                data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
-            ),
-        )
+        with self._patch_users([]):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 42,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 4},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
 
         assert len(fired) == 0
 
-    def test_wrong_event_id_ignored(self, matter_lock_simple: MatterLock) -> None:
-        """Non-LockOperation DoorLock events are ignored."""
+    async def test_lock_op_dispatch_swallows_lock_disconnected(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Transport failure during owner lookup logs and drops the event."""
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                event_id=3,  # LockOperationError
-                data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
-            ),
-        )
+        with patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(side_effect=HomeAssistantError("transport down")),
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 1,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 1},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 0
+
+    async def test_rfid_credential_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """RFID (credentialType=2) does not fire a code slot event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users([]):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 1,
+                        "credentials": [
+                            {"credentialType": 2, "credentialIndex": 3},  # RFID
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 0
+
+    async def test_fingerprint_credential_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Fingerprint (credentialType=3) does not fire a code slot event."""
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users([]):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 1,
+                        "credentials": [
+                            {"credentialType": 3, "credentialIndex": 1},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 0
+
+    async def test_wrong_cluster_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Events from non-DoorLock clusters are ignored upstream of dispatch."""
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users([]):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    cluster_id=6,  # OnOff cluster
+                    data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 0
+
+    async def test_wrong_event_id_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Non-LockOperation DoorLock events are ignored upstream of dispatch."""
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users([]):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=3,  # LockOperationError
+                    data={"credentials": [{"credentialType": 1, "credentialIndex": 1}]},
+                ),
+            )
+            await hass.async_block_till_done()
 
         assert len(fired) == 0
 
@@ -655,30 +945,55 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    def test_no_operation_type(self, matter_lock_simple: MatterLock) -> None:
-        """Event without lockOperationType fires with to_locked=None."""
+    async def test_no_operation_type(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Event without ``lockOperationType`` fires with ``to_locked=None``.
+
+        Matter spec permits unknown / vendor-specific operation types; the
+        handler falls through to ``to_locked=None`` and ``action_text="operated"``
+        rather than dropping the event so downstream automations still see
+        the PIN use.
+        """
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
-            None,
-            _make_node_event(
-                data={
-                    "credentials": [{"credentialType": 1, "credentialIndex": 3}],
-                }
-            ),
-        )
+        with self._patch_users(
+            [
+                {
+                    "user_index": 1,
+                    "user_name": "lcm:3:Eve",
+                    "credentials": [{"type": "pin", "index": 3}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "userIndex": 1,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 3},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
 
         assert len(fired) == 1
+        assert fired[0]["code_slot"] == 3
         assert fired[0]["to_locked"] is None
         assert fired[0]["action_text"] == "operated"
 
-    def test_none_data_ignored(self, matter_lock_simple: MatterLock) -> None:
-        """Event with None data is ignored (no credentials)."""
+    async def test_none_data_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Event with ``None`` data is ignored (no credentials)."""
         fired: list[dict[str, Any]] = []
         matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         matter_lock_simple._on_node_event(None, _make_node_event(data=None))
+        await hass.async_block_till_done()
 
         assert len(fired) == 0
 

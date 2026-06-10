@@ -70,6 +70,59 @@ _DATA_OP_CLEAR = 1
 _DATA_OP_MODIFY = 2
 
 
+def _lcm_slot_from_raw_users_by_user_index(
+    raw_users: list[dict[str, Any]], user_index: int | None
+) -> int | None:
+    """
+    Resolve the LCM slot by matching a raw lock user by ``user_index``.
+
+    Pure helper over the already-fetched user list -- the caller owns the
+    ``_raw_lock_users`` round-trip and the transport-error handling.
+    """
+    if user_index is None:
+        return None
+    name = next(
+        (
+            raw_user.get("user_name")
+            for raw_user in raw_users
+            if raw_user.get("user_index") == user_index
+        ),
+        None,
+    )
+    if not name:
+        return None
+    slot, _ = parse_tag(name)
+    return slot
+
+
+def _lcm_slot_from_raw_users_by_credential_index(
+    raw_users: list[dict[str, Any]], credential_index: int | None
+) -> int | None:
+    """
+    Resolve the LCM slot by finding the PIN credential at ``credential_index``.
+
+    Walks each raw user's credentials list for a Personal Identification
+    Number credential whose Matter index matches; if found, parses the
+    owning user's ``lcm:<slot>:`` tag. Used as a fallback when the
+    LockOperation event omits ``userIndex``.
+    """
+    if credential_index is None:
+        return None
+    name = next(
+        (
+            raw_user.get("user_name")
+            for raw_user in raw_users
+            for cred in raw_user.get("credentials", []) or []
+            if cred.get("type") == "pin" and cred.get("index") == credential_index
+        ),
+        None,
+    )
+    if not name:
+        return None
+    slot, _ = parse_tag(name)
+    return slot
+
+
 @dataclass(repr=False, eq=False)
 class MatterLock(BaseLock):
     """Class to represent a Matter lock."""
@@ -754,37 +807,96 @@ class MatterLock(BaseLock):
         Handle LockOperation events (event ID 2).
 
         Fires a code slot event when a PIN credential is used to lock/unlock.
-        Only PIN credentials (credentialType=1) trigger the event — other
+        Only PIN credentials (credentialType=1) trigger the event -- other
         credential types (RFID, fingerprint, etc.) are ignored.
+
+        The event's ``credentials[].credentialIndex`` is the Matter credential
+        index, which is no longer pinned to the LCM slot under the user-tag
+        model. To find the LCM slot we resolve via the event's top-level
+        ``userIndex`` -> user.name -> ``lcm:<slot>:`` tag, falling back to
+        walking the user list for a PIN credential at ``credentialIndex``
+        when ``userIndex`` is absent. The lookup is async so the callback
+        schedules a task rather than blocking the event loop.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
         credentials = data.get("credentials")
-        lock_operation_type = data.get("lockOperationType")
 
-        # Must have credentials with a PIN type to fire
         if not credentials:
             return
 
-        # Find the PIN credential index (credentialType 1 = PIN)
-        code_slot: int | None = None
-        for cred in credentials:
-            if isinstance(cred, dict) and cred.get("credentialType") == 1:
-                code_slot = cred.get("credentialIndex")
-                break
-
-        if code_slot is None:
+        # Find the PIN credential index (credentialType 1 = PIN).
+        credential_index = next(
+            (
+                cred.get("credentialIndex")
+                for cred in credentials
+                if isinstance(cred, dict) and cred.get("credentialType") == 1
+            ),
+            None,
+        )
+        if credential_index is None:
             return
 
-        # lockOperationType: 0=Lock, 1=Unlock, 2=NonAccessUserEvent, 3=ForcedUserEvent, 4=Unlatch
+        user_index = parse_slot_num(data.get("userIndex"))
+
+        self.hass.async_create_task(
+            self._dispatch_lock_operation(user_index, credential_index, data),
+            f"Matter LockOperation dispatch for {self.lock.entity_id}",
+        )
+
+    async def _dispatch_lock_operation(
+        self,
+        user_index: int | None,
+        credential_index: int,
+        data: dict[str, Any],
+    ) -> None:
+        """
+        Resolve the LCM slot for a LockOperation event and fire it.
+
+        Primary path: lock-reported ``userIndex`` -> user.name -> tag.
+        Fallback path: walk the user list to find the PIN credential at
+        ``credentialIndex`` and parse the owning user's tag. Events whose
+        owning user isn't LCM-tagged are silently dropped so out-of-band
+        PIN uses on non-LCM credentials don't drive spurious code slot
+        events.
+        """
+        try:
+            raw_users = await self._raw_lock_users()
+        except (LockDisconnected, LockOperationFailed) as err:
+            LOGGER.debug(
+                "Lock %s: could not resolve LockOperation userIndex=%s "
+                "credentialIndex=%s: %s",
+                self.lock.entity_id,
+                user_index,
+                credential_index,
+                err,
+            )
+            return
+
+        code_slot = _lcm_slot_from_raw_users_by_user_index(
+            raw_users, user_index
+        ) or _lcm_slot_from_raw_users_by_credential_index(raw_users, credential_index)
+        if code_slot is None:
+            LOGGER.debug(
+                "Lock %s: LockOperation userIndex=%s credentialIndex=%s did not "
+                "resolve to an LCM-tagged user; ignoring",
+                self.lock.entity_id,
+                user_index,
+                credential_index,
+            )
+            return
+
+        # lockOperationType: 0=Lock, 1=Unlock, 2=NonAccessUserEvent,
+        # 3=ForcedUserEvent, 4=Unlatch
+        lock_operation_type = data.get("lockOperationType")
         if lock_operation_type == 0:
-            to_locked = True
+            to_locked: bool | None = True
         elif lock_operation_type == 1:
             to_locked = False
         else:
             to_locked = None
 
         LOGGER.debug(
-            "Lock %s: LockOperation event — slot=%s, locked=%s",
+            "Lock %s: LockOperation event -- slot=%s, locked=%s",
             self.lock.entity_id,
             code_slot,
             to_locked,
@@ -894,28 +1006,13 @@ class MatterLock(BaseLock):
             )
             return
 
-        user_name = next(
-            (
-                raw_user.get("user_name")
-                for raw_user in raw_users
-                if raw_user.get("user_index") == user_index
-            ),
-            None,
-        )
-        if not user_name:
-            LOGGER.debug(
-                "Lock %s: LockUserChange userIndex %s has no name; ignoring",
-                self.lock.entity_id,
-                user_index,
-            )
-            return
-        code_slot, _ = parse_tag(user_name)
+        code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
         if code_slot is None:
             LOGGER.debug(
-                "Lock %s: LockUserChange userIndex %s name %r is not LCM-tagged; ignoring",
+                "Lock %s: LockUserChange userIndex %s did not resolve to an "
+                "LCM-tagged user; ignoring",
                 self.lock.entity_id,
                 user_index,
-                user_name,
             )
             return
 
