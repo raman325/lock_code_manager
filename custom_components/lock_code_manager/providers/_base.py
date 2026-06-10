@@ -185,12 +185,8 @@ class BaseLock:
     _push_unsubs: list[Callable[[], None]] = field(
         default_factory=list, init=False, repr=False
     )
-    # Cache for ``async_get_capabilities`` result; populated on first read
-    # via ``_get_cached_capabilities`` and used by the base orchestration
-    # (today: ``_put_credential`` chooses whether to write a user record).
-    # Lives for the provider instance's lifetime -- reload recreates the
-    # provider, naturally invalidating the cache after firmware/capability
-    # changes.
+    # Read via ``_get_cached_capabilities``; cleared by recreating the
+    # provider on integration reload.
     _capabilities_cache: LockCapabilities | None = field(
         default=None, init=False, repr=False
     )
@@ -1025,14 +1021,8 @@ class BaseLock:
         """
         Return the lock's capabilities, populating the cache on first call.
 
-        Provider-agnostic chokepoint for capability-driven base decisions
-        (today: whether ``_put_credential`` writes a user record before the
-        credential). The cache is per-instance and lives for the lifetime
-        of the provider, which is recreated on each integration reload --
-        so a firmware update or capability change is naturally picked up
-        the next time the integration loads. Errors propagate to the
-        caller so the same backoff/retry the provider already wraps
-        ``async_get_capabilities`` in keeps applying.
+        Cache lives for the provider instance's lifetime; reload
+        recreates the provider and naturally invalidates the cache.
         """
         if self._capabilities_cache is None:
             self._capabilities_cache = await self.async_get_capabilities()
@@ -1050,32 +1040,11 @@ class BaseLock:
         """
         Run the create-on-first user lifecycle around a credential write.
 
-        Native-user only (the slot adapters call the primitives directly for
-        slot-only providers). On locks that expose a real user record --
-        ``supports_user_management`` AND ``max_user_name_length > 0`` --
-        the owning user is created or updated first and its resolved
-        identifier (which the integration may allocate) is threaded into
-        the credential write. On locks where the user is implicit in the
-        credential (Z-Wave User Code CC: the user IS the code and the
-        unified ``accessControl`` API's ``setUser`` cannot run before a
-        credential exists), the user write is skipped and the credential
-        write creates the implicit user. Returns True if the value
-        changed.
-
-        ``user`` carries the user record (identifier, name, active state)
-        for ``async_set_user`` on the real-user path; ``credential`` is
-        the specific credential to write. They are independent arguments:
-        the slot adapter's ``user`` happens to also list this credential
-        (an artifact of the one-to-one slot projection), but only
-        ``credential`` drives the write here.
-
-        If the credential write fails, a user this call newly created is
-        rolled back so the lock is not left with a credential-less user
-        (which the slot-keyed coordinator cannot see and would never
-        reconcile away). A pre-existing user is left untouched -- it may
-        still own other credentials. On the no-user-write path there is
-        nothing to roll back -- the implicit user only exists while the
-        credential does.
+        Native-user only (the slot adapters call the credential primitive
+        directly). Rolls back a newly-created user when the credential
+        write fails so the lock isn't left with a credential-less user
+        the slot-keyed coordinator can't reconcile. Returns True if the
+        value changed.
         """
         caps = await self._get_cached_capabilities()
         needs_user_write = (
@@ -1086,10 +1055,6 @@ class BaseLock:
             credential_user_id = result.user_id
             rollback_user_id = result.user_id if result.created else None
         else:
-            # Implicit-user lock (e.g. Z-Wave User Code CC). The
-            # credential write creates the user implicitly; address the
-            # credential by the slot-shaped user identifier the seam
-            # already carries.
             credential_user_id = user.user_id
             rollback_user_id = None
         try:
@@ -1245,10 +1210,8 @@ class BaseLock:
         """
         Report the lock's user/credential capabilities.
 
-        Read by the base orchestration's ``_get_cached_capabilities``
-        helper to drive capability-gated behavior (today: whether
-        ``_put_credential`` writes a user record before the credential).
-        Providers that route through ``_put_credential`` must override.
+        Native-user providers must override; the base orchestration reads
+        this to decide whether to write a user record before a credential.
         """
         self._raise_not_implemented(
             "async_get_capabilities",

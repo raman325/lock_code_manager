@@ -237,18 +237,10 @@ class LockCapabilities:
     supports_user_management: bool
     max_users: int
     credential_types: Mapping[CredentialType, CredentialTypeCapability]
-    # Maximum user-name length the lock will store; 0 when the underlying
-    # API has no concept of named users (Z-Wave User Code CC) and the user
-    # IS the credential. The base orchestration uses
-    # ``supports_user_management and max_user_name_length > 0`` to decide
-    # whether to write a separate user record before a credential -- on
-    # locks where the user is implicit in the credential, ``async_set_user``
-    # is skipped entirely and the credential write creates the user
-    # implicitly. Default 0 keeps the field backward-compatible for
-    # callers that haven't been updated yet; new providers should set it
-    # explicitly. Matter providers hardcode 32 today because the Matter
-    # DoorLock cluster spec caps UserName at 32 bytes UTF-8 and the HA
-    # ``matter.lock_helpers`` does not yet surface the attribute.
+    # Maximum user-name length the lock will store; 0 means the lock has
+    # no concept of named users (e.g. Z-Wave User Code CC) and the user
+    # IS the credential. The base orchestration skips the separate user
+    # write when ``supports_user_management`` is False OR this is 0.
     max_user_name_length: int = 0
 
     def __post_init__(self) -> None:
