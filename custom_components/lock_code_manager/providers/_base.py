@@ -62,7 +62,7 @@ from ..domain.exceptions import (
 from ..domain.models import SlotCredential
 from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
 from ..domain.util import mask_pin
-from ._util import make_tagged_name
+from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -950,15 +950,34 @@ class BaseLock:
             )
             return await self.async_delete_credential(ref)
 
-        owner_user_id = next(
-            (
+        # Owner resolution is two-pass to match the same identity rule the
+        # set path uses (see Matter's _find_user_index_for_slot). The
+        # canonical pass matches by the ``lcm:<slot>:`` tag in user.name;
+        # the legacy fallback handles pre-PR-B installs where
+        # ``credential.slot`` was pinned to the LCM slot. Matching by
+        # ``credential.slot == code_slot`` alone is unsafe once providers
+        # let the lock auto-allocate the credential index -- a tagged
+        # user for slot A whose credential lands at index B would be
+        # mis-matched when clearing slot B.
+        users = await self.async_get_users()
+        owner_user_id: int | None
+        try:
+            owner_user_id = next(
                 user.user_id
-                for user in await self.async_get_users()
-                for credential in user.pin_credentials
-                if credential.slot == code_slot
-            ),
-            None,
-        )
+                for user in users
+                if user.name and parse_tag(user.name)[0] == code_slot
+            )
+        except StopIteration:
+            owner_user_id = next(
+                (
+                    user.user_id
+                    for user in users
+                    if parse_tag(user.name or "")[0] is None
+                    for credential in user.pin_credentials
+                    if credential.slot == code_slot
+                ),
+                None,
+            )
         if owner_user_id is None:
             # No user owns this slot's credential -- nothing to clear.
             return False
@@ -1173,11 +1192,14 @@ class BaseLock:
 
         Native-user only (the slot adapters call the credential primitive
         directly). Asserts the lock advertises ``credential.type`` and
-        truncates ``user.name`` to the lock's advertised limit before
+        replaces ``user.name`` with the LCM-tagged name built via
+        ``_build_tagged_user_name(credential.slot, user.name)`` before
         handing the user to the provider, so each provider's
-        ``async_set_user`` can write the name verbatim. Rolls back a
-        newly-created user when the credential write fails so the lock
-        isn't left with a credential-less user the slot-keyed coordinator
+        ``async_set_user`` can write the tagged name verbatim. The tag
+        carries the slot binding the find-or-create-by-tag lookup
+        recovers on subsequent operations. Rolls back a newly-created
+        user when the credential write fails so the lock isn't left
+        with a credential-less user the slot-keyed coordinator
         can't reconcile. Returns True if the value changed.
 
         ``pin`` is the resolved readable PIN that the caller (the seam in
@@ -1277,9 +1299,13 @@ class BaseLock:
         """
         Delete a lock user (and, per the Z-Wave/Matter spec, its credentials).
 
-        Native-user providers only. The base calls this once a user's last
-        credential has been removed -- the lifecycle invariant is that a user
-        exists if and only if it owns at least one credential.
+        Native-user providers only. Under the user-tag idempotency design
+        the lock-side user is an LCM-managed slot anchor: it persists
+        through PIN clear / rewrite cycles and is removed only when the
+        slot is dropped from LCM config (the base calls this from a
+        provider's ``async_release_managed_slot`` override). Also called
+        as a rollback path when a credential write fails for a freshly
+        created user.
         """
         self._raise_not_implemented(
             "async_delete_user",

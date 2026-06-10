@@ -702,6 +702,62 @@ async def test_clear_usercode_native_resolves_owner_when_user_id_not_slot(
     assert 12 in lock._users
 
 
+async def test_clear_usercode_resolves_owner_by_tag_when_credential_index_not_slot(
+    hass: HomeAssistant,
+) -> None:
+    """Owner resolution prefers the LCM tag in user.name over credential.slot.
+
+    Regression for #1239 review. After the PR drops the credential_index=slot
+    invariant for Matter, a user tagged ``lcm:5:`` may own a PIN whose
+    Credential.slot is the Matter-auto-allocated index (e.g. 1), not the
+    LCM slot. The owner resolution in async_clear_usercode must find the
+    user by the canonical tag in user.name, not by ``credential.slot ==
+    code_slot`` alone -- otherwise the loop yields nothing and the clear
+    silently no-ops.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_by_tag")
+    lock._users = {
+        42: User(
+            user_id=42,
+            name="lcm:5:Alice",
+            # Matter-auto-allocated credential index 1, NOT the LCM slot 5.
+            credentials=[credential_from_slot(1, SlotCredential.known("1234"))],
+        )
+    }
+    changed = await lock.async_clear_usercode(5)
+    assert changed is True
+    # Owner resolved via the lcm:5: tag; delete targets user_id=42
+    # with the ref's slot=5 (LCM slot).
+    assert lock.calls == [("delete_credential", 42, 5)]
+    assert 42 in lock._users
+
+
+async def test_clear_usercode_legacy_pass_skips_users_tagged_for_other_slots(
+    hass: HomeAssistant,
+) -> None:
+    """Legacy ``credential.slot == code_slot`` fallback ignores tagged owners.
+
+    Regression for #1239 review. A user tagged ``lcm:3:`` whose Matter-
+    auto-allocated credential index lands at 7 must NOT be picked up by
+    ``async_clear_usercode(7)``'s legacy fallback. Doing so would resolve
+    the owner of slot-7 as slot-3's user, and the subsequent delete would
+    target the wrong slot.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_legacy_skips_tagged")
+    lock._users = {
+        99: User(
+            user_id=99,
+            name="lcm:3:Alice",
+            credentials=[credential_from_slot(7, SlotCredential.known("1234"))],
+        )
+    }
+    # No user owns slot 7 under the canonical-tag lookup, and the legacy
+    # fallback must skip the lcm:3:-tagged owner -> clear is a no-op.
+    changed = await lock.async_clear_usercode(7)
+    assert changed is False
+    assert lock.calls == []
+
+
 async def test_clear_usercode_native_only_clears_the_targeted_credential(
     hass: HomeAssistant,
 ) -> None:

@@ -346,11 +346,11 @@ class MatterLock(BaseLock):
 
         1. **Canonical** -- a user whose name carries the
            ``lcm:<slot>:`` tag. This is the post-PR-B identity rule.
-        2. **Legacy adoption** -- a user owning a PIN credential at
-           ``credential_index == slot``. Pre-PR-B Matter LCM pinned
-           ``credential_index`` to the LCM slot, so an untagged user
-           owning a PIN at that index is almost certainly the LCM 2.0
-           user for this slot. Adopting it (the subsequent
+        2. **Legacy adoption** -- an *untagged* user owning a PIN
+           credential at ``credential_index == slot``. Pre-PR-B Matter
+           LCM pinned ``credential_index`` to the LCM slot, so an
+           untagged user owning a PIN at that index is almost certainly
+           the LCM 2.0 user for this slot. Adopting it (the subsequent
            ``set_lock_user`` rewrites the name to the tagged form, and
            ``set_lock_credential`` MODIFY'es the existing credential
            index in place) preserves a single, identifiable user per
@@ -358,20 +358,32 @@ class MatterLock(BaseLock):
            would CREATE a second user every time, silently leaving the
            pre-upgrade PIN active on the lock.
 
+           The legacy pass MUST skip users whose names already parse to
+           ANY LCM slot. Under the new model the Matter credential index
+           is auto-allocated, so a user tagged ``lcm:<A>:`` can own a
+           PIN at index ``B``; matching on ``cred.slot == slot`` alone
+           would mis-adopt slot-A's user as slot-B's anchor.
+
         Returns ``None`` when neither lookup matches.
         """
         users = await self.async_get_users()
-        for existing in users:
-            if existing.name is None:
-                continue
-            parsed_slot, _ = parse_tag(existing.name)
-            if parsed_slot == slot:
-                return existing.user_id
-        for existing in users:
-            for cred in existing.pin_credentials:
-                if cred.slot == slot:
-                    return existing.user_id
-        return None
+        try:
+            return next(
+                existing.user_id
+                for existing in users
+                if existing.name and parse_tag(existing.name)[0] == slot
+            )
+        except StopIteration:
+            return next(
+                (
+                    existing.user_id
+                    for existing in users
+                    if parse_tag(existing.name or "")[0] is None
+                    for cred in existing.pin_credentials
+                    if cred.slot == slot
+                ),
+                None,
+            )
 
     async def async_delete_user(self, user_id: int) -> None:
         """
@@ -472,12 +484,15 @@ class MatterLock(BaseLock):
         treats Matter's credential index as opaque and rediscovers it per
         operation by walking the user's owned credentials.
         """
-        for existing in await self.async_get_users():
-            if existing.user_id != user_id:
-                continue
-            for cred in existing.pin_credentials:
-                return cred.slot
-        return None
+        return next(
+            (
+                cred.slot
+                for existing in await self.async_get_users()
+                if existing.user_id == user_id
+                for cred in existing.pin_credentials
+            ),
+            None,
+        )
 
     async def async_set_credential(
         self,

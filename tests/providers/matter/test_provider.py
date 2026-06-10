@@ -1423,6 +1423,50 @@ class TestSetUser:
         assert call_kwargs["user_index"] == 99
         assert call_kwargs["user_name"] == "lcm:5:Carol"
 
+    async def test_set_user_legacy_pass_skips_users_tagged_for_other_slots(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A tagged user whose Matter credential index happens to equal our slot is NOT adopted.
+
+        Regression for #1239 review: under the new model the Matter credential
+        index is auto-allocated. A user tagged ``lcm:3:`` can legitimately
+        own a PIN at credential_index 7. ``_find_user_index_for_slot(7)``
+        must NOT match that user via the legacy fallback (it belongs to
+        slot 3) -- doing so would cause us to rename slot-3's user and
+        write slot-7's PIN onto slot-3's user record.
+        """
+        mock_set_user = AsyncMock(return_value={"user_index": 100})
+        user = User(user_id=7, name="lcm:7:Eve")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users(
+                [
+                    # User tagged for slot 3, but its PIN credential happens
+                    # to live at Matter-auto-allocated index 7. Must not be
+                    # adopted as slot 7's anchor.
+                    {
+                        "user_index": 42,
+                        "user_name": "lcm:3:Alice",
+                        "credentials": [{"type": "pin", "index": 7}],
+                    },
+                ]
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        # CREATE (auto-allocate) because no canonical match for slot 7
+        # and the legacy pass correctly skipped the slot-3 user.
+        assert result == SetUserResult(user_id=100, created=True)
+        call_kwargs = mock_set_user.call_args.kwargs
+        assert call_kwargs["user_index"] is None
+        assert call_kwargs["user_name"] == "lcm:7:Eve"
+
     async def test_set_user_create_auto_allocates_and_returns_allocated_index(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
