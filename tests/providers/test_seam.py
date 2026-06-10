@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
@@ -176,6 +177,68 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
         await lock.async_delete_credential(CredentialRef(1, CredentialType.PIN, 1))
     with pytest.raises(ProviderNotImplementedError):
         await lock.async_get_users()
+
+
+async def test_setup_internal_rejects_lock_without_pin_support(
+    hass: HomeAssistant,
+) -> None:
+    """A native-user lock missing PIN support fails setup with a typed error."""
+
+    class _NoPinLock(_NativeStubLock):
+        async def async_get_capabilities(self) -> LockCapabilities:
+            return LockCapabilities(
+                supports_user_management=True,
+                max_users=30,
+                credential_types={},  # no PIN
+                max_user_name_length=16,
+            )
+
+    lock = _make_lock(hass, _NoPinLock, "seam_setup_no_pin")
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    with pytest.raises(LockCodeManagerProviderError, match="PIN credential"):
+        await lock.async_setup_internal(config_entry)
+
+
+async def test_setup_internal_rejects_lock_without_user_management(
+    hass: HomeAssistant,
+) -> None:
+    """A native-user lock missing user management fails setup with a typed error."""
+
+    class _NoUserMgmtLock(_NativeStubLock):
+        async def async_get_capabilities(self) -> LockCapabilities:
+            return LockCapabilities(
+                supports_user_management=False,
+                max_users=30,
+                credential_types={
+                    CredentialType.PIN: CredentialTypeCapability(
+                        num_slots=30,
+                        min_length=4,
+                        max_length=8,
+                        supports_learn=False,
+                    ),
+                },
+                max_user_name_length=16,
+            )
+
+    lock = _make_lock(hass, _NoUserMgmtLock, "seam_setup_no_user_mgmt")
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    with pytest.raises(LockCodeManagerProviderError, match="user management"):
+        await lock.async_setup_internal(config_entry)
+
+
+async def test_setup_internal_skips_capability_check_for_slot_only_providers(
+    hass: HomeAssistant,
+) -> None:
+    """Slot-only providers don't have capabilities; base must not call them."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_setup_degen")
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    # The default async_get_capabilities raises ProviderNotImplementedError;
+    # if the base attempted to read caps, that error would propagate. The
+    # gate on supports_native_users keeps it from running.
+    await lock.async_setup_internal(config_entry)
 
 
 async def test_get_usercodes_projects_pin_credentials(hass: HomeAssistant) -> None:
@@ -431,6 +494,69 @@ async def test_truncate_user_name_returns_none_when_caps_fetch_fails(
         assert await lock._truncate_user_name("alice") is None
     # Cache stays unset so the next call retries.
     assert lock._capabilities_cache is None
+
+
+async def test_assert_credential_type_supported_accepts_advertised(
+    hass: HomeAssistant,
+) -> None:
+    """PIN is advertised by the stub → no raise."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_assert_type_ok")
+    credential = credential_from_slot(1, SlotCredential.known("1234"))
+    # Should not raise.
+    await lock._assert_credential_type_supported(credential)
+
+
+async def test_assert_credential_type_supported_rejects_unadvertised(
+    hass: HomeAssistant,
+) -> None:
+    """A type the lock doesn't advertise → CodeRejectedError."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_assert_type_reject")
+    credential = Credential(
+        type=CredentialType.RFID, slot=4, state=SlotCredential.known("AABB")
+    )
+    with pytest.raises(CodeRejectedError) as exc_info:
+        await lock._assert_credential_type_supported(credential)
+    assert exc_info.value.code_slot == 4
+    assert "unsupported credential type" in str(exc_info.value)
+
+
+async def test_assert_credential_ref_supported_rejects_unadvertised(
+    hass: HomeAssistant,
+) -> None:
+    """A ref of a type the lock doesn't advertise → CodeRejectedError."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_assert_ref_reject")
+    ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=7)
+    with pytest.raises(CodeRejectedError) as exc_info:
+        await lock._assert_credential_ref_supported(ref)
+    assert exc_info.value.code_slot == 7
+    assert "unsupported credential type" in str(exc_info.value)
+
+
+async def test_put_credential_rejects_unsupported_credential_type(
+    hass: HomeAssistant,
+) -> None:
+    """``_put_credential`` asserts the type before any set call."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_put_reject_type")
+    rfid_credential = Credential(
+        type=CredentialType.RFID, slot=2, state=SlotCredential.known("AABB")
+    )
+    user = User(user_id=2, credentials=[rfid_credential])
+    with pytest.raises(CodeRejectedError):
+        await lock._put_credential(user, rfid_credential, name=None, source="direct")
+    # No primitive was reached because the assertion fired first.
+    assert lock.calls == []
+
+
+async def test_drop_credential_rejects_unsupported_credential_type(
+    hass: HomeAssistant,
+) -> None:
+    """``_drop_credential`` asserts the ref's type before any delete call."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_drop_reject_type")
+    owner = User(user_id=1, credentials=[])
+    ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=3)
+    with pytest.raises(CodeRejectedError):
+        await lock._drop_credential(owner, ref)
+    assert lock.calls == []
 
 
 async def test_set_usercode_native_user_first_and_threads_id(

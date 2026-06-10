@@ -276,12 +276,6 @@ class ZWaveJSLock(BaseLock):
         source: Literal["sync", "direct"],
     ) -> bool:
         """Write the Personal Identification Number credential under user_id; map device rejections."""
-        if credential.type is not CredentialType.PIN:
-            raise CodeRejectedError(
-                code_slot=credential.slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"unsupported credential type: {credential.type}",
-            )
         pin = credential.readable_pin
         if pin is None:
             # The set path only ever carries a readable Personal Identification
@@ -321,12 +315,6 @@ class ZWaveJSLock(BaseLock):
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """Delete the Personal Identification Number credential addressed by ref."""
-        if ref.type is not CredentialType.PIN:
-            raise CodeRejectedError(
-                code_slot=ref.slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"unsupported credential type: {ref.type}",
-            )
         try:
             await lock_helpers.async_delete_credential(
                 self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
@@ -464,14 +452,10 @@ class ZWaveJSLock(BaseLock):
         """
         Set up lock by provider.
 
-        Probes capabilities so an unmanageable lock (neither User
-        Credential CC nor User Code CC under the unified
-        ``accessControl`` API) fails setup with a typed LCM error
-        instead of a downstream attribute error. Idempotent: clears
-        existing listeners before re-registering.
+        Idempotent: clears existing listeners before re-registering.
+        Capability validation runs in the base ``async_setup_internal``.
         """
         self._clear_listeners()
-        await self._get_cached_capabilities()
         self._listeners.append(
             self.hass.bus.async_listen(
                 ZWAVE_JS_NOTIFICATION_EVENT,

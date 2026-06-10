@@ -12,10 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from zwave_js_server.const.command_class.access_control import UserCredentialType
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
 
+from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
@@ -412,7 +414,7 @@ async def simple_lcm_config_entry(
 @pytest.fixture
 def mock_lock_helpers():
     """Patch the write/capability lock_helpers the provider calls."""
-    pin_type_str = "pin"
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
     mocks = {
         "async_get_credential_capabilities": AsyncMock(
             return_value={

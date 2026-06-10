@@ -51,8 +51,10 @@ from ..domain.credentials import (
     user_from_slot,
 )
 from ..domain.exceptions import (
+    CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerError,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
@@ -548,10 +550,23 @@ class BaseLock:
         """
         Set up lock and coordinator, signaling completion to waiters.
 
-        Provider ``async_setup()`` runs first so providers can initialize
-        any state the coordinator needs during its first refresh.
+        Validates the lock advertises the capabilities LCM needs
+        (``supports_user_management`` + PIN credentials) for native-user
+        providers; failures here are hard and propagate. Provider
+        ``async_setup()`` then runs so providers can initialize any state
+        the coordinator needs during its first refresh.
         """
         self._lcm_config_entry = config_entry
+        if self.supports_native_users:
+            caps = await self._get_cached_capabilities()
+            if not caps.supports_user_management:
+                raise LockCodeManagerProviderError(
+                    f"{self.lock.entity_id}: lock does not support user management"
+                )
+            if CredentialType.PIN not in caps.credential_types:
+                raise LockCodeManagerProviderError(
+                    f"{self.lock.entity_id}: lock does not advertise PIN credential support"
+                )
         try:
             await self.async_setup(config_entry)
         except (LockDisconnected, LockOperationFailed) as err:
@@ -1057,6 +1072,37 @@ class BaseLock:
             return None
         return name[: caps.max_user_name_length]
 
+    async def _assert_credential_type_supported(self, credential: Credential) -> None:
+        """
+        Raise ``CodeRejectedError`` if the lock doesn't advertise the type.
+
+        Capability-driven defense for ``async_set_credential``. Picks up
+        new types (e.g. PASSWORD) automatically once a lock starts
+        advertising them in ``credential_types`` -- no provider-side
+        change needed.
+        """
+        caps = await self._get_cached_capabilities()
+        if credential.type not in caps.credential_types:
+            raise CodeRejectedError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=f"unsupported credential type: {credential.type}",
+            )
+
+    async def _assert_credential_ref_supported(self, ref: CredentialRef) -> None:
+        """
+        Raise ``CodeRejectedError`` if the lock doesn't advertise the type.
+
+        Delete-path sibling of ``_assert_credential_type_supported``.
+        """
+        caps = await self._get_cached_capabilities()
+        if ref.type not in caps.credential_types:
+            raise CodeRejectedError(
+                code_slot=ref.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=f"unsupported credential type: {ref.type}",
+            )
+
     @final
     async def _put_credential(
         self,
@@ -1070,13 +1116,15 @@ class BaseLock:
         Run the create-on-first user lifecycle around a credential write.
 
         Native-user only (the slot adapters call the credential primitive
-        directly). Truncates ``user.name`` to the lock's advertised limit
-        before handing the user to the provider, so each provider's
+        directly). Asserts the lock advertises ``credential.type`` and
+        truncates ``user.name`` to the lock's advertised limit before
+        handing the user to the provider, so each provider's
         ``async_set_user`` can write the name verbatim. Rolls back a
         newly-created user when the credential write fails so the lock
         isn't left with a credential-less user the slot-keyed coordinator
         can't reconcile. Returns True if the value changed.
         """
+        await self._assert_credential_type_supported(credential)
         if await self._supports_user_records():
             truncated = await self._truncate_user_name(user.name)
             user_for_write = (
@@ -1111,17 +1159,20 @@ class BaseLock:
         """
         Run the delete-on-last user lifecycle around a credential delete.
 
-        Native-user only. Deletes the credential, then deletes ``owner`` when
-        that was its last credential (the invariant: a user exists if and only
-        if it owns at least one credential). The count is read from ``owner``,
-        a pre-deletion snapshot, so the decision does not depend on whether the
-        provider mutates the user during the delete. Returns True if changed.
+        Native-user only. Asserts the lock advertises ``ref.type``, then
+        deletes the credential. Deletes ``owner`` when that was its last
+        credential (the invariant: a user exists if and only if it owns
+        at least one credential). The count is read from ``owner``, a
+        pre-deletion snapshot, so the decision does not depend on whether
+        the provider mutates the user during the delete. Returns True if
+        changed.
 
         The credential delete is the operation that clears the slot, so a
         failure of the follow-up user delete is logged rather than raised: the
         slot is already cleared, and raising would only churn retries that
         re-resolve to no owner. The leftover empty user is surfaced in the log.
         """
+        await self._assert_credential_ref_supported(ref)
         was_only_credential = len(owner.credentials) <= 1
         changed = await self.async_delete_credential(ref)
         if changed and was_only_credential:

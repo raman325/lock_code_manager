@@ -1059,40 +1059,6 @@ async def test_async_set_usercode_truncates_name_to_lock_limit(
 # ── Credential type validation ──────────────────────────────────────
 
 
-async def test_async_set_credential_rejects_non_pin_type(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A non-PIN credential type is rejected before reaching the helper."""
-    credential = Credential(
-        type=CredentialType.RFID, slot=1, state=SlotCredential.known("AABB")
-    )
-    with pytest.raises(CodeRejectedError) as exc_info:
-        await zwave_js_lock.async_set_credential(
-            user_id=1, credential=credential, name=None, source="sync"
-        )
-
-    assert exc_info.value.code_slot == 1
-    assert "unsupported credential type" in str(exc_info.value)
-    mock_lock_helpers["async_set_credential"].assert_not_called()
-
-
-async def test_async_delete_credential_rejects_non_pin_type(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A non-PIN CredentialRef type is rejected before reaching the helper."""
-    ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=1)
-    with pytest.raises(CodeRejectedError) as exc_info:
-        await zwave_js_lock.async_delete_credential(ref)
-
-    assert exc_info.value.code_slot == 1
-    assert "unsupported credential type" in str(exc_info.value)
-    mock_lock_helpers["async_delete_credential"].assert_not_called()
-
-
 # ── Exception wrapping for write primitives ─────────────────────────
 
 
