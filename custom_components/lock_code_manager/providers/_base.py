@@ -960,12 +960,20 @@ class BaseLock:
         # user for slot A whose credential lands at index B would be
         # mis-matched when clearing slot B.
         users = await self.async_get_users()
+        # Both lookups require the user to actually own a PIN credential
+        # at the slot we're clearing. Under the persistent-user-anchor
+        # lifecycle a tagged user can exist without a PIN (between
+        # writes); resolving such a user as the owner would drive a
+        # spurious ``async_delete_credential`` call whose provider-
+        # specific return value can incorrectly report changed=True.
         owner_user_id: int | None
         try:
             owner_user_id = next(
                 user.user_id
                 for user in users
                 if user.name and parse_tag(user.name)[0] == code_slot
+                for credential in user.pin_credentials
+                if credential.slot == code_slot
             )
         except StopIteration:
             owner_user_id = next(
@@ -1100,38 +1108,50 @@ class BaseLock:
         falls back to writing just the slot number as the user name
         (``str(slot)``). :func:`._util.parse_tag` recognizes
         digit-only names as a length-constrained encoding of the slot
-        binding. Truncating the canonical prefix would lose the slot
-        recoverably, which is worse than the slot-only fallback's
-        ambiguity with external users whose names happen to be digits.
+        binding. If even the slot digits don't fit
+        (``len(str(slot)) > max_user_name_length``, e.g. slot 255 on a
+        2-char-limit lock), the helper returns ``None`` rather than
+        truncating the slot to a different number and silently
+        mis-binding the user. The seam treats ``None`` as "leave name
+        alone," which means LCM cannot identify its own user on such a
+        lock -- those locks are effectively unmanaged at the user-name
+        level.
 
         Returns ``None`` when the lock has no concept of named users
-        (``max_user_name_length == 0`` or ``supports_user_management`` is
-        False); the seam's ``_supports_user_records`` gate already short-
-        circuits the user-write path on such locks, so a ``None`` return
-        here means "do not write a user name." A best-effort
-        capabilities-fetch failure also returns ``None`` rather than
-        blocking the write -- the cache stays unset so the next call
-        retries.
+        (``supports_user_management`` is False or
+        ``max_user_name_length <= 0``); the seam's
+        ``_supports_user_records`` gate already short-circuits the
+        user-write path on such locks, but the guard here is
+        defensive in case the helper is called outside that gate. A
+        best-effort capabilities-fetch failure also returns ``None``
+        rather than blocking the write -- the cache stays unset so the
+        next call retries.
 
         Worst-case canonical prefix overhead is 8 characters
         (``lcm:255:``); on a 10-character-limit lock that leaves 2
         characters of display, which is degenerate but functional.
         Locks advertising a length below that (rare) hit the slot-only
-        fallback.
+        fallback or the ``None`` return.
         """
         try:
             caps = await self._get_cached_capabilities()
         except LockDisconnected, LockOperationFailed:
             return None
-        if caps.max_user_name_length <= 0:
+        if not caps.supports_user_management or caps.max_user_name_length <= 0:
             return None
         tagged = make_tagged_name(slot, display)
         if len(tagged) <= caps.max_user_name_length:
             return tagged
         if len(f"lcm:{slot}:") > caps.max_user_name_length:
-            # Canonical prefix doesn't fit. Fall back to the slot-only
-            # encoding so the slot binding survives the read.
-            return str(slot)[: caps.max_user_name_length]
+            # Canonical prefix doesn't fit. Try the slot-only fallback so
+            # the slot binding survives the read; if the slot digits
+            # themselves can't fit either, return ``None`` rather than
+            # truncate the slot number to a different one and mis-bind
+            # the user.
+            slot_str = str(slot)
+            if len(slot_str) > caps.max_user_name_length:
+                return None
+            return slot_str
         # Canonical prefix fits; truncate only the display portion.
         return tagged[: caps.max_user_name_length]
 

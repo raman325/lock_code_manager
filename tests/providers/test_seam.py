@@ -513,6 +513,39 @@ async def test_build_tagged_user_name_falls_back_to_slot_only_when_prefix_overfl
     assert await lock._build_tagged_user_name(255, "alice") == "255"
 
 
+async def test_build_tagged_user_name_returns_none_when_slot_digits_dont_fit(
+    hass: HomeAssistant,
+) -> None:
+    """If even the slot digits can't fit, return None rather than truncate.
+
+    Regression for #1239 review (Copilot). On a max_user_name_length
+    smaller than ``len(str(slot))`` (e.g. slot=255 on a 2-char lock),
+    slicing ``str(slot)`` would yield ``"25"`` -- the wrong slot. Better
+    to return ``None`` and let the seam treat it as "no name write" than
+    silently mis-bind the user to a different slot.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_slot_too_big")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=2
+    )
+    # "255" is 3 chars, doesn't fit in a 2-char limit.
+    assert await lock._build_tagged_user_name(255, "alice") is None
+
+
+async def test_build_tagged_user_name_returns_none_when_supports_user_management_false(
+    hass: HomeAssistant,
+) -> None:
+    """``supports_user_management=False`` returns None even with a positive length.
+
+    Defensive guard for callers that bypass ``_supports_user_records``.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_no_user_mgmt")
+    lock._capabilities_cache = _caps(
+        supports_user_management=False, max_user_name_length=16
+    )
+    assert await lock._build_tagged_user_name(5, "alice") is None
+
+
 async def test_build_tagged_user_name_keeps_canonical_prefix_when_it_just_fits(
     hass: HomeAssistant,
 ) -> None:
@@ -719,26 +752,28 @@ async def test_clear_usercode_native_resolves_owner_when_user_id_not_slot(
     assert 12 in lock._users
 
 
-async def test_clear_usercode_resolves_owner_by_tag_when_credential_index_not_slot(
+async def test_clear_usercode_resolves_owner_by_tag_when_user_id_not_slot(
     hass: HomeAssistant,
 ) -> None:
-    """Owner resolution prefers the LCM tag in user.name over credential.slot.
+    """Owner resolution prefers the LCM tag in user.name over the user_id heuristic.
 
-    Regression for #1239 review. After the PR drops the credential_index=slot
-    invariant for Matter, a user tagged ``lcm:5:`` may own a PIN whose
-    Credential.slot is the Matter-auto-allocated index (e.g. 1), not the
-    LCM slot. The owner resolution in async_clear_usercode must find the
-    user by the canonical tag in user.name, not by ``credential.slot ==
-    code_slot`` alone -- otherwise the loop yields nothing and the clear
-    silently no-ops.
+    Regression for #1239 review. After the PR drops the user_id == LCM
+    slot invariant for native-user providers, a user tagged ``lcm:5:``
+    can have any lock-side ``user_id`` (Matter auto-allocates). The
+    owner resolution in async_clear_usercode must find the user by the
+    canonical tag, not by anything tied to the lock-side user_id.
+
+    (The provider's ``async_get_users`` is responsible for projecting
+    ``Credential.slot`` to the LCM slot, so by the time this code runs,
+    ``credential.slot == code_slot`` is the right query for the
+    PIN-ownership guard.)
     """
     lock = _make_lock(hass, _NativeStubLock, "seam_clear_by_tag")
     lock._users = {
         42: User(
-            user_id=42,
+            user_id=42,  # Matter-auto-allocated; NOT the LCM slot.
             name="lcm:5:Alice",
-            # Matter-auto-allocated credential index 1, NOT the LCM slot 5.
-            credentials=[credential_from_slot(1, SlotCredential.known("1234"))],
+            credentials=[credential_from_slot(5, SlotCredential.known("1234"))],
         )
     }
     changed = await lock.async_clear_usercode(5)
@@ -747,6 +782,33 @@ async def test_clear_usercode_resolves_owner_by_tag_when_credential_index_not_sl
     # with the ref's slot=5 (LCM slot).
     assert lock.calls == [("delete_credential", 42, 5)]
     assert 42 in lock._users
+
+
+async def test_clear_usercode_no_op_when_tagged_user_has_no_pin_credential(
+    hass: HomeAssistant,
+) -> None:
+    """A tagged user with no PIN credential is not the slot's owner -> clear is no-op.
+
+    Regression for #1239 review (Copilot). Under the persistent-user-anchor
+    lifecycle, an ``lcm:<slot>:`` tagged user can exist with no PIN
+    (between writes, or after a previous clear). The canonical owner
+    pass must require the user to own a PIN at the slot before resolving
+    them as the owner -- otherwise ``_delete_credential`` would call the
+    provider's ``async_delete_credential`` which (for some providers, e.g.
+    zwave_js) unconditionally returns True and causes a spurious
+    coordinator refresh.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_tagged_no_pin")
+    lock._users = {
+        42: User(
+            user_id=42,
+            name="lcm:5:Alice",  # tagged but no credentials
+            credentials=[],
+        )
+    }
+    changed = await lock.async_clear_usercode(5)
+    assert changed is False
+    assert lock.calls == []
 
 
 async def test_clear_usercode_legacy_pass_skips_users_tagged_for_other_slots(
