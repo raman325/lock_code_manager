@@ -485,13 +485,25 @@ async def test_concurrent_set_credential_serialized_under_sequence_lock(
 
     await asyncio.gather(
         schlage_lock.async_set_credential(
-            1, _pin_cred(1, "1111"), name=None, source="direct"
+            1,
+            _pin_cred(1, "1111"),
+            (_pin_cred(1, "1111")).readable_pin or "",
+            name=None,
+            source="direct",
         ),
         schlage_lock.async_set_credential(
-            2, _pin_cred(2, "2222"), name=None, source="direct"
+            2,
+            _pin_cred(2, "2222"),
+            (_pin_cred(2, "2222")).readable_pin or "",
+            name=None,
+            source="direct",
         ),
         schlage_lock.async_set_credential(
-            3, _pin_cred(3, "3333"), name=None, source="direct"
+            3,
+            _pin_cred(3, "3333"),
+            (_pin_cred(3, "3333")).readable_pin or "",
+            name=None,
+            source="direct",
         ),
     )
 
@@ -520,7 +532,11 @@ async def test_set_credential_replaces_existing(
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     result = await schlage_lock.async_set_credential(
-        1, _pin_cred(1, "5678"), name="New Name", source="direct"
+        1,
+        _pin_cred(1, "5678"),
+        (_pin_cred(1, "5678")).readable_pin or "",
+        name="New Name",
+        source="direct",
     )
 
     assert result is True
@@ -561,7 +577,11 @@ async def test_set_credential_preserves_existing_name(
     delete_handler.side_effect = lambda _: call_order.append("delete")
 
     result = await schlage_lock.async_set_credential(
-        1, _pin_cred(1, "9999"), name=None, source="direct"
+        1,
+        _pin_cred(1, "9999"),
+        (_pin_cred(1, "9999")).readable_pin or "",
+        name=None,
+        source="direct",
     )
 
     assert result is True
@@ -599,7 +619,11 @@ async def test_set_credential_already_exists_treated_as_success(
     register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
 
     result = await schlage_lock.async_set_credential(
-        1, _pin_cred(1, "1234"), name="Guest", source="direct"
+        1,
+        _pin_cred(1, "1234"),
+        (_pin_cred(1, "1234")).readable_pin or "",
+        name="Guest",
+        source="direct",
     )
 
     assert result is True
@@ -619,7 +643,11 @@ async def test_set_credential_non_exists_error_still_raises(
 
     with pytest.raises(LockOperationFailed, match="connection lost"):
         await schlage_lock.async_set_credential(
-            1, _pin_cred(1, "1234"), name=None, source="direct"
+            1,
+            _pin_cred(1, "1234"),
+            (_pin_cred(1, "1234")).readable_pin or "",
+            name=None,
+            source="direct",
         )
 
 
@@ -635,7 +663,11 @@ async def test_set_credential_service_failure(
 
     with pytest.raises(LockOperationFailed, match="connection lost"):
         await schlage_lock.async_set_credential(
-            1, _pin_cred(1, "1234"), name=None, source="direct"
+            1,
+            _pin_cred(1, "1234"),
+            (_pin_cred(1, "1234")).readable_pin or "",
+            name=None,
+            source="direct",
         )
 
 
@@ -770,7 +802,11 @@ async def test_base_orchestration_set_and_get(
     )
 
     await schlage_lock.async_set_credential(
-        1, _pin_cred(1, "9999"), name="test", source="direct"
+        1,
+        _pin_cred(1, "9999"),
+        (_pin_cred(1, "9999")).readable_pin or "",
+        name="test",
+        source="direct",
     )
 
     # After setting, the lock reports the slot as unreadable (write-only Personal Identification Number)

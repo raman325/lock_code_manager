@@ -407,6 +407,7 @@ class Zigbee2MQTTLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -420,7 +421,6 @@ class Zigbee2MQTTLock(BaseLock):
         slot-only providers address the credential by ``credential.slot``.
         """
         code_slot = credential.slot
-        usercode = credential.readable_pin or ""
 
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
@@ -439,7 +439,7 @@ class Zigbee2MQTTLock(BaseLock):
                 "pin_code": {
                     "user": code_slot,
                     "user_type": "unrestricted",
-                    "pin_code": str(usercode),
+                    "pin_code": pin,
                     "user_enabled": True,
                 }
             }
@@ -473,7 +473,7 @@ class Zigbee2MQTTLock(BaseLock):
             code_slot,
         )
         # Optimistic coordinator update after publish (MQTT QoS 0); hard_refresh mitigates drift.
-        self._push_credential_update(code_slot, SlotCredential.known(str(usercode)))
+        self._push_credential_update(code_slot, SlotCredential.known(pin))
         return True
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:

@@ -69,6 +69,7 @@ class VirtualLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -80,7 +81,7 @@ class VirtualLock(BaseLock):
         Ignores ``user_id``; slot-only providers address the credential by slot.
         """
         slot_key = str(credential.slot)
-        new_data = CodeSlotData(code=credential.readable_pin or "", name=name)
+        new_data = CodeSlotData(code=pin, name=name)
         if slot_key in self._data and self._data[slot_key] == new_data:
             return False
         self._data[slot_key] = new_data

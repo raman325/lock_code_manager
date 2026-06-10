@@ -21,27 +21,43 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
 
     # First set should return True (value changed from empty)
     changed = await lock.async_set_credential(
-        1, _make_credential(1, "1234"), name="test", source="direct"
+        1,
+        _make_credential(1, "1234"),
+        (_make_credential(1, "1234")).readable_pin or "",
+        name="test",
+        source="direct",
     )
     assert changed is True
     assert lock._data["1"] == {"code": "1234", "name": "test"}
 
     # Setting the same value should return False (no change)
     changed = await lock.async_set_credential(
-        1, _make_credential(1, "1234"), name="test", source="direct"
+        1,
+        _make_credential(1, "1234"),
+        (_make_credential(1, "1234")).readable_pin or "",
+        name="test",
+        source="direct",
     )
     assert changed is False
 
     # Changing the code should return True
     changed = await lock.async_set_credential(
-        1, _make_credential(1, "5678"), name="test", source="direct"
+        1,
+        _make_credential(1, "5678"),
+        (_make_credential(1, "5678")).readable_pin or "",
+        name="test",
+        source="direct",
     )
     assert changed is True
     assert lock._data["1"] == {"code": "5678", "name": "test"}
 
     # Changing the name should return True
     changed = await lock.async_set_credential(
-        1, _make_credential(1, "5678"), name="new_name", source="direct"
+        1,
+        _make_credential(1, "5678"),
+        (_make_credential(1, "5678")).readable_pin or "",
+        name="new_name",
+        source="direct",
     )
     assert changed is True
     assert lock._data["1"] == {"code": "5678", "name": "new_name"}
@@ -62,6 +78,7 @@ async def test_delete_credential_returns_changed_status(virtual_lock: VirtualLoc
     await lock.async_set_credential(
         1,
         credential_from_slot(1, SlotCredential.known("1234")),
+        (credential_from_slot(1, SlotCredential.known("1234"))).readable_pin or "",
         name="test",
         source="direct",
     )
@@ -94,6 +111,7 @@ async def test_get_users_returns_empty_for_cleared_slots(
     await lock.async_set_credential(
         1,
         credential_from_slot(1, SlotCredential.known("1234")),
+        (credential_from_slot(1, SlotCredential.known("1234"))).readable_pin or "",
         name="slot1",
         source="direct",
     )
@@ -128,6 +146,7 @@ async def test_get_users_includes_unmanaged_occupied_slots(
     await lock.async_set_credential(
         1,
         credential_from_slot(1, SlotCredential.known("1234")),
+        (credential_from_slot(1, SlotCredential.known("1234"))).readable_pin or "",
         name="slot1",
         source="direct",
     )
@@ -177,6 +196,7 @@ async def test_base_orchestration_set_clear_get(virtual_lock_with_slots: Virtual
     await lock.async_set_credential(
         1,
         credential_from_slot(1, SlotCredential.known("4321")),
+        (credential_from_slot(1, SlotCredential.known("4321"))).readable_pin or "",
         name="orchestration_test",
         source="direct",
     )
@@ -200,6 +220,7 @@ async def test_get_users_returns_user_objects(virtual_lock_with_slots: VirtualLo
     await lock.async_set_credential(
         1,
         credential_from_slot(1, SlotCredential.known("7777")),
+        (credential_from_slot(1, SlotCredential.known("7777"))).readable_pin or "",
         name=None,
         source="direct",
     )

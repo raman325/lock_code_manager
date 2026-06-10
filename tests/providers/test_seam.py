@@ -78,6 +78,7 @@ class _NativeStubLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -86,6 +87,7 @@ class _NativeStubLock(BaseLock):
         self.last_set_credential = {
             "user_id": user_id,
             "slot": credential.slot,
+            "pin": pin,
             "name": name,
             "source": source,
         }
@@ -137,6 +139,7 @@ class _DegenerateStubLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -170,6 +173,7 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
         await lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("1")),
+            "1",
             name=None,
             source="direct",
         )
@@ -542,7 +546,9 @@ async def test_set_credential_rejects_unsupported_credential_type(
     )
     user = User(user_id=2, credentials=[rfid_credential])
     with pytest.raises(CodeRejectedError):
-        await lock._set_credential(user, rfid_credential, name=None, source="direct")
+        await lock._set_credential(
+            user, rfid_credential, "AABB", name=None, source="direct"
+        )
     # No primitive was reached because the assertion fired first.
     assert lock.calls == []
 
@@ -557,6 +563,25 @@ async def test_delete_credential_rejects_unsupported_credential_type(
     with pytest.raises(CodeRejectedError):
         await lock._delete_credential(owner, ref)
     assert lock.calls == []
+
+
+async def test_require_readable_pin_rejects_unreadable_credential(
+    hass: HomeAssistant,
+) -> None:
+    """The base contract helper raises before any provider primitive is reached.
+
+    The seam (``async_set_usercode``) constructs Known credentials so this
+    branch is unreachable in production; the helper exists to express the
+    invariant once and give providers a guaranteed-string ``pin`` argument.
+    A direct call here pins that contract.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_require_pin")
+    unreadable = Credential(
+        type=CredentialType.PIN, slot=4, state=SlotCredential.unreadable()
+    )
+    with pytest.raises(CodeRejectedError) as exc_info:
+        lock._require_readable_pin(unreadable)
+    assert exc_info.value.code_slot == 4
 
 
 async def test_set_usercode_native_user_first_and_threads_id(
@@ -757,6 +782,7 @@ async def test_set_usercode_threads_name_and_source(hass: HomeAssistant) -> None
     assert lock.last_set_credential == {
         "user_id": 2,
         "slot": 2,
+        "pin": "2468",
         "name": None,
         "source": "sync",
     }
@@ -769,6 +795,7 @@ class _CredentialWriteFailsLock(_NativeStubLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],

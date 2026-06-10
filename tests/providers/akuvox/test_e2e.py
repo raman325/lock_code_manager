@@ -61,6 +61,7 @@ class TestSetAndClearCredentials:
         result = await e2e_akuvox_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("9999")),
+            (credential_from_slot(1, SlotCredential.known("9999"))).readable_pin or "",
             name="E2E Guest",
             source="direct",
         )
@@ -94,6 +95,7 @@ class TestSetAndClearCredentials:
         result = await e2e_akuvox_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("5678")),
+            (credential_from_slot(1, SlotCredential.known("5678"))).readable_pin or "",
             name="Updated",
             source="direct",
         )

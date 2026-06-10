@@ -224,6 +224,7 @@ class ZHALock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -243,14 +244,13 @@ class ZHALock(BaseLock):
         by ``credential.slot``.
         """
         code_slot = credential.slot
-        usercode = credential.readable_pin or ""
         cluster = await self._get_connected_cluster()
         try:
             result = await cluster.set_pin_code(
                 code_slot,
                 DoorLock.UserStatus.Enabled,
                 DoorLock.UserType.Unrestricted,
-                str(usercode),
+                pin,
             )
         except Exception as err:
             raise LockDisconnected(f"Failed to set PIN: {err}") from err
@@ -266,7 +266,7 @@ class ZHALock(BaseLock):
                 lock_entity_id=self.lock.entity_id,
                 reason=f"set_pin_code rejected: status {result.status}",
             )
-        self._push_credential_update(code_slot, SlotCredential.known(usercode))
+        self._push_credential_update(code_slot, SlotCredential.known(pin))
         return True
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
