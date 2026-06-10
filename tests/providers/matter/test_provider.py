@@ -1321,6 +1321,48 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
+    async def test_pin_event_with_missing_data_index_still_fires(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Events with no ``dataIndex`` still push if ``userIndex`` resolves.
+
+        ``dataIndex`` (the Matter credential index) is no longer the LCM
+        slot under the user-tag model; it's only kept for log context.
+        Hard-rejecting events where ``dataIndex`` is absent or malformed
+        would silently lose otherwise-resolvable state updates -- the LCM
+        slot comes from ``userIndex`` -> tag.
+        """
+        mock_coordinator = MagicMock()
+        mock_coordinator.data = {3: SlotCredential.empty()}
+        matter_lock_simple.coordinator = mock_coordinator
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 42,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,
+                        "dataOperationType": 0,
+                        # dataIndex omitted -- previously would hard-reject.
+                        "userIndex": 42,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        mock_coordinator.push_update.assert_called_once_with(
+            {3: SlotCredential.unreadable()}
+        )
+
     async def test_pin_event_dispatch_swallows_lock_disconnected(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:

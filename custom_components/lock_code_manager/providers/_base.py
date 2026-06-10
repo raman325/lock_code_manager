@@ -1246,6 +1246,16 @@ class BaseLock:
         await self._assert_credential_type_supported(credential)
         if await self._supports_user_records():
             tagged = await self._build_tagged_user_name(credential.slot, user.name)
+            if tagged is None:
+                # No stable slot tag fits the lock's max_user_name_length --
+                # writing a user without one (or with name=None) would break
+                # the find-or-create-by-tag lookup the next operation needs.
+                # Fail loudly rather than create an unrecoverable user.
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id} cannot encode a stable slot "
+                    f"tag for slot {credential.slot}; refusing to write a "
+                    "credential whose owning user could not be re-identified"
+                )
             user_for_write = user if tagged == user.name else replace(user, name=tagged)
             result = await self.async_set_user(user_for_write)
             credential_user_id = result.user_id

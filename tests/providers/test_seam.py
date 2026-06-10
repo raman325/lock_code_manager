@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
 from unittest.mock import AsyncMock, patch
 
@@ -957,6 +958,34 @@ async def test_set_usercode_keeps_pre_existing_user_on_failure(
         await lock.async_set_usercode(3, "9999", name="bob")
     assert ("delete_user", 3) not in lock.calls
     assert 3 in lock._users
+
+
+async def test_set_usercode_fails_loudly_when_tag_cant_be_encoded(
+    hass: HomeAssistant,
+) -> None:
+    """``_set_credential`` refuses to write a user with no recoverable slot tag.
+
+    Pins the safety check on a native-user provider whose
+    ``max_user_name_length`` can't fit even the slot digits:
+    ``_build_tagged_user_name`` returns ``None``, and the seam must
+    fail loudly rather than call ``async_set_user(name=None)`` --
+    writing a nameless user would break the find-or-create-by-tag
+    lookup the next operation needs and leave an unrecoverable
+    duplicate user on the lock.
+    """
+
+    class _TinyNameLock(_NativeStubLock):
+        async def async_get_capabilities(self) -> LockCapabilities:
+            base = await super().async_get_capabilities()
+            # max_user_name_length=1 -- slot 25 ("25") doesn't fit.
+            return replace(base, max_user_name_length=1)
+
+    lock = _make_lock(hass, _TinyNameLock, "seam_no_stable_tag")
+    with pytest.raises(LockOperationFailed, match="cannot encode a stable slot tag"):
+        await lock.async_set_usercode(25, "9999", name="alice")
+    # No user written, no credential written -- failure happened before either.
+    assert not any(c[0] == "set_user" for c in lock.calls)
+    assert not any(c[0] == "set_credential" for c in lock.calls)
 
 
 async def test_set_usercode_logs_warning_when_rollback_user_delete_fails(

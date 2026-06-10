@@ -924,30 +924,20 @@ class MatterLock(BaseLock):
 
         Only PIN credentials (LockDataType=6) are handled.
 
-        The event's ``dataIndex`` is the Matter credential index, which is
-        no longer pinned to the LCM slot (Matter auto-allocates). To find
-        the LCM slot we use the event's ``userIndex`` to look up the
-        owning user's name and parse its ``lcm:<slot>:`` tag. The lookup
-        is async (a fresh ``_raw_lock_users`` round-trip) so the callback
-        schedules a task rather than blocking the event loop. Events for
-        users LCM doesn't own (untagged names) are ignored -- those
-        credentials don't belong to any LCM-managed slot.
+        The LCM slot is resolved by walking the event's ``userIndex`` to
+        the owning user's name and parsing its ``lcm:<slot>:`` tag --
+        ``userIndex`` alone is sufficient. ``dataIndex`` (the Matter
+        credential index) is captured best-effort for log context only;
+        it's no longer pinned to the LCM slot under the user-tag model
+        and dropping otherwise-resolvable events when it's missing or
+        malformed would silently lose state updates. The lookup is async
+        (a fresh ``_raw_lock_users`` round-trip) so the callback
+        schedules a task rather than blocking the event loop. Events
+        for users LCM doesn't own (untagged names) are ignored.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
 
         if data.get("lockDataType") != _LOCK_DATA_TYPE_PIN:
-            return
-
-        raw_index = data.get("dataIndex")
-        if raw_index is None:
-            return
-        credential_index = parse_slot_num(raw_index)
-        if credential_index is None:
-            LOGGER.warning(
-                "Lock %s: LockUserChange has non-integer dataIndex %r, ignoring",
-                self.lock.entity_id,
-                raw_index,
-            )
             return
 
         user_index = parse_slot_num(data.get("userIndex"))
@@ -958,6 +948,10 @@ class MatterLock(BaseLock):
                 data.get("userIndex"),
             )
             return
+
+        # Best-effort: parsed for log context only; the LCM slot comes
+        # from the userIndex -> tag resolution in _dispatch_lock_user_change.
+        credential_index = parse_slot_num(data.get("dataIndex"))
 
         operation = data.get("dataOperationType")
         if operation == _DATA_OP_CLEAR:
