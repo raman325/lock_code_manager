@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f6b649e53666",
+  "session_id": "f007f8e0-8e15-49f8-9b78-ca4730e9a56f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T04:33:45.606578Z",
+  "branch": "matter-credential-migration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/credentials.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "cbb8635747cd",
+  "checkpoint_transcript_start": 2010,
+  "transcript_lines_at_start": 2010,
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 23563,
+    "cache_read_tokens": 13275979,
+    "output_tokens": 11076,
+    "api_call_count": 21
+  },
+  "session_metrics": {
+    "turn_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T04:33:44.874365Z",
+    "agent_lines": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 100
+  }
+}

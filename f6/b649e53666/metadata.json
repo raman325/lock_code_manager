@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f6b649e53666",
+  "strategy": "manual-commit",
+  "branch": "matter-credential-migration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/credentials.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f6/b649e53666/0/metadata.json",
+      "transcript": "/f6/b649e53666/0/full.jsonl",
+      "content_hash": "/f6/b649e53666/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 23563,
+    "cache_read_tokens": 13275979,
+    "output_tokens": 11076,
+    "api_call_count": 21
+  }
+}
