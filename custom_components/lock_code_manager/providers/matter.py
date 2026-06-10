@@ -23,6 +23,7 @@ from homeassistant.components.matter.helpers import (
 from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
     clear_lock_credential,
+    clear_lock_user,
     get_lock_credential_status,
     get_lock_info,
     get_lock_users,
@@ -33,11 +34,21 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+    SetUserResult,
+    User,
+)
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationFailed,
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -96,6 +107,18 @@ class MatterLock(BaseLock):
         """
         return timedelta(hours=1)
 
+    @property
+    def supports_native_users(self) -> bool:
+        """
+        Return True — Matter locks expose the full User/Credential model.
+
+        Matter's DoorLock cluster manages users and credentials as distinct
+        entities, so the base orchestration runs the user-first lifecycle
+        (create/update user, then write its Personal Identification Number
+        credential; delete the user when its last credential is removed).
+        """
+        return True
+
     def _get_matter_node(self) -> Any | None:
         """
         Get the MatterNode for this lock from the Matter integration.
@@ -138,32 +161,369 @@ class MatterLock(BaseLock):
             )
         return client, node
 
-    async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Validate the lock supports Matter user management."""
+    # -- Credential primitives -----------------------------------------------
+
+    async def async_get_users(self) -> list[User]:
+        """
+        Read every user and their Personal Identification Number credentials from the lock.
+
+        Matter PINs are write-only: each occupied credential slot is projected to
+        SlotCredential.unreadable(). Non-PIN credentials (for example RFID) are
+        filtered out because the coordinator and sync manager only manage PIN slots.
+        """
         client, node = self._require_client_and_node()
         try:
-            lock_info = await get_lock_info(client, node)
+            lock_data = await get_lock_users(client, node)
         except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
+            raise LockOperationFailed(
+                f"Matter get_lock_users rejected input for {self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
+            ) from err
+
+        # A for-loop (not a comprehension) so the int-or-None user_index and
+        # credential index are narrowed by explicit guards before use: the
+        # Matter helper types both as ``int | None``.
+        users: list[User] = []
+        for raw_user in lock_data.get("users", []):
+            user_index = raw_user.get("user_index")
+            if user_index is None:
+                continue
+            pin_credentials: list[Credential] = []
+            for cred in raw_user.get("credentials", []):
+                slot = cred.get("index")
+                if cred.get("type") != "pin" or slot is None:
+                    continue
+                pin_credentials.append(
+                    Credential(
+                        type=CredentialType.PIN,
+                        slot=slot,
+                        state=SlotCredential.unreadable(),
+                    )
+                )
+            users.append(
+                User(
+                    user_id=user_index,
+                    name=raw_user.get("user_name"),
+                    active=True,
+                    credentials=pin_credentials,
+                )
+            )
+        return users
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """
+        Read lock capabilities from the Matter DoorLock cluster.
+
+        Maps the get_lock_info result to a platform-neutral LockCapabilities.
+        Only the Personal Identification Number credential type is surfaced
+        when the lock advertises PIN support. None capacity fields default
+        to 0 (unknown capacity) rather than raising.
+        """
+        client, node = self._require_client_and_node()
+        try:
+            info = await get_lock_info(client, node)
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
                 f"Matter get_lock_info rejected input for {self.lock.entity_id}: {err}"
             ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
                 f"Matter get_lock_info failed for {self.lock.entity_id}: {err}"
             ) from err
-        if not lock_info.get("supports_user_management"):
-            raise LockCodeManagerProviderError(
-                f"Matter lock {self.lock.entity_id} does not support user management"
+
+        credential_types: dict[CredentialType, CredentialTypeCapability] = {}
+        if "pin" in (info.get("supported_credential_types") or []):
+            credential_types[CredentialType.PIN] = CredentialTypeCapability(
+                num_slots=info.get("max_pin_users") or 0,
+                min_length=info.get("min_pin_length") or 0,
+                max_length=info.get("max_pin_length") or 0,
+                supports_learn=False,
             )
-        if "pin" not in (lock_info.get("supported_credential_types") or []):
-            raise LockCodeManagerProviderError(
-                f"Matter lock {self.lock.entity_id} does not support PIN credentials"
-            )
-        LOGGER.debug(
-            "Matter lock %s setup complete: %s",
-            self.lock.entity_id,
-            lock_info,
+
+        return LockCapabilities(
+            supports_user_management=bool(info.get("supports_user_management")),
+            max_users=info.get("max_users") or 0,
+            credential_types=credential_types,
+            # Matter DoorLock spec caps UserName at 32 bytes UTF-8;
+            # ``matter.lock_helpers`` does not yet surface the attribute.
+            max_user_name_length=32,
         )
+
+    async def async_set_user(self, user: User) -> SetUserResult:
+        """
+        Create or update a lock user, returning whether it was newly created.
+
+        The user.user_id here is the slot (credential_index). Matter allocates
+        user_index independently: you cannot create a user at a chosen index —
+        set_lock_user raises UserSlotEmptyError when user_index is given for an
+        empty slot. So the flow is:
+
+        1. Check the credential slot's current owner via get_lock_credential_status.
+        2. If the slot is occupied (UPDATE): call set_lock_user with the existing
+           user_index from the status response.
+        3. If the slot is empty (CREATE): call set_lock_user with user_index=None
+           so Matter auto-allocates a free user slot and returns the new index.
+
+        The returned SetUserResult carries the real Matter user_index, which the
+        base orchestration passes into async_set_credential as the user_id.
+        """
+        client, node = self._require_client_and_node()
+        try:
+            status = await get_lock_credential_status(
+                client,
+                node,
+                credential_type="pin",
+                credential_index=user.user_id,
+            )
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter get_lock_credential_status rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter get_lock_credential_status failed for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+
+        credential_exists = status.get("credential_exists", False)
+        existing_user_index = status.get("user_index")
+
+        if credential_exists and existing_user_index is None:
+            # The credential is reportedly occupied but the lock did not
+            # surface its owner. Falling through to CREATE would orphan
+            # the original user (it would still exist with zero credentials)
+            # and break the user-per-credential invariant, so refuse the
+            # write and let the caller decide how to recover.
+            raise LockOperationFailed(
+                f"Matter lock {self.lock.entity_id} slot {user.user_id} reports "
+                "credential_exists=True but no user_index"
+            )
+
+        if credential_exists and existing_user_index is not None:
+            # UPDATE: the slot is occupied — modify the existing user record.
+            # set_lock_user here is a metadata-only name update. The historical
+            # Matter contract (PR #1077) tolerated name-set failures so a
+            # transient 500 or a name the lock rejects does not block the
+            # subsequent credential write; the user still exists at the
+            # known index, the only thing lost is the name update. Log a
+            # warning and fall through.
+            try:
+                await set_lock_user(
+                    client,
+                    node,
+                    user_index=existing_user_index,
+                    user_name=user.name,
+                )
+            except HomeAssistantError as err:
+                LOGGER.warning(
+                    "Lock %s: failed to update user name on slot %s "
+                    "(user_index=%s); continuing without name update: %s",
+                    self.lock.entity_id,
+                    user.user_id,
+                    existing_user_index,
+                    err,
+                )
+            return SetUserResult(user_id=existing_user_index, created=False)
+
+        # CREATE: the slot is empty — let Matter auto-allocate a user_index.
+        try:
+            result = await set_lock_user(
+                client,
+                node,
+                user_index=None,
+                user_name=user.name,
+            )
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter set_lock_user rejected input for {self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
+            ) from err
+        return SetUserResult(user_id=result["user_index"], created=True)
+
+    async def async_delete_user(self, user_id: int) -> None:
+        """
+        Delete a lock user and all of its credentials.
+
+        The Matter DoorLock ClearUser command also clears all associated
+        credentials and schedules for the user per the Matter specification.
+        """
+        client, node = self._require_client_and_node()
+        try:
+            await clear_lock_user(client, node, user_id)
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter clear_lock_user rejected input for {self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter clear_lock_user failed for {self.lock.entity_id}: {err}"
+            ) from err
+
+    async def _send_set_credential(
+        self,
+        client: Any,
+        node: Any,
+        code_slot: int,
+        pin: str,
+        user_id: int,
+    ) -> None:
+        """
+        Send set_lock_credential to the lock for the given slot, PIN, and user.
+
+        Raises SetCredentialFailedError on lock rejection,
+        CodeRejectedError on validation failure,
+        LockDisconnected on communication failure.
+        """
+        try:
+            await set_lock_credential(
+                client,
+                node,
+                credential_type="pin",
+                credential_data=pin,
+                credential_index=code_slot,
+                user_index=user_id,
+            )
+        except SetCredentialFailedError:
+            raise
+        except ServiceValidationError as err:
+            # Bad Personal Identification Number / unsupported type -> the lock
+            # rejects the value; surface as a code rejection.
+            raise CodeRejectedError(
+                code_slot=code_slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=str(err),
+            ) from err
+        except HomeAssistantError as err:
+            # Transport / endpoint failure -> route to the retry path.
+            raise LockDisconnected(
+                f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
+            ) from err
+
+    async def async_set_credential(
+        self,
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> bool:
+        """
+        Write a Personal Identification Number credential to the lock.
+
+        Raises CodeRejectedError when the credential has no readable value
+        (for example when projecting an already-unreadable slot — the lock
+        requires a concrete PIN string). Handles the duplicate-slot restart
+        case for sync sources by clearing and retrying once.
+
+        The base orchestration skips coordinator refresh for push providers.
+        Matter does not emit LockUserChange for LCM-initiated writes, so an
+        optimistic push is required to keep the coordinator current.
+        """
+        if credential.readable_pin is None:
+            raise CodeRejectedError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason="credential has no readable Personal Identification Number value",
+            )
+
+        client, node = self._require_client_and_node()
+        pin = credential.readable_pin
+        slot = credential.slot
+
+        try:
+            await self._send_set_credential(client, node, slot, pin, user_id)
+        except SetCredentialFailedError as err:
+            status = (err.translation_placeholders or {}).get("status", "")
+            if status != "duplicate":
+                raise CodeRejectedError(
+                    code_slot=slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=str(err),
+                ) from err
+            if source != "sync":
+                raise DuplicateCodeError(
+                    code_slot=slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
+
+            # Sync duplicate: clear and retry once
+            LOGGER.debug(
+                "Lock %s: duplicate on slot %s, clearing and retrying",
+                self.lock.entity_id,
+                slot,
+            )
+            try:
+                await clear_lock_credential(
+                    client, node, credential_type="pin", credential_index=slot
+                )
+            except ServiceValidationError as clear_err:
+                raise LockOperationFailed(
+                    f"Matter clear_lock_credential rejected input for "
+                    f"{self.lock.entity_id} during sync-duplicate retry: {clear_err}"
+                ) from clear_err
+            except HomeAssistantError as clear_err:
+                raise LockDisconnected(
+                    f"Matter clear_lock_credential failed for "
+                    f"{self.lock.entity_id} during sync-duplicate retry: {clear_err}"
+                ) from clear_err
+            try:
+                await self._send_set_credential(client, node, slot, pin, user_id)
+            except SetCredentialFailedError as retry_err:
+                retry_status = (retry_err.translation_placeholders or {}).get(
+                    "status", ""
+                )
+                if retry_status == "duplicate":
+                    raise DuplicateCodeError(
+                        code_slot=slot,
+                        lock_entity_id=self.lock.entity_id,
+                    ) from retry_err
+                raise CodeRejectedError(
+                    code_slot=slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=str(retry_err),
+                ) from retry_err
+
+        self._push_credential_update(slot, SlotCredential.unreadable())
+        return True
+
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
+        """
+        Clear a Personal Identification Number credential from the lock.
+
+        Returns True on success. Pushes SlotCredential.empty() to the
+        coordinator immediately because Matter does not emit LockUserChange
+        for LCM-initiated clears.
+        """
+        client, node = self._require_client_and_node()
+        try:
+            await clear_lock_credential(
+                client,
+                node,
+                credential_type="pin",
+                credential_index=ref.slot,
+            )
+        except ServiceValidationError as err:
+            raise LockOperationFailed(
+                f"Matter clear_lock_credential rejected input for "
+                f"{self.lock.entity_id}: {err}"
+            ) from err
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"Matter clear_lock_credential failed for {self.lock.entity_id}: {err}"
+            ) from err
+
+        self._push_credential_update(ref.slot, SlotCredential.empty())
+        return True
+
+    async def async_setup(self, config_entry: ConfigEntry) -> None:
+        """No matter-specific setup; base validates required capabilities."""
 
     async def async_is_device_available(self) -> bool:
         """Return whether the Matter lock device is available for commands."""
@@ -348,271 +708,13 @@ class MatterLock(BaseLock):
 
         self._push_credential_update(code_slot, resolved)
 
-    # -- Credential helpers --------------------------------------------------
-
-    async def _set_lock_credential(self, code_slot: int, usercode: str) -> int | None:
-        """
-        Send set_lock_credential to the lock and return the user_index.
-
-        Raises SetCredentialFailedError on lock rejection,
-        LockCodeManagerProviderError on invalid input,
-        LockDisconnected on communication failure.
-        """
-        client, node = self._require_client_and_node()
-        try:
-            result = await set_lock_credential(
-                client,
-                node,
-                credential_type="pin",
-                credential_data=usercode,
-                credential_index=code_slot,
-            )
-        except SetCredentialFailedError:
-            raise
-        except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
-                f"Matter set_lock_credential rejected input for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
-            ) from err
-        return result.get("user_index")
-
-    async def _clear_lock_credential(self, code_slot: int) -> None:
-        """
-        Send clear_lock_credential to the lock.
-
-        Raises LockCodeManagerProviderError on invalid input,
-        LockDisconnected on communication failure.
-        """
-        client, node = self._require_client_and_node()
-        try:
-            await clear_lock_credential(
-                client,
-                node,
-                credential_type="pin",
-                credential_index=code_slot,
-            )
-        except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
-                f"Matter clear_lock_credential rejected input for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter clear_lock_credential failed for {self.lock.entity_id}: {err}"
-            ) from err
-
-    # -- Usercode CRUD -------------------------------------------------------
-
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
-        """
-        Get dictionary of code slots and usercodes.
-
-        Returns all occupied PIN credential slots as
-        ``SlotCredential.unreadable()`` (PINs are write-only) and managed
-        empty slots as ``SlotCredential.empty()``. Unmanaged occupied slots
-        are included so callers like the lock reset config flow step can
-        detect codes not managed by Lock Code Manager.
-        """
-        managed_slots = self.managed_slots
-        client, node = self._require_client_and_node()
-
-        try:
-            lock_data = await get_lock_users(client, node)
-        except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
-                f"Matter get_lock_users rejected input for {self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
-            ) from err
-
-        users = lock_data.get("users")
-        if not isinstance(users, list):
-            raise LockCodeManagerProviderError(
-                f"Matter get_lock_users response for {self.lock.entity_id} "
-                f"has unexpected 'users' value: {users!r}"
-            )
-
-        # Build a set of credential indices that have PIN credentials
-        occupied_slots: set[int] = set()
-        for user in users:
-            for credential in user.get("credentials", []):
-                if credential.get("type") != "pin":
-                    continue
-                cred_index = credential.get("index")
-                if cred_index is None:
-                    continue
-                slot_num = parse_slot_num(cred_index)
-                if slot_num is None:
-                    LOGGER.warning(
-                        "Lock %s: skipping credential with invalid index %r",
-                        self.lock.entity_id,
-                        cred_index,
-                    )
-                    continue
-                occupied_slots.add(slot_num)
-
-        all_slots = managed_slots | occupied_slots
-        LOGGER.debug(
-            "Lock %s: %s managed, %s occupied, %s total",
-            self.lock.entity_id,
-            len(managed_slots),
-            len(occupied_slots),
-            len(all_slots),
-        )
-        return {
-            slot: (
-                SlotCredential.unreadable()
-                if slot in occupied_slots
-                else SlotCredential.empty()
-            )
-            for slot in all_slots
-        }
-
-    async def _set_credential_with_duplicate_handling(
-        self,
-        code_slot: int,
-        usercode: str,
-        source: Literal["sync", "direct"],
-    ) -> int | None:
-        """
-        Set a credential, handling duplicate status.
-
-        For sync operations, clears the slot and retries on duplicate (handles
-        the restart case where _last_set_pin is lost). For direct operations,
-        raises DuplicateCodeError immediately.
-
-        Returns the user_index from the set response.
-        """
-        try:
-            return await self._set_lock_credential(code_slot, usercode)
-        except SetCredentialFailedError as err:
-            status = (err.translation_placeholders or {}).get("status", "")
-            if status != "duplicate":
-                raise CodeRejectedError(
-                    code_slot=code_slot,
-                    lock_entity_id=self.lock.entity_id,
-                    reason=str(err),
-                ) from err
-            if source != "sync":
-                raise DuplicateCodeError(
-                    code_slot=code_slot,
-                    lock_entity_id=self.lock.entity_id,
-                ) from err
-
-        # Sync duplicate: clear and retry
-        LOGGER.debug(
-            "Lock %s: duplicate on slot %s, clearing and retrying",
-            self.lock.entity_id,
-            code_slot,
-        )
-        await self._clear_lock_credential(code_slot)
-
-        try:
-            return await self._set_lock_credential(code_slot, usercode)
-        except SetCredentialFailedError as retry_err:
-            status = (retry_err.translation_placeholders or {}).get("status", "")
-            if status == "duplicate":
-                raise DuplicateCodeError(
-                    code_slot=code_slot,
-                    lock_entity_id=self.lock.entity_id,
-                ) from retry_err
-            raise CodeRejectedError(
-                code_slot=code_slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=str(retry_err),
-            ) from retry_err
-
-    async def _set_user_name(self, user_index: int, name: str, code_slot: int) -> None:
-        """Set the user name for a credential slot, logging on failure."""
-        client, node = self._require_client_and_node()
-        try:
-            await set_lock_user(
-                client,
-                node,
-                user_index=user_index,
-                user_name=name,
-            )
-        except HomeAssistantError:
-            LOGGER.warning(
-                "Lock %s: credential set on slot %s but failed to set user name '%s'",
-                self.lock.entity_id,
-                code_slot,
-                name,
-            )
-
-    async def async_set_usercode(
-        self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
-    ) -> bool:
-        """
-        Set a usercode on a code slot.
-
-        Returns True unconditionally because Matter does not reveal whether
-        the credential value actually changed. Pushes an unreadable
-        credential to the coordinator immediately — the LockUserChange event
-        will confirm.
-        """
-        user_index = await self._set_credential_with_duplicate_handling(
-            code_slot, usercode, source
-        )
-
-        if name is not None and user_index is not None:
-            await self._set_user_name(user_index, name, code_slot)
-
-        # Optimistic update: push occupancy state immediately;
-        # the LockUserChange event will confirm.
-        self._push_credential_update(code_slot, SlotCredential.unreadable())
-        return True
-
-    async def async_clear_usercode(self, code_slot: int) -> bool:
-        """
-        Clear a usercode on a code slot.
-
-        Returns True if a credential was cleared, False if the slot was already
-        empty. Pushes an empty credential to the coordinator immediately on
-        success.
-        """
-        client, node = self._require_client_and_node()
-        try:
-            lock_data = await get_lock_credential_status(
-                client,
-                node,
-                credential_type="pin",
-                credential_index=code_slot,
-            )
-        except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
-                f"Matter get_lock_credential_status rejected input for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter get_lock_credential_status failed for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
-
-        if not lock_data.get("credential_exists"):
-            return False
-
-        await self._clear_lock_credential(code_slot)
-        # Optimistic update: push empty state immediately;
-        # the LockUserChange event will confirm.
-        self._push_credential_update(code_slot, SlotCredential.empty())
-        return True
-
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """
-        Perform hard refresh and return all codes.
+        Perform a hard refresh and return all slot credentials.
 
-        Matter has no cache to invalidate, so this is identical to async_get_usercodes.
+        Matter has no on-device cache to invalidate. This re-fetches the current
+        user list fresh from the lock and projects it through the base
+        async_get_usercodes() projection (managed slots as empty, occupied
+        Personal Identification Number slots as unreadable).
         """
         return await self.async_get_usercodes()

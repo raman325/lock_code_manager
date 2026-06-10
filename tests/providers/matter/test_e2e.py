@@ -40,7 +40,7 @@ class TestFullSetupLifecycle:
 
 
 class TestSetAndClearUsercodes:
-    """Verify set/clear operations call the correct Matter helpers."""
+    """Verify set/clear operations call the correct Matter helpers via base orchestration."""
 
     async def test_set_usercode(
         self,
@@ -48,16 +48,22 @@ class TestSetAndClearUsercodes:
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """Set a code via the provider and verify the Matter helper was called."""
+        """Set a code via the base orchestration and verify set_lock_credential was called."""
         matter_mock_helpers["set_lock_credential"].reset_mock()
+        matter_mock_helpers["get_lock_credential_status"].reset_mock()
+        matter_mock_helpers["set_lock_user"].reset_mock()
         with (
             patch(
-                f"{_PROVIDER_MODULE}.set_lock_credential",
-                matter_mock_helpers["set_lock_credential"],
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                matter_mock_helpers["get_lock_credential_status"],
             ),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",
                 matter_mock_helpers["set_lock_user"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                matter_mock_helpers["set_lock_credential"],
             ),
         ):
             result = await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
@@ -71,16 +77,22 @@ class TestSetAndClearUsercodes:
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """Clear a code via the provider and verify the Matter helper was called."""
+        """Clear a code via the base orchestration and verify clear_lock_credential was called."""
         matter_mock_helpers["clear_lock_credential"].reset_mock()
+        matter_mock_helpers["get_lock_users"].reset_mock()
+        # Slot 2 is occupied (user_index 2) in the default fixture helpers
         with (
             patch(
-                f"{_PROVIDER_MODULE}.get_lock_credential_status",
-                matter_mock_helpers["get_lock_credential_status"],
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                matter_mock_helpers["get_lock_users"],
             ),
             patch(
                 f"{_PROVIDER_MODULE}.clear_lock_credential",
                 matter_mock_helpers["clear_lock_credential"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.clear_lock_user",
+                matter_mock_helpers["clear_lock_user"],
             ),
         ):
             result = await e2e_matter_lock.async_clear_usercode(2)
@@ -98,16 +110,20 @@ class TestSetAndClearUsercodes:
         After set, the coordinator has the optimistic UNREADABLE_CODE value.
 
         Matter PINs are write-only so optimistic updates use UNREADABLE_CODE
-        instead of the actual PIN value.
+        instead of the actual PIN value. The push comes from async_set_credential.
         """
         with (
             patch(
-                f"{_PROVIDER_MODULE}.set_lock_credential",
-                matter_mock_helpers["set_lock_credential"],
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                matter_mock_helpers["get_lock_credential_status"],
             ),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",
                 matter_mock_helpers["set_lock_user"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                matter_mock_helpers["set_lock_credential"],
             ),
         ):
             await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
@@ -123,12 +139,16 @@ class TestSetAndClearUsercodes:
         """After clear, the coordinator has SlotCredential.empty()."""
         with (
             patch(
-                f"{_PROVIDER_MODULE}.get_lock_credential_status",
-                matter_mock_helpers["get_lock_credential_status"],
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                matter_mock_helpers["get_lock_users"],
             ),
             patch(
                 f"{_PROVIDER_MODULE}.clear_lock_credential",
                 matter_mock_helpers["clear_lock_credential"],
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.clear_lock_user",
+                matter_mock_helpers["clear_lock_user"],
             ),
         ):
             await e2e_matter_lock.async_clear_usercode(2)
@@ -149,11 +169,10 @@ class TestGetUsercodes:
         """
         Get usercodes returns slot occupancy from Matter.
 
-        After initial setup with empty users, both managed slots should
-        be EMPTY. When the mock reports a user with a PIN credential on
-        slot 1, that slot should become UNREADABLE_CODE.
+        The base async_get_usercodes projects async_get_users output onto
+        the managed-slot map. Slot 1 is occupied (unreadable), slot 2 is
+        empty when the mock reports only a user on slot 1.
         """
-        # Override the get_lock_users mock to report an occupied slot
         mock_get_lock_users = AsyncMock(
             return_value={
                 "max_users": 10,

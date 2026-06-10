@@ -197,29 +197,43 @@ def matter_mock_helpers() -> dict[str, AsyncMock]:
         }
     )
 
-    # get_lock_users: called by async_get_usercodes (coordinator refresh)
+    # get_lock_users: called by async_get_usercodes / async_get_users (coordinator refresh)
     helpers["get_lock_users"] = AsyncMock(
         return_value={
             "max_users": 10,
-            "users": [],
+            "users": [
+                {
+                    "user_index": 1,
+                    "user_name": "slot1",
+                    "credentials": [{"type": "pin", "index": 1}],
+                },
+                {
+                    "user_index": 2,
+                    "user_name": "slot2",
+                    "credentials": [{"type": "pin", "index": 2}],
+                },
+            ],
         }
     )
 
-    # set_lock_credential: called by async_set_usercode
+    # set_lock_credential: called by async_set_credential
     helpers["set_lock_credential"] = AsyncMock(
         return_value={"credential_index": 1, "user_index": 1},
     )
 
-    # set_lock_user: called by async_set_usercode when a name is provided
-    helpers["set_lock_user"] = AsyncMock(return_value={})
+    # set_lock_user: called by async_set_user
+    helpers["set_lock_user"] = AsyncMock(return_value={"user_index": 1})
 
-    # get_lock_credential_status: called by async_clear_usercode
+    # get_lock_credential_status: called by async_set_user to detect create-vs-update
     helpers["get_lock_credential_status"] = AsyncMock(
-        return_value={"credential_exists": True}
+        return_value={"credential_exists": True, "user_index": 1}
     )
 
-    # clear_lock_credential: called by async_clear_usercode
+    # clear_lock_credential: called by async_delete_credential
     helpers["clear_lock_credential"] = AsyncMock(return_value={})
+
+    # clear_lock_user: called by async_delete_user after last credential is removed
+    helpers["clear_lock_user"] = AsyncMock(return_value=None)
 
     return helpers
 
@@ -270,6 +284,10 @@ async def lcm_config_entry(
         patch(
             f"{_PROVIDER_MODULE}.clear_lock_credential",
             matter_mock_helpers["clear_lock_credential"],
+        ),
+        patch(
+            f"{_PROVIDER_MODULE}.clear_lock_user",
+            matter_mock_helpers["clear_lock_user"],
         ),
     ):
         assert await hass.config_entries.async_setup(lcm_entry.entry_id)
