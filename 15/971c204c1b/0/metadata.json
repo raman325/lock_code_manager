@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "15971c204c1b",
+  "session_id": "f007f8e0-8e15-49f8-9b78-ca4730e9a56f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T19:43:32.467944Z",
+  "branch": "feat/matter-user-tag-adoption",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7[1m]",
+  "turn_id": "5b1f563ca1b4",
+  "token_usage": {
+    "input_tokens": 2451,
+    "cache_creation_tokens": 4135003,
+    "cache_read_tokens": 680245135,
+    "output_tokens": 871617,
+    "api_call_count": 1299
+  },
+  "session_metrics": {
+    "turn_count": 74
+  }
+}
