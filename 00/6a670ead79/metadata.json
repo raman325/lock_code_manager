@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "006a670ead79",
+  "strategy": "manual-commit",
+  "branch": "refactor/tag-helpers-tolerant-parser",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/00/6a670ead79/0/metadata.json",
+      "transcript": "/00/6a670ead79/0/full.jsonl",
+      "content_hash": "/00/6a670ead79/0/content_hash.txt",
+      "prompt": "/00/6a670ead79/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1734,
+    "cache_creation_tokens": 3473858,
+    "cache_read_tokens": 365126930,
+    "output_tokens": 567094,
+    "api_call_count": 777
+  }
+}
