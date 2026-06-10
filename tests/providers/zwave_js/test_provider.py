@@ -638,56 +638,157 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
 # Write primitive tests (Task 2)
 
 
-async def test_async_set_user_returns_created_when_user_absent(
+async def test_async_set_user_returns_created_when_no_tagged_user_exists(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Test async_set_user reports created=True when no existing user is found.
+    ``async_set_user`` reports ``created=True`` and allocates a new user_id.
 
-    When get_user_cached returns None the user does not yet exist on the lock,
-    so SetUserResult.created must be True. The helper is called with the correct
-    node, user_id, user_name, and active values.
+    With no existing tagged user for slot 5 (and no legacy adoption
+    target), the provider delegates to the upstream helper with
+    ``user_id=None`` so Z-Wave finds the first free user_id. The
+    returned ``user_id`` carries the allocated value.
     """
-    mock_access_control.get_user_cached.return_value = None
-    mock_lock_helpers["async_set_user"].return_value = {"user_id": 5}
+    mock_access_control.get_users_cached.return_value = []
+    mock_access_control.get_all_credentials_cached.return_value = []
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 12}
 
-    user = User(user_id=5, name="alice", active=True)
+    user = User(user_id=5, name="lcm:5:alice", active=True)
     result = await zwave_js_lock.async_set_user(user)
 
-    assert result == SetUserResult(user_id=5, created=True)
+    assert result == SetUserResult(user_id=12, created=True)
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
-        user_id=5,
-        user_name="alice",
+        user_id=None,
+        user_name="lcm:5:alice",
         active=True,
     )
 
 
-async def test_async_set_user_returns_not_created_when_user_exists(
+async def test_async_set_user_returns_not_created_when_tagged_user_exists(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Test async_set_user reports created=False when the user already exists.
+    ``async_set_user`` reports ``created=False`` when a tagged user already exists.
 
-    When get_user_cached returns a UserData object the slot is being updated,
-    not created, so SetUserResult.created must be False.
+    Seeds a lock user at ``user_id=17`` whose name carries the
+    ``lcm:3:`` tag; the provider must discover it via the tag (NOT via
+    ``user_id == slot``) and dispatch an UPDATE to that user_id, not a
+    CREATE.
     """
-    mock_access_control.get_user_cached.return_value = UserData(
-        user_id=3,
-        active=True,
-        user_type=UserCredentialUserType.GENERAL,
-        user_name="bob",
-    )
-    mock_lock_helpers["async_set_user"].return_value = {"user_id": 3}
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=17,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="lcm:3:bob",
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = []
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 17}
 
-    user = User(user_id=3, name="bob", active=True)
+    user = User(user_id=3, name="lcm:3:bob", active=True)
     result = await zwave_js_lock.async_set_user(user)
 
-    assert result == SetUserResult(user_id=3, created=False)
+    assert result == SetUserResult(user_id=17, created=False)
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=17,
+        user_name="lcm:3:bob",
+        active=True,
+    )
+
+
+async def test_async_set_user_adopts_legacy_user_at_user_id_equals_slot(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Pre-PR-C upgrade path: adopt an untagged user at ``user_id == slot``.
+
+    Pre-PR-C LCM pinned ``user_id`` to the LCM slot. On the first
+    write after upgrade, the new code must find that legacy user (it
+    has no tag, but it sits at the old invariant) and UPDATE it rather
+    than CREATE a second user, preserving the existing PIN credential.
+    """
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=4,  # legacy user_id == LCM slot
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="Carol",  # untagged
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = [
+        CredentialData(
+            user_id=4,
+            type=UserCredentialType.PIN_CODE,
+            slot=4,  # legacy credential.slot == LCM slot
+            data="1234",
+        ),
+    ]
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 4}
+
+    user = User(user_id=4, name="lcm:4:carol", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    assert result == SetUserResult(user_id=4, created=False)
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=4,
+        user_name="lcm:4:carol",
+        active=True,
+    )
+
+
+async def test_async_set_user_legacy_pass_skips_users_tagged_for_other_slots(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    Legacy adoption must not steal a user already tagged for a different slot.
+
+    The legacy probe matches ``user_id == slot`` AND a PIN at the same
+    slot. A user that happens to satisfy both halves but already
+    carries an LCM tag for a *different* slot is NOT the slot's legacy
+    anchor; adopting it would re-bind one slot's user as another
+    slot's anchor and silently corrupt both slots' state.
+    """
+    mock_access_control.get_users_cached.return_value = [
+        UserData(
+            user_id=2,
+            active=True,
+            user_type=UserCredentialUserType.GENERAL,
+            user_name="lcm:9:elsewhere",  # tagged for slot 9, not 2
+        ),
+    ]
+    mock_access_control.get_all_credentials_cached.return_value = [
+        CredentialData(
+            user_id=2,
+            type=UserCredentialType.PIN_CODE,
+            slot=2,
+            data="0000",
+        ),
+    ]
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 88}
+
+    user = User(user_id=2, name="lcm:2:newcomer", active=True)
+    result = await zwave_js_lock.async_set_user(user)
+
+    # Legacy pass skipped -> CREATE, not adoption.
+    assert result == SetUserResult(user_id=88, created=True)
+    mock_lock_helpers["async_set_user"].assert_called_once_with(
+        zwave_js_lock.node,
+        user_id=None,
+        user_name="lcm:2:newcomer",
+        active=True,
+    )
 
 
 async def test_async_set_credential_returns_true_on_success(
@@ -986,24 +1087,25 @@ async def test_async_set_user_writes_name_verbatim(
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Provider primitive writes user.name as-is.
+    Provider primitive writes ``user.name`` as-is.
 
-    Truncation is the base orchestration's responsibility (applied in
-    ``_set_credential`` before the call); the provider receives a User
-    with the name already shaped to the lock's limit and writes it
-    verbatim. End-to-end truncation behavior is covered through
-    ``async_set_usercode`` below.
+    Truncation and tagging are the base orchestration's responsibility
+    (applied in ``_set_credential`` via ``_build_tagged_user_name``);
+    the provider receives a User with the name already shaped and
+    writes it verbatim. End-to-end truncation behavior is covered
+    through ``async_set_usercode`` below.
     """
-    mock_access_control.get_user_cached.return_value = None
-    mock_lock_helpers["async_set_user"].return_value = {"user_id": 1}
+    mock_access_control.get_users_cached.return_value = []
+    mock_access_control.get_all_credentials_cached.return_value = []
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 7}
 
-    user = User(user_id=1, name="alice", active=True)
+    user = User(user_id=1, name="lcm:1:alice", active=True)
     await zwave_js_lock.async_set_user(user)
 
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
-        user_id=1,
-        user_name="alice",
+        user_id=None,
+        user_name="lcm:1:alice",
         active=True,
     )
 
@@ -1045,7 +1147,8 @@ async def test_async_set_usercode_builds_tagged_name_within_lock_limit(
             }
         },
     }
-    mock_access_control.get_user_cached.return_value = None
+    mock_access_control.get_users_cached.return_value = []
+    mock_access_control.get_all_credentials_cached.return_value = []
     mock_lock_helpers["async_set_user"].return_value = {"user_id": 1}
 
     # "alexandra" (9 chars) is the display; only "alex" fits after the
@@ -1054,7 +1157,7 @@ async def test_async_set_usercode_builds_tagged_name_within_lock_limit(
 
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
-        user_id=1,
+        user_id=None,
         user_name="lcm:1:alex",
         active=True,
     )
