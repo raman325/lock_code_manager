@@ -105,7 +105,7 @@ class _NativeStubLock(BaseLock):
 
     async def async_get_capabilities(self) -> LockCapabilities:
         # Real user records with names available — this is what gates
-        # ``_put_credential`` into the set-user-first path.
+        # ``_set_credential`` into the set-user-first path.
         return LockCapabilities(
             supports_user_management=True,
             max_users=30,
@@ -532,30 +532,30 @@ async def test_assert_credential_ref_supported_rejects_unadvertised(
     assert "unsupported credential type" in str(exc_info.value)
 
 
-async def test_put_credential_rejects_unsupported_credential_type(
+async def test_set_credential_rejects_unsupported_credential_type(
     hass: HomeAssistant,
 ) -> None:
-    """``_put_credential`` asserts the type before any set call."""
+    """``_set_credential`` asserts the type before any set call."""
     lock = _make_lock(hass, _NativeStubLock, "seam_put_reject_type")
     rfid_credential = Credential(
         type=CredentialType.RFID, slot=2, state=SlotCredential.known("AABB")
     )
     user = User(user_id=2, credentials=[rfid_credential])
     with pytest.raises(CodeRejectedError):
-        await lock._put_credential(user, rfid_credential, name=None, source="direct")
+        await lock._set_credential(user, rfid_credential, name=None, source="direct")
     # No primitive was reached because the assertion fired first.
     assert lock.calls == []
 
 
-async def test_drop_credential_rejects_unsupported_credential_type(
+async def test_delete_credential_rejects_unsupported_credential_type(
     hass: HomeAssistant,
 ) -> None:
-    """``_drop_credential`` asserts the ref's type before any delete call."""
+    """``_delete_credential`` asserts the ref's type before any delete call."""
     lock = _make_lock(hass, _NativeStubLock, "seam_drop_reject_type")
     owner = User(user_id=1, credentials=[])
     ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=3)
     with pytest.raises(CodeRejectedError):
-        await lock._drop_credential(owner, ref)
+        await lock._delete_credential(owner, ref)
     assert lock.calls == []
 
 

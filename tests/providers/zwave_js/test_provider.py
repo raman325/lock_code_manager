@@ -943,7 +943,7 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
 
     The unified accessControl API's setUser cannot run before a credential
     exists on a UC lock (the user IS the code), so the base orchestration
-    in _put_credential takes the no-user-write path when the capabilities
+    in _set_credential takes the no-user-write path when the capabilities
     report ``max_user_name_length == 0``. async_set_credential creates
     the user implicitly. End-to-end check via async_set_usercode covers
     the gate, the cache, and the provider-level credential write.
@@ -992,7 +992,7 @@ async def test_async_set_user_writes_name_verbatim(
     Provider primitive writes user.name as-is.
 
     Truncation is the base orchestration's responsibility (applied in
-    ``_put_credential`` before the call); the provider receives a User
+    ``_set_credential`` before the call); the provider receives a User
     with the name already shaped to the lock's limit and writes it
     verbatim. End-to-end truncation behavior is covered through
     ``async_set_usercode`` below.

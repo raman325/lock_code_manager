@@ -855,7 +855,7 @@ class BaseLock:
 
         Projects the slot to a single Personal Identification Number
         credential. Native-user providers run the create-on-first user
-        lifecycle via ``_put_credential``; slot-only providers write the
+        lifecycle via ``_set_credential``; slot-only providers write the
         credential directly, addressing it by slot. Returns True if the value
         changed, False if it was already set to this value -- and True when the
         provider cannot determine whether a change occurred, so the coordinator
@@ -867,7 +867,7 @@ class BaseLock:
             return await self.async_set_credential(
                 code_slot, credential, name=name, source=source
             )
-        return await self._put_credential(
+        return await self._set_credential(
             user_from_slot(code_slot, state, name),
             credential,
             name=name,
@@ -929,7 +929,7 @@ class BaseLock:
         credential may have been created on the lock by another controller, or
         the integration may have allocated a user identifier that differs from
         the slot. The owner is resolved from the lock's current users and the
-        delete-on-last user lifecycle runs via ``_drop_credential``. Returns
+        delete-on-last user lifecycle runs via ``_delete_credential``. Returns
         True if the value changed, False if it was already cleared -- and True
         when the provider cannot determine whether a change occurred, so the
         coordinator refreshes and verifies the actual state.
@@ -956,7 +956,7 @@ class BaseLock:
         ref = CredentialRef(
             user_id=owner.user_id, type=CredentialType.PIN, slot=code_slot
         )
-        return await self._drop_credential(owner, ref)
+        return await self._delete_credential(owner, ref)
 
     @final
     async def async_internal_clear_usercode(
@@ -1104,7 +1104,7 @@ class BaseLock:
             )
 
     @final
-    async def _put_credential(
+    async def _set_credential(
         self,
         user: User,
         credential: Credential,
@@ -1155,7 +1155,7 @@ class BaseLock:
             raise
 
     @final
-    async def _drop_credential(self, owner: User, ref: CredentialRef) -> bool:
+    async def _delete_credential(self, owner: User, ref: CredentialRef) -> bool:
         """
         Run the delete-on-last user lifecycle around a credential delete.
 
