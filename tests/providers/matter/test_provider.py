@@ -25,7 +25,6 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerError,
-    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
 )
@@ -156,35 +155,12 @@ class TestDeviceAvailability:
 # ---------------------------------------------------------------------------
 
 
-async def test_setup(
+async def test_setup_internal_unsupported_lock(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that setup validates lock supports user management and PIN credentials."""
-    mock_get_lock_info = AsyncMock(
-        return_value={
-            "supports_user_management": True,
-            "supported_credential_types": ["pin"],
-        }
-    )
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-    ):
-        await matter_lock_simple.async_setup(simple_lcm_config_entry)
-    assert mock_get_lock_info.call_count == 1
-
-
-async def test_setup_unsupported_lock(
-    hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Test that setup raises when lock does not support user management."""
+    """Base setup raises when the lock doesn't support user management."""
     mock_get_lock_info = AsyncMock(return_value={"supports_user_management": False})
     with (
         patch.object(
@@ -194,15 +170,15 @@ async def test_setup_unsupported_lock(
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
         pytest.raises(LockCodeManagerError, match="does not support user management"),
     ):
-        await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
 
 
-async def test_setup_no_pin_support(
+async def test_setup_internal_no_pin_support(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that setup raises when lock supports users but not PIN credentials."""
+    """Base setup raises when the lock supports users but not PIN credentials."""
     mock_get_lock_info = AsyncMock(
         return_value={
             "supports_user_management": True,
@@ -215,9 +191,9 @@ async def test_setup_no_pin_support(
         ),
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-        pytest.raises(LockCodeManagerError, match="does not support PIN credentials"),
+        pytest.raises(LockCodeManagerError, match="PIN credential"),
     ):
-        await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
 
 
 # ---------------------------------------------------------------------------
@@ -440,23 +416,23 @@ async def test_get_matter_node_exception_returns_none(
     assert result is None
 
 
-async def test_setup_client_unavailable(
+async def test_setup_internal_client_unavailable(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test async_setup raises LockDisconnected when _require_client_and_node fails."""
+    """Transient client/node unavailability logs and continues without raising."""
     with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-        with pytest.raises(LockDisconnected, match="client or node unavailable"):
-            await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+    assert matter_lock_simple._capabilities_cache is None
 
 
-async def test_setup_get_lock_info_service_validation_error(
+async def test_setup_internal_caps_service_validation_error(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test async_setup raises LockCodeManagerProviderError on ServiceValidationError."""
+    """ServiceValidationError from get_lock_info logs and continues."""
     mock_get_lock_info = AsyncMock(side_effect=ServiceValidationError("bad input"))
     with (
         patch.object(
@@ -465,16 +441,16 @@ async def test_setup_get_lock_info_service_validation_error(
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
     ):
-        with pytest.raises(LockCodeManagerProviderError, match="rejected input"):
-            await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+    assert matter_lock_simple._capabilities_cache is None
 
 
-async def test_setup_get_lock_info_communication_error(
+async def test_setup_internal_caps_communication_error(
     hass: HomeAssistant,
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test async_setup raises LockDisconnected on HomeAssistantError from get_lock_info."""
+    """Base setup logs and continues on HomeAssistantError from get_lock_info."""
     mock_get_lock_info = AsyncMock(side_effect=HomeAssistantError("connection lost"))
     with (
         patch.object(
@@ -483,8 +459,11 @@ async def test_setup_get_lock_info_communication_error(
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
     ):
-        with pytest.raises(LockDisconnected, match="get_lock_info failed"):
-            await matter_lock_simple.async_setup(simple_lcm_config_entry)
+        # async_get_capabilities maps HomeAssistantError → LockDisconnected;
+        # async_setup_internal catches that and logs a warning so the
+        # coordinator can be created and retry once the lock comes online.
+        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+    assert matter_lock_simple._capabilities_cache is None
 
 
 async def test_require_client_and_node_no_client(

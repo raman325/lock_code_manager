@@ -552,22 +552,25 @@ class BaseLock:
 
         Validates the lock advertises the capabilities LCM needs
         (``supports_user_management`` + PIN credentials) for native-user
-        providers; failures here are hard and propagate. Provider
-        ``async_setup()`` then runs so providers can initialize any state
-        the coordinator needs during its first refresh.
+        providers; structural failures (``LockCodeManagerProviderError``)
+        propagate and prevent setup. Transport-level failures
+        (``LockDisconnected``/``LockOperationFailed``) during the
+        capability probe OR the provider's own ``async_setup`` are logged
+        and the coordinator is created anyway so the integration retries
+        once the lock comes online.
         """
         self._lcm_config_entry = config_entry
-        if self.supports_native_users:
-            caps = await self._get_cached_capabilities()
-            if not caps.supports_user_management:
-                raise LockCodeManagerProviderError(
-                    f"{self.lock.entity_id}: lock does not support user management"
-                )
-            if CredentialType.PIN not in caps.credential_types:
-                raise LockCodeManagerProviderError(
-                    f"{self.lock.entity_id}: lock does not advertise PIN credential support"
-                )
         try:
+            if self.supports_native_users:
+                caps = await self._get_cached_capabilities()
+                if not caps.supports_user_management:
+                    raise LockCodeManagerProviderError(
+                        f"{self.lock.entity_id}: lock does not support user management"
+                    )
+                if CredentialType.PIN not in caps.credential_types:
+                    raise LockCodeManagerProviderError(
+                        f"{self.lock.entity_id}: lock does not advertise PIN credential support"
+                    )
             await self.async_setup(config_entry)
         except (LockDisconnected, LockOperationFailed) as err:
             LOGGER.warning(

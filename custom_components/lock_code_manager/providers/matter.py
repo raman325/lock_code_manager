@@ -523,31 +523,7 @@ class MatterLock(BaseLock):
         return True
 
     async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """Validate the lock supports Matter user management."""
-        client, node = self._require_client_and_node()
-        try:
-            lock_info = await get_lock_info(client, node)
-        except ServiceValidationError as err:
-            raise LockCodeManagerProviderError(
-                f"Matter get_lock_info rejected input for {self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter get_lock_info failed for {self.lock.entity_id}: {err}"
-            ) from err
-        if not lock_info.get("supports_user_management"):
-            raise LockCodeManagerProviderError(
-                f"Matter lock {self.lock.entity_id} does not support user management"
-            )
-        if "pin" not in (lock_info.get("supported_credential_types") or []):
-            raise LockCodeManagerProviderError(
-                f"Matter lock {self.lock.entity_id} does not support PIN credentials"
-            )
-        LOGGER.debug(
-            "Matter lock %s setup complete: %s",
-            self.lock.entity_id,
-            lock_info,
-        )
+        """No matter-specific setup; base validates required capabilities."""
 
     async def async_is_device_available(self) -> bool:
         """Return whether the Matter lock device is available for commands."""
