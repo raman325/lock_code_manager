@@ -711,7 +711,11 @@ async def test_async_set_credential_returns_true_on_success(
         type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
     )
     result = await zwave_js_lock.async_set_credential(
-        user_id=1, credential=credential, name="alice", source="sync"
+        user_id=1,
+        credential=credential,
+        pin="5678",
+        name="alice",
+        source="sync",
     )
 
     assert result is True
@@ -744,7 +748,11 @@ async def test_async_set_credential_raises_duplicate_code_error(
     )
     with pytest.raises(DuplicateCodeError) as exc_info:
         await zwave_js_lock.async_set_credential(
-            user_id=1, credential=credential, name=None, source="sync"
+            user_id=1,
+            credential=credential,
+            pin="1111",
+            name=None,
+            source="sync",
         )
 
     assert exc_info.value.code_slot == 3
@@ -771,29 +779,15 @@ async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error
     )
     with pytest.raises(CodeRejectedError) as exc_info:
         await zwave_js_lock.async_set_credential(
-            user_id=1, credential=credential, name=None, source="sync"
+            user_id=1,
+            credential=credential,
+            pin="2222",
+            name=None,
+            source="sync",
         )
 
     assert exc_info.value.code_slot == 4
     assert not isinstance(exc_info.value, DuplicateCodeError)
-
-
-async def test_async_set_credential_rejects_unreadable_credential(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """An unreadable credential (no Personal Identification Number) is rejected cleanly."""
-    credential = Credential(
-        type=CredentialType.PIN, slot=4, state=SlotCredential.unreadable()
-    )
-    with pytest.raises(CodeRejectedError) as exc_info:
-        await zwave_js_lock.async_set_credential(
-            user_id=1, credential=credential, name=None, source="sync"
-        )
-
-    assert exc_info.value.code_slot == 4
-    mock_lock_helpers["async_set_credential"].assert_not_called()
 
 
 async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
@@ -816,7 +810,11 @@ async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
     )
     with pytest.raises(LockDisconnected):
         await zwave_js_lock.async_set_credential(
-            user_id=1, credential=credential, name=None, source="sync"
+            user_id=1,
+            credential=credential,
+            pin="2222",
+            name=None,
+            source="sync",
         )
 
 

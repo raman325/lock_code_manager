@@ -866,13 +866,15 @@ class BaseLock:
         """
         state = SlotCredential.known(usercode)
         credential = credential_from_slot(code_slot, state)
+        pin = self._require_readable_pin(credential)
         if not self.supports_native_users:
             return await self.async_set_credential(
-                code_slot, credential, name=name, source=source
+                code_slot, credential, pin, name=name, source=source
             )
         return await self._set_credential(
             user_from_slot(code_slot, state, name),
             credential,
+            pin,
             name=name,
             source=source,
         )
@@ -1106,11 +1108,39 @@ class BaseLock:
                 reason=f"unsupported credential type: {ref.type}",
             )
 
+    def _require_readable_pin(self, credential: Credential) -> str:
+        """
+        Return the credential's readable PIN, or raise ``CodeRejectedError``.
+
+        Called by the seam (``async_set_usercode`` and ``_set_credential``)
+        before dispatching to the provider's ``async_set_credential``
+        override; the resolved ``pin: str`` is threaded through as a
+        positional argument so the provider receives a guaranteed string
+        and does not need its own defensive check.
+
+        The seam already builds credentials from a string usercode so
+        ``readable_pin`` is non-None by construction along that path -- the
+        guard catches future regressions (a credential constructed outside
+        the seam, a refactor that loses the invariant) and never the
+        normal flow. Providers MUST NOT re-add their own readable-pin
+        check; doing so duplicates the contract and re-introduces the
+        ``or ""`` silent coercion pattern this helper exists to eliminate.
+        """
+        pin = credential.readable_pin
+        if pin is None:
+            raise CodeRejectedError(
+                code_slot=credential.slot,
+                lock_entity_id=self.lock.entity_id,
+                reason="cannot write an unreadable credential",
+            )
+        return pin
+
     @final
     async def _set_credential(
         self,
         user: User,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -1126,6 +1156,11 @@ class BaseLock:
         newly-created user when the credential write fails so the lock
         isn't left with a credential-less user the slot-keyed coordinator
         can't reconcile. Returns True if the value changed.
+
+        ``pin`` is the resolved readable PIN that the caller (the seam in
+        ``async_set_usercode``) has already validated via
+        ``_require_readable_pin``; threading it through avoids a second
+        validation pass in the provider.
         """
         await self._assert_credential_type_supported(credential)
         if await self._supports_user_records():
@@ -1141,7 +1176,7 @@ class BaseLock:
             rollback_user_id = None
         try:
             return await self.async_set_credential(
-                credential_user_id, credential, name=name, source=source
+                credential_user_id, credential, pin, name=name, source=source
             )
         except Exception:
             if rollback_user_id is not None:
@@ -1235,6 +1270,7 @@ class BaseLock:
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -1244,12 +1280,16 @@ class BaseLock:
 
         Every migrated provider implements this. ``user_id`` identifies the
         owning user for native-user providers; slot-only providers ignore it
-        and address the credential by ``credential.slot``. Providers raise
-        ``DuplicateCodeError`` when the lock rejects the value as a duplicate.
-        Native-user providers carry the user's name on the user record, so they
-        may treat ``name`` here as advisory; slot-only providers use it (for
-        example as a tagged code name). A ``name`` of ``None`` means leave any
-        existing name unchanged, never clear it.
+        and address the credential by ``credential.slot``. ``pin`` is the
+        resolved readable PIN string; the base seam validates that
+        ``credential.readable_pin`` is non-None and passes it through so
+        providers receive a guaranteed string and don't need their own
+        defensive checks. Providers raise ``DuplicateCodeError`` when the
+        lock rejects the value as a duplicate. Native-user providers carry
+        the user's name on the user record, so they may treat ``name`` here
+        as advisory; slot-only providers use it (for example as a tagged
+        code name). A ``name`` of ``None`` means leave any existing name
+        unchanged, never clear it.
 
         Return True if the value changed, False if it was already set to this
         value. When the provider cannot determine whether a change occurred

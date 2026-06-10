@@ -330,6 +330,7 @@ class AkuvoxLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -349,7 +350,6 @@ class AkuvoxLock(BaseLock):
         credential by slot.
         """
         code_slot = credential.slot
-        usercode = credential.readable_pin or ""
         async with self._serialize_sequence():
             users = await self._async_list_users()
 
@@ -370,10 +370,10 @@ class AkuvoxLock(BaseLock):
 
             if existing_device_id:
                 await self._async_modify_user(
-                    existing_device_id, name=tagged_name, pin=usercode
+                    existing_device_id, name=tagged_name, pin=pin
                 )
             else:
-                await self._async_add_user(tagged_name, usercode)
+                await self._async_add_user(tagged_name, pin)
 
         LOGGER.debug(
             "Lock %s: set Personal Identification Number credential on slot %s",

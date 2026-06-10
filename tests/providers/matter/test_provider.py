@@ -1620,7 +1620,11 @@ class TestSetCredential:
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
             result = await matter_lock_simple.async_set_credential(
-                1, credential, name="Alice", source="direct"
+                1,
+                credential,
+                "1234",
+                name="Alice",
+                source="direct",
             )
         assert result is True
 
@@ -1644,26 +1648,12 @@ class TestSetCredential:
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
             await matter_lock_simple.async_set_credential(
-                2, credential, name=None, source="direct"
+                2, credential, "5678", name=None, source="direct"
             )
 
         mock_coordinator.push_update.assert_called_once_with(
             {2: SlotCredential.unreadable()}
         )
-
-    async def test_set_credential_unreadable_pin_raises_code_rejected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
-    ) -> None:
-        """A credential with no readable_pin raises CodeRejectedError immediately."""
-        credential = Credential(
-            type=CredentialType.PIN,
-            slot=1,
-            state=SlotCredential.unreadable(),
-        )
-        with pytest.raises(CodeRejectedError):
-            await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="direct"
-            )
 
     async def test_set_credential_duplicate_direct_raises(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
@@ -1684,7 +1674,7 @@ class TestSetCredential:
             pytest.raises(DuplicateCodeError),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="direct"
+                1, credential, "1234", name=None, source="direct"
             )
 
     async def test_set_credential_duplicate_sync_retries_and_succeeds(
@@ -1710,7 +1700,7 @@ class TestSetCredential:
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
         ):
             result = await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="sync"
+                1, credential, "1234", name=None, source="sync"
             )
 
         assert result is True
@@ -1738,7 +1728,7 @@ class TestSetCredential:
             pytest.raises(DuplicateCodeError),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="sync"
+                1, credential, "1234", name=None, source="sync"
             )
 
         assert mock_set_credential.call_count == 2
@@ -1765,7 +1755,7 @@ class TestSetCredential:
             pytest.raises(LockDisconnected, match="sync-duplicate retry"),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="sync"
+                1, credential, "1234", name=None, source="sync"
             )
         # First set raised duplicate; clear failed; no retry attempt is made.
         assert mock_set_credential.call_count == 1
@@ -1791,7 +1781,7 @@ class TestSetCredential:
             pytest.raises(LockOperationFailed, match="sync-duplicate retry"),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="sync"
+                1, credential, "1234", name=None, source="sync"
             )
         assert mock_set_credential.call_count == 1
 
@@ -1814,7 +1804,7 @@ class TestSetCredential:
             pytest.raises(CodeRejectedError),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="direct"
+                1, credential, "1234", name=None, source="direct"
             )
 
     async def test_set_credential_ha_error_raises_code_rejected(
@@ -1836,7 +1826,7 @@ class TestSetCredential:
             pytest.raises(CodeRejectedError),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="direct"
+                1, credential, "1", name=None, source="direct"
             )
 
     async def test_set_credential_transport_error_raises_lock_disconnected(
@@ -1856,7 +1846,7 @@ class TestSetCredential:
             pytest.raises(LockDisconnected),
         ):
             await matter_lock_simple.async_set_credential(
-                1, credential, name=None, source="direct"
+                1, credential, "1234", name=None, source="direct"
             )
 
     async def test_set_credential_passes_correct_args(
@@ -1877,7 +1867,11 @@ class TestSetCredential:
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
             await matter_lock_simple.async_set_credential(
-                3, credential, name="Carol", source="direct"
+                3,
+                credential,
+                "9999",
+                name="Carol",
+                source="direct",
             )
 
         call_kwargs = mock_set_credential.call_args.kwargs

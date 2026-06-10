@@ -352,6 +352,7 @@ class SchlageLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -368,7 +369,6 @@ class SchlageLock(BaseLock):
         address the credential by slot.
         """
         code_slot = credential.slot
-        usercode = credential.readable_pin or ""
         async with self._serialize_sequence():
             codes = await self._async_get_codes()
 
@@ -396,7 +396,7 @@ class SchlageLock(BaseLock):
                     await self._async_delete_code(code_name)
 
             try:
-                await self._async_add_code(tagged_name, usercode)
+                await self._async_add_code(tagged_name, pin)
             except (LockDisconnected, LockOperationFailed) as err:
                 # Schlage's cloud API has eventual consistency: a delete may not
                 # propagate before the add, causing "already exists".  Since Personal

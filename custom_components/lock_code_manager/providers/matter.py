@@ -410,6 +410,7 @@ class MatterLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
@@ -417,24 +418,15 @@ class MatterLock(BaseLock):
         """
         Write a Personal Identification Number credential to the lock.
 
-        Raises CodeRejectedError when the credential has no readable value
-        (for example when projecting an already-unreadable slot — the lock
-        requires a concrete PIN string). Handles the duplicate-slot restart
-        case for sync sources by clearing and retrying once.
+        ``pin`` is the resolved PIN string the seam already validated as
+        non-None; surgical write path only. Handles the duplicate-slot
+        restart case for sync sources by clearing and retrying once.
 
         The base orchestration skips coordinator refresh for push providers.
         Matter does not emit LockUserChange for LCM-initiated writes, so an
         optimistic push is required to keep the coordinator current.
         """
-        if credential.readable_pin is None:
-            raise CodeRejectedError(
-                code_slot=credential.slot,
-                lock_entity_id=self.lock.entity_id,
-                reason="credential has no readable Personal Identification Number value",
-            )
-
         client, node = self._require_client_and_node()
-        pin = credential.readable_pin
         slot = credential.slot
 
         try:

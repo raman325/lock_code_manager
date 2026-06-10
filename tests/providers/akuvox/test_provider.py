@@ -369,7 +369,11 @@ class TestSetCredential:
         )
 
         result = await akuvox_lock.async_set_credential(
-            1, _pin_cred(1, "9999"), name=None, source="direct"
+            1,
+            _pin_cred(1, "9999"),
+            "9999",
+            name=None,
+            source="direct",
         )
 
         assert result is True
@@ -392,7 +396,11 @@ class TestSetCredential:
 
         with pytest.raises(LockOperationFailed, match="device offline"):
             await akuvox_lock.async_set_credential(
-                1, _pin_cred(1, "1234"), name=None, source="direct"
+                1,
+                _pin_cred(1, "1234"),
+                "1234",
+                name=None,
+                source="direct",
             )
 
 
@@ -681,10 +689,18 @@ class TestAutoTagging:
 
         await asyncio.gather(
             akuvox_lock.async_set_credential(
-                1, _pin_cred(1, "1111"), name=None, source="direct"
+                1,
+                _pin_cred(1, "1111"),
+                "1111",
+                name=None,
+                source="direct",
             ),
             akuvox_lock.async_set_credential(
-                2, _pin_cred(2, "2222"), name=None, source="direct"
+                2,
+                _pin_cred(2, "2222"),
+                "2222",
+                name=None,
+                source="direct",
             ),
         )
 
@@ -751,7 +767,11 @@ class TestBaseOrchestration:
         )
 
         await akuvox_lock.async_set_credential(
-            1, _pin_cred(1, "7777"), name="base_test", source="direct"
+            1,
+            _pin_cred(1, "7777"),
+            "7777",
+            name="base_test",
+            source="direct",
         )
 
         # After setting, the mock now returns the tagged user with the PIN

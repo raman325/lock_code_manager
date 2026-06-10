@@ -271,21 +271,12 @@ class ZWaveJSLock(BaseLock):
         self,
         user_id: int,
         credential: Credential,
+        pin: str,
         *,
         name: str | None,
         source: Literal["sync", "direct"],
     ) -> bool:
         """Write the Personal Identification Number credential under user_id; map device rejections."""
-        pin = credential.readable_pin
-        if pin is None:
-            # The set path only ever carries a readable Personal Identification
-            # Number; guard so an unreadable credential fails cleanly rather
-            # than passing None into the helper's str-only signature.
-            raise CodeRejectedError(
-                code_slot=credential.slot,
-                lock_entity_id=self.lock.entity_id,
-                reason="cannot write an unreadable credential",
-            )
         try:
             await lock_helpers.async_set_credential(
                 self.node,

@@ -59,6 +59,7 @@ class TestSetAndClearCredentials:
         result = await e2e_schlage_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("9999")),
+            "9999",
             name="Test User",
             source="direct",
         )
