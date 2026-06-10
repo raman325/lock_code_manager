@@ -4,16 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from zwave_js_server.event import Event as ZwaveEvent
-
 from homeassistant.const import CONF_ENABLED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
-
-# Module path where provider functions are imported (used as a patch target).
-_PROVIDER_MODULE = "custom_components.lock_code_manager.providers.zwave_js"
 
 
 def async_capture_events(
@@ -28,30 +23,6 @@ def async_capture_events(
 
     hass.bus.async_listen(event_name, capture_events)
     return events
-
-
-def make_duplicate_code_event(node_id: int, user_id: int | None = None) -> ZwaveEvent:
-    """Create a duplicate-code Access Control notification ZwaveEvent."""
-    params: dict[str, Any] = {}
-    if user_id is not None:
-        params["userId"] = user_id
-    return ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": node_id,
-            "endpointIndex": 0,
-            "ccId": 113,
-            "args": {
-                "type": 6,  # ACCESS_CONTROL
-                "event": 15,  # NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-                "label": "Access Control",
-                "eventLabel": "New user code not added due to duplicate code",
-                "parameters": params,
-            },
-        },
-    )
 
 
 def get_enabled_switch_entity_id(hass: HomeAssistant, entry_id: str, slot: int) -> str:
