@@ -1,7 +1,7 @@
 -r requirements_lint.txt
 -r requirements_test.txt
 aioesphomeapi==45.3.1
-aiofiles==24.1.0
+aiofiles==25.1.0
 aiousbwatcher==1.1.2
 colorlog==6.10.1
 debugpy==1.8.21
