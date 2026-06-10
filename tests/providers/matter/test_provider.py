@@ -978,6 +978,104 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
+    async def test_pin_event_with_unknown_operation_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """LockUserChange with an unrecognized dataOperationType is dropped.
+
+        Defends against a future Matter spec adding a data operation LCM
+        doesn't model yet; we ignore rather than push a stale resolved
+        state with the wrong semantics.
+        """
+        mock_coordinator = MagicMock()
+        matter_lock_simple.coordinator = mock_coordinator
+
+        matter_lock_simple._on_node_event(
+            None,
+            _make_node_event(
+                event_id=4,
+                data={
+                    "lockDataType": 6,  # PIN
+                    "dataOperationType": 99,  # unknown
+                    "dataIndex": 3,
+                    "userIndex": 1,
+                },
+            ),
+        )
+        await hass.async_block_till_done()
+
+        mock_coordinator.push_update.assert_not_called()
+
+    async def test_pin_event_dispatch_swallows_lock_disconnected(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """If the owner lookup fails (LockDisconnected), the dispatch logs and returns.
+
+        The handler runs as a fire-and-forget task; a transport failure
+        during the userIndex -> tag lookup must not propagate out of the
+        task. The coordinator update is dropped; the next refresh will
+        surface the change.
+        """
+        mock_coordinator = MagicMock()
+        matter_lock_simple.coordinator = mock_coordinator
+
+        with patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(side_effect=HomeAssistantError("transport down")),
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,
+                        "dataOperationType": 0,
+                        "dataIndex": 3,
+                        "userIndex": 42,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        mock_coordinator.push_update.assert_not_called()
+
+    async def test_pin_event_for_user_with_no_name_ignored(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A nameless user-record yields no LCM tag -> ignore.
+
+        Some Matter locks return user records with a missing or empty
+        ``user_name`` field. There's no way to parse a tag without a name,
+        so the event is dropped (untagged-user contract).
+        """
+        mock_coordinator = MagicMock()
+        matter_lock_simple.coordinator = mock_coordinator
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 7,
+                    "user_name": None,  # lock returned an empty/None name
+                    "credentials": [{"type": "pin", "index": 2}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,
+                        "dataOperationType": 0,
+                        "dataIndex": 2,
+                        "userIndex": 7,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        mock_coordinator.push_update.assert_not_called()
+
     def test_non_pin_data_type_ignored(self, matter_lock_simple: MatterLock) -> None:
         """Non-PIN LockDataType (e.g. RFID=7) is ignored."""
         mock_coordinator = MagicMock()
@@ -1604,6 +1702,39 @@ class TestSetUser:
         call_kwargs = mock_set_user.call_args.kwargs
         assert call_kwargs["user_index"] == 99
         assert call_kwargs["user_name"] == "lcm:5:Carol"
+
+    async def test_set_user_falls_back_to_user_id_when_name_is_untagged(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """``_slot_from_seam_user`` falls back to user.user_id for untagged names.
+
+        Defensive path -- the seam always passes a tagged name, but a
+        direct caller (test setup, future refactor) might pass a User
+        with an untagged name. The helper uses user.user_id as the slot
+        in that case so the rest of the logic still has a slot to work
+        with.
+        """
+        mock_set_user = AsyncMock(return_value={"user_index": 5})
+        # user.user_id = 9 is the LCM slot fallback; name has no lcm:<slot>: tag.
+        user = User(user_id=9, name="Unparseable name")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        # CREATE path runs because no canonical/legacy match for slot 9.
+        # The verbatim un-tagged name flows through to set_lock_user.
+        assert result == SetUserResult(user_id=5, created=True)
+        call_kwargs = mock_set_user.call_args.kwargs
+        assert call_kwargs["user_index"] is None
+        assert call_kwargs["user_name"] == "Unparseable name"
 
     async def test_set_user_legacy_pass_skips_users_tagged_for_other_slots(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
@@ -2402,6 +2533,48 @@ class TestDeleteCredential:
         ):
             result = await matter_lock_simple.async_delete_credential(ref)
         assert result is True
+
+    async def test_delete_credential_returns_false_when_user_has_no_pin(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Delete for a user with no PIN credential is a no-op (returns False).
+
+        The seam resolves a stale owner (e.g. coordinator refresh raced with
+        an out-of-band clear); the provider then finds no PIN at that user
+        and returns False without calling clear_lock_credential.
+        """
+        mock_clear = AsyncMock(return_value=None)
+        # Override the autouse fixture to seed a user with no PIN credential
+        # at ref.user_id=1.
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                AsyncMock(
+                    return_value={
+                        "max_users": 10,
+                        "users": [
+                            {
+                                "user_index": 1,
+                                "user_name": "lcm:1:test",
+                                "credentials": [],
+                            },
+                        ],
+                    },
+                ),
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+        ):
+            result = await matter_lock_simple.async_delete_credential(
+                CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
+            )
+        assert result is False
+        mock_clear.assert_not_called()
 
     async def test_delete_credential_pushes_empty(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock

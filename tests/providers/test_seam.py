@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationFailed,
     ProviderNotImplementedError,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -894,3 +895,28 @@ async def test_set_usercode_keeps_pre_existing_user_on_failure(
         await lock.async_set_usercode(3, "9999", name="bob")
     assert ("delete_user", 3) not in lock.calls
     assert 3 in lock._users
+
+
+async def test_set_usercode_logs_warning_when_rollback_user_delete_fails(
+    hass: HomeAssistant, caplog
+) -> None:
+    """If the rollback ``async_delete_user`` itself raises, log and re-raise the original.
+
+    Pins the defensive log path in ``_set_credential``: the credential
+    write failed, the seam tried to roll back the newly-created user,
+    and that rollback ALSO failed. The original CodeRejectedError still
+    surfaces (it's what the caller cares about), but the warning
+    captures the leftover user so the operator has something to act on.
+    """
+
+    class _RollbackFailsLock(_CredentialWriteFailsLock):
+        async def async_delete_user(self, user_id: int) -> None:
+            self.calls.append(("delete_user", user_id))
+            raise LockOperationFailed("delete user transient failure")
+
+    lock = _make_lock(hass, _RollbackFailsLock, "seam_rollback_delete_fails")
+    with pytest.raises(CodeRejectedError):
+        await lock.async_set_usercode(3, "9999", name="alice")
+
+    assert ("delete_user", 3) in lock.calls
+    assert "failed to roll back newly created user 3" in caplog.text
