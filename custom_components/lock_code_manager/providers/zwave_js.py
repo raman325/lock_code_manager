@@ -241,15 +241,15 @@ class ZWaveJSLock(BaseLock):
 
         ``created`` reflects whether the user existed BEFORE this call so
         the base orchestration can roll back a user only newly created
-        here. Names are truncated via the base helper.
+        here. Receives ``user`` with a name already truncated to the
+        lock's advertised limit by the base orchestration.
         """
-        user_name = await self._truncate_user_name(user.name)
         try:
             existing = await self.node.access_control.get_user_cached(user.user_id)
             result = await lock_helpers.async_set_user(
                 self.node,
                 user_id=user.user_id,
-                user_name=user_name,
+                user_name=user.name,
                 active=user.active,
             )
         except BaseZwaveJSServerError as err:

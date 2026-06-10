@@ -983,50 +983,49 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
     mock_lock_helpers["async_set_credential"].assert_called_once()
 
 
-async def test_async_set_user_truncates_name_when_too_long(
+async def test_async_set_user_writes_name_verbatim(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """When user name exceeds max_user_name_length, it is truncated."""
-    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
-    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
-        "supports_user_management": True,
-        "max_users": 30,
-        "supported_user_types": [],
-        "max_user_name_length": 3,
-        "supported_credential_rules": [],
-        "supported_credential_types": {
-            pin_type_str: {
-                "num_slots": 30,
-                "min_length": 4,
-                "max_length": 8,
-                "supports_learn": False,
-            }
-        },
-    }
+    """
+    Provider primitive writes user.name as-is.
+
+    Truncation is the base orchestration's responsibility (applied in
+    ``_put_credential`` before the call); the provider receives a User
+    with the name already shaped to the lock's limit and writes it
+    verbatim. End-to-end truncation behavior is covered through
+    ``async_set_usercode`` below.
+    """
     mock_access_control.get_user_cached.return_value = None
-    mock_lock_helpers["async_set_user"].return_value = {"user_id": 5}
+    mock_lock_helpers["async_set_user"].return_value = {"user_id": 1}
 
-    # Name "alice" (5 chars) truncated to "ali" (3 chars)
-    user = User(user_id=5, name="alice", active=True)
-    result = await zwave_js_lock.async_set_user(user)
+    user = User(user_id=1, name="alice", active=True)
+    await zwave_js_lock.async_set_user(user)
 
-    assert result == SetUserResult(user_id=5, created=True)
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
-        user_id=5,
-        user_name="ali",
+        user_id=1,
+        user_name="alice",
         active=True,
     )
 
 
-async def test_async_set_user_uses_cached_max_name_length(
+async def test_async_set_usercode_truncates_name_to_lock_limit(
+    hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """After the base caches caps, async_set_user reuses the cached limit."""
+    """End-to-end: ``async_set_usercode`` truncates per the cached limit."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
     pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
     mock_lock_helpers["async_get_credential_capabilities"].return_value = {
         "supports_user_management": True,
@@ -1043,16 +1042,11 @@ async def test_async_set_user_uses_cached_max_name_length(
             }
         },
     }
-    # Prime the base capability cache via the same chokepoint async_set_user
-    # uses (_truncate_user_name → _get_cached_capabilities).
-    await zwave_js_lock._get_cached_capabilities()
-
     mock_access_control.get_user_cached.return_value = None
     mock_lock_helpers["async_set_user"].return_value = {"user_id": 1}
 
-    # Name "alexandra" (10 chars) truncated to 5 chars per the cached limit.
-    user = User(user_id=1, name="alexandra", active=True)
-    await zwave_js_lock.async_set_user(user)
+    # "alexandra" (9 chars) → truncated to "alexa" (5 chars) by the base.
+    await zwave_js_lock.async_set_usercode(1, "1234", name="alexandra")
 
     mock_lock_helpers["async_set_user"].assert_called_once_with(
         zwave_js_lock.node,
@@ -1060,8 +1054,6 @@ async def test_async_set_user_uses_cached_max_name_length(
         user_name="alexa",
         active=True,
     )
-    # Cache is warm; no second helper call.
-    assert mock_lock_helpers["async_get_credential_capabilities"].call_count == 1
 
 
 # ── Credential type validation ──────────────────────────────────────
@@ -1102,67 +1094,6 @@ async def test_async_delete_credential_rejects_non_pin_type(
 
 
 # ── Exception wrapping for write primitives ─────────────────────────
-
-
-async def test_async_set_user_falls_back_when_capabilities_fetch_fails(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Caps-read failure drops the name for this call without poisoning the cache.
-
-    Failure surfaces as ``LockDisconnected``/``LockOperationFailed`` which the
-    base ``_truncate_user_name`` catches; the cache stays None so the next
-    call retries instead of pinning a 0 sentinel that would silently strip
-    all user names for the provider instance lifetime.
-    """
-    mock_lock_helpers[
-        "async_get_credential_capabilities"
-    ].side_effect = FailedZWaveCommand("cmd", 1, "caps unavailable")
-    mock_access_control.get_user_cached.return_value = None
-
-    user = User(user_id=1, name="alice", active=True)
-    result = await zwave_js_lock.async_set_user(user)
-
-    assert result == SetUserResult(user_id=1, created=True)
-    assert zwave_js_lock._capabilities_cache is None
-    mock_lock_helpers["async_set_user"].assert_called_once_with(
-        zwave_js_lock.node,
-        user_id=1,
-        user_name=None,
-        active=True,
-    )
-
-
-async def test_async_set_user_retries_capabilities_after_failure(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """After a transient caps-fetch failure, the next call retries and the name lands."""
-    mock_lock_helpers["async_get_credential_capabilities"].side_effect = [
-        FailedZWaveCommand("cmd", 1, "caps unavailable"),
-        {
-            "max_user_name_length": 10,
-            "supports_user_management": True,
-            "max_users": 5,
-            "supported_credential_types": {},
-        },
-    ]
-    mock_access_control.get_user_cached.return_value = None
-
-    # First call: caps fetch fails, name dropped, base cache stays unset.
-    await zwave_js_lock.async_set_user(User(user_id=1, name="alice", active=True))
-    assert zwave_js_lock._capabilities_cache is None
-
-    # Second call: caps fetch retries, cache warms, name is now written.
-    await zwave_js_lock.async_set_user(User(user_id=2, name="bob", active=True))
-    assert zwave_js_lock._capabilities_cache is not None
-    assert zwave_js_lock._capabilities_cache.max_user_name_length == 10
-    assert mock_lock_helpers["async_get_credential_capabilities"].call_count == 2
-    last_call = mock_lock_helpers["async_set_user"].call_args_list[-1]
-    assert last_call.kwargs["user_name"] == "bob"
 
 
 async def test_async_set_user_maps_failed_command_to_lock_disconnected(

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import contextlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 import logging
 import time
@@ -1070,13 +1070,19 @@ class BaseLock:
         Run the create-on-first user lifecycle around a credential write.
 
         Native-user only (the slot adapters call the credential primitive
-        directly). Rolls back a newly-created user when the credential
-        write fails so the lock isn't left with a credential-less user
-        the slot-keyed coordinator can't reconcile. Returns True if the
-        value changed.
+        directly). Truncates ``user.name`` to the lock's advertised limit
+        before handing the user to the provider, so each provider's
+        ``async_set_user`` can write the name verbatim. Rolls back a
+        newly-created user when the credential write fails so the lock
+        isn't left with a credential-less user the slot-keyed coordinator
+        can't reconcile. Returns True if the value changed.
         """
         if await self._supports_user_records():
-            result = await self.async_set_user(user)
+            truncated = await self._truncate_user_name(user.name)
+            user_for_write = (
+                user if truncated == user.name else replace(user, name=truncated)
+            )
+            result = await self.async_set_user(user_for_write)
             credential_user_id = result.user_id
             rollback_user_id = result.user_id if result.created else None
         else:
