@@ -62,6 +62,7 @@ from ..domain.exceptions import (
 from ..domain.models import SlotCredential
 from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
 from ..domain.util import mask_pin
+from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -931,13 +932,17 @@ class BaseLock:
         Slot-only providers address the credential by slot and delete it
         directly. Native-user providers must target the credential's actual
         owning user, which is not assumed to equal the slot index: a
-        credential may have been created on the lock by another controller, or
-        the integration may have allocated a user identifier that differs from
-        the slot. The owner is resolved from the lock's current users and the
-        delete-on-last user lifecycle runs via ``_delete_credential``. Returns
-        True if the value changed, False if it was already cleared -- and True
-        when the provider cannot determine whether a change occurred, so the
-        coordinator refreshes and verifies the actual state.
+        credential may have been created on the lock by another controller,
+        or the integration may have allocated a user identifier that differs
+        from the slot. The owning ``user_id`` is resolved from the lock's
+        current users and threaded through the ``CredentialRef`` so the
+        provider's delete primitive can address the credential precisely.
+        The lock-side user stays put; it is torn down only when the slot
+        is removed from LCM config (see ``async_release_managed_slot``).
+        Returns True if the value changed, False if it was already cleared
+        -- and True when the provider cannot determine whether a change
+        occurred, so the coordinator refreshes and verifies the actual
+        state.
         """
         if not self.supports_native_users:
             ref = CredentialRef(
@@ -945,23 +950,50 @@ class BaseLock:
             )
             return await self.async_delete_credential(ref)
 
-        owner = next(
-            (
-                user
-                for user in await self.async_get_users()
+        # Owner resolution is two-pass to match the same identity rule the
+        # set path uses (see Matter's _find_user_index_for_slot). The
+        # canonical pass matches by the ``lcm:<slot>:`` tag in user.name;
+        # the legacy fallback handles pre-PR-B installs where
+        # ``credential.slot`` was pinned to the LCM slot. Matching by
+        # ``credential.slot == code_slot`` alone is unsafe once providers
+        # let the lock auto-allocate the credential index -- a tagged
+        # user for slot A whose credential lands at index B would be
+        # mis-matched when clearing slot B.
+        users = await self.async_get_users()
+        # Both lookups require the user to actually own a PIN credential
+        # at the slot we're clearing. Under the persistent-user-anchor
+        # lifecycle a tagged user can exist without a PIN (between
+        # writes); resolving such a user as the owner would drive a
+        # spurious ``async_delete_credential`` call whose provider-
+        # specific return value can incorrectly report changed=True.
+        owner_user_id: int | None
+        try:
+            owner_user_id = next(
+                user.user_id
+                for user in users
+                if user.name and parse_tag(user.name)[0] == code_slot
                 for credential in user.pin_credentials
                 if credential.slot == code_slot
-            ),
-            None,
-        )
-        if owner is None:
+            )
+        except StopIteration:
+            owner_user_id = next(
+                (
+                    user.user_id
+                    for user in users
+                    if parse_tag(user.name or "")[0] is None
+                    for credential in user.pin_credentials
+                    if credential.slot == code_slot
+                ),
+                None,
+            )
+        if owner_user_id is None:
             # No user owns this slot's credential -- nothing to clear.
             return False
 
         ref = CredentialRef(
-            user_id=owner.user_id, type=CredentialType.PIN, slot=code_slot
+            user_id=owner_user_id, type=CredentialType.PIN, slot=code_slot
         )
-        return await self._delete_credential(owner, ref)
+        return await self._delete_credential(ref)
 
     @final
     async def async_internal_clear_usercode(
@@ -1058,24 +1090,70 @@ class BaseLock:
         caps = await self._get_cached_capabilities()
         return caps.supports_user_management and caps.max_user_name_length > 0
 
-    async def _truncate_user_name(self, name: str | None) -> str | None:
+    async def _build_tagged_user_name(
+        self, slot: int, display: str | None
+    ) -> str | None:
         """
-        Truncate ``name`` to the lock's advertised user-name length.
+        Build the LCM-tagged user name for a slot, fitting the lock's length.
+
+        Emits ``lcm:{slot}:{display}`` (canonical format from
+        :func:`._util.make_tagged_name`) and truncates the display portion
+        so the overall length fits ``max_user_name_length``. The tag prefix
+        is sacred -- it's how :func:`._util.parse_tag` recovers the slot
+        binding on subsequent reads -- so when the full prefix fits,
+        truncation only ever shortens the user-supplied display.
+
+        When the lock's limit can't even fit the canonical prefix
+        (``len("lcm:{slot}:") > max_user_name_length``), the helper
+        falls back to writing just the slot number as the user name
+        (``str(slot)``). :func:`._util.parse_tag` recognizes
+        digit-only names as a length-constrained encoding of the slot
+        binding. If even the slot digits don't fit
+        (``len(str(slot)) > max_user_name_length``, e.g. slot 255 on a
+        2-char-limit lock), the helper returns ``None`` rather than
+        truncating the slot to a different number and silently
+        mis-binding the user. The seam treats ``None`` as "leave name
+        alone," which means LCM cannot identify its own user on such a
+        lock -- those locks are effectively unmanaged at the user-name
+        level.
 
         Returns ``None`` when the lock has no concept of named users
-        (``max_user_name_length == 0``). A best-effort capabilities-fetch
-        failure also returns ``None`` rather than blocking the write --
-        the cache stays unset so the next call retries.
+        (``supports_user_management`` is False or
+        ``max_user_name_length <= 0``); the seam's
+        ``_supports_user_records`` gate already short-circuits the
+        user-write path on such locks, but the guard here is
+        defensive in case the helper is called outside that gate. A
+        best-effort capabilities-fetch failure also returns ``None``
+        rather than blocking the write -- the cache stays unset so the
+        next call retries.
+
+        Worst-case canonical prefix overhead is 8 characters
+        (``lcm:255:``); on a 10-character-limit lock that leaves 2
+        characters of display, which is degenerate but functional.
+        Locks advertising a length below that (rare) hit the slot-only
+        fallback or the ``None`` return.
         """
-        if name is None:
-            return None
         try:
             caps = await self._get_cached_capabilities()
         except LockDisconnected, LockOperationFailed:
             return None
-        if caps.max_user_name_length <= 0:
+        if not caps.supports_user_management or caps.max_user_name_length <= 0:
             return None
-        return name[: caps.max_user_name_length]
+        tagged = make_tagged_name(slot, display)
+        if len(tagged) <= caps.max_user_name_length:
+            return tagged
+        if len(f"lcm:{slot}:") > caps.max_user_name_length:
+            # Canonical prefix doesn't fit. Try the slot-only fallback so
+            # the slot binding survives the read; if the slot digits
+            # themselves can't fit either, return ``None`` rather than
+            # truncate the slot number to a different one and mis-bind
+            # the user.
+            slot_str = str(slot)
+            if len(slot_str) > caps.max_user_name_length:
+                return None
+            return slot_str
+        # Canonical prefix fits; truncate only the display portion.
+        return tagged[: caps.max_user_name_length]
 
     async def _assert_credential_type_supported(self, credential: Credential) -> None:
         """
@@ -1150,11 +1228,14 @@ class BaseLock:
 
         Native-user only (the slot adapters call the credential primitive
         directly). Asserts the lock advertises ``credential.type`` and
-        truncates ``user.name`` to the lock's advertised limit before
+        replaces ``user.name`` with the LCM-tagged name built via
+        ``_build_tagged_user_name(credential.slot, user.name)`` before
         handing the user to the provider, so each provider's
-        ``async_set_user`` can write the name verbatim. Rolls back a
-        newly-created user when the credential write fails so the lock
-        isn't left with a credential-less user the slot-keyed coordinator
+        ``async_set_user`` can write the tagged name verbatim. The tag
+        carries the slot binding the find-or-create-by-tag lookup
+        recovers on subsequent operations. Rolls back a newly-created
+        user when the credential write fails so the lock isn't left
+        with a credential-less user the slot-keyed coordinator
         can't reconcile. Returns True if the value changed.
 
         ``pin`` is the resolved readable PIN that the caller (the seam in
@@ -1164,10 +1245,18 @@ class BaseLock:
         """
         await self._assert_credential_type_supported(credential)
         if await self._supports_user_records():
-            truncated = await self._truncate_user_name(user.name)
-            user_for_write = (
-                user if truncated == user.name else replace(user, name=truncated)
-            )
+            tagged = await self._build_tagged_user_name(credential.slot, user.name)
+            if tagged is None:
+                # No stable slot tag fits the lock's max_user_name_length --
+                # writing a user without one (or with name=None) would break
+                # the find-or-create-by-tag lookup the next operation needs.
+                # Fail loudly rather than create an unrecoverable user.
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id} cannot encode a stable slot "
+                    f"tag for slot {credential.slot}; refusing to write a "
+                    "credential whose owning user could not be re-identified"
+                )
+            user_for_write = user if tagged == user.name else replace(user, name=tagged)
             result = await self.async_set_user(user_for_write)
             credential_user_id = result.user_id
             rollback_user_id = result.user_id if result.created else None
@@ -1193,42 +1282,41 @@ class BaseLock:
             raise
 
     @final
-    async def _delete_credential(self, owner: User, ref: CredentialRef) -> bool:
+    async def _delete_credential(self, ref: CredentialRef) -> bool:
         """
-        Run the delete-on-last user lifecycle around a credential delete.
+        Delete a credential without touching its owning user.
 
         Native-user only. Asserts the lock advertises ``ref.type``, then
-        deletes the credential. On locks with separate user records
-        (mirroring ``_set_credential``'s gate), deletes ``owner`` when
-        that was its last credential -- the invariant being that a user
-        exists if and only if it owns at least one credential. On
-        implicit-user locks (e.g. Z-Wave User Code CC) the credential
-        delete already removed the user, so the cleanup call is skipped.
-        The count is read from ``owner``, a pre-deletion snapshot, so
-        the decision does not depend on whether the provider mutates the
-        user during the delete. Returns True if changed.
-
-        The credential delete is the operation that clears the slot, so a
-        failure of the follow-up user delete is logged rather than raised: the
-        slot is already cleared, and raising would only churn retries that
-        re-resolve to no owner. The leftover empty user is surfaced in the log.
+        deletes the credential. The lock-side user is now an LCM-managed
+        slot anchor (see the user-tag idempotency design) -- created on
+        first slot-configured write and removed only on slot removal
+        from LCM config via ``async_release_managed_slot``. Clear and
+        rewrite cycles preserve the slot's lock-side user, so this
+        helper is now a thin guard around ``async_delete_credential``.
+        Returns True if changed.
         """
         await self._assert_credential_ref_supported(ref)
-        was_only_credential = len(owner.credentials) <= 1
-        changed = await self.async_delete_credential(ref)
-        if changed and was_only_credential and await self._supports_user_records():
-            try:
-                await self.async_delete_user(owner.user_id)
-            except Exception as err:
-                LOGGER.warning(
-                    "Lock %s: cleared the credential at slot %s but failed to "
-                    "remove the now-empty user %s: %s",
-                    self.lock.entity_id,
-                    ref.slot,
-                    owner.user_id,
-                    err,
-                )
-        return changed
+        return await self.async_delete_credential(ref)
+
+    async def async_release_managed_slot(self, slot: int) -> None:
+        """
+        Release any lock-side state LCM owns for ``slot``.
+
+        Called by ``__init__.py``'s teardown path once a slot is removed
+        from LCM config (per the user-tag idempotency design's lifecycle
+        decoupling: a lock-side user is the slot's persistent anchor and
+        survives PIN clear/rewrite cycles, so it can only be torn down
+        when the slot itself is removed from LCM management).
+
+        Default is a no-op: slot-only providers have no user record to
+        tear down, and native-user providers that have not yet migrated
+        to the tag scheme don't carry a recoverable slot binding either.
+        Providers that DO carry the binding (Matter, eventually Z-Wave
+        User Credential CC) override this to find the user tagged for
+        ``slot`` and delete it -- the cascade defined by the lock's
+        protocol then removes the user's credentials.
+        """
+        return
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
@@ -1257,9 +1345,13 @@ class BaseLock:
         """
         Delete a lock user (and, per the Z-Wave/Matter spec, its credentials).
 
-        Native-user providers only. The base calls this once a user's last
-        credential has been removed -- the lifecycle invariant is that a user
-        exists if and only if it owns at least one credential.
+        Native-user providers only. Under the user-tag idempotency design
+        the lock-side user is an LCM-managed slot anchor: it persists
+        through PIN clear / rewrite cycles and is removed only when the
+        slot is dropped from LCM config (the base calls this from a
+        provider's ``async_release_managed_slot`` override). Also called
+        as a rollback path when a credential write fails for a freshly
+        created user.
         """
         self._raise_not_implemented(
             "async_delete_user",

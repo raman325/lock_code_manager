@@ -81,6 +81,7 @@ from .const import (
     Platform,
 )
 from .domain.config import EntryConfig
+from .domain.exceptions import LockDisconnected, LockOperationFailed
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
     LockCodeManagerConfigEntry,
@@ -976,6 +977,31 @@ async def async_update_listener(
                     entry_title,
                     slot_num,
                 )
+
+    # Release lock-side state LCM owns for any (lock, slot) pair that no
+    # longer exists in config. Native-user providers (Matter, Z-Wave User
+    # Credential CC under the user-tag idempotency design) override
+    # ``async_release_managed_slot`` to delete the LCM-tagged user that
+    # anchored the slot; slot-only providers leave the default no-op in
+    # place. This runs before ``locks_to_remove`` processing so providers
+    # in ``runtime_data.locks`` are still usable.
+    for lock_entity_id, slot_num in diff.pairs_removed:
+        release_lock = runtime_data.locks.get(lock_entity_id)
+        if release_lock is None:
+            continue
+        try:
+            await release_lock.async_release_managed_slot(slot_num)
+        except (LockDisconnected, LockOperationFailed) as err:
+            # The slot is gone from LCM config either way; lock-side cleanup
+            # is best-effort and must not block the teardown.
+            _LOGGER.warning(
+                "%s (%s): could not release slot %s on lock %s: %s",
+                entry_id,
+                entry_title,
+                slot_num,
+                lock_entity_id,
+                err,
+            )
 
     # Remove old lock entities
     if locks_to_remove:

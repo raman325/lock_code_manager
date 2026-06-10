@@ -50,12 +50,12 @@ class TestSetAndClearUsercodes:
     ) -> None:
         """Set a code via the base orchestration and verify set_lock_credential was called."""
         matter_mock_helpers["set_lock_credential"].reset_mock()
-        matter_mock_helpers["get_lock_credential_status"].reset_mock()
+        matter_mock_helpers["get_lock_users"].reset_mock()
         matter_mock_helpers["set_lock_user"].reset_mock()
         with (
             patch(
-                f"{_PROVIDER_MODULE}.get_lock_credential_status",
-                matter_mock_helpers["get_lock_credential_status"],
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                matter_mock_helpers["get_lock_users"],
             ),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",
@@ -114,8 +114,8 @@ class TestSetAndClearUsercodes:
         """
         with (
             patch(
-                f"{_PROVIDER_MODULE}.get_lock_credential_status",
-                matter_mock_helpers["get_lock_credential_status"],
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                matter_mock_helpers["get_lock_users"],
             ),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",

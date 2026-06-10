@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
 from unittest.mock import AsyncMock, patch
 
@@ -447,55 +448,129 @@ async def test_supports_user_records_false_when_management_disabled(
     assert await lock._supports_user_records() is False
 
 
-async def test_truncate_user_name_within_limit_is_unchanged(
+async def test_build_tagged_user_name_within_limit_keeps_full_display(
     hass: HomeAssistant,
 ) -> None:
-    """A name within ``max_user_name_length`` passes through unchanged."""
-    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_within")
+    """``lcm:<slot>:<display>`` fits the lock's limit -- everything stays."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_within")
     lock._capabilities_cache = _caps(
         supports_user_management=True, max_user_name_length=16
     )
-    assert await lock._truncate_user_name("alice") == "alice"
+    assert await lock._build_tagged_user_name(5, "alice") == "lcm:5:alice"
 
 
-async def test_truncate_user_name_truncates_to_limit(hass: HomeAssistant) -> None:
-    """A name longer than ``max_user_name_length`` is truncated."""
-    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_long")
-    lock._capabilities_cache = _caps(
-        supports_user_management=True, max_user_name_length=5
-    )
-    assert await lock._truncate_user_name("alexandra") == "alexa"
-
-
-async def test_truncate_user_name_returns_none_when_max_zero(
+async def test_build_tagged_user_name_truncates_only_display(
     hass: HomeAssistant,
 ) -> None:
-    """Locks without named users drop the name entirely."""
-    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_zero")
+    """When the total exceeds the limit, only the display portion is cut."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_truncate")
+    # "lcm:5:" is 6 chars, limit 10 → 4 chars of display ("alex").
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=10
+    )
+    assert await lock._build_tagged_user_name(5, "alexandra") == "lcm:5:alex"
+
+
+async def test_build_tagged_user_name_handles_none_display(
+    hass: HomeAssistant,
+) -> None:
+    """A ``None`` display becomes the synthetic ``Code Slot <n>`` placeholder."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_none")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=32
+    )
+    # make_tagged_name uses "Code Slot <n>" when display is falsy.
+    assert await lock._build_tagged_user_name(5, None) == "lcm:5:Code Slot 5"
+
+
+async def test_build_tagged_user_name_returns_none_when_max_zero(
+    hass: HomeAssistant,
+) -> None:
+    """Locks without named users return None so the seam skips the user write."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_zero")
     lock._capabilities_cache = _caps(
         supports_user_management=True, max_user_name_length=0
     )
-    assert await lock._truncate_user_name("alice") is None
+    assert await lock._build_tagged_user_name(5, "alice") is None
 
 
-async def test_truncate_user_name_none_input_is_none(hass: HomeAssistant) -> None:
-    """A ``None`` name stays ``None`` without touching the capability cache."""
-    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_none")
-    # No capabilities cache primed; helper short-circuits on None input.
-    assert await lock._truncate_user_name(None) is None
+async def test_build_tagged_user_name_falls_back_to_slot_only_when_prefix_overflows(
+    hass: HomeAssistant,
+) -> None:
+    """Below the canonical-prefix length, write just the slot number.
+
+    On a lock whose ``max_user_name_length`` can't fit even the canonical
+    ``lcm:<slot>:`` prefix, truncating the prefix loses the slot binding
+    irrecoverably. The helper falls back to writing the slot number as
+    the user name; :func:`._util.parse_tag` recognizes digit-only names
+    as a length-constrained encoding of the slot binding.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_under")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=3
+    )
+    # "lcm:255:" is 8 chars; the 3-char limit can't fit it. Fall back to
+    # the slot-only encoding -- "255" fits and the slot survives the read.
+    assert await lock._build_tagged_user_name(255, "alice") == "255"
 
 
-async def test_truncate_user_name_returns_none_when_caps_fetch_fails(
+async def test_build_tagged_user_name_returns_none_when_slot_digits_dont_fit(
+    hass: HomeAssistant,
+) -> None:
+    """If even the slot digits can't fit, return None rather than truncate.
+
+    Regression for #1239 review (Copilot). On a max_user_name_length
+    smaller than ``len(str(slot))`` (e.g. slot=255 on a 2-char lock),
+    slicing ``str(slot)`` would yield ``"25"`` -- the wrong slot. Better
+    to return ``None`` and let the seam treat it as "no name write" than
+    silently mis-bind the user to a different slot.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_slot_too_big")
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=2
+    )
+    # "255" is 3 chars, doesn't fit in a 2-char limit.
+    assert await lock._build_tagged_user_name(255, "alice") is None
+
+
+async def test_build_tagged_user_name_returns_none_when_supports_user_management_false(
+    hass: HomeAssistant,
+) -> None:
+    """``supports_user_management=False`` returns None even with a positive length.
+
+    Defensive guard for callers that bypass ``_supports_user_records``.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_no_user_mgmt")
+    lock._capabilities_cache = _caps(
+        supports_user_management=False, max_user_name_length=16
+    )
+    assert await lock._build_tagged_user_name(5, "alice") is None
+
+
+async def test_build_tagged_user_name_keeps_canonical_prefix_when_it_just_fits(
+    hass: HomeAssistant,
+) -> None:
+    """At exactly the prefix's length, keep the canonical prefix (display=empty)."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_just_fits")
+    # ``lcm:1:`` is 6 chars. With max_user_name_length=6 the prefix fits
+    # with zero display budget -- no fallback needed.
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=6
+    )
+    assert await lock._build_tagged_user_name(1, "alice") == "lcm:1:"
+
+
+async def test_build_tagged_user_name_returns_none_when_caps_fetch_fails(
     hass: HomeAssistant,
 ) -> None:
     """Caps-read failure falls back to None instead of blocking the write."""
-    lock = _make_lock(hass, _NativeStubLock, "seam_truncate_fail")
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_fail")
     with patch.object(
         type(lock),
         "async_get_capabilities",
         AsyncMock(side_effect=LockDisconnected("unreachable")),
     ):
-        assert await lock._truncate_user_name("alice") is None
+        assert await lock._build_tagged_user_name(5, "alice") is None
     # Cache stays unset so the next call retries.
     assert lock._capabilities_cache is None
 
@@ -558,10 +633,9 @@ async def test_delete_credential_rejects_unsupported_credential_type(
 ) -> None:
     """``_delete_credential`` asserts the ref's type before any delete call."""
     lock = _make_lock(hass, _NativeStubLock, "seam_drop_reject_type")
-    owner = User(user_id=1, credentials=[])
     ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=3)
     with pytest.raises(CodeRejectedError):
-        await lock._delete_credential(owner, ref)
+        await lock._delete_credential(ref)
     assert lock.calls == []
 
 
@@ -592,7 +666,7 @@ async def test_set_usercode_native_user_first_and_threads_id(
     changed = await lock.async_set_usercode(3, "9999", name="alice")
     assert changed is True
     assert lock.calls == [
-        ("set_user", 3, "alice"),
+        ("set_user", 3, "lcm:3:alice"),
         ("set_credential", 3, 3),
     ]
     assert lock._users[3].credentials[0].matches("9999")
@@ -607,68 +681,23 @@ async def test_set_usercode_degenerate_skips_user(hass: HomeAssistant) -> None:
     assert lock._slots[3].matches("9999")
 
 
-async def test_clear_usercode_native_deletes_user_on_last_credential(
+async def test_clear_usercode_native_preserves_user_record(
     hass: HomeAssistant,
 ) -> None:
-    """Native clear removes the credential then the now-empty user."""
+    """Native clear removes the credential and leaves the slot's user in place.
+
+    The lock-side user is now an LCM-managed slot anchor: it persists for
+    the slot's whole lifetime so the slot keeps the same identity across
+    PIN cycles. Teardown happens only when the slot itself is removed
+    from LCM config (see ``async_release_managed_slot``).
+    """
     lock = _make_lock(hass, _NativeStubLock, "seam_clear_native")
     await lock.async_set_usercode(3, "9999", name="alice")
     lock.calls.clear()
     changed = await lock.async_clear_usercode(3)
     assert changed is True
-    assert lock.calls == [
-        ("delete_credential", 3, 3),
-        ("delete_user", 3),
-    ]
-    assert 3 not in lock._users
-
-
-async def test_clear_usercode_implicit_user_skips_delete_user(
-    hass: HomeAssistant,
-) -> None:
-    """
-    Implicit-user lock (e.g. Z-Wave User Code CC) skips the cleanup
-    ``async_delete_user`` call after a credential delete.
-
-    The credential delete already removed the user implicitly, so the
-    base lifecycle has nothing to clean up. Without this gate the base
-    would log a spurious warning on every clear because the driver
-    reports the user as already gone. Mirrors ``_set_credential``'s
-    ``_supports_user_records()`` gate on the set side.
-    """
-
-    class _ImplicitUserStubLock(_NativeStubLock):
-        async def async_get_capabilities(self) -> LockCapabilities:
-            # supports_user_management True (hardcoded by the driver for
-            # all Z-Wave locks), max_user_name_length 0 (UC has no
-            # names) -- the implicit-user signal.
-            return LockCapabilities(
-                supports_user_management=True,
-                max_users=30,
-                credential_types={
-                    CredentialType.PIN: CredentialTypeCapability(
-                        num_slots=30,
-                        min_length=4,
-                        max_length=8,
-                        supports_learn=False,
-                    ),
-                },
-                max_user_name_length=0,
-            )
-
-    lock = _make_lock(hass, _ImplicitUserStubLock, "seam_clear_implicit_user")
-    # Directly seed an implicit user; on a real User Code CC lock the
-    # driver creates this record inside the credential-write call.
-    lock._users[3] = User(
-        user_id=3,
-        credentials=[credential_from_slot(3, SlotCredential.known("9999"))],
-    )
-
-    changed = await lock.async_clear_usercode(3)
-
-    assert changed is True
-    # delete_credential ran; delete_user did NOT.
     assert lock.calls == [("delete_credential", 3, 3)]
+    assert 3 in lock._users
 
 
 async def test_clear_usercode_degenerate_no_user_op(hass: HomeAssistant) -> None:
@@ -717,17 +746,108 @@ async def test_clear_usercode_native_resolves_owner_when_user_id_not_slot(
     }
     changed = await lock.async_clear_usercode(5)
     assert changed is True
-    assert lock.calls == [
-        ("delete_credential", 12, 5),
-        ("delete_user", 12),
-    ]
-    assert 12 not in lock._users
+    # The ref is built from the resolved owner, so the credential delete
+    # targets user_id=12 / slot=5, not the slot index alone.
+    assert lock.calls == [("delete_credential", 12, 5)]
+    # User stays put -- lifecycle is decoupled from credential presence.
+    assert 12 in lock._users
 
 
-async def test_clear_usercode_native_keeps_user_with_other_credentials(
+async def test_clear_usercode_resolves_owner_by_tag_when_user_id_not_slot(
     hass: HomeAssistant,
 ) -> None:
-    """Native clear deletes only the credential when the user has others."""
+    """Owner resolution prefers the LCM tag in user.name over the user_id heuristic.
+
+    Regression for #1239 review. After the PR drops the user_id == LCM
+    slot invariant for native-user providers, a user tagged ``lcm:5:``
+    can have any lock-side ``user_id`` (Matter auto-allocates). The
+    owner resolution in async_clear_usercode must find the user by the
+    canonical tag, not by anything tied to the lock-side user_id.
+
+    (The provider's ``async_get_users`` is responsible for projecting
+    ``Credential.slot`` to the LCM slot, so by the time this code runs,
+    ``credential.slot == code_slot`` is the right query for the
+    PIN-ownership guard.)
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_by_tag")
+    lock._users = {
+        42: User(
+            user_id=42,  # Matter-auto-allocated; NOT the LCM slot.
+            name="lcm:5:Alice",
+            credentials=[credential_from_slot(5, SlotCredential.known("1234"))],
+        )
+    }
+    changed = await lock.async_clear_usercode(5)
+    assert changed is True
+    # Owner resolved via the lcm:5: tag; delete targets user_id=42
+    # with the ref's slot=5 (LCM slot).
+    assert lock.calls == [("delete_credential", 42, 5)]
+    assert 42 in lock._users
+
+
+async def test_clear_usercode_no_op_when_tagged_user_has_no_pin_credential(
+    hass: HomeAssistant,
+) -> None:
+    """A tagged user with no PIN credential is not the slot's owner -> clear is no-op.
+
+    Regression for #1239 review (Copilot). Under the persistent-user-anchor
+    lifecycle, an ``lcm:<slot>:`` tagged user can exist with no PIN
+    (between writes, or after a previous clear). The canonical owner
+    pass must require the user to own a PIN at the slot before resolving
+    them as the owner -- otherwise ``_delete_credential`` would call the
+    provider's ``async_delete_credential`` which (for some providers, e.g.
+    zwave_js) unconditionally returns True and causes a spurious
+    coordinator refresh.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_tagged_no_pin")
+    lock._users = {
+        42: User(
+            user_id=42,
+            name="lcm:5:Alice",  # tagged but no credentials
+            credentials=[],
+        )
+    }
+    changed = await lock.async_clear_usercode(5)
+    assert changed is False
+    assert lock.calls == []
+
+
+async def test_clear_usercode_legacy_pass_skips_users_tagged_for_other_slots(
+    hass: HomeAssistant,
+) -> None:
+    """Legacy ``credential.slot == code_slot`` fallback ignores tagged owners.
+
+    Regression for #1239 review. A user tagged ``lcm:3:`` whose Matter-
+    auto-allocated credential index lands at 7 must NOT be picked up by
+    ``async_clear_usercode(7)``'s legacy fallback. Doing so would resolve
+    the owner of slot-7 as slot-3's user, and the subsequent delete would
+    target the wrong slot.
+    """
+    lock = _make_lock(hass, _NativeStubLock, "seam_clear_legacy_skips_tagged")
+    lock._users = {
+        99: User(
+            user_id=99,
+            name="lcm:3:Alice",
+            credentials=[credential_from_slot(7, SlotCredential.known("1234"))],
+        )
+    }
+    # No user owns slot 7 under the canonical-tag lookup, and the legacy
+    # fallback must skip the lcm:3:-tagged owner -> clear is a no-op.
+    changed = await lock.async_clear_usercode(7)
+    assert changed is False
+    assert lock.calls == []
+
+
+async def test_clear_usercode_native_only_clears_the_targeted_credential(
+    hass: HomeAssistant,
+) -> None:
+    """Native clear touches only the targeted credential, never the user.
+
+    Verifies the multi-credential case: even when the lock-side user has
+    credentials beyond the one LCM is clearing (e.g. coexisting fingerprint
+    or RFID enrolled out-of-band), only the targeted PIN credential is
+    deleted. The user record and its other credentials stay put.
+    """
     lock = _make_lock(hass, _NativeStubLock, "seam_clear_multi_cred")
     lock._users = {
         4: User(
@@ -742,6 +862,7 @@ async def test_clear_usercode_native_keeps_user_with_other_credentials(
     assert changed is True
     assert lock.calls == [("delete_credential", 4, 4)]
     assert ("delete_user", 4) not in lock.calls
+    assert 4 in lock._users
 
 
 async def test_internal_set_usercode_drives_orchestration(
@@ -754,7 +875,7 @@ async def test_internal_set_usercode_drives_orchestration(
     # only the connection gate needs forcing to reach the orchestration.
     with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
         await lock.async_internal_set_usercode(4, "4321", "carol")
-    assert ("set_user", 4, "carol") in lock.calls
+    assert ("set_user", 4, "lcm:4:carol") in lock.calls
     assert ("set_credential", 4, 4) in lock.calls
 
 
@@ -814,7 +935,7 @@ async def test_set_usercode_rolls_back_newly_created_user_on_failure(
     with pytest.raises(CodeRejectedError):
         await lock.async_set_usercode(3, "9999", name="alice")
     assert lock.calls == [
-        ("set_user", 3, "alice"),
+        ("set_user", 3, "lcm:3:alice"),
         ("set_credential", 3, 3),
         ("delete_user", 3),
     ]
@@ -839,26 +960,54 @@ async def test_set_usercode_keeps_pre_existing_user_on_failure(
     assert 3 in lock._users
 
 
-class _UserDeleteFailsLock(_NativeStubLock):
-    """Native stub whose user delete always fails."""
-
-    async def async_delete_user(self, user_id: int) -> None:
-        self.calls.append(("delete_user", user_id))
-        raise LockOperationFailed("user delete failed")
-
-
-async def test_clear_usercode_tolerates_user_delete_failure(
+async def test_set_usercode_fails_loudly_when_tag_cant_be_encoded(
     hass: HomeAssistant,
 ) -> None:
-    """Clear still reports the credential change when the user delete fails."""
-    lock = _make_lock(hass, _UserDeleteFailsLock, "seam_clear_deluser_fail")
-    lock._users = {
-        4: User(
-            user_id=4,
-            credentials=[credential_from_slot(4, SlotCredential.known("1234"))],
-        )
-    }
-    changed = await lock.async_clear_usercode(4)
-    assert changed is True
-    assert ("delete_credential", 4, 4) in lock.calls
-    assert ("delete_user", 4) in lock.calls
+    """``_set_credential`` refuses to write a user with no recoverable slot tag.
+
+    Pins the safety check on a native-user provider whose
+    ``max_user_name_length`` can't fit even the slot digits:
+    ``_build_tagged_user_name`` returns ``None``, and the seam must
+    fail loudly rather than call ``async_set_user(name=None)`` --
+    writing a nameless user would break the find-or-create-by-tag
+    lookup the next operation needs and leave an unrecoverable
+    duplicate user on the lock.
+    """
+
+    class _TinyNameLock(_NativeStubLock):
+        async def async_get_capabilities(self) -> LockCapabilities:
+            base = await super().async_get_capabilities()
+            # max_user_name_length=1 -- slot 25 ("25") doesn't fit.
+            return replace(base, max_user_name_length=1)
+
+    lock = _make_lock(hass, _TinyNameLock, "seam_no_stable_tag")
+    with pytest.raises(LockOperationFailed, match="cannot encode a stable slot tag"):
+        await lock.async_set_usercode(25, "9999", name="alice")
+    # No user written, no credential written -- failure happened before either.
+    assert not any(c[0] == "set_user" for c in lock.calls)
+    assert not any(c[0] == "set_credential" for c in lock.calls)
+
+
+async def test_set_usercode_logs_warning_when_rollback_user_delete_fails(
+    hass: HomeAssistant, caplog
+) -> None:
+    """If the rollback ``async_delete_user`` itself raises, log and re-raise the original.
+
+    Pins the defensive log path in ``_set_credential``: the credential
+    write failed, the seam tried to roll back the newly-created user,
+    and that rollback ALSO failed. The original CodeRejectedError still
+    surfaces (it's what the caller cares about), but the warning
+    captures the leftover user so the operator has something to act on.
+    """
+
+    class _RollbackFailsLock(_CredentialWriteFailsLock):
+        async def async_delete_user(self, user_id: int) -> None:
+            self.calls.append(("delete_user", user_id))
+            raise LockOperationFailed("delete user transient failure")
+
+    lock = _make_lock(hass, _RollbackFailsLock, "seam_rollback_delete_fails")
+    with pytest.raises(CodeRejectedError):
+        await lock.async_set_usercode(3, "9999", name="alice")
+
+    assert ("delete_user", 3) in lock.calls
+    assert "failed to roll back newly created user 3" in caplog.text

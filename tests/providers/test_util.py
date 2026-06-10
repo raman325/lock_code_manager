@@ -85,6 +85,10 @@ class TestParseTagWithRewrite:
             pytest.param(
                 "[LCM:5]Tight", (5, "Tight", True), id="legacy-no-space-after-bracket"
             ),
+            # Slot-only fallback -- written when the lock's
+            # max_user_name_length can't fit the canonical prefix.
+            pytest.param("5", (5, "", False), id="slot-only-single-digit"),
+            pytest.param("255", (255, "", False), id="slot-only-multi-digit"),
             # Untagged or malformed -- no match, no rewrite.
             pytest.param("Guest Code", (None, "Guest Code", False), id="untagged"),
             pytest.param("", (None, "", False), id="empty-string"),
@@ -137,6 +141,7 @@ class TestParseTag:
         [
             pytest.param("lcm:5:Alice", (5, "Alice"), id="new-format"),
             pytest.param("[LCM:5] Alice", (5, "Alice"), id="legacy-format"),
+            pytest.param("42", (42, ""), id="slot-only"),
             pytest.param("Alice", (None, "Alice"), id="untagged"),
             pytest.param("", (None, ""), id="empty"),
         ],

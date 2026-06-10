@@ -224,11 +224,6 @@ def matter_mock_helpers() -> dict[str, AsyncMock]:
     # set_lock_user: called by async_set_user
     helpers["set_lock_user"] = AsyncMock(return_value={"user_index": 1})
 
-    # get_lock_credential_status: called by async_set_user to detect create-vs-update
-    helpers["get_lock_credential_status"] = AsyncMock(
-        return_value={"credential_exists": True, "user_index": 1}
-    )
-
     # clear_lock_credential: called by async_delete_credential
     helpers["clear_lock_credential"] = AsyncMock(return_value={})
 
@@ -276,10 +271,6 @@ async def lcm_config_entry(
         patch(
             f"{_PROVIDER_MODULE}.set_lock_user",
             matter_mock_helpers["set_lock_user"],
-        ),
-        patch(
-            f"{_PROVIDER_MODULE}.get_lock_credential_status",
-            matter_mock_helpers["get_lock_credential_status"],
         ),
         patch(
             f"{_PROVIDER_MODULE}.clear_lock_credential",

@@ -24,7 +24,6 @@ from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
     clear_lock_credential,
     clear_lock_user,
-    get_lock_credential_status,
     get_lock_info,
     get_lock_users,
     set_lock_credential,
@@ -52,7 +51,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import parse_slot_num
+from ._util import parse_slot_num, parse_tag
 from .const import LOGGER
 
 # DoorLock cluster ID (0x0101 = 257)
@@ -69,6 +68,59 @@ _LOCK_DATA_TYPE_PIN = 6
 _DATA_OP_ADD = 0
 _DATA_OP_CLEAR = 1
 _DATA_OP_MODIFY = 2
+
+
+def _lcm_slot_from_raw_users_by_user_index(
+    raw_users: list[dict[str, Any]], user_index: int | None
+) -> int | None:
+    """
+    Resolve the LCM slot by matching a raw lock user by ``user_index``.
+
+    Pure helper over the already-fetched user list -- the caller owns the
+    ``_raw_lock_users`` round-trip and the transport-error handling.
+    """
+    if user_index is None:
+        return None
+    name = next(
+        (
+            raw_user.get("user_name")
+            for raw_user in raw_users
+            if raw_user.get("user_index") == user_index
+        ),
+        None,
+    )
+    if not name:
+        return None
+    slot, _ = parse_tag(name)
+    return slot
+
+
+def _lcm_slot_from_raw_users_by_credential_index(
+    raw_users: list[dict[str, Any]], credential_index: int | None
+) -> int | None:
+    """
+    Resolve the LCM slot by finding the PIN credential at ``credential_index``.
+
+    Walks each raw user's credentials list for a Personal Identification
+    Number credential whose Matter index matches; if found, parses the
+    owning user's ``lcm:<slot>:`` tag. Used as a fallback when the
+    LockOperation event omits ``userIndex``.
+    """
+    if credential_index is None:
+        return None
+    name = next(
+        (
+            raw_user.get("user_name")
+            for raw_user in raw_users
+            for cred in raw_user.get("credentials", []) or []
+            if cred.get("type") == "pin" and cred.get("index") == credential_index
+        ),
+        None,
+    )
+    if not name:
+        return None
+    slot, _ = parse_tag(name)
+    return slot
 
 
 @dataclass(repr=False, eq=False)
@@ -163,13 +215,15 @@ class MatterLock(BaseLock):
 
     # -- Credential primitives -----------------------------------------------
 
-    async def async_get_users(self) -> list[User]:
+    async def _raw_lock_users(self) -> list[dict[str, Any]]:
         """
-        Read every user and their Personal Identification Number credentials from the lock.
+        Return the raw user list from ``get_lock_users``.
 
-        Matter PINs are write-only: each occupied credential slot is projected to
-        SlotCredential.unreadable(). Non-PIN credentials (for example RFID) are
-        filtered out because the coordinator and sync manager only manage PIN slots.
+        Internal helper for Matter-side lookups that need the unprojected
+        Matter credential index (e.g. set/clear lock-credential calls).
+        ``async_get_users`` consumes the same data but projects
+        credentials to the LCM slot via the owning user's tag; raw
+        callers want the lock's own identifiers.
         """
         client, node = self._require_client_and_node()
         try:
@@ -182,20 +236,47 @@ class MatterLock(BaseLock):
             raise LockDisconnected(
                 f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
             ) from err
+        return lock_data.get("users", [])
 
+    async def async_get_users(self) -> list[User]:
+        """
+        Read every user and their Personal Identification Number credentials from the lock.
+
+        Matter PINs are write-only: each occupied credential slot is projected to
+        SlotCredential.unreadable(). Non-PIN credentials (for example RFID) are
+        filtered out because the coordinator and sync manager only manage PIN slots.
+
+        Credential.slot is the LCM slot, NOT the Matter credential index.
+        The LCM slot is recovered from the owning user's ``lcm:<slot>:`` tag;
+        untagged users (legacy LCM 2.0) followed the
+        ``credential_index == LCM slot`` invariant, so for them the Matter
+        credential index doubles as the LCM slot. The translation keeps
+        the rest of LCM (``_project_users_to_slots``, sync manager,
+        coordinator) working in LCM-slot terms even though Matter now
+        auto-allocates the lock-side credential index.
+        """
         # A for-loop (not a comprehension) so the int-or-None user_index and
         # credential index are narrowed by explicit guards before use: the
         # Matter helper types both as ``int | None``.
         users: list[User] = []
-        for raw_user in lock_data.get("users", []):
+        for raw_user in await self._raw_lock_users():
             user_index = raw_user.get("user_index")
             if user_index is None:
                 continue
+            user_name = raw_user.get("user_name")
+            lcm_slot_from_tag: int | None = None
+            if user_name:
+                lcm_slot_from_tag, _ = parse_tag(user_name)
             pin_credentials: list[Credential] = []
-            for cred in raw_user.get("credentials", []):
-                slot = cred.get("index")
-                if cred.get("type") != "pin" or slot is None:
+            for cred in raw_user.get("credentials") or []:
+                credential_index = cred.get("index")
+                if cred.get("type") != "pin" or credential_index is None:
                     continue
+                slot = (
+                    lcm_slot_from_tag
+                    if lcm_slot_from_tag is not None
+                    else credential_index
+                )
                 pin_credentials.append(
                     Credential(
                         type=CredentialType.PIN,
@@ -206,7 +287,7 @@ class MatterLock(BaseLock):
             users.append(
                 User(
                     user_id=user_index,
-                    name=raw_user.get("user_name"),
+                    name=user_name,
                     active=True,
                     credentials=pin_credentials,
                 )
@@ -254,63 +335,40 @@ class MatterLock(BaseLock):
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
-        Create or update a lock user, returning whether it was newly created.
+        Find-or-create the lock user for the LCM slot encoded in ``user.name``.
 
-        The user.user_id here is the slot (credential_index). Matter allocates
-        user_index independently: you cannot create a user at a chosen index —
-        set_lock_user raises UserSlotEmptyError when user_index is given for an
-        empty slot. So the flow is:
+        The base seam passes a tagged ``user.name`` (``lcm:<slot>:<display>``)
+        whose slot is the LCM-side identity for this credential. The Matter
+        lock's own ``user_index`` is whatever Matter happens to allocate;
+        LCM does NOT pin it to the slot. Discovery on every call walks the
+        lock's user list and matches by tag:
 
-        1. Check the credential slot's current owner via get_lock_credential_status.
-        2. If the slot is occupied (UPDATE): call set_lock_user with the existing
-           user_index from the status response.
-        3. If the slot is empty (CREATE): call set_lock_user with user_index=None
-           so Matter auto-allocates a free user slot and returns the new index.
+        1. Scan ``async_get_users()`` for a user whose name parses to the
+           same LCM slot as ``user`` carries.
+        2. If found (UPDATE): rename via ``set_lock_user`` with the
+           existing ``user_index``, return that index.
+        3. If not found (CREATE): allocate a fresh ``user_index`` via
+           ``set_lock_user(user_index=None)`` and return the new index.
 
-        The returned SetUserResult carries the real Matter user_index, which the
-        base orchestration passes into async_set_credential as the user_id.
+        ``user.user_id`` -- set by the seam from the LCM slot in
+        ``user_from_slot`` -- is used as the slot identity when ``user.name``
+        is untagged (defensive fallback; the seam should always pass a
+        tagged name on this code path).
         """
+        slot = self._slot_from_seam_user(user)
         client, node = self._require_client_and_node()
-        try:
-            status = await get_lock_credential_status(
-                client,
-                node,
-                credential_type="pin",
-                credential_index=user.user_id,
-            )
-        except ServiceValidationError as err:
-            raise LockOperationFailed(
-                f"Matter get_lock_credential_status rejected input for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter get_lock_credential_status failed for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
 
-        credential_exists = status.get("credential_exists", False)
-        existing_user_index = status.get("user_index")
+        existing_user_index = await self._find_user_index_for_slot(slot)
 
-        if credential_exists and existing_user_index is None:
-            # The credential is reportedly occupied but the lock did not
-            # surface its owner. Falling through to CREATE would orphan
-            # the original user (it would still exist with zero credentials)
-            # and break the user-per-credential invariant, so refuse the
-            # write and let the caller decide how to recover.
-            raise LockOperationFailed(
-                f"Matter lock {self.lock.entity_id} slot {user.user_id} reports "
-                "credential_exists=True but no user_index"
-            )
-
-        if credential_exists and existing_user_index is not None:
-            # UPDATE: the slot is occupied — modify the existing user record.
-            # set_lock_user here is a metadata-only name update. The historical
-            # Matter contract (PR #1077) tolerated name-set failures so a
-            # transient 500 or a name the lock rejects does not block the
-            # subsequent credential write; the user still exists at the
-            # known index, the only thing lost is the name update. Log a
-            # warning and fall through.
+        if existing_user_index is not None:
+            # UPDATE: rename via set_lock_user.
+            #
+            # set_lock_user here is a metadata-only name update. The
+            # historical Matter contract (PR #1077) tolerated name-set
+            # failures so a transient 500 or a name the lock rejects does
+            # not block the subsequent credential write; the user still
+            # exists at the known index, the only thing lost is the name
+            # update. Log a warning and fall through.
             try:
                 await set_lock_user(
                     client,
@@ -323,13 +381,14 @@ class MatterLock(BaseLock):
                     "Lock %s: failed to update user name on slot %s "
                     "(user_index=%s); continuing without name update: %s",
                     self.lock.entity_id,
-                    user.user_id,
+                    slot,
                     existing_user_index,
                     err,
                 )
             return SetUserResult(user_id=existing_user_index, created=False)
 
-        # CREATE: the slot is empty — let Matter auto-allocate a user_index.
+        # CREATE: no LCM-tagged user exists for this slot yet — let Matter
+        # auto-allocate a free user_index.
         try:
             result = await set_lock_user(
                 client,
@@ -346,6 +405,67 @@ class MatterLock(BaseLock):
                 f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
         return SetUserResult(user_id=result["user_index"], created=True)
+
+    def _slot_from_seam_user(self, user: User) -> int:
+        """
+        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
+
+        The base seam always passes a tagged name; this helper centralizes
+        the fallback so the rest of the provider can treat the resolved
+        slot as a single value.
+        """
+        if user.name:
+            slot, _ = parse_tag(user.name)
+            if slot is not None:
+                return slot
+        return user.user_id
+
+    async def _find_user_index_for_slot(self, slot: int) -> int | None:
+        """
+        Return the ``user_index`` of the user LCM owns for ``slot``, if any.
+
+        Two lookups, in priority order:
+
+        1. **Canonical** -- a user whose name carries the
+           ``lcm:<slot>:`` tag. This is the post-PR-B identity rule.
+        2. **Legacy adoption** -- an *untagged* user owning a PIN
+           credential at ``credential_index == slot``. Pre-PR-B Matter
+           LCM pinned ``credential_index`` to the LCM slot, so an
+           untagged user owning a PIN at that index is almost certainly
+           the LCM 2.0 user for this slot. Adopting it (the subsequent
+           ``set_lock_user`` rewrites the name to the tagged form, and
+           ``set_lock_credential`` MODIFY'es the existing credential
+           index in place) preserves a single, identifiable user per
+           slot across the upgrade. Without this fallback the new model
+           would CREATE a second user every time, silently leaving the
+           pre-upgrade PIN active on the lock.
+
+           The legacy pass MUST skip users whose names already parse to
+           ANY LCM slot. Under the new model the Matter credential index
+           is auto-allocated, so a user tagged ``lcm:<A>:`` can own a
+           PIN at index ``B``; matching on ``cred.slot == slot`` alone
+           would mis-adopt slot-A's user as slot-B's anchor.
+
+        Returns ``None`` when neither lookup matches.
+        """
+        users = await self.async_get_users()
+        try:
+            return next(
+                existing.user_id
+                for existing in users
+                if existing.name and parse_tag(existing.name)[0] == slot
+            )
+        except StopIteration:
+            return next(
+                (
+                    existing.user_id
+                    for existing in users
+                    if parse_tag(existing.name or "")[0] is None
+                    for cred in existing.pin_credentials
+                    if cred.slot == slot
+                ),
+                None,
+            )
 
     async def async_delete_user(self, user_id: int) -> None:
         """
@@ -366,6 +486,32 @@ class MatterLock(BaseLock):
                 f"Matter clear_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
 
+    async def async_release_managed_slot(self, slot: int) -> None:
+        """
+        Tear down the LCM-owned user that anchors ``slot``.
+
+        Called by the base teardown path when the slot is removed from
+        LCM config (see ``__init__.py``'s ``pairs_removed`` loop). Looks
+        up the lock-side user via the same find-or-adopt logic the set
+        path uses, then deletes it. Matter's ClearUser cascade then
+        removes the user's PIN credential automatically.
+
+        Tolerates "no user found": the slot may have never had an LCM
+        user on this lock (e.g. the user was already removed out-of-band,
+        or the slot was configured but never written). Lock-side
+        transport failures bubble up so the base wraps them in a warning
+        and the teardown still completes.
+        """
+        user_index = await self._find_user_index_for_slot(slot)
+        if user_index is None:
+            LOGGER.debug(
+                "Lock %s: no LCM-owned user to release for slot %s",
+                self.lock.entity_id,
+                slot,
+            )
+            return
+        await self.async_delete_user(user_index)
+
     async def _send_set_credential(
         self,
         client: Any,
@@ -373,9 +519,15 @@ class MatterLock(BaseLock):
         code_slot: int,
         pin: str,
         user_id: int,
+        credential_index: int | None,
     ) -> None:
         """
-        Send set_lock_credential to the lock for the given slot, PIN, and user.
+        Send set_lock_credential to the lock for the given user and PIN.
+
+        ``credential_index=None`` auto-allocates the next free credential slot
+        (CREATE). Passing an existing index addresses the user's current PIN
+        credential for MODIFY. ``code_slot`` is the LCM slot only and is used
+        for error reporting; it is no longer pinned to the Matter index.
 
         Raises SetCredentialFailedError on lock rejection,
         CodeRejectedError on validation failure,
@@ -387,7 +539,7 @@ class MatterLock(BaseLock):
                 node,
                 credential_type="pin",
                 credential_data=pin,
-                credential_index=code_slot,
+                credential_index=credential_index,
                 user_index=user_id,
             )
         except SetCredentialFailedError:
@@ -406,6 +558,29 @@ class MatterLock(BaseLock):
                 f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
             ) from err
 
+    async def _find_pin_credential_index_for_user(self, user_id: int) -> int | None:
+        """
+        Return the user's current Matter PIN credential index, or ``None``.
+
+        LCM no longer pins ``credential_index`` to the LCM slot; instead it
+        treats Matter's credential index as opaque and rediscovers it per
+        operation. This helper deliberately walks the **raw** lock-side
+        user data (not ``async_get_users``) so the returned value is the
+        Matter credential index Matter expects for
+        ``set_lock_credential`` / ``clear_lock_credential`` -- not the
+        LCM-projected slot that ``async_get_users`` exposes upward.
+        """
+        return next(
+            (
+                cred.get("index")
+                for raw_user in await self._raw_lock_users()
+                if raw_user.get("user_index") == user_id
+                for cred in raw_user.get("credentials") or []
+                if cred.get("type") == "pin" and cred.get("index") is not None
+            ),
+            None,
+        )
+
     async def async_set_credential(
         self,
         user_id: int,
@@ -418,9 +593,13 @@ class MatterLock(BaseLock):
         """
         Write a Personal Identification Number credential to the lock.
 
-        ``pin`` is the resolved PIN string the seam already validated as
-        non-None; surgical write path only. Handles the duplicate-slot
-        restart case for sync sources by clearing and retrying once.
+        Looks up the user's existing PIN credential index. If present this
+        is a MODIFY (same Matter credential index, new PIN value); if
+        absent this is a CREATE (Matter auto-allocates the next free
+        credential index). ``pin`` is the resolved PIN string the seam
+        already validated as non-None. Handles the duplicate-slot restart
+        case for sync sources by clearing the existing credential and
+        retrying with a fresh allocation.
 
         The base orchestration skips coordinator refresh for push providers.
         Matter does not emit LockUserChange for LCM-initiated writes, so an
@@ -428,9 +607,14 @@ class MatterLock(BaseLock):
         """
         client, node = self._require_client_and_node()
         slot = credential.slot
+        existing_credential_index = await self._find_pin_credential_index_for_user(
+            user_id
+        )
 
         try:
-            await self._send_set_credential(client, node, slot, pin, user_id)
+            await self._send_set_credential(
+                client, node, slot, pin, user_id, existing_credential_index
+            )
         except SetCredentialFailedError as err:
             status = (err.translation_placeholders or {}).get("status", "")
             if status != "duplicate":
@@ -444,16 +628,27 @@ class MatterLock(BaseLock):
                     code_slot=slot,
                     lock_entity_id=self.lock.entity_id,
                 ) from err
+            # Sync duplicate: only meaningful when WE own the credential.
+            # If we don't, the duplicate is external -- surface to the
+            # caller; clearing it would step on another controller's code.
+            if existing_credential_index is None:
+                raise DuplicateCodeError(
+                    code_slot=slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
 
-            # Sync duplicate: clear and retry once
             LOGGER.debug(
-                "Lock %s: duplicate on slot %s, clearing and retrying",
+                "Lock %s: duplicate on slot %s, clearing credential_index %s and retrying",
                 self.lock.entity_id,
                 slot,
+                existing_credential_index,
             )
             try:
                 await clear_lock_credential(
-                    client, node, credential_type="pin", credential_index=slot
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=existing_credential_index,
                 )
             except ServiceValidationError as clear_err:
                 raise LockOperationFailed(
@@ -466,7 +661,9 @@ class MatterLock(BaseLock):
                     f"{self.lock.entity_id} during sync-duplicate retry: {clear_err}"
                 ) from clear_err
             try:
-                await self._send_set_credential(client, node, slot, pin, user_id)
+                # Retry with credential_index=None so Matter auto-allocates a
+                # fresh slot; we cleared the old one above.
+                await self._send_set_credential(client, node, slot, pin, user_id, None)
             except SetCredentialFailedError as retry_err:
                 retry_status = (retry_err.translation_placeholders or {}).get(
                     "status", ""
@@ -489,17 +686,28 @@ class MatterLock(BaseLock):
         """
         Clear a Personal Identification Number credential from the lock.
 
-        Returns True on success. Pushes SlotCredential.empty() to the
-        coordinator immediately because Matter does not emit LockUserChange
-        for LCM-initiated clears.
+        Looks up the user's current PIN credential index and clears that
+        Matter credential. ``ref.slot`` is the LCM slot identifier; the
+        Matter credential index is rediscovered per call (LCM does not
+        pin the index to the LCM slot under the user-tag idempotency
+        design). Returns True when the user had a PIN to clear and the
+        clear succeeded; False when no PIN was present.
+
+        Pushes SlotCredential.empty() to the coordinator immediately
+        because Matter does not emit LockUserChange for LCM-initiated
+        clears.
         """
+        credential_index = await self._find_pin_credential_index_for_user(ref.user_id)
+        if credential_index is None:
+            return False
+
         client, node = self._require_client_and_node()
         try:
             await clear_lock_credential(
                 client,
                 node,
                 credential_type="pin",
-                credential_index=ref.slot,
+                credential_index=credential_index,
             )
         except ServiceValidationError as err:
             raise LockOperationFailed(
@@ -599,37 +807,105 @@ class MatterLock(BaseLock):
         Handle LockOperation events (event ID 2).
 
         Fires a code slot event when a PIN credential is used to lock/unlock.
-        Only PIN credentials (credentialType=1) trigger the event — other
+        Only PIN credentials (credentialType=1) trigger the event -- other
         credential types (RFID, fingerprint, etc.) are ignored.
+
+        The event's ``credentials[].credentialIndex`` is the Matter credential
+        index, which is no longer pinned to the LCM slot under the user-tag
+        model. To find the LCM slot we resolve via the event's top-level
+        ``userIndex`` -> user.name -> ``lcm:<slot>:`` tag, falling back to
+        walking the user list for a PIN credential at ``credentialIndex``
+        when ``userIndex`` is absent. The lookup is async so the callback
+        schedules a task rather than blocking the event loop.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
         credentials = data.get("credentials")
-        lock_operation_type = data.get("lockOperationType")
 
-        # Must have credentials with a PIN type to fire
         if not credentials:
             return
 
-        # Find the PIN credential index (credentialType 1 = PIN)
-        code_slot: int | None = None
-        for cred in credentials:
-            if isinstance(cred, dict) and cred.get("credentialType") == 1:
-                code_slot = cred.get("credentialIndex")
-                break
-
-        if code_slot is None:
+        # Find the PIN credential index (credentialType 1 = PIN). Coerce
+        # via ``parse_slot_num`` because some Matter implementations send
+        # the index as a string -- the int-keyed comparison in the fallback
+        # walker would then never match.
+        credential_index = parse_slot_num(
+            next(
+                (
+                    cred.get("credentialIndex")
+                    for cred in credentials
+                    if isinstance(cred, dict) and cred.get("credentialType") == 1
+                ),
+                None,
+            )
+        )
+        if credential_index is None:
             return
 
-        # lockOperationType: 0=Lock, 1=Unlock, 2=NonAccessUserEvent, 3=ForcedUserEvent, 4=Unlatch
+        user_index = parse_slot_num(data.get("userIndex"))
+
+        self.hass.async_create_task(
+            self._dispatch_lock_operation(user_index, credential_index, data),
+            f"Matter LockOperation dispatch for {self.lock.entity_id}",
+        )
+
+    async def _dispatch_lock_operation(
+        self,
+        user_index: int | None,
+        credential_index: int,
+        data: dict[str, Any],
+    ) -> None:
+        """
+        Resolve the LCM slot for a LockOperation event and fire it.
+
+        Primary path: lock-reported ``userIndex`` -> user.name -> tag.
+        Fallback path: walk the user list to find the PIN credential at
+        ``credentialIndex`` and parse the owning user's tag. Events whose
+        owning user isn't LCM-tagged are silently dropped so out-of-band
+        PIN uses on non-LCM credentials don't drive spurious code slot
+        events.
+        """
+        try:
+            raw_users = await self._raw_lock_users()
+        except (LockDisconnected, LockOperationFailed) as err:
+            LOGGER.debug(
+                "Lock %s: could not resolve LockOperation userIndex=%s "
+                "credentialIndex=%s: %s",
+                self.lock.entity_id,
+                user_index,
+                credential_index,
+                err,
+            )
+            return
+
+        # Explicit ``None`` check (not ``or``) so a valid LCM slot of 0
+        # from the primary resolver doesn't fall through to the fallback.
+        code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
+        if code_slot is None:
+            code_slot = _lcm_slot_from_raw_users_by_credential_index(
+                raw_users, credential_index
+            )
+        if code_slot is None:
+            LOGGER.debug(
+                "Lock %s: LockOperation userIndex=%s credentialIndex=%s did not "
+                "resolve to an LCM-tagged user; ignoring",
+                self.lock.entity_id,
+                user_index,
+                credential_index,
+            )
+            return
+
+        # lockOperationType: 0=Lock, 1=Unlock, 2=NonAccessUserEvent,
+        # 3=ForcedUserEvent, 4=Unlatch
+        lock_operation_type = data.get("lockOperationType")
         if lock_operation_type == 0:
-            to_locked = True
+            to_locked: bool | None = True
         elif lock_operation_type == 1:
             to_locked = False
         else:
             to_locked = None
 
         LOGGER.debug(
-            "Lock %s: LockOperation event — slot=%s, locked=%s",
+            "Lock %s: LockOperation event -- slot=%s, locked=%s",
             self.lock.entity_id,
             code_slot,
             to_locked,
@@ -652,41 +928,94 @@ class MatterLock(BaseLock):
         Handle LockUserChange events (event ID 4).
 
         Pushes occupancy updates to the coordinator when a PIN credential is
-        added, modified, or cleared. This provides real-time change detection
-        without waiting for the next poll cycle.
+        added, modified, or cleared. Real-time change detection without
+        waiting for the next poll cycle.
 
-        Only PIN credentials (LockDataType=6) are handled. The DataIndex field
-        maps to the credential index (code slot number).
+        Only PIN credentials (LockDataType=6) are handled.
+
+        The LCM slot is resolved by walking the event's ``userIndex`` to
+        the owning user's name and parsing its ``lcm:<slot>:`` tag --
+        ``userIndex`` alone is sufficient. ``dataIndex`` (the Matter
+        credential index) is captured best-effort for log context only;
+        it's no longer pinned to the LCM slot under the user-tag model
+        and dropping otherwise-resolvable events when it's missing or
+        malformed would silently lose state updates. The lookup is async
+        (a fresh ``_raw_lock_users`` round-trip) so the callback
+        schedules a task rather than blocking the event loop. Events
+        for users LCM doesn't own (untagged names) are ignored.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
 
         if data.get("lockDataType") != _LOCK_DATA_TYPE_PIN:
             return
 
-        raw_index = data.get("dataIndex")
-        if raw_index is None:
-            return
-        code_slot = parse_slot_num(raw_index)
-        if code_slot is None:
-            LOGGER.warning(
-                "Lock %s: LockUserChange has non-integer dataIndex %r, ignoring",
+        user_index = parse_slot_num(data.get("userIndex"))
+        if user_index is None:
+            LOGGER.debug(
+                "Lock %s: LockUserChange has non-integer userIndex %r, ignoring",
                 self.lock.entity_id,
-                raw_index,
+                data.get("userIndex"),
             )
             return
 
-        operation = data.get("dataOperationType")
+        # Best-effort: parsed for log context only; the LCM slot comes
+        # from the userIndex -> tag resolution in _dispatch_lock_user_change.
+        credential_index = parse_slot_num(data.get("dataIndex"))
 
+        operation = data.get("dataOperationType")
         if operation == _DATA_OP_CLEAR:
             resolved = SlotCredential.empty()
         elif operation in (_DATA_OP_ADD, _DATA_OP_MODIFY):
             resolved = SlotCredential.unreadable()
         else:
             LOGGER.debug(
-                "Lock %s: LockUserChange event with unknown operation %s for slot %s",
+                "Lock %s: LockUserChange event with unknown operation %s "
+                "(userIndex=%s, credentialIndex=%s)",
                 self.lock.entity_id,
                 operation,
-                code_slot,
+                user_index,
+                credential_index,
+            )
+            return
+
+        self.hass.async_create_task(
+            self._dispatch_lock_user_change(user_index, resolved, operation),
+            f"Matter LockUserChange dispatch for {self.lock.entity_id}",
+        )
+
+    async def _dispatch_lock_user_change(
+        self,
+        user_index: int,
+        resolved: SlotCredential,
+        operation: int,
+    ) -> None:
+        """
+        Resolve the LCM slot for a LockUserChange and push the update.
+
+        Fetches the lock's current user list, finds the owner by
+        ``user_index``, parses its ``lcm:<slot>:`` tag, and pushes the
+        update. Events whose owning user isn't LCM-tagged are ignored so
+        out-of-band credential changes on non-LCM users don't drive
+        spurious coordinator updates.
+        """
+        try:
+            raw_users = await self._raw_lock_users()
+        except (LockDisconnected, LockOperationFailed) as err:
+            LOGGER.debug(
+                "Lock %s: could not resolve LockUserChange userIndex %s: %s",
+                self.lock.entity_id,
+                user_index,
+                err,
+            )
+            return
+
+        code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
+        if code_slot is None:
+            LOGGER.debug(
+                "Lock %s: LockUserChange userIndex %s did not resolve to an "
+                "LCM-tagged user; ignoring",
+                self.lock.entity_id,
+                user_index,
             )
             return
 
@@ -697,7 +1026,6 @@ class MatterLock(BaseLock):
             operation,
             resolved,
         )
-
         self._push_credential_update(code_slot, resolved)
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:

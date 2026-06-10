@@ -7,11 +7,17 @@ identify codes by user-name rather than by slot number (Schlage, Akuvox,
 and -- once the unified-user migration lands -- Matter and Z-Wave User
 Credential CC).
 
-Two tag formats coexist during the migration window:
+Three tag formats coexist during the migration window:
 
 * Canonical ``lcm:<slot>:<name>`` -- the consolidated format every new
-  write uses. Two colons delimit the slot field clearly for visual
-  parseability on the lock UI.
+  write uses when the lock's ``max_user_name_length`` can fit the full
+  ``lcm:<slot>:`` prefix. Two colons delimit the slot field clearly for
+  visual parseability on the lock UI.
+* Slot-only ``<digits>`` -- the length-constrained fallback, used when
+  the lock's name field is too small to fit even the canonical prefix.
+  Just the slot number, written as ``str(slot)``. Ambiguous with any
+  external user named with only digits, but only encountered on locks
+  with absurdly small name limits, so the tradeoff is accepted.
 * Legacy ``[LCM:<slot>] <name>`` -- written by Schlage/Akuvox today.
   Still emitted by ``make_legacy_tagged_name`` while those providers
   migrate; their reads tolerate it via ``parse_tag_with_rewrite``, which
@@ -27,6 +33,7 @@ import re
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
 _TAG_RE = re.compile(r"^lcm:(\d+):\s*(.*)")
+_SLOT_ONLY_RE = re.compile(r"^(\d+)$")
 
 
 def make_tagged_name(slot_num: int, name: str | None = None) -> str:
@@ -67,8 +74,18 @@ def parse_tag_with_rewrite(name: str) -> tuple[int | None, str, bool]:
     Returns ``(slot_num, friendly_name, needs_rewrite)``. ``needs_rewrite``
     is True only when the legacy ``[LCM:<slot>]`` format matched; the
     caller can re-emit via ``make_tagged_name`` on the next write to
-    migrate the lock-stored name in place. The canonical ``lcm:<slot>:``
-    format and untagged names both return ``needs_rewrite=False``.
+    migrate the lock-stored name in place. The canonical
+    ``lcm:<slot>:`` format, the slot-only fallback, and untagged names
+    all return ``needs_rewrite=False``.
+
+    Match priority: canonical, then legacy, then slot-only digits. The
+    slot-only branch is the length-constrained encoding emitted by
+    :func:`._base.BaseLock._build_tagged_user_name` when the lock's
+    ``max_user_name_length`` cannot fit the canonical prefix; the
+    display portion is empty. Bare digits being treated as a slot tag
+    is intentional but ambiguous with external users whose names
+    happen to be digit-only -- the ambiguity is the cost of preserving
+    the slot binding on length-constrained locks.
     """
     match = _TAG_RE.match(name)
     if match:
@@ -76,6 +93,9 @@ def parse_tag_with_rewrite(name: str) -> tuple[int | None, str, bool]:
     match = _LEGACY_SLOT_TAG_RE.match(name)
     if match:
         return int(match.group(1)), match.group(2), True
+    match = _SLOT_ONLY_RE.match(name)
+    if match:
+        return int(match.group(1)), "", False
     return None, name, False
 
 
