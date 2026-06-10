@@ -137,31 +137,20 @@ you want where you want it.
 [wiki-ui-strategies]: https://github.com/raman325/lock_code_manager/wiki/UI-Strategies
 [wiki-ui-cards]: https://github.com/raman325/lock_code_manager/wiki/Custom-Cards
 
-## Inspiration
+## AI Usage
 
-I am a [keymaster](https://github.com/FutureTense/keymaster) maintainer,
-and what I learned working on it, and the regular complaints users had about it generating
-too many automations, entities, etc. led me to take a different approach. This isn't a
-knock on `keymaster`, unfortunately a lot of what is built in this integration wasn't
-possible for most of `keymaster`'s life. I briefly considered implementing this into
-`keymaster` but:
+While I began this project before AI coding agents and wrote the bones
+myself, since November 2025 it's been hard NOT to code with a coding
+agent. You will notice that almost all of my PRs since then have been
+co-authored with Claude (I've also experimented with Codex and Copilot).
 
-1. `keymaster` is still a great solution that works as is.
-2. `keymaster` is surprisingly simple under the hood because it makes Home Assistant do a
-   lot of the heavy lifting for figuring out when to enable and disable a usercode. This
-   integration, on the other hand, attempts to do all of the heavy lifting internally in
-   code, which means it will generate less entities and automations but it is likely more
-   fragile to changes in HA Core or even changes in the codebase.
-3. It would be impossible to seamlessly migrate users from the current implementation of
-   `keymaster` to this integration's implementation. Rewriting `keymaster` to do this
-   would have been the equivalent of creating a new integration anyway.
+If you look at any of the PRs, particularly the meaningful ones, you'll
+notice many commits. Some come from AI code reviews, but many come from
+my own code reviews or from me steering the design. I can't say I've
+audited everything line for line, but I can comfortably say that it's not
+exfiltrating your data or doing anything evil.
 
-## Thanks
-
-A big thank you to the other `keymaster` maintainers:
-
-- @FutureTense
-- @firstof9
-
-As well as the person who created the base concept that `keymaster` evolved from:
-@ptdalen
+If you are uncomfortable using this integration because of concerns around
+AI, I completely understand and that is your prerogative. If you ever want
+to chat about it — whether it's to convince me that what I'm doing is
+wrong, to learn more about it, or anything in between — find me on Discord.
