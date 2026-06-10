@@ -24,7 +24,6 @@ from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
     clear_lock_credential,
     clear_lock_user,
-    get_lock_credential_status,
     get_lock_info,
     get_lock_users,
     set_lock_credential,
@@ -52,7 +51,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import parse_slot_num
+from ._util import parse_slot_num, parse_tag
 from .const import LOGGER
 
 # DoorLock cluster ID (0x0101 = 257)
@@ -254,63 +253,40 @@ class MatterLock(BaseLock):
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
-        Create or update a lock user, returning whether it was newly created.
+        Find-or-create the lock user for the LCM slot encoded in ``user.name``.
 
-        The user.user_id here is the slot (credential_index). Matter allocates
-        user_index independently: you cannot create a user at a chosen index —
-        set_lock_user raises UserSlotEmptyError when user_index is given for an
-        empty slot. So the flow is:
+        The base seam passes a tagged ``user.name`` (``lcm:<slot>:<display>``)
+        whose slot is the LCM-side identity for this credential. The Matter
+        lock's own ``user_index`` is whatever Matter happens to allocate;
+        LCM does NOT pin it to the slot. Discovery on every call walks the
+        lock's user list and matches by tag:
 
-        1. Check the credential slot's current owner via get_lock_credential_status.
-        2. If the slot is occupied (UPDATE): call set_lock_user with the existing
-           user_index from the status response.
-        3. If the slot is empty (CREATE): call set_lock_user with user_index=None
-           so Matter auto-allocates a free user slot and returns the new index.
+        1. Scan ``async_get_users()`` for a user whose name parses to the
+           same LCM slot as ``user`` carries.
+        2. If found (UPDATE): rename via ``set_lock_user`` with the
+           existing ``user_index``, return that index.
+        3. If not found (CREATE): allocate a fresh ``user_index`` via
+           ``set_lock_user(user_index=None)`` and return the new index.
 
-        The returned SetUserResult carries the real Matter user_index, which the
-        base orchestration passes into async_set_credential as the user_id.
+        ``user.user_id`` -- set by the seam from the LCM slot in
+        ``user_from_slot`` -- is used as the slot identity when ``user.name``
+        is untagged (defensive fallback; the seam should always pass a
+        tagged name on this code path).
         """
+        slot = self._slot_from_seam_user(user)
         client, node = self._require_client_and_node()
-        try:
-            status = await get_lock_credential_status(
-                client,
-                node,
-                credential_type="pin",
-                credential_index=user.user_id,
-            )
-        except ServiceValidationError as err:
-            raise LockOperationFailed(
-                f"Matter get_lock_credential_status rejected input for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter get_lock_credential_status failed for "
-                f"{self.lock.entity_id}: {err}"
-            ) from err
 
-        credential_exists = status.get("credential_exists", False)
-        existing_user_index = status.get("user_index")
+        existing_user_index = await self._find_user_index_for_slot(slot)
 
-        if credential_exists and existing_user_index is None:
-            # The credential is reportedly occupied but the lock did not
-            # surface its owner. Falling through to CREATE would orphan
-            # the original user (it would still exist with zero credentials)
-            # and break the user-per-credential invariant, so refuse the
-            # write and let the caller decide how to recover.
-            raise LockOperationFailed(
-                f"Matter lock {self.lock.entity_id} slot {user.user_id} reports "
-                "credential_exists=True but no user_index"
-            )
-
-        if credential_exists and existing_user_index is not None:
-            # UPDATE: the slot is occupied — modify the existing user record.
-            # set_lock_user here is a metadata-only name update. The historical
-            # Matter contract (PR #1077) tolerated name-set failures so a
-            # transient 500 or a name the lock rejects does not block the
-            # subsequent credential write; the user still exists at the
-            # known index, the only thing lost is the name update. Log a
-            # warning and fall through.
+        if existing_user_index is not None:
+            # UPDATE: rename via set_lock_user.
+            #
+            # set_lock_user here is a metadata-only name update. The
+            # historical Matter contract (PR #1077) tolerated name-set
+            # failures so a transient 500 or a name the lock rejects does
+            # not block the subsequent credential write; the user still
+            # exists at the known index, the only thing lost is the name
+            # update. Log a warning and fall through.
             try:
                 await set_lock_user(
                     client,
@@ -323,13 +299,14 @@ class MatterLock(BaseLock):
                     "Lock %s: failed to update user name on slot %s "
                     "(user_index=%s); continuing without name update: %s",
                     self.lock.entity_id,
-                    user.user_id,
+                    slot,
                     existing_user_index,
                     err,
                 )
             return SetUserResult(user_id=existing_user_index, created=False)
 
-        # CREATE: the slot is empty — let Matter auto-allocate a user_index.
+        # CREATE: no LCM-tagged user exists for this slot yet — let Matter
+        # auto-allocate a free user_index.
         try:
             result = await set_lock_user(
                 client,
@@ -346,6 +323,55 @@ class MatterLock(BaseLock):
                 f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
         return SetUserResult(user_id=result["user_index"], created=True)
+
+    def _slot_from_seam_user(self, user: User) -> int:
+        """
+        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
+
+        The base seam always passes a tagged name; this helper centralizes
+        the fallback so the rest of the provider can treat the resolved
+        slot as a single value.
+        """
+        if user.name:
+            slot, _ = parse_tag(user.name)
+            if slot is not None:
+                return slot
+        return user.user_id
+
+    async def _find_user_index_for_slot(self, slot: int) -> int | None:
+        """
+        Return the ``user_index`` of the user LCM owns for ``slot``, if any.
+
+        Two lookups, in priority order:
+
+        1. **Canonical** -- a user whose name carries the
+           ``lcm:<slot>:`` tag. This is the post-PR-B identity rule.
+        2. **Legacy adoption** -- a user owning a PIN credential at
+           ``credential_index == slot``. Pre-PR-B Matter LCM pinned
+           ``credential_index`` to the LCM slot, so an untagged user
+           owning a PIN at that index is almost certainly the LCM 2.0
+           user for this slot. Adopting it (the subsequent
+           ``set_lock_user`` rewrites the name to the tagged form, and
+           ``set_lock_credential`` MODIFY'es the existing credential
+           index in place) preserves a single, identifiable user per
+           slot across the upgrade. Without this fallback the new model
+           would CREATE a second user every time, silently leaving the
+           pre-upgrade PIN active on the lock.
+
+        Returns ``None`` when neither lookup matches.
+        """
+        users = await self.async_get_users()
+        for existing in users:
+            if existing.name is None:
+                continue
+            parsed_slot, _ = parse_tag(existing.name)
+            if parsed_slot == slot:
+                return existing.user_id
+        for existing in users:
+            for cred in existing.pin_credentials:
+                if cred.slot == slot:
+                    return existing.user_id
+        return None
 
     async def async_delete_user(self, user_id: int) -> None:
         """
@@ -366,6 +392,32 @@ class MatterLock(BaseLock):
                 f"Matter clear_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
 
+    async def async_release_managed_slot(self, slot: int) -> None:
+        """
+        Tear down the LCM-owned user that anchors ``slot``.
+
+        Called by the base teardown path when the slot is removed from
+        LCM config (see ``__init__.py``'s ``pairs_removed`` loop). Looks
+        up the lock-side user via the same find-or-adopt logic the set
+        path uses, then deletes it. Matter's ClearUser cascade then
+        removes the user's PIN credential automatically.
+
+        Tolerates "no user found": the slot may have never had an LCM
+        user on this lock (e.g. the user was already removed out-of-band,
+        or the slot was configured but never written). Lock-side
+        transport failures bubble up so the base wraps them in a warning
+        and the teardown still completes.
+        """
+        user_index = await self._find_user_index_for_slot(slot)
+        if user_index is None:
+            LOGGER.debug(
+                "Lock %s: no LCM-owned user to release for slot %s",
+                self.lock.entity_id,
+                slot,
+            )
+            return
+        await self.async_delete_user(user_index)
+
     async def _send_set_credential(
         self,
         client: Any,
@@ -373,9 +425,15 @@ class MatterLock(BaseLock):
         code_slot: int,
         pin: str,
         user_id: int,
+        credential_index: int | None,
     ) -> None:
         """
-        Send set_lock_credential to the lock for the given slot, PIN, and user.
+        Send set_lock_credential to the lock for the given user and PIN.
+
+        ``credential_index=None`` auto-allocates the next free credential slot
+        (CREATE). Passing an existing index addresses the user's current PIN
+        credential for MODIFY. ``code_slot`` is the LCM slot only and is used
+        for error reporting; it is no longer pinned to the Matter index.
 
         Raises SetCredentialFailedError on lock rejection,
         CodeRejectedError on validation failure,
@@ -387,7 +445,7 @@ class MatterLock(BaseLock):
                 node,
                 credential_type="pin",
                 credential_data=pin,
-                credential_index=code_slot,
+                credential_index=credential_index,
                 user_index=user_id,
             )
         except SetCredentialFailedError:
@@ -406,6 +464,21 @@ class MatterLock(BaseLock):
                 f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
             ) from err
 
+    async def _find_pin_credential_index_for_user(self, user_id: int) -> int | None:
+        """
+        Return the user's current PIN credential index, or ``None`` if none.
+
+        LCM no longer pins ``credential_index`` to the LCM slot; instead it
+        treats Matter's credential index as opaque and rediscovers it per
+        operation by walking the user's owned credentials.
+        """
+        for existing in await self.async_get_users():
+            if existing.user_id != user_id:
+                continue
+            for cred in existing.pin_credentials:
+                return cred.slot
+        return None
+
     async def async_set_credential(
         self,
         user_id: int,
@@ -418,9 +491,13 @@ class MatterLock(BaseLock):
         """
         Write a Personal Identification Number credential to the lock.
 
-        ``pin`` is the resolved PIN string the seam already validated as
-        non-None; surgical write path only. Handles the duplicate-slot
-        restart case for sync sources by clearing and retrying once.
+        Looks up the user's existing PIN credential index. If present this
+        is a MODIFY (same Matter credential index, new PIN value); if
+        absent this is a CREATE (Matter auto-allocates the next free
+        credential index). ``pin`` is the resolved PIN string the seam
+        already validated as non-None. Handles the duplicate-slot restart
+        case for sync sources by clearing the existing credential and
+        retrying with a fresh allocation.
 
         The base orchestration skips coordinator refresh for push providers.
         Matter does not emit LockUserChange for LCM-initiated writes, so an
@@ -428,9 +505,14 @@ class MatterLock(BaseLock):
         """
         client, node = self._require_client_and_node()
         slot = credential.slot
+        existing_credential_index = await self._find_pin_credential_index_for_user(
+            user_id
+        )
 
         try:
-            await self._send_set_credential(client, node, slot, pin, user_id)
+            await self._send_set_credential(
+                client, node, slot, pin, user_id, existing_credential_index
+            )
         except SetCredentialFailedError as err:
             status = (err.translation_placeholders or {}).get("status", "")
             if status != "duplicate":
@@ -444,16 +526,27 @@ class MatterLock(BaseLock):
                     code_slot=slot,
                     lock_entity_id=self.lock.entity_id,
                 ) from err
+            # Sync duplicate: only meaningful when WE own the credential.
+            # If we don't, the duplicate is external -- surface to the
+            # caller; clearing it would step on another controller's code.
+            if existing_credential_index is None:
+                raise DuplicateCodeError(
+                    code_slot=slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
 
-            # Sync duplicate: clear and retry once
             LOGGER.debug(
-                "Lock %s: duplicate on slot %s, clearing and retrying",
+                "Lock %s: duplicate on slot %s, clearing credential_index %s and retrying",
                 self.lock.entity_id,
                 slot,
+                existing_credential_index,
             )
             try:
                 await clear_lock_credential(
-                    client, node, credential_type="pin", credential_index=slot
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=existing_credential_index,
                 )
             except ServiceValidationError as clear_err:
                 raise LockOperationFailed(
@@ -466,7 +559,9 @@ class MatterLock(BaseLock):
                     f"{self.lock.entity_id} during sync-duplicate retry: {clear_err}"
                 ) from clear_err
             try:
-                await self._send_set_credential(client, node, slot, pin, user_id)
+                # Retry with credential_index=None so Matter auto-allocates a
+                # fresh slot; we cleared the old one above.
+                await self._send_set_credential(client, node, slot, pin, user_id, None)
             except SetCredentialFailedError as retry_err:
                 retry_status = (retry_err.translation_placeholders or {}).get(
                     "status", ""
@@ -489,17 +584,28 @@ class MatterLock(BaseLock):
         """
         Clear a Personal Identification Number credential from the lock.
 
-        Returns True on success. Pushes SlotCredential.empty() to the
-        coordinator immediately because Matter does not emit LockUserChange
-        for LCM-initiated clears.
+        Looks up the user's current PIN credential index and clears that
+        Matter credential. ``ref.slot`` is the LCM slot identifier; the
+        Matter credential index is rediscovered per call (LCM does not
+        pin the index to the LCM slot under the user-tag idempotency
+        design). Returns True when the user had a PIN to clear and the
+        clear succeeded; False when no PIN was present.
+
+        Pushes SlotCredential.empty() to the coordinator immediately
+        because Matter does not emit LockUserChange for LCM-initiated
+        clears.
         """
+        credential_index = await self._find_pin_credential_index_for_user(ref.user_id)
+        if credential_index is None:
+            return False
+
         client, node = self._require_client_and_node()
         try:
             await clear_lock_credential(
                 client,
                 node,
                 credential_type="pin",
-                credential_index=ref.slot,
+                credential_index=credential_index,
             )
         except ServiceValidationError as err:
             raise LockOperationFailed(
