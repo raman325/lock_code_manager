@@ -153,4 +153,5 @@ exfiltrating your data or doing anything evil.
 If you are uncomfortable using this integration because of concerns around
 AI, I completely understand and that is your prerogative. If you ever want
 to chat about it — whether it's to convince me that what I'm doing is
-wrong, to learn more about it, or anything in between — find me on Discord.
+wrong, to learn more about it, or anything in between — find me on the
+[Home Assistant Discord](https://www.home-assistant.io/join-chat/).
