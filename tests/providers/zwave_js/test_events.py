@@ -39,6 +39,8 @@ async def test_subscribe_push_updates(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test subscribing to push updates."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -60,6 +62,8 @@ async def test_subscribe_is_idempotent(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that calling subscribe multiple times is safe."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -80,6 +84,8 @@ async def test_subscribe_push_no_crash_on_client_not_ready(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that push subscription handles client not ready without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -106,6 +112,8 @@ async def test_subscribe_push_no_crash_on_node_error(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that push subscription handles node.on error without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -127,6 +135,8 @@ async def test_subscribe_push_cleans_up_partial_subscription_on_error(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """A failure partway through subscribing releases the unsubs already registered."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -166,6 +176,8 @@ async def test_subscribe_registers_three_credential_listeners(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that subscribing registers listeners for all three credential events."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -188,6 +200,8 @@ async def test_event_filter_matches_correct_node(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that event filter matches events for the correct node."""
     dev_reg = dr.async_get(hass)
@@ -220,6 +234,8 @@ async def test_notification_event_keypad_lock_fires_lock_state_changed(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that a keypad lock notification event fires EVENT_LOCK_STATE_CHANGED."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -266,6 +282,8 @@ async def test_notification_event_keypad_unlock_fires_lock_state_changed(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that a keypad unlock notification event fires EVENT_LOCK_STATE_CHANGED."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -309,6 +327,8 @@ async def test_notification_event_non_access_control_ignored(
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """A notification of a non Access Control type is ignored (no LCM event)."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -425,6 +445,8 @@ async def test_credential_added_pin_pushes_unreadable(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that a 'credential added' event for a PIN pushes SlotCredential.unreadable()."""
     mock_coordinator = MagicMock()
@@ -449,6 +471,8 @@ async def test_credential_added_pin_with_data_pushes_known(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """A credential event that carries the value pushes the readable state."""
     mock_coordinator = MagicMock()
@@ -475,6 +499,8 @@ async def test_credential_modified_pin_pushes_unreadable(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that a 'credential modified' event for a PIN pushes SlotCredential.unreadable()."""
     mock_coordinator = MagicMock()
@@ -499,6 +525,8 @@ async def test_credential_deleted_pin_pushes_empty(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that a 'credential deleted' event for a PIN pushes SlotCredential.empty()."""
     mock_coordinator = MagicMock()
@@ -521,6 +549,8 @@ async def test_credential_added_non_pin_ignored(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that 'credential added' for a non-PIN credential type is ignored."""
     mock_coordinator = MagicMock()
@@ -547,6 +577,8 @@ async def test_credential_deleted_non_pin_ignored(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_schlage_be469: Node,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that 'credential deleted' for a non-PIN credential type is ignored."""
     mock_coordinator = MagicMock()

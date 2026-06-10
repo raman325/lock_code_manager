@@ -276,6 +276,8 @@ async def lcm_config_entry(
     hass: HomeAssistant,
     zwave_integration: MockConfigEntry,
     lock_entity: er.RegistryEntry,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> MockConfigEntry:
     """
     Set up a full LCM config entry managing the Z-Wave JS lock.

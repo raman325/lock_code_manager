@@ -16,6 +16,8 @@ from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
     SetUserResult,
     User,
     credential_from_slot,
@@ -98,6 +100,23 @@ class _NativeStubLock(BaseLock):
 
     async def async_get_users(self) -> list[User]:
         return list(self._users.values())
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        # Real user records with names available — this is what gates
+        # ``_put_credential`` into the set-user-first path.
+        return LockCapabilities(
+            supports_user_management=True,
+            max_users=30,
+            credential_types={
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=30,
+                    min_length=4,
+                    max_length=8,
+                    supports_learn=False,
+                ),
+            },
+            max_user_name_length=16,
+        )
 
 
 class _DegenerateStubLock(BaseLock):

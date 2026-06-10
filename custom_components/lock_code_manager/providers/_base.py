@@ -44,6 +44,7 @@ from ..domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    LockCapabilities,
     SetUserResult,
     User,
     credential_from_slot,
@@ -183,6 +184,15 @@ class BaseLock:
     # everything on teardown without each provider tracking its own field.
     _push_unsubs: list[Callable[[], None]] = field(
         default_factory=list, init=False, repr=False
+    )
+    # Cache for ``async_get_capabilities`` result; populated on first read
+    # via ``_get_cached_capabilities`` and used by the base orchestration
+    # (today: ``_put_credential`` chooses whether to write a user record).
+    # Lives for the provider instance's lifetime -- reload recreates the
+    # provider, naturally invalidating the cache after firmware/capability
+    # changes.
+    _capabilities_cache: LockCapabilities | None = field(
+        default=None, init=False, repr=False
     )
     _last_operation_time: float = field(default=0.0, init=False)
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
@@ -1011,6 +1021,24 @@ class BaseLock:
         return await self._project_users_to_slots(CredentialType.PIN)
 
     @final
+    async def _get_cached_capabilities(self) -> LockCapabilities:
+        """
+        Return the lock's capabilities, populating the cache on first call.
+
+        Provider-agnostic chokepoint for capability-driven base decisions
+        (today: whether ``_put_credential`` writes a user record before the
+        credential). The cache is per-instance and lives for the lifetime
+        of the provider, which is recreated on each integration reload --
+        so a firmware update or capability change is naturally picked up
+        the next time the integration loads. Errors propagate to the
+        caller so the same backoff/retry the provider already wraps
+        ``async_get_capabilities`` in keeps applying.
+        """
+        if self._capabilities_cache is None:
+            self._capabilities_cache = await self.async_get_capabilities()
+        return self._capabilities_cache
+
+    @final
     async def _put_credential(
         self,
         user: User,
@@ -1023,39 +1051,61 @@ class BaseLock:
         Run the create-on-first user lifecycle around a credential write.
 
         Native-user only (the slot adapters call the primitives directly for
-        slot-only providers). The owning user is created or updated first --
-        the Z-Wave set-credential command requires an existing user, and this
-        ordering also sidesteps the User-Code-Command-Class fallback quirk --
-        and its resolved identifier (which the integration may allocate) is
-        threaded into the credential write. Returns True if the value changed.
+        slot-only providers). On locks that expose a real user record --
+        ``supports_user_management`` AND ``max_user_name_length > 0`` --
+        the owning user is created or updated first and its resolved
+        identifier (which the integration may allocate) is threaded into
+        the credential write. On locks where the user is implicit in the
+        credential (Z-Wave User Code CC: the user IS the code and the
+        unified ``accessControl`` API's ``setUser`` cannot run before a
+        credential exists), the user write is skipped and the credential
+        write creates the implicit user. Returns True if the value
+        changed.
 
-        ``user`` carries the user record (identifier, name, active state) for
-        ``async_set_user``; ``credential`` is the specific credential to write.
-        They are independent arguments: the slot adapter's ``user`` happens to
-        also list this credential (an artifact of the one-to-one slot
-        projection), but only ``credential`` drives the write here.
+        ``user`` carries the user record (identifier, name, active state)
+        for ``async_set_user`` on the real-user path; ``credential`` is
+        the specific credential to write. They are independent arguments:
+        the slot adapter's ``user`` happens to also list this credential
+        (an artifact of the one-to-one slot projection), but only
+        ``credential`` drives the write here.
 
-        If the credential write fails, a user this call newly created is rolled
-        back so the lock is not left with a credential-less user (which the
-        slot-keyed coordinator cannot see and would never reconcile away). A
-        pre-existing user is left untouched -- it may still own other
-        credentials.
+        If the credential write fails, a user this call newly created is
+        rolled back so the lock is not left with a credential-less user
+        (which the slot-keyed coordinator cannot see and would never
+        reconcile away). A pre-existing user is left untouched -- it may
+        still own other credentials. On the no-user-write path there is
+        nothing to roll back -- the implicit user only exists while the
+        credential does.
         """
-        result = await self.async_set_user(user)
+        caps = await self._get_cached_capabilities()
+        needs_user_write = (
+            caps.supports_user_management and caps.max_user_name_length > 0
+        )
+        if needs_user_write:
+            result = await self.async_set_user(user)
+            credential_user_id = result.user_id
+            rollback_user_id = result.user_id if result.created else None
+        else:
+            # Implicit-user lock (e.g. Z-Wave User Code CC). The
+            # credential write creates the user implicitly; address the
+            # credential by the slot-shaped user identifier the seam
+            # already carries.
+            credential_user_id = user.user_id
+            rollback_user_id = None
         try:
             return await self.async_set_credential(
-                result.user_id, credential, name=name, source=source
+                credential_user_id, credential, name=name, source=source
             )
         except Exception:
-            if result.created:
+            if rollback_user_id is not None:
                 try:
-                    await self.async_delete_user(result.user_id)
+                    await self.async_delete_user(rollback_user_id)
                 except Exception as rollback_err:
                     LOGGER.warning(
                         "Lock %s: failed to roll back newly created user %s "
                         "after a failed credential write: %s",
                         self.lock.entity_id,
-                        result.user_id,
+                        rollback_user_id,
                         rollback_err,
                     )
             raise
@@ -1189,6 +1239,20 @@ class BaseLock:
         self._raise_not_implemented(
             "async_get_users",
             "Override to read users and credentials from the lock.",
+        )
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """
+        Report the lock's user/credential capabilities.
+
+        Read by the base orchestration's ``_get_cached_capabilities``
+        helper to drive capability-gated behavior (today: whether
+        ``_put_credential`` writes a user record before the credential).
+        Providers that route through ``_put_credential`` must override.
+        """
+        self._raise_not_implemented(
+            "async_get_capabilities",
+            "Override to report the lock's user/credential capabilities.",
         )
 
     @final

@@ -9,6 +9,7 @@ provider's role in the data flow.
 from __future__ import annotations
 
 from collections.abc import Callable
+import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -82,6 +83,7 @@ _ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE: dict[UserCredentialType, CredentialType] = {
     UserCredentialType.FACE_BIOMETRIC: CredentialType.FACE,
     UserCredentialType.FINGER_BIOMETRIC: CredentialType.FINGERPRINT,
 }
+
 
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
@@ -220,7 +222,12 @@ class ZWaveJSLock(BaseLock):
             raise LockDisconnected(f"get capabilities failed: {err}") from err
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get capabilities failed: {err}") from err
-        # Cache max name length for async_set_user name validation.
+        # Cache max name length for async_set_user's name truncation. The
+        # base orchestration also reads ``max_user_name_length`` via
+        # ``_get_cached_capabilities`` to decide whether ``_put_credential``
+        # should write a user record at all -- 0 means the lock surfaces
+        # User Code CC under the unified accessControl API, where the
+        # user is implicit in the credential.
         self._max_user_name_length = caps.get("max_user_name_length", 0)
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
         credential_types = (
@@ -239,6 +246,7 @@ class ZWaveJSLock(BaseLock):
             supports_user_management=caps["supports_user_management"],
             max_users=caps["max_users"],
             credential_types=credential_types,
+            max_user_name_length=self._max_user_name_length,
         )
 
     async def async_set_user(self, user: User) -> SetUserResult:
@@ -253,20 +261,15 @@ class ZWaveJSLock(BaseLock):
         # Resolve the max user name length. If async_get_capabilities has
         # not yet been called (or the cache is stale), fetch capabilities
         # so the name is always validated against the lock's actual limit.
+        # Note: the base's ``_put_credential`` only routes through
+        # ``async_set_user`` when ``supports_user_management`` is True and
+        # the lock advertises ``max_user_name_length > 0`` -- so by the
+        # time we get here we know the lock has real user records and
+        # names; the cache priming below just ensures the truncation
+        # bound is fresh on first call.
         if self._max_user_name_length is None:
-            try:
-                raw_caps = await lock_helpers.async_get_credential_capabilities(
-                    self.node
-                )
-            except BaseZwaveJSServerError, HomeAssistantError:
-                # Capabilities fetch failed — proceed for this call without
-                # a name guard, but leave the cache unset so the next call
-                # retries. Caching a 0 sentinel here would silently strip
-                # all user names for the lifetime of the provider instance
-                # after a single transient disconnect.
-                pass
-            else:
-                self._max_user_name_length = raw_caps.get("max_user_name_length")
+            with contextlib.suppress(LockDisconnected, LockOperationFailed):
+                await self.async_get_capabilities()
         max_name_len: int = self._max_user_name_length or 0
         # Enforce the lock's name length constraint:
         # - max_name_len == 0: the lock does not support user names; omit it
@@ -497,9 +500,24 @@ class ZWaveJSLock(BaseLock):
         """
         Set up lock by provider.
 
+        Prime the base capability cache so the orchestration's
+        ``_put_credential`` gate (write a user record only when the lock
+        has ``supports_user_management`` and ``max_user_name_length > 0``)
+        is resolved before the first write, and surface a clear typed
+        error if the lock exposes neither User Credential CC nor User
+        Code CC (i.e. the unified ``accessControl`` API is not available
+        at all -- effectively never for a real Z-Wave lock, but worth
+        catching cleanly rather than as an opaque attribute error
+        downstream).
+
         Idempotent: clears existing listeners before re-registering.
         """
         self._clear_listeners()
+        # Prime the capability cache via the base helper so subsequent
+        # ``_put_credential`` calls hit a warm cache. Failures surface as
+        # typed LCM errors and prevent integration setup -- a Z-Wave lock
+        # that exposes neither CC is not a lock LCM can manage.
+        await self._get_cached_capabilities()
         self._listeners.append(
             self.hass.bus.async_listen(
                 ZWAVE_JS_NOTIFICATION_EVENT,

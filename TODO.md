@@ -47,6 +47,71 @@ read/write, name-based, max 4 user PINs), SwitchBot, SmartThings
   sensor entities to coordinator (survives entity recreation during config
   updates).
 
+- **Expand sync "in sync" predicate to include user name + every managed
+  credential type** — Today sync compares PIN only. With names (User
+  Credential CC) and future credential types (PASSWORD, etc.), a slot
+  should be "out of sync" if any field — name, PIN, or any managed
+  non-PIN credential — drifts from config. Smart writes only the deltas:
+  name-only via `async_set_user`, credential-only via `async_set_credential`
+  per mismatching type, both via `_put_credential` for the create path.
+  Trivially-equal name comparison on User Code CC locks (both sides
+  None) keeps the same code path safe for legacy locks. Requires the
+  coordinator/sync state to carry `User` rather than `dict[int,
+  SlotCredential]` so name is visible to the sync predicate.
+
+- **Least-common-denominator capability aggregation across locks in a
+  config entry** — When a config entry covers multiple locks, aggregate
+  per-credential-type limits as the LCD so a single configured value
+  works on all of them. Rules per capability kind:
+  - Numeric bounds: `min_length = max(...)`, `max_length = min(...)`
+    across the locks that support the type. Skip locks where the
+    capability doesn't apply (e.g. User Code CC locks contribute
+    nothing to name-length aggregation because UC has no names).
+  - Type availability: any lock supports the type → the field appears
+    on the slot config; the sync layer per-lock decides whether to
+    write. When no lock supports the type, hide the field entirely.
+  - Boolean feature flags (e.g. `supports_learn` for RFID): AND across
+    the supporting locks.
+  Empty aggregate (e.g. PIN min > max because one lock requires <=6 and
+  another requires >=8) must be a hard config flow failure surfaced in
+  both the initial config flow and the option flow ("these locks have
+  incompatible PIN length requirements; split them into separate config
+  entries"). On lock add/remove, re-validate existing slot configs
+  against the recomputed aggregate and disable any slots whose stored
+  values fall outside the new bounds, with a clear repair-suggestion
+  notification. Enforce at the `text` entity level via `native_min` /
+  `native_max` for both PIN and name. Lands after the password
+  expansion + name-reconciliation sync work above.
+
+- **Multi-credential-type support: password (Option B architecture
+  decision)** — Z-Wave User Credential CC and Matter DoorLock both
+  expose `PASSWORD` natively; this is the first concrete second type
+  beyond PIN. Sequence-wise lands after the sync-state expansion above
+  and the LCD aggregation, since both are prerequisites for a coherent
+  multi-type UX.
+  The feature work: slot config schema becomes `{name, pin, password,
+  ...}` (slot per user, multiple credential types per slot);
+  capability-gated per slot by `max_user_name_length > 0` and at least
+  one lock advertising `credential_types[PASSWORD]`; sync layer
+  multiplexes the write/clear per type.
+  The architecture decision (Option B): the base orchestration already
+  carries Option A (parametric per-type projection via
+  `_project_users_to_slots(credential_type)`) so the seam supports
+  adding types additively. Open question is whether the
+  coordinator/entities also become type-scoped from the top — separate
+  slot entity trees per credential type — or whether a single slot
+  surfaces multiple type fields. Tied up with the lock-side slot
+  mapping: Z-Wave User Credential CC indexes (user_id,
+  credential_type, credential_slot) independently, so LCM "slot N"
+  could hold PIN at one lock-side index and PASSWORD at another.
+  Simplest is to enforce `lock_slot = user_id = LCM_slot_N` for every
+  credential type (matches the existing 1:1:1 invariant, may waste
+  lock-side slot capacity when types are sparsely used); richer is a
+  per-type mapping table (more flexibility, more state to track and
+  recover at setup). Decide the entity-tree shape and the slot-mapping
+  rule together when wiring password — they're one design question
+  with two surfaces.
+
 ## Code Quality
 
 - **Dual storage pattern** — Simplify `data` + `options` config entry pattern.

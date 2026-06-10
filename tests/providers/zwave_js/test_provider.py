@@ -81,6 +81,8 @@ async def test_setup_is_idempotent(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     lock_code_manager_config_entry: MockConfigEntry,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that async_setup clears old listeners before re-registering."""
     await zwave_js_lock.async_setup(lock_code_manager_config_entry)
@@ -125,6 +127,8 @@ async def test_setup_registers_event_listener(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that setup registers an event listener for Z-Wave JS events."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -145,6 +149,8 @@ async def test_unload_cleans_up_push_subscription(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     zwave_integration: MockConfigEntry,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Test that unload cleans up push subscriptions."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
@@ -626,6 +632,7 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
                 supports_learn=False,
             )
         },
+        max_user_name_length=10,
     )
 
 
@@ -925,12 +932,33 @@ async def test_async_get_capabilities_raises_lock_operation_failed_on_ha_error(
 # ── Name length validation in async_set_user ───────────────────────
 
 
-async def test_async_set_user_omits_name_when_max_name_length_is_zero(
+async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_only(
+    hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """When max_user_name_length is 0, user_name is passed as None."""
+    """
+    On a User Code CC lock, the seam orchestration skips set_user entirely.
+
+    The unified accessControl API's setUser cannot run before a credential
+    exists on a UC lock (the user IS the code), so the base orchestration
+    in _put_credential takes the no-user-write path when the capabilities
+    report ``max_user_name_length == 0``. async_set_credential creates
+    the user implicitly. End-to-end check via async_set_usercode covers
+    the gate, the cache, and the provider-level credential write.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+            CONF_SLOTS: {"5": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    # UC-shaped capabilities: real user-record support is hardcoded to
+    # True by the driver, but max_user_name_length == 0 signals the user
+    # is implicit in the credential.
     pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
     mock_lock_helpers["async_get_credential_capabilities"].return_value = {
         "supports_user_management": True,
@@ -947,20 +975,12 @@ async def test_async_set_user_omits_name_when_max_name_length_is_zero(
             }
         },
     }
-    mock_access_control.get_user_cached.return_value = None
-    mock_lock_helpers["async_set_user"].return_value = {"user_id": 5}
 
-    # Name is provided, but the lock doesn't support names → pass None
-    user = User(user_id=5, name="alice", active=True)
-    result = await zwave_js_lock.async_set_user(user)
+    changed = await zwave_js_lock.async_set_usercode(5, "9999", name="alice")
 
-    assert result == SetUserResult(user_id=5, created=True)
-    mock_lock_helpers["async_set_user"].assert_called_once_with(
-        zwave_js_lock.node,
-        user_id=5,
-        user_name=None,
-        active=True,
-    )
+    assert changed is True
+    mock_lock_helpers["async_set_user"].assert_not_called()
+    mock_lock_helpers["async_set_credential"].assert_called_once()
 
 
 async def test_async_set_user_truncates_name_when_too_long(
