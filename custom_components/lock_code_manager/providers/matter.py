@@ -247,6 +247,9 @@ class MatterLock(BaseLock):
             supports_user_management=bool(info.get("supports_user_management")),
             max_users=info.get("max_users") or 0,
             credential_types=credential_types,
+            # Matter DoorLock spec caps UserName at 32 bytes UTF-8;
+            # ``matter.lock_helpers`` does not yet surface the attribute.
+            max_user_name_length=32,
         )
 
     async def async_set_user(self, user: User) -> SetUserResult:

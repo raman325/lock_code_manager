@@ -1231,6 +1231,9 @@ class TestGetCapabilities:
         assert isinstance(caps, LockCapabilities)
         assert caps.supports_user_management is True
         assert caps.max_users == 20
+        # Matter DoorLock spec cap (32 bytes UTF-8); hardcoded because
+        # ``matter.lock_helpers`` does not yet surface the attribute.
+        assert caps.max_user_name_length == 32
         pin_cap = caps.capability_for(CredentialType.PIN)
         assert pin_cap is not None
         assert pin_cap.num_slots == 15
