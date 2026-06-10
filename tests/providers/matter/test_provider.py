@@ -708,6 +708,93 @@ class TestLockOperationEvent:
         assert len(fired) == 1
         assert fired[0]["code_slot"] == 3
 
+    async def test_preserves_slot_zero_resolved_by_user_index(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Slot 0 from the primary resolver must not fall through to the fallback.
+
+        Pins the explicit ``None`` check that replaced an ``or``-chain in
+        ``_dispatch_lock_operation``: with ``or``, ``code_slot == 0`` is
+        falsy, so the fallback walker would run and likely return a
+        different slot. The fix is to gate on ``is None`` explicitly.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                # User at userIndex 1 maps to LCM slot 0 (legitimate primary hit).
+                {
+                    "user_index": 1,
+                    "user_name": "lcm:0:Zero",
+                    "credentials": [{"type": "pin", "index": 99}],
+                },
+                # Decoy at credentialIndex 99 owned by a different tagged slot.
+                # If the resolver falls through, this would yield slot 4.
+                {
+                    "user_index": 2,
+                    "user_name": "lcm:4:Decoy",
+                    "credentials": [{"type": "pin", "index": 99}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 1,
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": 99},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 0
+
+    async def test_credential_index_as_string_is_coerced(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Some Matter implementations send ``credentialIndex`` as a string.
+
+        The fallback walker compares against the raw user list's int
+        ``index`` field; without ``parse_slot_num`` coercion, the
+        comparison would never match and the event would silently drop
+        when ``userIndex`` is absent.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 50,
+                    "user_name": "lcm:7:Dave",
+                    "credentials": [{"type": "pin", "index": 4}],
+                },
+            ]
+        ):
+            matter_lock_simple._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        # userIndex omitted to force the credentialIndex walk;
+                        # credentialIndex sent as a string.
+                        "credentials": [
+                            {"credentialType": 1, "credentialIndex": "4"},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert len(fired) == 1
+        assert fired[0]["code_slot"] == 7
+
     async def test_falls_back_to_credential_index_walk_when_user_index_missing(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:

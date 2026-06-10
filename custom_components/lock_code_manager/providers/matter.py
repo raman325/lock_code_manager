@@ -268,7 +268,7 @@ class MatterLock(BaseLock):
             if user_name:
                 lcm_slot_from_tag, _ = parse_tag(user_name)
             pin_credentials: list[Credential] = []
-            for cred in raw_user.get("credentials", []):
+            for cred in raw_user.get("credentials") or []:
                 credential_index = cred.get("index")
                 if cred.get("type") != "pin" or credential_index is None:
                     continue
@@ -575,7 +575,7 @@ class MatterLock(BaseLock):
                 cred.get("index")
                 for raw_user in await self._raw_lock_users()
                 if raw_user.get("user_index") == user_id
-                for cred in raw_user.get("credentials", [])
+                for cred in raw_user.get("credentials") or []
                 if cred.get("type") == "pin" and cred.get("index") is not None
             ),
             None,
@@ -824,14 +824,19 @@ class MatterLock(BaseLock):
         if not credentials:
             return
 
-        # Find the PIN credential index (credentialType 1 = PIN).
-        credential_index = next(
-            (
-                cred.get("credentialIndex")
-                for cred in credentials
-                if isinstance(cred, dict) and cred.get("credentialType") == 1
-            ),
-            None,
+        # Find the PIN credential index (credentialType 1 = PIN). Coerce
+        # via ``parse_slot_num`` because some Matter implementations send
+        # the index as a string -- the int-keyed comparison in the fallback
+        # walker would then never match.
+        credential_index = parse_slot_num(
+            next(
+                (
+                    cred.get("credentialIndex")
+                    for cred in credentials
+                    if isinstance(cred, dict) and cred.get("credentialType") == 1
+                ),
+                None,
+            )
         )
         if credential_index is None:
             return
@@ -872,9 +877,13 @@ class MatterLock(BaseLock):
             )
             return
 
-        code_slot = _lcm_slot_from_raw_users_by_user_index(
-            raw_users, user_index
-        ) or _lcm_slot_from_raw_users_by_credential_index(raw_users, credential_index)
+        # Explicit ``None`` check (not ``or``) so a valid LCM slot of 0
+        # from the primary resolver doesn't fall through to the fallback.
+        code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
+        if code_slot is None:
+            code_slot = _lcm_slot_from_raw_users_by_credential_index(
+                raw_users, credential_index
+            )
         if code_slot is None:
             LOGGER.debug(
                 "Lock %s: LockOperation userIndex=%s credentialIndex=%s did not "
