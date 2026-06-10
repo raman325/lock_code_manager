@@ -1092,8 +1092,9 @@ class BaseLock:
         :func:`._util.make_tagged_name`) and truncates the display portion
         so the overall length fits ``max_user_name_length``. The tag prefix
         is sacred -- it's how :func:`._util.parse_tag` recovers the slot
-        binding on subsequent reads -- so truncation only ever shortens
-        the user-supplied display, never the prefix.
+        binding on subsequent reads -- so truncation shortens only the
+        user-supplied display when the full prefix fits; if the lock's limit
+        is smaller than the prefix itself, the prefix is truncated to the limit.
 
         Returns ``None`` when the lock has no concept of named users
         (``max_user_name_length == 0`` or ``supports_user_management`` is
