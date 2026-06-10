@@ -487,21 +487,21 @@ async def test_concurrent_set_credential_serialized_under_sequence_lock(
         schlage_lock.async_set_credential(
             1,
             _pin_cred(1, "1111"),
-            (_pin_cred(1, "1111")).readable_pin or "",
+            "1111",
             name=None,
             source="direct",
         ),
         schlage_lock.async_set_credential(
             2,
             _pin_cred(2, "2222"),
-            (_pin_cred(2, "2222")).readable_pin or "",
+            "2222",
             name=None,
             source="direct",
         ),
         schlage_lock.async_set_credential(
             3,
             _pin_cred(3, "3333"),
-            (_pin_cred(3, "3333")).readable_pin or "",
+            "3333",
             name=None,
             source="direct",
         ),
@@ -534,7 +534,7 @@ async def test_set_credential_replaces_existing(
     result = await schlage_lock.async_set_credential(
         1,
         _pin_cred(1, "5678"),
-        (_pin_cred(1, "5678")).readable_pin or "",
+        "5678",
         name="New Name",
         source="direct",
     )
@@ -579,7 +579,7 @@ async def test_set_credential_preserves_existing_name(
     result = await schlage_lock.async_set_credential(
         1,
         _pin_cred(1, "9999"),
-        (_pin_cred(1, "9999")).readable_pin or "",
+        "9999",
         name=None,
         source="direct",
     )
@@ -621,7 +621,7 @@ async def test_set_credential_already_exists_treated_as_success(
     result = await schlage_lock.async_set_credential(
         1,
         _pin_cred(1, "1234"),
-        (_pin_cred(1, "1234")).readable_pin or "",
+        "1234",
         name="Guest",
         source="direct",
     )
@@ -645,7 +645,7 @@ async def test_set_credential_non_exists_error_still_raises(
         await schlage_lock.async_set_credential(
             1,
             _pin_cred(1, "1234"),
-            (_pin_cred(1, "1234")).readable_pin or "",
+            "1234",
             name=None,
             source="direct",
         )
@@ -665,7 +665,7 @@ async def test_set_credential_service_failure(
         await schlage_lock.async_set_credential(
             1,
             _pin_cred(1, "1234"),
-            (_pin_cred(1, "1234")).readable_pin or "",
+            "1234",
             name=None,
             source="direct",
         )
@@ -804,7 +804,7 @@ async def test_base_orchestration_set_and_get(
     await schlage_lock.async_set_credential(
         1,
         _pin_cred(1, "9999"),
-        (_pin_cred(1, "9999")).readable_pin or "",
+        "9999",
         name="test",
         source="direct",
     )

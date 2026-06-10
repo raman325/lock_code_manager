@@ -168,7 +168,7 @@ async def test_set_credential(
 
     credential = credential_from_slot(3, SlotCredential.known("5678"))
     result = await zha_lock.async_set_credential(
-        3, credential, credential.readable_pin or "", name="Test User", source="direct"
+        3, credential, "5678", name="Test User", source="direct"
     )
 
     assert result is True
@@ -196,7 +196,7 @@ async def test_set_credential_failure(
     credential = credential_from_slot(3, SlotCredential.known("5678"))
     with pytest.raises(CodeRejectedError, match="set_pin_code rejected"):
         await zha_lock.async_set_credential(
-            3, credential, credential.readable_pin or "", name=None, source="direct"
+            3, credential, "5678", name=None, source="direct"
         )
 
 
@@ -661,7 +661,7 @@ async def test_set_credential_generic_exception(
     credential = credential_from_slot(1, SlotCredential.known("1234"))
     with pytest.raises(LockDisconnected, match="Failed to set PIN"):
         await zha_lock.async_set_credential(
-            1, credential, credential.readable_pin or "", name=None, source="direct"
+            1, credential, "1234", name=None, source="direct"
         )
 
 

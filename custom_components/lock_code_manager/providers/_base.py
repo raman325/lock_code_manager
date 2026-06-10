@@ -1112,13 +1112,19 @@ class BaseLock:
         """
         Return the credential's readable PIN, or raise ``CodeRejectedError``.
 
-        The seam (``async_set_usercode``) builds credentials from a string
-        usercode so ``readable_pin`` is always set by construction along
-        that path. Providers call this helper at the top of their
-        ``async_set_credential`` override so the contract is expressed
-        once and the per-provider write path can use the returned ``str``
-        directly without an ``or ""`` coercion (which would silently send
-        a blank PIN to the device).
+        Called by the seam (``async_set_usercode`` and ``_set_credential``)
+        before dispatching to the provider's ``async_set_credential``
+        override; the resolved ``pin: str`` is threaded through as a
+        positional argument so the provider receives a guaranteed string
+        and does not need its own defensive check.
+
+        The seam already builds credentials from a string usercode so
+        ``readable_pin`` is non-None by construction along that path -- the
+        guard catches future regressions (a credential constructed outside
+        the seam, a refactor that loses the invariant) and never the
+        normal flow. Providers MUST NOT re-add their own readable-pin
+        check; doing so duplicates the contract and re-introduces the
+        ``or ""`` silent coercion pattern this helper exists to eliminate.
         """
         pin = credential.readable_pin
         if pin is None:

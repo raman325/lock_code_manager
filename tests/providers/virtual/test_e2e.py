@@ -49,7 +49,7 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("1111")),
-            (credential_from_slot(1, SlotCredential.known("1111"))).readable_pin or "",
+            "1111",
             name="test_user",
             source="direct",
         )
@@ -66,7 +66,7 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("1111")),
-            (credential_from_slot(1, SlotCredential.known("1111"))).readable_pin or "",
+            "1111",
             name="test_user",
             source="direct",
         )
@@ -109,14 +109,14 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("1111")),
-            (credential_from_slot(1, SlotCredential.known("1111"))).readable_pin or "",
+            "1111",
             name="user1",
             source="direct",
         )
         await e2e_virtual_lock.async_set_credential(
             2,
             credential_from_slot(2, SlotCredential.known("2222")),
-            (credential_from_slot(2, SlotCredential.known("2222"))).readable_pin or "",
+            "2222",
             name="user2",
             source="direct",
         )
@@ -141,7 +141,7 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("1111")),
-            (credential_from_slot(1, SlotCredential.known("1111"))).readable_pin or "",
+            "1111",
             name="user1",
             source="direct",
         )
@@ -160,7 +160,7 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("5555")),
-            (credential_from_slot(1, SlotCredential.known("5555"))).readable_pin or "",
+            "5555",
             name="slot_user",
             source="direct",
         )

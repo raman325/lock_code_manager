@@ -440,7 +440,7 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="MQTT component not available"),
         ):
             await lock.async_set_credential(
-                1, credential, credential.readable_pin or "", name=None, source="direct"
+                1, credential, "1234", name=None, source="direct"
             )
 
     async def test_async_delete_credential_raises_when_mqtt_disabled(
@@ -481,7 +481,7 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="Lock not connected"),
         ):
             await lock.async_set_credential(
-                3, credential, credential.readable_pin or "", name=None, source="direct"
+                3, credential, "9999", name=None, source="direct"
             )
 
     async def test_async_delete_credential_raises_when_not_connected(
@@ -524,7 +524,7 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="not a Zigbee2MQTT lock"),
         ):
             await lock.async_set_credential(
-                1, credential, credential.readable_pin or "", name=None, source="direct"
+                1, credential, "1234", name=None, source="direct"
             )
 
     async def test_async_set_credential_raises_when_topic_unavailable(
@@ -550,7 +550,7 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="Could not determine MQTT topic"),
         ):
             await lock.async_set_credential(
-                2, credential, credential.readable_pin or "", name=None, source="direct"
+                2, credential, "8888", name=None, source="direct"
             )
 
     async def test_async_delete_credential_raises_when_topic_unavailable(
@@ -602,7 +602,7 @@ class TestAsyncSetClearHardRefresh:
                 await lock.async_set_credential(
                     2,
                     credential,
-                    credential.readable_pin or "",
+                    "9999",
                     name=None,
                     source="direct",
                 )
@@ -637,7 +637,7 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockDisconnected, match="Failed to set PIN"),
         ):
             await lock.async_set_credential(
-                1, credential, credential.readable_pin or "", name=None, source="direct"
+                1, credential, "1111", name=None, source="direct"
             )
 
     async def test_async_set_credential_publish_ha_error_raises_operation_failed(
@@ -663,7 +663,7 @@ class TestAsyncSetClearHardRefresh:
             pytest.raises(LockOperationFailed, match="Failed to set PIN"),
         ):
             await lock.async_set_credential(
-                1, credential, credential.readable_pin or "", name=None, source="direct"
+                1, credential, "1111", name=None, source="direct"
             )
 
     async def test_async_delete_credential_publish_failure_raises(

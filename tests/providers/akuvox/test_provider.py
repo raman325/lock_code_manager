@@ -371,7 +371,7 @@ class TestSetCredential:
         result = await akuvox_lock.async_set_credential(
             1,
             _pin_cred(1, "9999"),
-            (_pin_cred(1, "9999")).readable_pin or "",
+            "9999",
             name=None,
             source="direct",
         )
@@ -398,7 +398,7 @@ class TestSetCredential:
             await akuvox_lock.async_set_credential(
                 1,
                 _pin_cred(1, "1234"),
-                (_pin_cred(1, "1234")).readable_pin or "",
+                "1234",
                 name=None,
                 source="direct",
             )
@@ -691,14 +691,14 @@ class TestAutoTagging:
             akuvox_lock.async_set_credential(
                 1,
                 _pin_cred(1, "1111"),
-                (_pin_cred(1, "1111")).readable_pin or "",
+                "1111",
                 name=None,
                 source="direct",
             ),
             akuvox_lock.async_set_credential(
                 2,
                 _pin_cred(2, "2222"),
-                (_pin_cred(2, "2222")).readable_pin or "",
+                "2222",
                 name=None,
                 source="direct",
             ),
@@ -769,7 +769,7 @@ class TestBaseOrchestration:
         await akuvox_lock.async_set_credential(
             1,
             _pin_cred(1, "7777"),
-            (_pin_cred(1, "7777")).readable_pin or "",
+            "7777",
             name="base_test",
             source="direct",
         )

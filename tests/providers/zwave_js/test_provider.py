@@ -713,7 +713,7 @@ async def test_async_set_credential_returns_true_on_success(
     result = await zwave_js_lock.async_set_credential(
         user_id=1,
         credential=credential,
-        pin=credential.readable_pin or "",
+        pin="5678",
         name="alice",
         source="sync",
     )
@@ -750,7 +750,7 @@ async def test_async_set_credential_raises_duplicate_code_error(
         await zwave_js_lock.async_set_credential(
             user_id=1,
             credential=credential,
-            pin=credential.readable_pin or "",
+            pin="1111",
             name=None,
             source="sync",
         )
@@ -781,7 +781,7 @@ async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error
         await zwave_js_lock.async_set_credential(
             user_id=1,
             credential=credential,
-            pin=credential.readable_pin or "",
+            pin="2222",
             name=None,
             source="sync",
         )
@@ -812,7 +812,7 @@ async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
         await zwave_js_lock.async_set_credential(
             user_id=1,
             credential=credential,
-            pin=credential.readable_pin or "",
+            pin="2222",
             name=None,
             source="sync",
         )
