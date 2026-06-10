@@ -1102,3 +1102,7 @@ pull latest. One thought - right now if max characters is < 4 the current format
 ---
 
 pull latest. One thought - right now if max characters is < 4 in that lcm:1:blah becomes lcm: or worse. In that case we should probably fall back to slot number
+
+---
+
+need to add coverage checks
