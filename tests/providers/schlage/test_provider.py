@@ -60,9 +60,9 @@ class TestMakeTaggedName:
     @pytest.mark.parametrize(
         ("slot", "name", "expected"),
         [
-            pytest.param(1, "Guest", "[LCM:1] Guest", id="with-name"),
-            pytest.param(5, None, "[LCM:5] Code Slot 5", id="without-name"),
-            pytest.param(3, None, "[LCM:3] Code Slot 3", id="none-name"),
+            pytest.param(1, "Guest", "lcm:1:Guest", id="with-name"),
+            pytest.param(5, None, "lcm:5:Code Slot 5", id="without-name"),
+            pytest.param(3, None, "lcm:3:Code Slot 3", id="none-name"),
         ],
     )
     def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
@@ -213,8 +213,8 @@ async def test_get_users_duplicate_tag_uses_first(
     """Test that duplicate tags for the same slot use the first (by code_id sort)."""
     mock_response = {
         LOCK_ENTITY_ID: {
-            "code_a": {"name": "[LCM:1] First", "code": "****"},
-            "code_b": {"name": "[LCM:1] Second", "code": "****"},
+            "code_a": {"name": "lcm:1:First", "code": "****"},
+            "code_b": {"name": "lcm:1:Second", "code": "****"},
         },
     }
     handler = AsyncMock(return_value=mock_response)
@@ -235,7 +235,7 @@ async def test_get_users_ignores_tags_outside_managed_range(
     """Test that tagged codes outside managed slots are ignored."""
     mock_response = {
         LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:99] Outside", "code": "****"},
+            "code1": {"name": "lcm:99:Outside", "code": "****"},
         },
     }
     handler = AsyncMock(return_value=mock_response)
@@ -276,7 +276,7 @@ async def test_tag_unmanaged_codes(
     # Verify add_code was called with the tagged name
     assert add_handler.call_count == 1
     add_call = add_handler.call_args[0][0]
-    assert add_call.data["name"] == "[LCM:1] Guest"
+    assert add_call.data["name"] == "lcm:1:Guest"
     assert add_call.data["code"] == "1234"
 
     # Verify delete_code was called to remove the original
@@ -521,7 +521,7 @@ async def test_set_credential_replaces_existing(
     """Test async_set_credential replaces an existing code on the same slot."""
     get_response = {
         LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:1] Old Name", "code": "****"},
+            "code1": {"name": "lcm:1:Old Name", "code": "****"},
         },
     }
     get_handler = AsyncMock(return_value=get_response)
@@ -542,12 +542,12 @@ async def test_set_credential_replaces_existing(
     assert result is True
     # add_code called with new tagged name
     add_call = add_handler.call_args[0][0]
-    assert add_call.data["name"] == "[LCM:1] New Name"
+    assert add_call.data["name"] == "lcm:1:New Name"
     assert add_call.data["code"] == "5678"
     # Both old name and new tagged name deleted (eventual consistency guard)
     assert delete_handler.call_count == 2
     deleted_names = {call[0][0].data["name"] for call in delete_handler.call_args_list}
-    assert deleted_names == {"[LCM:1] Old Name", "[LCM:1] New Name"}
+    assert deleted_names == {"lcm:1:Old Name", "lcm:1:New Name"}
 
 
 async def test_set_credential_preserves_existing_name(
@@ -561,7 +561,7 @@ async def test_set_credential_preserves_existing_name(
     """
     get_response = {
         LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:1] Guest", "code": "****"},
+            "code1": {"name": "lcm:1:Guest", "code": "****"},
         },
     }
     get_handler = AsyncMock(return_value=get_response)
@@ -588,12 +588,59 @@ async def test_set_credential_preserves_existing_name(
     # Name unchanged so existing_full_name == tagged_name, deduplicated to 1 delete
     assert delete_handler.call_count == 1
     delete_call = delete_handler.call_args[0][0]
-    assert delete_call.data["name"] == "[LCM:1] Guest"
+    assert delete_call.data["name"] == "lcm:1:Guest"
     assert add_handler.call_count == 1
     add_call = add_handler.call_args[0][0]
-    assert add_call.data["name"] == "[LCM:1] Guest"
+    assert add_call.data["name"] == "lcm:1:Guest"
     assert add_call.data["code"] == "9999"
     assert call_order == ["delete", "add"]
+
+
+async def test_set_credential_migrates_legacy_format_tag_on_write(
+    hass: HomeAssistant, schlage_lock: SchlageLock
+) -> None:
+    """
+    Touching a legacy ``[LCM:<slot>]``-tagged code rewrites it to ``lcm:<slot>:`` on the next write.
+
+    Pre-PR-C installs have codes named ``[LCM:1] Old``. The tolerant
+    parser already discovers them by slot (via #1238), so the provider
+    finds the code at slot 1; the rewrite happens implicitly because
+    ``_make_tagged_name`` now produces the canonical format. The lock
+    sees a delete of the legacy name and an add of the canonical
+    name, completing the per-code migration.
+    """
+    get_response = {
+        LOCK_ENTITY_ID: {
+            "code1": {"name": "[LCM:1] Guest", "code": "****"},
+        },
+    }
+    get_handler = AsyncMock(return_value=get_response)
+    add_handler = AsyncMock(return_value=None)
+    delete_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
+
+    deleted_names: set[str] = set()
+    delete_handler.side_effect = lambda call: deleted_names.add(call.data["name"])
+
+    result = await schlage_lock.async_set_credential(
+        1,
+        _pin_cred(1, "9999"),
+        "9999",
+        name=None,
+        source="direct",
+    )
+
+    assert result is True
+    add_call = add_handler.call_args[0][0]
+    # The new value is written under the canonical tag, NOT the legacy tag.
+    assert add_call.data["name"] == "lcm:1:Guest"
+    # The legacy-tagged code is cleaned up. (Both names show up if the
+    # provider deletes the pre-existing legacy entry and the new entry
+    # in a single transaction; the important assertion is that the
+    # legacy name is gone after the write completes.)
+    assert "[LCM:1] Guest" in deleted_names
 
 
 async def test_set_credential_already_exists_treated_as_success(
@@ -610,7 +657,7 @@ async def test_set_credential_already_exists_treated_as_success(
     get_handler = AsyncMock(return_value=get_response)
     add_handler = AsyncMock(
         side_effect=HomeAssistantError(
-            'A PIN code with the name "[LCM:1] Guest" already exists on the lock'
+            'A PIN code with the name "lcm:1:Guest" already exists on the lock'
         )
     )
     delete_handler = AsyncMock(return_value=None)
@@ -695,7 +742,7 @@ async def test_delete_credential_service_failure(
     """Test that async_delete_credential raises LockOperationFailed on service failure."""
     get_response = {
         LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:1] Guest", "code": "****"},
+            "code1": {"name": "lcm:1:Guest", "code": "****"},
         },
     }
     get_handler = AsyncMock(return_value=get_response)
@@ -720,7 +767,7 @@ async def test_hard_refresh_codes(
     """Test hard_refresh_codes calls tagging then returns usercodes via base projection."""
     mock_response = {
         LOCK_ENTITY_ID: {
-            "code1": {"name": "[LCM:2] Family", "code": "****"},
+            "code1": {"name": "lcm:2:Family", "code": "****"},
         },
     }
     handler = AsyncMock(return_value=mock_response)
@@ -810,7 +857,7 @@ async def test_base_orchestration_set_and_get(
     )
 
     # After setting, the lock reports the slot as unreadable (write-only Personal Identification Number)
-    mock_after = {LOCK_ENTITY_ID: {"c1": {"name": "[LCM:1] test", "code": "****"}}}
+    mock_after = {LOCK_ENTITY_ID: {"c1": {"name": "lcm:1:test", "code": "****"}}}
     register_mock_service(
         hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=mock_after)
     )
@@ -826,7 +873,7 @@ async def test_base_orchestration_clear(
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """async_delete_credential + async_get_usercodes (base projection) shows empty after clear."""
-    get_response = {LOCK_ENTITY_ID: {"c1": {"name": "[LCM:1] Guest", "code": "****"}}}
+    get_response = {LOCK_ENTITY_ID: {"c1": {"name": "lcm:1:Guest", "code": "****"}}}
     register_mock_service(
         hass, SCHLAGE_DOMAIN, "get_codes", AsyncMock(return_value=get_response)
     )

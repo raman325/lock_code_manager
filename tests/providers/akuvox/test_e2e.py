@@ -83,7 +83,7 @@ class TestSetAndClearCredentials:
         akuvox_mock_services["list_users"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "users": [make_user("100", "[LCM:1] Existing", "1234")],
+                    "users": [make_user("100", "lcm:1:Existing", "1234")],
                 },
             }
         )
@@ -117,7 +117,7 @@ class TestSetAndClearCredentials:
         akuvox_mock_services["list_users"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "users": [make_user("100", "[LCM:1] Guest", "1234")],
+                    "users": [make_user("100", "lcm:1:Guest", "1234")],
                 },
             }
         )
@@ -159,7 +159,7 @@ class TestSetAndClearCredentials:
         akuvox_mock_services["list_users"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "users": [make_user("100", "[LCM:1] Guest", "1234")],
+                    "users": [make_user("100", "lcm:1:Guest", "1234")],
                 },
             }
         )
@@ -196,7 +196,7 @@ class TestGetUsers:
         akuvox_mock_services["list_users"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "users": [make_user("100", "[LCM:1] Guest", "4321")],
+                    "users": [make_user("100", "lcm:1:Guest", "4321")],
                 },
             }
         )
@@ -223,7 +223,7 @@ class TestGetUsers:
         akuvox_mock_services["list_users"] = AsyncMock(
             return_value={
                 entity_id: {
-                    "users": [make_user("100", "[LCM:1] Guest", "4321")],
+                    "users": [make_user("100", "lcm:1:Guest", "4321")],
                 },
             }
         )
