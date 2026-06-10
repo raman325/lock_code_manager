@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ee3af889048b",
+  "strategy": "manual-commit",
+  "branch": "fix/slot-only-providers-pin-guard-and-log-terms",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ee/3af889048b/0/metadata.json",
+      "transcript": "/ee/3af889048b/0/full.jsonl",
+      "content_hash": "/ee/3af889048b/0/content_hash.txt",
+      "prompt": "/ee/3af889048b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1898,
+    "cache_creation_tokens": 3693811,
+    "cache_read_tokens": 420550224,
+    "output_tokens": 659892,
+    "api_call_count": 926
+  }
+}
