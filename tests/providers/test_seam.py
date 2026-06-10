@@ -598,6 +598,54 @@ async def test_clear_usercode_native_deletes_user_on_last_credential(
     assert 3 not in lock._users
 
 
+async def test_clear_usercode_implicit_user_skips_delete_user(
+    hass: HomeAssistant,
+) -> None:
+    """
+    Implicit-user lock (e.g. Z-Wave User Code CC) skips the cleanup
+    ``async_delete_user`` call after a credential delete.
+
+    The credential delete already removed the user implicitly, so the
+    base lifecycle has nothing to clean up. Without this gate the base
+    would log a spurious warning on every clear because the driver
+    reports the user as already gone. Mirrors ``_set_credential``'s
+    ``_supports_user_records()`` gate on the set side.
+    """
+
+    class _ImplicitUserStubLock(_NativeStubLock):
+        async def async_get_capabilities(self) -> LockCapabilities:
+            # supports_user_management True (hardcoded by the driver for
+            # all Z-Wave locks), max_user_name_length 0 (UC has no
+            # names) -- the implicit-user signal.
+            return LockCapabilities(
+                supports_user_management=True,
+                max_users=30,
+                credential_types={
+                    CredentialType.PIN: CredentialTypeCapability(
+                        num_slots=30,
+                        min_length=4,
+                        max_length=8,
+                        supports_learn=False,
+                    ),
+                },
+                max_user_name_length=0,
+            )
+
+    lock = _make_lock(hass, _ImplicitUserStubLock, "seam_clear_implicit_user")
+    # Directly seed an implicit user; on a real User Code CC lock the
+    # driver creates this record inside the credential-write call.
+    lock._users[3] = User(
+        user_id=3,
+        credentials=[credential_from_slot(3, SlotCredential.known("9999"))],
+    )
+
+    changed = await lock.async_clear_usercode(3)
+
+    assert changed is True
+    # delete_credential ran; delete_user did NOT.
+    assert lock.calls == [("delete_credential", 3, 3)]
+
+
 async def test_clear_usercode_degenerate_no_user_op(hass: HomeAssistant) -> None:
     """Slot-only clear deletes the credential and performs no user operation."""
     lock = _make_lock(hass, _DegenerateStubLock, "seam_clear_degen")

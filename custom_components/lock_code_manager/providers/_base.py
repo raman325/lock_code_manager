@@ -1160,12 +1160,15 @@ class BaseLock:
         Run the delete-on-last user lifecycle around a credential delete.
 
         Native-user only. Asserts the lock advertises ``ref.type``, then
-        deletes the credential. Deletes ``owner`` when that was its last
-        credential (the invariant: a user exists if and only if it owns
-        at least one credential). The count is read from ``owner``, a
-        pre-deletion snapshot, so the decision does not depend on whether
-        the provider mutates the user during the delete. Returns True if
-        changed.
+        deletes the credential. On locks with separate user records
+        (mirroring ``_set_credential``'s gate), deletes ``owner`` when
+        that was its last credential -- the invariant being that a user
+        exists if and only if it owns at least one credential. On
+        implicit-user locks (e.g. Z-Wave User Code CC) the credential
+        delete already removed the user, so the cleanup call is skipped.
+        The count is read from ``owner``, a pre-deletion snapshot, so
+        the decision does not depend on whether the provider mutates the
+        user during the delete. Returns True if changed.
 
         The credential delete is the operation that clears the slot, so a
         failure of the follow-up user delete is logged rather than raised: the
@@ -1175,7 +1178,7 @@ class BaseLock:
         await self._assert_credential_ref_supported(ref)
         was_only_credential = len(owner.credentials) <= 1
         changed = await self.async_delete_credential(ref)
-        if changed and was_only_credential:
+        if changed and was_only_credential and await self._supports_user_records():
             try:
                 await self.async_delete_user(owner.user_id)
             except Exception as err:
