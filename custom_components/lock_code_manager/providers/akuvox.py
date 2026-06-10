@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from homeassistant.config_entries import ConfigEntry
 
+from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
 from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -284,25 +285,24 @@ class AkuvoxLock(BaseLock):
                 "will be retried on reconnect"
             ) from first_disconnect
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_users(self) -> list[User]:
         """
-        Get dictionary of code slots and usercodes.
+        Return users by reading tagged local users from the Akuvox device.
 
-        Users already bearing a ``[LCM:<slot>]`` tag in their name are
-        mapped to the embedded slot number. Only reads and classifies;
-        auto-tagging of unmanaged users is handled separately by
-        ``_async_tag_unmanaged_users()``.
-
-        Only codes whose slot numbers fall within the managed set are returned.
+        Users bearing a ``[LCM:<slot>]`` tag in their name are mapped to the
+        embedded slot number. Only reads and classifies; auto-tagging of
+        unmanaged users is handled separately by ``_async_tag_unmanaged_users()``.
+        Only users whose slot numbers fall within the managed set are returned.
+        Personal Identification Numbers are readable on Akuvox, so occupied
+        slots report the actual value.
         """
         managed_slots = self.managed_slots
         if not managed_slots:
-            return {}
+            return []
 
         users = await self._async_list_users()
 
-        # Start with all managed slots empty
-        result: dict[int, SlotCredential] = dict.fromkeys(
+        slot_states: dict[int, SlotCredential] = dict.fromkeys(
             managed_slots, SlotCredential.empty()
         )
 
@@ -314,7 +314,7 @@ class AkuvoxLock(BaseLock):
             slot_num, _ = _parse_tag(name)
 
             if slot_num is not None and slot_num in managed_slots:
-                result[slot_num] = (
+                slot_states[slot_num] = (
                     SlotCredential.known(pin) if pin else SlotCredential.empty()
                 )
 
@@ -322,30 +322,34 @@ class AkuvoxLock(BaseLock):
             "Lock %s: %s managed slots, %s occupied",
             self.lock.entity_id,
             len(managed_slots),
-            sum(1 for v in result.values() if v.is_present),
+            sum(1 for v in slot_states.values() if v.is_present),
         )
-        return result
+        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
-    async def async_set_usercode(
+    async def async_set_credential(
         self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
     ) -> bool:
         """
-        Set user code on a virtual slot.
+        Set a Personal Identification Number credential on a slot.
 
-        If a user already exists for the given slot, the PIN (and
-        optionally the name) is updated via ``modify_user``. Otherwise
-        a new user is created via ``add_user``.
+        If a user already exists for the given slot, the Personal
+        Identification Number (and optionally the name) is updated via
+        ``modify_user``. Otherwise a new user is created via ``add_user``.
 
         Returns True unconditionally because the Akuvox API does not
         indicate whether the value actually changed. The list/modify
         (or list/add) sequence runs under the sequence lock so concurrent
         callers cannot interleave their own multi-step writes against the
-        same slot.
+        same slot. Ignores ``user_id``; slot-only providers address the
+        credential by slot.
         """
+        code_slot = credential.slot
+        usercode = credential.readable_pin or ""
         async with self._serialize_sequence():
             users = await self._async_list_users()
 
@@ -372,20 +376,21 @@ class AkuvoxLock(BaseLock):
                 await self._async_add_user(tagged_name, usercode)
 
         LOGGER.debug(
-            "Lock %s: set usercode on slot %s",
+            "Lock %s: set Personal Identification Number credential on slot %s",
             self.lock.entity_id,
             code_slot,
         )
         return True
 
-    async def async_clear_usercode(self, code_slot: int) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
-        Clear user code from a virtual slot by deleting the user.
+        Delete the credential addressed by ``ref``; return whether it changed.
 
         Returns True if a user was deleted, False if the slot was already
         empty. The list/delete sequence runs under the sequence lock for
-        the same reason ``async_set_usercode`` does.
+        the same reason ``async_set_credential`` does.
         """
+        code_slot = ref.slot
         async with self._serialize_sequence():
             users = await self._async_list_users()
             target_device_id: str | None = None
@@ -402,7 +407,7 @@ class AkuvoxLock(BaseLock):
 
             await self._async_delete_user(target_device_id)
         LOGGER.debug(
-            "Lock %s: cleared usercode from slot %s",
+            "Lock %s: deleted Personal Identification Number credential on slot %s",
             self.lock.entity_id,
             code_slot,
         )

@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
+from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
@@ -64,44 +65,48 @@ class VirtualLock(BaseLock):
         self._data = data if (data := await self._store.async_load()) else {}
         return await self.async_get_usercodes()
 
-    async def async_set_usercode(
+    async def async_set_credential(
         self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
     ) -> bool:
         """
-        Set a usercode on a code slot.
+        Set a Personal Identification Number credential on a code slot.
 
         Returns True if the value was changed, False if already set to this value.
+        Ignores ``user_id``; slot-only providers address the credential by slot.
         """
-        slot_key = str(code_slot)
-        new_data = CodeSlotData(code=usercode, name=name)
+        slot_key = str(credential.slot)
+        new_data = CodeSlotData(code=credential.readable_pin or "", name=name)
         if slot_key in self._data and self._data[slot_key] == new_data:
             return False
         self._data[slot_key] = new_data
         return True
 
-    async def async_clear_usercode(self, code_slot: int) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
-        Clear a usercode on a code slot.
+        Delete the credential addressed by ``ref``; return whether it changed.
 
-        Returns True if the value was changed, False if already cleared.
+        Returns True if a code was removed, False if the slot was already empty.
         """
-        slot_key = str(code_slot)
+        slot_key = str(ref.slot)
         if slot_key not in self._data:
             return False
         self._data.pop(slot_key)
         return True
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
+    async def async_get_users(self) -> list[User]:
         """
-        Get dictionary of code slots and usercodes.
+        Return users by reading all stored and managed slots.
 
-        Returns all slots with data plus managed empty slots. Unmanaged
-        occupied slots are included so callers like the lock reset config
-        flow step can detect codes not managed by Lock Code Manager.
+        Returns occupied slots as known-Personal-Identification-Number users
+        and managed empty slots as empty users so the base projection can
+        surface them. Unmanaged occupied slots are also included so callers
+        like the lock-reset config flow step can detect codes not managed
+        by Lock Code Manager.
         """
         managed_slots = self.managed_slots
         stored_slots = set()
@@ -116,11 +121,13 @@ class VirtualLock(BaseLock):
                 continue
             stored_slots.add(slot_num)
         all_slots = managed_slots | stored_slots
-        data: dict[int, SlotCredential] = {}
+        slot_states: dict[int, SlotCredential] = {}
         for slot_num in all_slots:
             slot_key = str(slot_num)
             if slot_key in self._data:
-                data[slot_num] = SlotCredential.known(str(self._data[slot_key]["code"]))
+                slot_states[slot_num] = SlotCredential.known(
+                    str(self._data[slot_key]["code"])
+                )
             else:
-                data[slot_num] = SlotCredential.empty()
-        return data
+                slot_states[slot_num] = SlotCredential.empty()
+        return [user_from_slot(slot, state) for slot, state in slot_states.items()]

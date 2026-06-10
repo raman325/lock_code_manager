@@ -13,6 +13,12 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.lock_code_manager.domain.credentials import (
+    Credential,
+    CredentialRef,
+    CredentialType,
+    credential_from_slot,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
@@ -32,6 +38,17 @@ from tests.providers.helpers import (
 )
 
 from .conftest import LOCK_ENTITY_ID, make_user
+
+
+def _pin_cred(slot: int, pin: str) -> Credential:
+    """Build a known-Personal-Identification-Number credential for a slot."""
+    return credential_from_slot(slot, SlotCredential.known(pin))
+
+
+def _cred_ref(slot: int) -> CredentialRef:
+    """Build a CredentialRef for a slot."""
+    return CredentialRef(user_id=slot, type=CredentialType.PIN, slot=slot)
+
 
 # ---------------------------------------------------------------------------
 # Helper function tests
@@ -143,20 +160,46 @@ class TestConnection(ServiceProviderConnectionTests):
 
 
 # ---------------------------------------------------------------------------
-# Get usercodes
+# async_get_users
 # ---------------------------------------------------------------------------
 
 
-class TestGetUsercodes:
-    """Tests for async_get_usercodes."""
+class TestGetUsers:
+    """Tests for async_get_users."""
 
-    async def test_get_usercodes_no_users(
+    async def test_get_users_no_users(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test get_usercodes when no users exist on the lock."""
+        """Test async_get_users when no users exist on the lock returns empty users for managed slots."""
+        mock_response = {LOCK_ENTITY_ID: {"users": []}}
+        handler = AsyncMock(return_value=mock_response)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
+
+        users = await akuvox_lock.async_get_users()
+        user_map = {u.user_id: u for u in users}
+
+        assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+        assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
+
+    async def test_get_users_no_configured_slots(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+    ) -> None:
+        """Test async_get_users returns empty list when no slots are configured."""
+        users = await akuvox_lock.async_get_users()
+        assert users == []
+
+    async def test_get_usercodes_base_projection_no_users(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test async_get_usercodes base projection returns empty for managed slots with no users."""
         mock_response = {LOCK_ENTITY_ID: {"users": []}}
         handler = AsyncMock(return_value=mock_response)
         register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
@@ -171,17 +214,17 @@ class TestGetUsercodes:
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
     ) -> None:
-        """Test get_usercodes returns empty dict when no slots are configured."""
+        """Test async_get_usercodes returns empty dict when no slots are configured."""
         codes = await akuvox_lock.async_get_usercodes()
         assert codes == {}
 
-    async def test_get_usercodes_does_not_auto_tag(
+    async def test_get_users_does_not_auto_tag(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that async_get_usercodes does not auto-tag untagged users."""
+        """Test that async_get_users does not auto-tag untagged users."""
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -192,13 +235,14 @@ class TestGetUsercodes:
         list_handler = AsyncMock(return_value=mock_response)
         register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
 
-        codes = await akuvox_lock.async_get_usercodes()
+        users = await akuvox_lock.async_get_users()
+        user_map = {u.user_id: u for u in users}
 
         # Untagged user should NOT appear in results (no auto-tagging)
-        assert codes[1] is SlotCredential.empty()
-        assert codes[2] is SlotCredential.empty()
+        assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+        assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
 
-    async def test_get_usercodes_skips_cloud_users(
+    async def test_get_users_skips_cloud_users(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
@@ -215,18 +259,19 @@ class TestGetUsercodes:
         handler = AsyncMock(return_value=mock_response)
         register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
-        codes = await akuvox_lock.async_get_usercodes()
+        users = await akuvox_lock.async_get_users()
+        user_map = {u.user_id: u for u in users}
 
-        assert codes[1] is SlotCredential.empty()
-        assert codes[2] is SlotCredential.empty()
+        assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+        assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
 
-    async def test_get_usercodes_tagged_user_no_pin(
+    async def test_get_users_tagged_user_no_pin(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that a tagged user with no PIN is reported as EMPTY."""
+        """Test that a tagged user with no Personal Identification Number is reported as EMPTY."""
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -237,11 +282,12 @@ class TestGetUsercodes:
         handler = AsyncMock(return_value=mock_response)
         register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
-        codes = await akuvox_lock.async_get_usercodes()
+        users = await akuvox_lock.async_get_users()
+        user_map = {u.user_id: u for u in users}
 
-        assert codes[1] is SlotCredential.empty()
+        assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
 
-    async def test_get_usercodes_tagged_outside_managed_range(
+    async def test_get_users_tagged_outside_managed_range(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
@@ -258,25 +304,50 @@ class TestGetUsercodes:
         handler = AsyncMock(return_value=mock_response)
         register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
 
-        codes = await akuvox_lock.async_get_usercodes()
+        users = await akuvox_lock.async_get_users()
+        user_ids = {u.user_id for u in users}
 
-        assert 99 not in codes
-        assert codes[1] is SlotCredential.empty()
-        assert codes[2] is SlotCredential.empty()
+        assert 99 not in user_ids
+        user_map = {u.user_id: u for u in users}
+        assert user_map[1].pin_credentials[0].state is SlotCredential.empty()
+        assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
+
+    async def test_get_users_known_pin(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """Test that a tagged user with a readable Personal Identification Number surfaces correctly."""
+        mock_response = {
+            LOCK_ENTITY_ID: {
+                "users": [
+                    make_user("100", "[LCM:1] Guest", "4321"),
+                ],
+            },
+        }
+        handler = AsyncMock(return_value=mock_response)
+        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", handler)
+
+        users = await akuvox_lock.async_get_users()
+        user_map = {u.user_id: u for u in users}
+
+        assert user_map[1].pin_credentials[0].state == SlotCredential.known("4321")
+        assert user_map[2].pin_credentials[0].state is SlotCredential.empty()
 
 
 # ---------------------------------------------------------------------------
-# Set usercode
+# async_set_credential
 # ---------------------------------------------------------------------------
 
 
-class TestSetUsercode:
-    """Tests for async_set_usercode."""
+class TestSetCredential:
+    """Tests for async_set_credential."""
 
-    async def test_set_usercode_no_name_keeps_existing(
+    async def test_set_credential_no_name_keeps_existing(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
-        """Test setting a usercode without a name preserves the existing name."""
+        """Test setting a credential without a name preserves the existing name."""
         list_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -297,12 +368,14 @@ class TestSetUsercode:
             hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
         )
 
-        result = await akuvox_lock.async_set_usercode(1, "9999")
+        result = await akuvox_lock.async_set_credential(
+            1, _pin_cred(1, "9999"), name=None, source="direct"
+        )
 
         assert result is True
         assert modify_calls[0]["name"] == "[LCM:1] Guest"
 
-    async def test_set_usercode_service_failure(
+    async def test_set_credential_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
         """Test that service failures raise LockOperationFailed."""
@@ -318,30 +391,32 @@ class TestSetUsercode:
         )
 
         with pytest.raises(LockOperationFailed, match="device offline"):
-            await akuvox_lock.async_set_usercode(1, "1234")
+            await akuvox_lock.async_set_credential(
+                1, _pin_cred(1, "1234"), name=None, source="direct"
+            )
 
 
 # ---------------------------------------------------------------------------
-# Clear usercode
+# async_delete_credential
 # ---------------------------------------------------------------------------
 
 
-class TestClearUsercode:
-    """Tests for async_clear_usercode."""
+class TestDeleteCredential:
+    """Tests for async_delete_credential."""
 
-    async def test_clear_usercode_already_empty(
+    async def test_delete_credential_already_empty(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
-        """Test clearing returns False when the slot has no user."""
+        """Test deleting returns False when the slot has no user."""
         list_response = {LOCK_ENTITY_ID: {"users": []}}
         register_mock_service(
             hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=list_response)
         )
 
-        result = await akuvox_lock.async_clear_usercode(1)
+        result = await akuvox_lock.async_delete_credential(_cred_ref(1))
         assert result is False
 
-    async def test_clear_usercode_service_failure(
+    async def test_delete_credential_service_failure(
         self, hass: HomeAssistant, akuvox_lock: AkuvoxLock
     ) -> None:
         """Test that service failures raise LockOperationFailed."""
@@ -363,7 +438,7 @@ class TestClearUsercode:
         )
 
         with pytest.raises(LockOperationFailed, match="device offline"):
-            await akuvox_lock.async_clear_usercode(1)
+            await akuvox_lock.async_delete_credential(_cred_ref(1))
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +464,7 @@ class TestListUsersErrors:
         )
 
         with pytest.raises(LockOperationFailed, match="connection lost"):
-            await akuvox_lock.async_get_usercodes()
+            await akuvox_lock.async_get_users()
 
     async def test_list_users_invalid_response(
         self,
@@ -413,7 +488,7 @@ class TestListUsersErrors:
         with pytest.raises(
             LockOperationFailed, match="Service call local_akuvox.list_users failed"
         ):
-            await akuvox_lock.async_get_usercodes()
+            await akuvox_lock.async_get_users()
 
     async def test_list_users_malformed_entity_response(
         self,
@@ -433,7 +508,7 @@ class TestListUsersErrors:
         with pytest.raises(
             LockCodeManagerError, match="Malformed list_users entity response"
         ):
-            await akuvox_lock.async_get_usercodes()
+            await akuvox_lock.async_get_users()
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +525,7 @@ class TestAutoTagging:
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that untagged local users with PINs are auto-tagged."""
+        """Test that untagged local users with Personal Identification Numbers are auto-tagged."""
         mock_response = {
             LOCK_ENTITY_ID: {
                 "users": [
@@ -582,13 +657,13 @@ class TestAutoTagging:
         await akuvox_lock.async_setup(lcm_config_entry)
         assert akuvox_lock._tagged_once is True
 
-    async def test_concurrent_set_usercode_serialized_under_sequence_lock(
+    async def test_concurrent_set_credential_serialized_under_sequence_lock(
         self,
         hass: HomeAssistant,
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Concurrent set_usercode calls must not interleave their read-modify-write."""
+        """Concurrent async_set_credential calls must not interleave their read-modify-write."""
         in_section = [0]
         max_overlap = [0]
 
@@ -605,8 +680,12 @@ class TestAutoTagging:
         )
 
         await asyncio.gather(
-            akuvox_lock.async_set_usercode(1, "1111"),
-            akuvox_lock.async_set_usercode(2, "2222"),
+            akuvox_lock.async_set_credential(
+                1, _pin_cred(1, "1111"), name=None, source="direct"
+            ),
+            akuvox_lock.async_set_credential(
+                2, _pin_cred(2, "2222"), name=None, source="direct"
+            ),
         )
 
         assert max_overlap[0] == 1
@@ -626,7 +705,7 @@ class TestHardRefresh:
         akuvox_lock: AkuvoxLock,
         lcm_config_entry: MockConfigEntry,
     ) -> None:
-        """Test that hard refresh auto-tags first, then reads codes."""
+        """Test that hard refresh auto-tags first, then reads codes via base projection."""
         # First call returns untagged user, second call returns tagged user
         untagged_response = {
             LOCK_ENTITY_ID: {
@@ -645,4 +724,75 @@ class TestHardRefresh:
         codes = await akuvox_lock.async_hard_refresh_codes()
 
         assert codes[1] == SlotCredential.known("9999")
+        assert codes[2] is SlotCredential.empty()
+
+
+# ---------------------------------------------------------------------------
+# Base orchestration end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestBaseOrchestration:
+    """Test the base set/clear/get flow through the primitives."""
+
+    async def test_set_and_get(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """async_set_credential + async_get_usercodes base projection shows known Personal Identification Number."""
+        empty_response = {LOCK_ENTITY_ID: {"users": []}}
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=empty_response)
+        )
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "add_user", AsyncMock(return_value=None)
+        )
+
+        await akuvox_lock.async_set_credential(
+            1, _pin_cred(1, "7777"), name="base_test", source="direct"
+        )
+
+        # After setting, the mock now returns the tagged user with the PIN
+        after_response = {
+            LOCK_ENTITY_ID: {
+                "users": [make_user("100", "[LCM:1] base_test", "7777")],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=after_response)
+        )
+
+        codes = await akuvox_lock.async_get_usercodes()
+        assert codes[1] == SlotCredential.known("7777")
+        assert codes[2] is SlotCredential.empty()
+
+    async def test_clear(
+        self,
+        hass: HomeAssistant,
+        akuvox_lock: AkuvoxLock,
+        lcm_config_entry: MockConfigEntry,
+    ) -> None:
+        """async_delete_credential + async_get_usercodes base projection shows empty."""
+        with_user = {
+            LOCK_ENTITY_ID: {
+                "users": [make_user("100", "[LCM:1] Guest", "1234")],
+            },
+        }
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=with_user)
+        )
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "delete_user", AsyncMock(return_value=None)
+        )
+
+        await akuvox_lock.async_delete_credential(_cred_ref(1))
+
+        empty_response = {LOCK_ENTITY_ID: {"users": []}}
+        register_mock_service(
+            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=empty_response)
+        )
+        codes = await akuvox_lock.async_get_usercodes()
+        assert codes[1] is SlotCredential.empty()
         assert codes[2] is SlotCredential.empty()

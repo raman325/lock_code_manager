@@ -24,6 +24,7 @@ from homeassistant.components.zha.helpers import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
+from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
 from ..domain.exceptions import CodeRejectedError, LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -217,51 +218,18 @@ class ZHALock(BaseLock):
             return False
         return device_proxy.device.available
 
-    # -- Usercode operations -------------------------------------------------
+    # -- Credential primitives -----------------------------------------------
 
-    async def async_get_usercodes(self) -> dict[int, SlotCredential]:
-        """Read PIN codes from all managed slots."""
-        cluster = await self._get_connected_cluster()
-        managed = self.managed_slots
-        if not managed:
-            return {}
-
-        data: dict[int, SlotCredential] = {}
-        for slot_num in managed:
-            try:
-                result = await cluster.get_pin_code(slot_num)
-                _LOGGER.debug(
-                    "Lock %s slot %s get_pin_code: %s",
-                    self.lock.entity_id,
-                    slot_num,
-                    result,
-                )
-                user_status, pin_code = self._parse_pin_response(result)
-                if user_status == DoorLock.UserStatus.Enabled and pin_code:
-                    data[slot_num] = SlotCredential.known(pin_code)
-                else:
-                    data[slot_num] = SlotCredential.empty()
-            except LockDisconnected:
-                raise
-            except Exception:
-                _LOGGER.debug(
-                    "Lock %s: failed to read slot %s, marking unreadable",
-                    self.lock.entity_id,
-                    slot_num,
-                    exc_info=True,
-                )
-                data[slot_num] = SlotCredential.unreadable()
-        return data
-
-    async def async_set_usercode(
+    async def async_set_credential(
         self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
+        user_id: int,
+        credential: Credential,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
     ) -> bool:
         """
-        Set a PIN code on a slot.
+        Set a Personal Identification Number credential on a slot.
 
         Bypasses ``async_call_service`` because ZHA exposes its cluster
         operations as zigpy method calls rather than Home Assistant
@@ -270,7 +238,12 @@ class ZHALock(BaseLock):
         failure — these are routed to ``LockDisconnected`` so retries
         and reconnect handling apply, mirroring the OSError branch of
         the service-call wrapper.
+
+        ``user_id`` is ignored; slot-only providers address the credential
+        by ``credential.slot``.
         """
+        code_slot = credential.slot
+        usercode = credential.readable_pin or ""
         cluster = await self._get_connected_cluster()
         try:
             result = await cluster.set_pin_code(
@@ -296,13 +269,14 @@ class ZHALock(BaseLock):
         self._push_credential_update(code_slot, SlotCredential.known(usercode))
         return True
 
-    async def async_clear_usercode(self, code_slot: int) -> bool:
+    async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
-        Clear a PIN code from a slot.
+        Clear a Personal Identification Number from a slot.
 
-        See ``async_set_usercode`` for why bare zigpy failures route to
+        See ``async_set_credential`` for why bare zigpy failures route to
         ``LockDisconnected`` instead of ``LockOperationFailed``.
         """
+        code_slot = ref.slot
         cluster = await self._get_connected_cluster()
         try:
             result = await cluster.clear_pin_code(code_slot)
@@ -322,6 +296,47 @@ class ZHALock(BaseLock):
             )
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
+
+    async def async_get_users(self) -> list[User]:
+        """
+        Read Personal Identification Number codes from all managed slots.
+
+        Returns a user per slot via the one-slot-one-user projection.
+        Known codes surface as occupied users; failed reads produce
+        unreadable credentials so the coordinator does not treat a
+        transient cluster error as a confirmed-empty slot.
+        """
+        cluster = await self._get_connected_cluster()
+        managed = self.managed_slots
+        if not managed:
+            return []
+
+        slot_states: dict[int, SlotCredential] = {}
+        for slot_num in managed:
+            try:
+                result = await cluster.get_pin_code(slot_num)
+                _LOGGER.debug(
+                    "Lock %s slot %s get_pin_code: %s",
+                    self.lock.entity_id,
+                    slot_num,
+                    result,
+                )
+                user_status, pin_code = self._parse_pin_response(result)
+                if user_status == DoorLock.UserStatus.Enabled and pin_code:
+                    slot_states[slot_num] = SlotCredential.known(pin_code)
+                else:
+                    slot_states[slot_num] = SlotCredential.empty()
+            except LockDisconnected:
+                raise
+            except Exception:
+                _LOGGER.debug(
+                    "Lock %s: failed to read slot %s, marking unreadable",
+                    self.lock.entity_id,
+                    slot_num,
+                    exc_info=True,
+                )
+                slot_states[slot_num] = SlotCredential.unreadable()
+        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read all codes from the lock (no cache to invalidate)."""
