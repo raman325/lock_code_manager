@@ -492,21 +492,37 @@ async def test_build_tagged_user_name_returns_none_when_max_zero(
     assert await lock._build_tagged_user_name(5, "alice") is None
 
 
-async def test_build_tagged_user_name_truncates_prefix_when_limit_below_overhead(
+async def test_build_tagged_user_name_falls_back_to_slot_only_when_prefix_overflows(
     hass: HomeAssistant,
 ) -> None:
-    """If even the prefix doesn't fit, return the prefix truncated to the limit.
+    """Below the canonical-prefix length, write just the slot number.
 
-    Pathological case -- a lock advertising ``max_user_name_length`` below
-    the prefix length (``lcm:255:`` = 8 chars) means we cannot encode the
-    slot recoverably. The helper still returns something rather than
-    crashing the write; the write path eats a degraded name.
+    On a lock whose ``max_user_name_length`` can't fit even the canonical
+    ``lcm:<slot>:`` prefix, truncating the prefix loses the slot binding
+    irrecoverably. The helper falls back to writing the slot number as
+    the user name; :func:`._util.parse_tag` recognizes digit-only names
+    as a length-constrained encoding of the slot binding.
     """
     lock = _make_lock(hass, _NativeStubLock, "seam_tag_under")
     lock._capabilities_cache = _caps(
         supports_user_management=True, max_user_name_length=3
     )
-    assert await lock._build_tagged_user_name(255, "alice") == "lcm"
+    # "lcm:255:" is 8 chars; the 3-char limit can't fit it. Fall back to
+    # the slot-only encoding -- "255" fits and the slot survives the read.
+    assert await lock._build_tagged_user_name(255, "alice") == "255"
+
+
+async def test_build_tagged_user_name_keeps_canonical_prefix_when_it_just_fits(
+    hass: HomeAssistant,
+) -> None:
+    """At exactly the prefix's length, keep the canonical prefix (display=empty)."""
+    lock = _make_lock(hass, _NativeStubLock, "seam_tag_just_fits")
+    # ``lcm:1:`` is 6 chars. With max_user_name_length=6 the prefix fits
+    # with zero display budget -- no fallback needed.
+    lock._capabilities_cache = _caps(
+        supports_user_management=True, max_user_name_length=6
+    )
+    assert await lock._build_tagged_user_name(1, "alice") == "lcm:1:"
 
 
 async def test_build_tagged_user_name_returns_none_when_caps_fetch_fails(

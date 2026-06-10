@@ -1092,9 +1092,17 @@ class BaseLock:
         :func:`._util.make_tagged_name`) and truncates the display portion
         so the overall length fits ``max_user_name_length``. The tag prefix
         is sacred -- it's how :func:`._util.parse_tag` recovers the slot
-        binding on subsequent reads -- so truncation shortens only the
-        user-supplied display when the full prefix fits; if the lock's limit
-        is smaller than the prefix itself, the prefix is truncated to the limit.
+        binding on subsequent reads -- so when the full prefix fits,
+        truncation only ever shortens the user-supplied display.
+
+        When the lock's limit can't even fit the canonical prefix
+        (``len("lcm:{slot}:") > max_user_name_length``), the helper
+        falls back to writing just the slot number as the user name
+        (``str(slot)``). :func:`._util.parse_tag` recognizes
+        digit-only names as a length-constrained encoding of the slot
+        binding. Truncating the canonical prefix would lose the slot
+        recoverably, which is worse than the slot-only fallback's
+        ambiguity with external users whose names happen to be digits.
 
         Returns ``None`` when the lock has no concept of named users
         (``max_user_name_length == 0`` or ``supports_user_management`` is
@@ -1105,11 +1113,11 @@ class BaseLock:
         blocking the write -- the cache stays unset so the next call
         retries.
 
-        Worst-case prefix overhead is 8 characters (``lcm:255:``); on a
-        10-character-limit lock that leaves 2 characters of display, which
-        is degenerate but functional. Locks that advertise a length too
-        small to fit even the prefix (extremely uncommon) return the
-        prefix truncated to the advertised maximum.
+        Worst-case canonical prefix overhead is 8 characters
+        (``lcm:255:``); on a 10-character-limit lock that leaves 2
+        characters of display, which is degenerate but functional.
+        Locks advertising a length below that (rare) hit the slot-only
+        fallback.
         """
         try:
             caps = await self._get_cached_capabilities()
@@ -1118,6 +1126,13 @@ class BaseLock:
         if caps.max_user_name_length <= 0:
             return None
         tagged = make_tagged_name(slot, display)
+        if len(tagged) <= caps.max_user_name_length:
+            return tagged
+        if len(f"lcm:{slot}:") > caps.max_user_name_length:
+            # Canonical prefix doesn't fit. Fall back to the slot-only
+            # encoding so the slot binding survives the read.
+            return str(slot)[: caps.max_user_name_length]
+        # Canonical prefix fits; truncate only the display portion.
         return tagged[: caps.max_user_name_length]
 
     async def _assert_credential_type_supported(self, credential: Credential) -> None:
