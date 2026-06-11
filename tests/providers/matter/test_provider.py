@@ -2297,6 +2297,10 @@ class TestSetUser:
         and a transient 500 or a rejected name should not block the
         subsequent credential write.
         """
+        # AsyncMock(side_effect=Error) raises the same error on every call.
+        # The new fallback path attempts canonical then slot-only; both raise
+        # here, so the test exercises the "both fail -> tolerate" branch
+        # while keeping the historical HomeAssistantError contract.
         mock_set_user = AsyncMock(side_effect=HomeAssistantError("500"))
         user = User(user_id=2, name="lcm:2:Updated Name")
         with (
@@ -2320,7 +2324,7 @@ class TestSetUser:
             result = await matter_lock_simple.async_set_user(user)
 
         assert result == SetUserResult(user_id=7, created=False)
-        mock_set_user.assert_called_once()
+        assert mock_set_user.call_count == 2
         assert "failed to update user name" in caplog.text
 
     async def test_set_user_update_tolerates_matter_sdk_error(
@@ -2337,6 +2341,11 @@ class TestSetUser:
         and let MatterError bubble past, causing the seam's catchall to
         spuriously suspend the slot and create a repair issue.
         """
+        # Both canonical and slot-only attempts raise the same error here;
+        # the test exercises the "both attempts fail -> tolerate" branch
+        # for a MatterError specifically. A dedicated test
+        # (test_set_user_update_falls_back_to_slot_only_on_charset_rejection)
+        # covers the success-on-fallback case.
         mock_set_user = AsyncMock(
             side_effect=UnknownError("InteractionModelError: InvalidCommand (0x85)")
         )
@@ -2365,23 +2374,28 @@ class TestSetUser:
         # subsequent credential write to the right user; only the name
         # update was dropped.
         assert result == SetUserResult(user_id=7, created=False)
-        mock_set_user.assert_called_once()
+        assert mock_set_user.call_count == 2
         assert "failed to update user name" in caplog.text
         assert "InvalidCommand (0x85)" in caplog.text
 
-    async def test_set_user_create_raises_operation_failed_on_matter_sdk_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    async def test_set_user_create_falls_back_to_slot_only_on_charset_rejection(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
     ) -> None:
-        """CREATE maps ``MatterError`` to ``LockOperationFailed``.
+        """CREATE retries with the slot-only fallback when canonical is rejected.
 
-        Unlike UPDATE, a CREATE failure cannot be tolerated -- without an
-        allocated user_index the subsequent credential write has no
-        target. Routing to ``LockOperationFailed`` ensures the seam
-        retries through the normal backoff path rather than dropping
-        into the catchall suspend (which would create a spurious repair
-        issue without giving the lock a chance to recover).
+        Some Matter lock firmwares restrict ``userName`` to alphanumeric
+        and reject the colons in ``lcm:<slot>:``. The provider retries
+        once with the slot-only fallback (``str(slot)``); the tolerant
+        parser recognizes digit-only names as the slot binding, so the
+        slot identity survives subsequent reads.
         """
-        mock_set_user = AsyncMock(side_effect=UnknownError("transient failure"))
+        # First call fails with InvalidCommand; second succeeds.
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InteractionModelError: InvalidCommand (0x85)"),
+                {"user_index": 4},
+            ]
+        )
         user = User(user_id=1, name="lcm:1:Alice")
         with (
             patch.object(
@@ -2392,9 +2406,137 @@ class TestSetUser:
             ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-            pytest.raises(LockOperationFailed, match="transient failure"),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        assert result == SetUserResult(user_id=4, created=True)
+        assert mock_set_user.call_count == 2
+        first_call_kwargs = mock_set_user.call_args_list[0].kwargs
+        second_call_kwargs = mock_set_user.call_args_list[1].kwargs
+        assert first_call_kwargs["user_name"] == "lcm:1:Alice"
+        assert second_call_kwargs["user_name"] == "1"
+        assert "rejected canonical tag" in caplog.text
+        assert "InvalidCommand (0x85)" in caplog.text
+
+    async def test_set_user_create_raises_when_both_attempts_fail(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """CREATE surfaces ``LockOperationFailed`` only after BOTH names fail.
+
+        If the lock rejects the canonical AND the slot-only fallback,
+        the failure is more than just a charset issue. Surfacing as
+        ``LockOperationFailed`` lets the seam route through the normal
+        retry path rather than the catchall suspend (which would create
+        a spurious repair issue).
+        """
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InvalidCommand (0x85)"),
+                UnknownError("InvalidCommand again"),
+            ]
+        )
+        user = User(user_id=1, name="lcm:1:Alice")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+            pytest.raises(LockOperationFailed, match="both canonical and slot-only"),
         ):
             await matter_lock_simple.async_set_user(user)
+
+        assert mock_set_user.call_count == 2
+
+    async def test_set_user_update_falls_back_to_slot_only_on_charset_rejection(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+    ) -> None:
+        """UPDATE retries with the slot-only fallback so the slot tag survives.
+
+        UPDATE's contract is "tolerate name-set failures," but a
+        successful slot-only rename preserves the slot binding across
+        reads (the digit-only name parses to the same slot). Strictly
+        better than letting the name drift to whatever pre-LCM string
+        the lock had.
+        """
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InvalidCommand (0x85)"),
+                None,
+            ]
+        )
+        user = User(user_id=2, name="lcm:2:Updated Name")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users(
+                [
+                    {
+                        "user_index": 7,
+                        "user_name": "lcm:2:Original",
+                        "credentials": [{"type": "pin", "index": 3}],
+                    },
+                ]
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        assert result == SetUserResult(user_id=7, created=False)
+        assert mock_set_user.call_count == 2
+        assert mock_set_user.call_args_list[1].kwargs["user_name"] == "2"
+        assert "rejected canonical tag" in caplog.text
+        assert "renamed to slot-only" in caplog.text
+
+    async def test_set_user_update_tolerates_when_both_attempts_fail(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+    ) -> None:
+        """UPDATE still tolerates the failure when both attempts fail.
+
+        The user record at ``existing_user_index`` is still valid; only
+        the rename was lost. The subsequent credential write can still
+        proceed, so we return the resolved user_id and log a single
+        warning carrying both error messages for diagnosis.
+        """
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("canonical rejected"),
+                UnknownError("slot-only rejected too"),
+            ]
+        )
+        user = User(user_id=2, name="lcm:2:Bob")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users(
+                [
+                    {
+                        "user_index": 9,
+                        "user_name": "lcm:2:Original",
+                        "credentials": [{"type": "pin", "index": 1}],
+                    },
+                ]
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        assert result == SetUserResult(user_id=9, created=False)
+        assert mock_set_user.call_count == 2
+        assert "failed to update user name" in caplog.text
+        assert "canonical rejected" in caplog.text
+        assert "slot-only rejected too" in caplog.text
 
 
 # =============================================================================
