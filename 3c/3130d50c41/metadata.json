@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "3c3130d50c41",
+  "strategy": "manual-commit",
+  "branch": "refactor/zwave-js-push-handler-methods",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/3c/3130d50c41/0/metadata.json",
+      "transcript": "/3c/3130d50c41/0/full.jsonl",
+      "content_hash": "/3c/3130d50c41/0/content_hash.txt",
+      "prompt": "/3c/3130d50c41/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2906,
+    "cache_creation_tokens": 6008931,
+    "cache_read_tokens": 805944128,
+    "output_tokens": 1113748,
+    "api_call_count": 1645
+  }
+}
