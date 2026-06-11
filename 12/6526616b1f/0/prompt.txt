@@ -1192,3 +1192,11 @@ check what's going on in the logs on my prod instance. I got another repair issu
 ---
 
 merged and release, clean up branches and ff. We also need to introduce a dark variant of the brand images. The current red is too dark for a dark theme
+
+---
+
+HA was restarted ~90s ago. Re-check the matter logs to see if the 4.0.1 fix worked: spurious slot_suspended issues should stop, but watch for follow-on errors at set_lock_credential (line ~480 in matter.py). Pull the last 5 minutes of LCM-related entries from docker logs homeassistant and assess.
+
+---
+
+merged
