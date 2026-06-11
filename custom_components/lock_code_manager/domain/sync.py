@@ -686,8 +686,8 @@ class SlotSyncManager:
                 # observing that the slot LOOKS in-sync on startup (e.g.
                 # a disabled slot trivially matches "no PIN expected, no
                 # PIN on lock") does not constitute a fix. The next
-                # genuine OUT_OF_SYNC -> IN_SYNC transition through
-                # _perform_sync will clear the issues at line 700-706.
+                # genuine recovery (OUT_OF_SYNC -> IN_SYNC), including the
+                # post-_perform_sync verification path, will clear issues.
             else:
                 self._state = SyncState.OUT_OF_SYNC
 
