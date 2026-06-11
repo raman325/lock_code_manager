@@ -436,38 +436,39 @@ class ZWaveJSLock(BaseLock):
         if not ready:
             raise LockDisconnected(reason)
 
-        @callback
-        def on_credential_changed(event: dict[str, Any]) -> None:
-            """Handle credential added/modified events from the node."""
-            args = event["args"]  # CredentialChangedArgs (pre-parsed by the library)
-            if args.credential_type != UserCredentialType.PIN_CODE:
-                return
-            # The event carries the value when the lock includes it (e.g. an
-            # out-of-band keypad change), so push the readable state rather than
-            # always unreadable -- otherwise the slot would be stranded as
-            # unreadable until the next set/clear or hard refresh.
-            self._push_credential_update(
-                args.credential_slot, self._pin_state(args.data)
-            )
-
-        @callback
-        def on_credential_deleted(event: dict[str, Any]) -> None:
-            """Handle credential deleted events from the node."""
-            args = event["args"]  # CredentialDeletedArgs (pre-parsed by the library)
-            if args.credential_type != UserCredentialType.PIN_CODE:
-                return
-            self._push_credential_update(args.credential_slot, SlotCredential.empty())
-
         try:
             for name, handler in (
-                ("credential added", on_credential_changed),
-                ("credential modified", on_credential_changed),
-                ("credential deleted", on_credential_deleted),
+                ("credential added", self._on_credential_changed),
+                ("credential modified", self._on_credential_changed),
+                ("credential deleted", self._on_credential_deleted),
             ):
                 self._register_push_unsub(self.node.on(name, handler))
         except ValueError as err:
             self._clear_push_unsubs()
             raise LockDisconnected(f"node not ready: {err}") from err
+
+    @callback
+    def _on_credential_changed(self, event: dict[str, Any]) -> None:
+        """
+        Handle credential added/modified events from the node.
+
+        The event carries the value when the lock includes it (e.g. an
+        out-of-band keypad change), so push the readable state rather
+        than always unreadable -- otherwise the slot would be stranded
+        as unreadable until the next set/clear or hard refresh.
+        """
+        args = event["args"]  # CredentialChangedArgs (pre-parsed by the library)
+        if args.credential_type != UserCredentialType.PIN_CODE:
+            return
+        self._push_credential_update(args.credential_slot, self._pin_state(args.data))
+
+    @callback
+    def _on_credential_deleted(self, event: dict[str, Any]) -> None:
+        """Handle credential deleted events from the node."""
+        args = event["args"]  # CredentialDeletedArgs (pre-parsed by the library)
+        if args.credential_type != UserCredentialType.PIN_CODE:
+            return
+        self._push_credential_update(args.credential_slot, SlotCredential.empty())
 
     @callback
     def teardown_push_subscription(self) -> None:
