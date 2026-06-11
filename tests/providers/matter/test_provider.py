@@ -7,6 +7,7 @@ from datetime import timedelta
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from matter_server.common.errors import UnknownError
 from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -2321,6 +2322,79 @@ class TestSetUser:
         assert result == SetUserResult(user_id=7, created=False)
         mock_set_user.assert_called_once()
         assert "failed to update user name" in caplog.text
+
+    async def test_set_user_update_tolerates_matter_sdk_error(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+    ) -> None:
+        """UPDATE swallows ``matter_server.common.errors.MatterError``.
+
+        Production regression: ``set_lock_user`` on an existing user
+        sometimes throws ``UnknownError: InteractionModelError:
+        InvalidCommand (0x85)`` (a ``MatterError`` subclass that is NOT a
+        ``HomeAssistantError`` subclass). The historical contract is to
+        tolerate any name-set failure on UPDATE so the credential write
+        still proceeds; the old code only caught ``HomeAssistantError``
+        and let MatterError bubble past, causing the seam's catchall to
+        spuriously suspend the slot and create a repair issue.
+        """
+        mock_set_user = AsyncMock(
+            side_effect=UnknownError("InteractionModelError: InvalidCommand (0x85)")
+        )
+        user = User(user_id=2, name="lcm:2:Updated Name")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users(
+                [
+                    {
+                        "user_index": 7,
+                        "user_name": "lcm:2:Original",
+                        "credentials": [{"type": "pin", "index": 3}],
+                    },
+                ]
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        # The user_index is still returned so the seam can route the
+        # subsequent credential write to the right user; only the name
+        # update was dropped.
+        assert result == SetUserResult(user_id=7, created=False)
+        mock_set_user.assert_called_once()
+        assert "failed to update user name" in caplog.text
+        assert "InvalidCommand (0x85)" in caplog.text
+
+    async def test_set_user_create_raises_operation_failed_on_matter_sdk_error(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """CREATE maps ``MatterError`` to ``LockOperationFailed``.
+
+        Unlike UPDATE, a CREATE failure cannot be tolerated -- without an
+        allocated user_index the subsequent credential write has no
+        target. Routing to ``LockOperationFailed`` ensures the seam
+        retries through the normal backoff path rather than dropping
+        into the catchall suspend (which would create a spurious repair
+        issue without giving the lock a chance to recover).
+        """
+        mock_set_user = AsyncMock(side_effect=UnknownError("transient failure"))
+        user = User(user_id=1, name="lcm:1:Alice")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+            pytest.raises(LockOperationFailed, match="transient failure"),
+        ):
+            await matter_lock_simple.async_set_user(user)
 
 
 # =============================================================================

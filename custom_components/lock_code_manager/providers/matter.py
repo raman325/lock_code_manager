@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
 
+from matter_server.common.errors import MatterError
 from matter_server.common.models import EventType
 
 from homeassistant.components.matter.helpers import (
@@ -376,7 +377,17 @@ class MatterLock(BaseLock):
                     user_index=existing_user_index,
                     user_name=user.name,
                 )
-            except HomeAssistantError as err:
+            except (HomeAssistantError, MatterError) as err:
+                # Matter SDK raises ``matter_server.common.errors.MatterError``
+                # subclasses (e.g. ``UnknownError`` carrying
+                # ``InteractionModelError: InvalidCommand (0x85)``); those are
+                # NOT ``HomeAssistantError`` subclasses, so they slipped past
+                # the original catch. Some Matter lock firmwares reject
+                # rename-on-existing-user with InvalidCommand even though the
+                # user record itself is valid -- the user still exists at the
+                # known index, the only thing lost is the name update. The
+                # subsequent credential write proceeds against the resolved
+                # user_id.
                 LOGGER.warning(
                     "Lock %s: failed to update user name on slot %s "
                     "(user_index=%s); continuing without name update: %s",
@@ -402,6 +413,15 @@ class MatterLock(BaseLock):
             ) from err
         except HomeAssistantError as err:
             raise LockDisconnected(
+                f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
+            ) from err
+        except MatterError as err:
+            # Matter SDK error on CREATE -- unlike UPDATE we can't tolerate
+            # this because without an allocated user_index the credential
+            # write has no target. Surface as LockOperationFailed so the
+            # seam routes it through retry rather than the catchall
+            # _suspend_slot path (which would create a spurious repair).
+            raise LockOperationFailed(
                 f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
         return SetUserResult(user_id=result["user_index"], created=True)
