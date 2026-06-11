@@ -381,21 +381,46 @@ class MatterLock(BaseLock):
                 # Matter SDK raises ``matter_server.common.errors.MatterError``
                 # subclasses (e.g. ``UnknownError`` carrying
                 # ``InteractionModelError: InvalidCommand (0x85)``); those are
-                # NOT ``HomeAssistantError`` subclasses, so they slipped past
-                # the original catch. Some Matter lock firmwares reject
-                # rename-on-existing-user with InvalidCommand even though the
-                # user record itself is valid -- the user still exists at the
-                # known index, the only thing lost is the name update. The
-                # subsequent credential write proceeds against the resolved
-                # user_id.
-                LOGGER.warning(
-                    "Lock %s: failed to update user name on slot %s "
-                    "(user_index=%s); continuing without name update: %s",
-                    self.lock.entity_id,
-                    slot,
-                    existing_user_index,
-                    err,
-                )
+                # NOT ``HomeAssistantError`` subclasses. Some Matter lock
+                # firmwares reject rename-on-existing-user when the new
+                # name contains non-alphanumeric characters (the colons in
+                # the canonical ``lcm:<slot>:`` prefix). Retry with the
+                # slot-only fallback (``str(slot)``), which the tolerant
+                # parser still recognizes as the slot binding. If the
+                # second attempt also fails, fall through to the
+                # historical "tolerate name-set failures" contract -- the
+                # user record itself remains valid at ``existing_user_index``
+                # so the credential write can still proceed.
+                slot_only_name = str(slot)
+                try:
+                    await set_lock_user(
+                        client,
+                        node,
+                        user_index=existing_user_index,
+                        user_name=slot_only_name,
+                    )
+                except (HomeAssistantError, MatterError) as fallback_err:
+                    LOGGER.warning(
+                        "Lock %s: failed to update user name on slot %s "
+                        "(user_index=%s); continuing without name update. "
+                        "Canonical attempt: %s. Slot-only fallback: %s",
+                        self.lock.entity_id,
+                        slot,
+                        existing_user_index,
+                        err,
+                        fallback_err,
+                    )
+                else:
+                    LOGGER.info(
+                        "Lock %s: lock rejected canonical tag %r for slot %s "
+                        "(%s); renamed to slot-only %r so the slot binding "
+                        "survives the read",
+                        self.lock.entity_id,
+                        user.name,
+                        slot,
+                        err,
+                        slot_only_name,
+                    )
             return SetUserResult(user_id=existing_user_index, created=False)
 
         # CREATE: no LCM-tagged user exists for this slot yet — let Matter
@@ -416,14 +441,41 @@ class MatterLock(BaseLock):
                 f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
         except MatterError as err:
-            # Matter SDK error on CREATE -- unlike UPDATE we can't tolerate
-            # this because without an allocated user_index the credential
-            # write has no target. Surface as LockOperationFailed so the
-            # seam routes it through retry rather than the catchall
-            # _suspend_slot path (which would create a spurious repair).
-            raise LockOperationFailed(
-                f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
-            ) from err
+            # Matter SDK error on CREATE with the canonical tagged name.
+            # Some lock firmwares restrict ``userName`` to alphanumeric
+            # characters and reject the colons in ``lcm:<slot>:``. Retry
+            # once with the slot-only fallback (``str(slot)``) -- the
+            # tolerant parser recognizes digit-only names as the slot
+            # binding, so the find-or-create-by-tag lookup still works on
+            # subsequent operations.
+            slot_only_name = str(slot)
+            try:
+                result = await set_lock_user(
+                    client,
+                    node,
+                    user_index=None,
+                    user_name=slot_only_name,
+                )
+            except MatterError as fallback_err:
+                # Second attempt also failed -- the lock is rejecting more
+                # than just the charset. Surface as LockOperationFailed so
+                # the seam routes through retry rather than the catchall
+                # suspend path (which would create a spurious repair issue).
+                raise LockOperationFailed(
+                    f"Matter set_lock_user failed for {self.lock.entity_id} "
+                    f"on both canonical and slot-only fallback names: "
+                    f"canonical={err}, slot-only={fallback_err}"
+                ) from fallback_err
+            LOGGER.info(
+                "Lock %s: lock rejected canonical tag %r for slot %s (%s); "
+                "created with slot-only %r so the slot binding survives the "
+                "read",
+                self.lock.entity_id,
+                user.name,
+                slot,
+                err,
+                slot_only_name,
+            )
         return SetUserResult(user_id=result["user_index"], created=True)
 
     def _slot_from_seam_user(self, user: User) -> int:
