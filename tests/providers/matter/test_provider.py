@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import timedelta
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2397,6 +2398,11 @@ class TestSetUser:
             ]
         )
         user = User(user_id=1, name="lcm:1:Alice")
+        # The success-on-fallback diagnostic log is at DEBUG (intentionally
+        # quiet for locks that always need the fallback). Enable DEBUG
+        # capture for this provider so the test asserts on the message
+        # without depending on global pytest logging configuration.
+        caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
         with (
             patch.object(
                 matter_lock_simple, "_get_matter_client", return_value=MagicMock()
@@ -2451,6 +2457,67 @@ class TestSetUser:
 
         assert mock_set_user.call_count == 2
 
+    async def test_set_user_create_routes_validation_error_during_fallback(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A ``ServiceValidationError`` during the slot-only fallback gets typed routing.
+
+        Mirrors the primary CREATE attempt's exception handling: the
+        slot-only retry must map ``ServiceValidationError`` to
+        ``LockOperationFailed`` and ``HomeAssistantError`` to
+        ``LockDisconnected`` so a transient validation or disconnect
+        during the fallback doesn't slip past as an untyped exception
+        (which would route to the seam's catchall suspend path and
+        create a spurious repair issue).
+        """
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InvalidCommand (0x85)"),
+                ServiceValidationError("validation"),
+            ]
+        )
+        user = User(user_id=1, name="lcm:1:Alice")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+            pytest.raises(LockOperationFailed, match="rejected slot-only fallback"),
+        ):
+            await matter_lock_simple.async_set_user(user)
+
+        assert mock_set_user.call_count == 2
+
+    async def test_set_user_create_routes_disconnect_during_fallback(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A ``HomeAssistantError`` during the slot-only fallback maps to ``LockDisconnected``."""
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InvalidCommand (0x85)"),
+                HomeAssistantError("transport closed"),
+            ]
+        )
+        user = User(user_id=1, name="lcm:1:Alice")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+            pytest.raises(LockDisconnected, match="slot-only fallback"),
+        ):
+            await matter_lock_simple.async_set_user(user)
+
+        assert mock_set_user.call_count == 2
+
     async def test_set_user_update_falls_back_to_slot_only_on_charset_rejection(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
     ) -> None:
@@ -2469,6 +2536,9 @@ class TestSetUser:
             ]
         )
         user = User(user_id=2, name="lcm:2:Updated Name")
+        # Same as the CREATE variant: the success-on-fallback log is at
+        # DEBUG, so enable DEBUG capture explicitly.
+        caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
         with (
             patch.object(
                 matter_lock_simple, "_get_matter_client", return_value=MagicMock()

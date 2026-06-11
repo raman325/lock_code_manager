@@ -411,7 +411,14 @@ class MatterLock(BaseLock):
                         fallback_err,
                     )
                 else:
-                    LOGGER.info(
+                    # DEBUG (not INFO): for a lock that consistently rejects
+                    # the canonical tag, this fires on every set_user run
+                    # (every credential write -- see _base._set_credential).
+                    # We don't want to spam the user's log; the warning
+                    # path on full failure is what they actually need to
+                    # see. DEBUG keeps the diagnostic available without
+                    # the noise.
+                    LOGGER.debug(
                         "Lock %s: lock rejected canonical tag %r for slot %s "
                         "(%s); renamed to slot-only %r so the slot binding "
                         "survives the read",
@@ -456,17 +463,36 @@ class MatterLock(BaseLock):
                     user_index=None,
                     user_name=slot_only_name,
                 )
+            except ServiceValidationError as fallback_err:
+                # Same routing as the primary CREATE attempt -- input
+                # validation failures get LockOperationFailed regardless of
+                # which name attempt triggered them.
+                raise LockOperationFailed(
+                    f"Matter set_lock_user rejected slot-only fallback for "
+                    f"{self.lock.entity_id}: {fallback_err}"
+                ) from fallback_err
+            except HomeAssistantError as fallback_err:
+                # Transport / disconnect during the fallback retry -- same
+                # routing as the primary attempt.
+                raise LockDisconnected(
+                    f"Matter set_lock_user failed on slot-only fallback for "
+                    f"{self.lock.entity_id}: {fallback_err}"
+                ) from fallback_err
             except MatterError as fallback_err:
-                # Second attempt also failed -- the lock is rejecting more
-                # than just the charset. Surface as LockOperationFailed so
-                # the seam routes through retry rather than the catchall
-                # suspend path (which would create a spurious repair issue).
+                # Both attempts hit lock-side rejections (the original
+                # MatterError and a second MatterError on the slot-only
+                # retry). The lock is rejecting more than just the
+                # charset; surface as LockOperationFailed so the seam
+                # routes through retry rather than the catchall suspend.
                 raise LockOperationFailed(
                     f"Matter set_lock_user failed for {self.lock.entity_id} "
                     f"on both canonical and slot-only fallback names: "
                     f"canonical={err}, slot-only={fallback_err}"
                 ) from fallback_err
-            LOGGER.info(
+            # See the UPDATE-path comment above: DEBUG (not INFO) so a
+            # lock that consistently needs the fallback doesn't flood
+            # the log on every credential write.
+            LOGGER.debug(
                 "Lock %s: lock rejected canonical tag %r for slot %s (%s); "
                 "created with slot-only %r so the slot binding survives the "
                 "read",
