@@ -29,7 +29,10 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 
-from custom_components.lock_code_manager import _setup_entry_after_start
+from custom_components.lock_code_manager import (
+    _setup_entry_after_start,
+    async_remove_entry,
+)
 from custom_components.lock_code_manager.const import (
     ATTR_ACTIVE,
     ATTR_IN_SYNC,
@@ -942,16 +945,24 @@ async def test_async_create_fix_flow_unknown():
         await async_create_fix_flow(None, "unknown_issue", None)
 
 
-async def test_unload_cleans_up_repair_issues(
+async def test_unload_preserves_persistent_repair_issues(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Test that unloading an entry deletes slot_disabled and pin_required repair issues."""
+    """Unloading an entry must NOT delete persistent repair issues.
+
+    Persistent issues (``is_persistent=True``) are flagged that way
+    precisely so they survive HA restarts, reloads, and integration
+    disable. ``async_unload_entry`` runs in all three of those cases
+    plus the actual entry-removal case; wiping issues there caused
+    the "click a repair and it says repaired" short-circuit after
+    every HA restart. Cleanup now lives in ``async_remove_entry``
+    which runs only on entry deletion -- see the next test.
+    """
     entry_id = lock_code_manager_config_entry.entry_id
     issue_reg = ir.async_get(hass)
 
-    # Create repair issues that should be cleaned up on unload
     for slot_num in (1, 2):
         ir.async_create_issue(
             hass,
@@ -977,7 +988,6 @@ async def test_unload_cleans_up_repair_issues(
             },
         )
 
-    # Create lock_offline issues for both locks
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         ir.async_create_issue(
             hass,
@@ -990,7 +1000,6 @@ async def test_unload_cleans_up_repair_issues(
             translation_placeholders={"lock_entity_id": lock_id},
         )
 
-    # Verify issues exist
     assert issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1") is not None
     assert issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_2") is not None
     assert (
@@ -1001,7 +1010,74 @@ async def test_unload_cleans_up_repair_issues(
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # All issues for this entry should be deleted
+    # Every issue still in the registry; unload preserves them.
+    for slot_num in (1, 2):
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
+            is not None
+        )
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+            is not None
+        )
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is not None
+
+
+async def test_remove_entry_cleans_up_repair_issues(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Removing the entry deletes its repair issues (canonical cleanup path)."""
+    entry_id = lock_code_manager_config_entry.entry_id
+    issue_reg = ir.async_get(hass)
+
+    for slot_num in (1, 2):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"slot_disabled_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="slot_disabled",
+            translation_placeholders={"slot_num": str(slot_num), "reason": "test"},
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"pin_required_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="pin_required",
+            translation_placeholders={
+                "slot_num": str(slot_num),
+                "config_entry_title": "test",
+            },
+        )
+
+    for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"lock_offline_{lock_id}",
+            is_fixable=False,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="lock_offline",
+            translation_placeholders={"lock_entity_id": lock_id},
+        )
+
+    # Call the remove hook directly so the fixture teardown (which
+    # async_unloads the entry) still sees a registered entry. HA calls
+    # this hook only on actual entry deletion -- not on unload, reload,
+    # disable, or HA restart -- which is precisely the property we want
+    # to pin.
+    await async_remove_entry(hass, lock_code_manager_config_entry)
+    await hass.async_block_till_done()
+
     for slot_num in (1, 2):
         assert (
             issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")

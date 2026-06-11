@@ -395,6 +395,69 @@ class TestSlotDisabledIssueCleanup:
         # The issue should be deleted since slot is back in sync
         assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
 
+    async def test_loading_branch_does_not_auto_clear_stale_issues(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Repair issues persist across LOADING -> IN_SYNC observation.
+
+        Pins the short-circuit fix: when LCM (re)starts and the sync
+        manager's first tick observes the slot to be in sync, it
+        transitions LOADING -> IN_SYNC. That transition is NOT a
+        recovery event -- the slot may be "in sync" only because it
+        was previously disabled (switch OFF, no PIN expected, no PIN
+        on lock = trivially in_sync). Pre-existing repair issues
+        (slot_disabled, slot_suspended) reflect state the user has
+        not acknowledged and must survive this observation. Only an
+        actual OUT_OF_SYNC -> IN_SYNC transition through _perform_sync
+        clears them.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        entry_id = lock_code_manager_config_entry.entry_id
+        slot_num = manager._slot_num
+        lock_entity_id = manager._lock.lock.entity_id
+
+        slot_disabled_id = f"slot_disabled_{entry_id}_{slot_num}"
+        slot_suspended_id = f"slot_suspended_{entry_id}_{lock_entity_id}_{slot_num}"
+        for issue_id, translation_key in (
+            (slot_disabled_id, "slot_disabled"),
+            (slot_suspended_id, "slot_suspended"),
+        ):
+            async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=True,
+                is_persistent=True,
+                severity=IssueSeverity.WARNING,
+                translation_key=translation_key,
+                translation_placeholders={
+                    "slot_num": str(slot_num),
+                    "reason": "test",
+                    "lock_name": lock_entity_id,
+                    "lock_entity_id": lock_entity_id,
+                },
+            )
+
+        issue_registry = async_get_issue_registry(hass)
+        assert issue_registry.async_get_issue(DOMAIN, slot_disabled_id) is not None
+        assert issue_registry.async_get_issue(DOMAIN, slot_suspended_id) is not None
+
+        # Simulate the startup path: the manager is in LOADING.
+        manager._state = SyncState.LOADING
+
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY)
+
+        # LOADING -> IN_SYNC transition should NOT touch the issues.
+        # The user must either acknowledge them via the UI or trigger
+        # a real recovery sync to clear them.
+        assert manager._state is SyncState.IN_SYNC
+        assert issue_registry.async_get_issue(DOMAIN, slot_disabled_id) is not None
+        assert issue_registry.async_get_issue(DOMAIN, slot_suspended_id) is not None
+
 
 class TestLockOperationFailedRetry:
     """Tests that LockOperationFailed triggers retry, not slot disable."""

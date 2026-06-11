@@ -679,7 +679,15 @@ class SlotSyncManager:
 
             if expected_in_sync:
                 self._state = SyncState.IN_SYNC
-                self._clear_resolved_issues(slot_state)
+                # Deliberately NOT calling _clear_resolved_issues here:
+                # LOADING is an initial-state observation, not a recovery
+                # event. A pre-existing slot_disabled / slot_suspended
+                # issue represents a state the user hasn't acknowledged;
+                # observing that the slot LOOKS in-sync on startup (e.g.
+                # a disabled slot trivially matches "no PIN expected, no
+                # PIN on lock") does not constitute a fix. The next
+                # genuine OUT_OF_SYNC -> IN_SYNC transition through
+                # _perform_sync will clear the issues at line 700-706.
             else:
                 self._state = SyncState.OUT_OF_SYNC
 
