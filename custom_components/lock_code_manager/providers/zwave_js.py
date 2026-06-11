@@ -264,10 +264,11 @@ class ZWaveJSLock(BaseLock):
         # slot 1, 2, 3, ... in the value DB until ``NotFoundError``, so
         # the returned list length is the lock's actual UC slot count.
         # An empty list means the lock genuinely has no PIN support.
-        try:
-            uc_slots = get_usercodes(self.node)
-        except Exception:
-            uc_slots = []
+        # The function only raises ``NotFoundError`` internally (caught
+        # there) and is otherwise pure value-DB walking, so we let any
+        # unexpected exception surface rather than silently mis-routing
+        # the lock to "no PIN support".
+        uc_slots = get_usercodes(self.node)
         if not uc_slots:
             return LockCapabilities(
                 supports_user_management=False,
