@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "f683efc9b41d",
+  "session_id": "f007f8e0-8e15-49f8-9b78-ca4730e9a56f",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-11T21:55:51.201037Z",
+  "branch": "fix/zwave-js-uc-only-lock-fallback",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7",
+  "turn_id": "70afa2fb2f64",
+  "token_usage": {
+    "input_tokens": 3317,
+    "cache_creation_tokens": 11167547,
+    "cache_read_tokens": 1031510247,
+    "output_tokens": 1356224,
+    "api_call_count": 1952
+  },
+  "session_metrics": {
+    "turn_count": 105
+  }
+}

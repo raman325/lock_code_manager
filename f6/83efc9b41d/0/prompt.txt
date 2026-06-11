@@ -1,0 +1,1258 @@
+check latest comments on 1229 and address any remaining
+
+---
+
+for 1227, should we normalize what capabilities we get back from zwave_js and matter and hoist e.g. max length of name and stuff to the base?
+
+---
+
+yes wire them into PR 1227
+
+---
+
+yes wire them into PR 1227. Let's create _supports_user_records for now knowing we will need to use it later?
+
+---
+
+shouldn't the truncation also happen in the base too? once we hadd a max user name length for matter it should just work
+
+---
+
+review everything we added in this PR and everything we added in the matter PR to identify anything else that could potentially be hoisted to the base class
+
+---
+
+wire all 3 then fix 1228
+
+---
+
+wire all 3 then fix 1228. For 1, we already have an async_setup or something that gets called on first setup. We can reuse that base lock and subclass infrastructure rather than creating a new setup function
+
+---
+
+did you already make the change? If not keep it as is its fine
+
+---
+
+run code review on this PR
+
+---
+
+<task-notification>
+<task-id>a4bb5b3c6db3934dc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a4bb5b3c6db3934dc.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #2: Shallow bug scan" completed</summary>
+<result>I've now read the full diff. Let me analyze the key areas for bugs.
+
+Based on my analysis of the diff, here are the findings:
+
+**Finding 1: `_set_credential` skips `async_set_user` when `_supports_user_records()` is False, but still passes `user.user_id` as `credential_user_id` to `async_set_credential`. For a `supports_native_users=True` provider (like the new Z-Wave JS one), the user_id in the `User` object built from `user_from_slot()` may be unresolved if no prior user write happened. However this appears by design for the User Code CC path — the slot IS the user_id — so it's likely intentional. Not a clear bug.**
+
+**Finding 2: Partial push-subscription registration leak on error.** In `setup_push_subscription`, the loop registers handlers one at a time. If the second or third `self.node.on()` call raises `ValueError`, `_clear_push_unsubs()` is called, but the first handler(s) already successfully registered with the node are NOT unsubscribed — they are cleared from `_push_unsubs` but the node still holds the callbacks.
+
+**Finding 3: `_truncate_user_name` — cache invalidation on error.** When `_get_cached_capabilities()` raises, `_capabilities_cache` stays `None` (the comment says "the cache stays unset so the next call retries"). But `_get_cached_capabilities` itself writes to `_capabilities_cache` only on success — so this is actually correct. Not a bug.
+
+**Finding 4: `_set_credential` branch condition bug — `_supports_user_records()` returns False for Z-Wave User Credential CC locks with `max_user_name_length=0`.** For the new `ZWaveJSLock` that reports `max_user_name_length &gt; 0` (from `async_get_capabilities`), it calls `async_set_user` correctly. But if the lock returns `max_user_name_length=0`, the code falls to the `else` branch and uses `user.user_id` directly without calling `async_set_user`. Yet Z-Wave User Credential CC always requires user creation before setting a credential. This is a design-level concern per the `_supports_user_records` docstring — it says "the user IS the credential" for User Code CC — so may be intentional.
+
+**Finding 5 (CONFIRMED BUG): `setup_push_subscription` partial subscription leak.** The loop iterates over three `(name, handler)` pairs. If the second or third `self.node.on(name, handler)` raises `ValueError`, `_clear_push_unsubs()` is called to clean `_push_unsubs`. However, `self.node.on()` already registered the listener with the node for the first handler — `_clear_push_unsubs` only cancels subscriptions stored in `_push_unsubs` via `_register_push_unsub`. There's no mechanism to unsubscribe previously successful `node.on()` calls that were already appended to `_push_unsubs` before the failure. Wait — let me re-check: `_register_push_unsub` appends to `_push_unsubs`, and `_clear_push_unsubs` calls each unsub. So the first successful `node.on()` IS in `_push_unsubs` when the second fails. `_clear_push_unsubs()` would then call that unsub. This is actually correct — the cleanup path unsubscribes whatever was already registered. Not a bug.
+
+**Finding 6 (CONFIRMED BUG): `async_get_users` mutates a frozen dataclass field via `owner.credentials.append()`.** `User` is defined as `@dataclass(frozen=True, slots=True)` (from prior context) — but `credentials: list[Credential]` is a mutable list field. The code does `owner.credentials.append(...)` which mutates the list in-place. This works with `frozen=True` because frozen only prevents attribute reassignment, not mutation of a mutable object. So this is NOT a bug — `frozen=True` doesn't make the list immutable.
+
+**Finding 7 (CONFIRMED BUG): `_set_credential` — `truncated == user.name` comparison when `truncated` is `None` and `user.name` is not `None`.** If `_supports_user_records()` is True and `user.name` is not None, `_truncate_user_name` is called. If the lock returns `max_user_name_length=0` (which `_supports_user_records` checks via `caps.max_user_name_length &gt; 0`), `_truncate_user_name` returns `None`. But `_supports_user_records` returns False when `max_user_name_length == 0`, so we would not enter the `if await self._supports_user_records():` branch. The condition is consistent. Not a bug.
+
+**Finding 8 (CONFIRMED BUG): Exception ordering in `async_get_users` — `HomeAssistantError` caught after `BaseZwaveJSServerError`.** `ServiceValidationError` extends `HomeAssistantError`. In `async_get_users`, the except chain is:
+```python
+except BaseZwaveJSServerError as err:
+    raise LockDisconnected(...)
+except HomeAssistantError as err:
+    raise LockOperationFailed(...)
+```
+The LCM contract says `LockOperationFailed` = lock reachable but operation rejected. This ordering is correct per the contract — `BaseZwaveJSServerError` routes to `LockDisconnected` (transport), `HomeAssistantError` routes to `LockOperationFailed`. No issue.
+
+**Final confirmed bug — `async_set_credential` maps ALL `HomeAssistantError` that aren't `credential_rejected_duplicate` to `CodeRejectedError`, but should route generic HA errors to `LockOperationFailed`.**
+
+```python
+except HomeAssistantError as err:
+    if getattr(err, "translation_key", None) == "credential_rejected_duplicate":
+        raise DuplicateCodeError(...)
+    raise CodeRejectedError(...)  # &lt;-- all other HA errors mapped to CodeRejectedError
+```
+
+`CodeRejectedError` means the PIN was rejected. A generic `HomeAssistantError` (e.g. entity unavailable, service call error) is not a PIN rejection — it should be `LockOperationFailed`, which routes to the retry/disconnect path rather than suspending the slot.
+
+```json
+[
+  {
+    "title": "async_set_credential maps all non-duplicate HomeAssistantError to CodeRejectedError instead of LockOperationFailed",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "849-860",
+    "description": "The except block catches any HomeAssistantError that is not 'credential_rejected_duplicate' and re-raises it as CodeRejectedError. CodeRejectedError means the PIN was explicitly rejected by the lock and causes slot suspension. A generic HomeAssistantError (e.g. service unavailable, entity not found) is not a PIN rejection — it should be LockOperationFailed so the coordinator routes it to the retry/disconnect path rather than suspending the slot with a user-visible rejection. The contract defines LockOperationFailed as 'lock reachable but operation rejected (no retry)' — that is the correct class for non-transport HA errors, and CodeRejectedError is specifically for PIN-content rejection. Evidence: `raise CodeRejectedError(code_slot=credential.slot, lock_entity_id=self.lock.entity_id, reason=str(err),) from err`",
+    "severity": "HIGH"
+  },
+  {
+    "title": "async_set_user does not propagate a HomeAssistantError that occurs between get_user_cached and async_set_user as the correct exception type",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "793-805",
+    "description": "In async_set_user, both get_user_cached and async_set_user (lock_helpers) are inside the same try block. If async_set_user (lock_helpers) raises HomeAssistantError, it is caught and re-raised as LockOperationFailed — this is correct. However, the SetUserResult is constructed using result['user_id'] from the lock_helpers return value, but the created flag is set from whether existing is None. If get_user_cached itself raises a HomeAssistantError (not a BaseZwaveJSServerError), it would be caught and re-raised as LockOperationFailed before async_set_user is called — but if it raises BaseZwaveJSServerError, it maps to LockDisconnected. This ordering is correct. Not a clear bug — LOW confidence.",
+    "severity": "LOW"
+  }
+]
+```
+
+result: One HIGH bug found in PR #1227 — `async_set_credential` in `zwave_js.py` (lines ~849-860) maps all non-duplicate `HomeAssistantError` to `CodeRejectedError` (which suspends the slot) instead of `LockOperationFailed` (which routes to retry); generic HA errors like entity unavailable or service failure are not PIN rejections and should not trigger slot suspension.</result>
+<usage><total_tokens>59933</total_tokens><tool_uses>3</tool_uses><duration_ms>72492</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4a1337e7a27dc3c1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a4a1337e7a27dc3c1.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #5: Code comments compliance" completed</summary>
+<result>I have read all three files. Now I'll analyze the code for comment compliance issues.
+
+Key findings:
+
+1. **`_base.py` line 655**: `except LockDisconnected, LockOperationFailed:` — this is Python 2 syntax and is invalid in Python 3. The method `_async_on_integration_loaded` has a docstring and the comment at line 656 shows intent to catch both exceptions, but the code would actually cause a `SyntaxError` at runtime, meaning the promised behavior ("re-runs async_setup to re-initialize provider state... then refreshes the coordinator") is broken.
+
+2. **`_base.py` line 1069**: Same invalid syntax `except LockDisconnected, LockOperationFailed:` in `_truncate_user_name`. The docstring says "A best-effort capabilities-fetch failure also returns None rather than blocking the write -- the cache stays unset so the next call retries." But the invalid except clause means neither `LockDisconnected` nor `LockOperationFailed` would actually be caught.
+
+3. **`_base.py` docstring line 113**: The docstring for `BaseLock` documents "3. Poll for drift" and "4. Poll connection state" but labels them as items 3 and 4 in a list that also contains a "3." and "4." prefix — this is actually valid sequential numbering so this is not a code compliance issue per se.
+
+4. **`_base.py` `SetUserResult.created` comment** (docstring line ~173): The `SetUserResult` docstring in `credentials.py` says "``created`` is True when the call added a new user and False when it updated an existing one. The base orchestration uses ``created`` to roll back -- delete the user -- only when a newly created user would otherwise be left with no credential by a failed credential write". In `_set_credential` (line 1135), `rollback_user_id = result.user_id if result.created else None`. This matches. No issue here.
+
+5. **`async_set_user` docstring** says `created` reflects "whether the user existed BEFORE this call". In `ZWaveJSLock.async_set_user` (line ~253 of zwave_js.py), `existing = await self.node.access_control.get_user_cached(user.user_id)` and then `return SetUserResult(user_id=result["user_id"], created=existing is None)`. `existing is None` means user did NOT exist before, so `created=True` when user was newly created — this matches the docstring contract correctly.
+
+6. **`_base.py` docstring for `BaseLock`** says "Do NOT raise generic exceptions, HomeAssistantError, or the bare `LockCodeManagerError` for lock/integration failures." But in `async_is_integration_connected` (line 795), when `lock_config_entry` is None, the base raises bare `LockCodeManagerError`, which the docstring explicitly says is "reserved for programming errors such as a missing required override." This is internally consistent — it IS a programming error. No issue.
+
+7. **`_project_users_to_slots` docstring** says "Every managed slot is present even when empty: the projection starts from ``managed_slots`` mapped to ``SlotCredential.empty()``". The code at line 1013 does `codes = {slot: SlotCredential.empty() for slot in self.managed_slots}`. This is correct.
+
+The two critical invalid Python 3 syntax exceptions are the real compliance issues:
+
+```json
+[
+  {
+    "title": "Python 2 except syntax makes _async_on_integration_loaded silently broken",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line_range": "633-674",
+    "description": "The method docstring promises: 'Re-runs async_setup to re-initialize provider state (e.g. re-register event listeners after an integration reload), then refreshes the coordinator and subscribes to push updates.' However, line 655 uses the Python 2 multi-exception syntax `except LockDisconnected, LockOperationFailed:` which is a SyntaxError in Python 3 — the comma is parsed as binding the exception to a name, not catching two types. This means the entire method would fail to parse/import, making the promised reconnect behavior completely non-functional.",
+    "severity": "HIGH"
+  },
+  {
+    "title": "Python 2 except syntax makes _truncate_user_name's error-recovery promise false",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line_range": "1056-1073",
+    "description": "The docstring states: 'A best-effort capabilities-fetch failure also returns None rather than blocking the write -- the cache stays unset so the next call retries.' Line 1069 uses `except LockDisconnected, LockOperationFailed:` — Python 2 syntax that is a SyntaxError in Python 3. The catch would never execute, so a disconnected lock would raise instead of returning None as documented, blocking the user-name truncation step and propagating an unexpected exception into `_set_credential`.",
+    "severity": "HIGH"
+  }
+]
+```
+
+result: Found 2 HIGH-severity findings in `_base.py`: lines 655 and 1069 both use Python 2 multi-exception syntax (`except A, B:`) which is a `SyntaxError` in Python 3, directly violating the docstring contracts in `_async_on_integration_loaded` (promises reconnect/setup re-runs) and `_truncate_user_name` (promises best-effort None return on disconnect), respectively — the module would fail to import entirely due to the syntax errors.</result>
+<usage><total_tokens>55733</total_tokens><tool_uses>4</tool_uses><duration_ms>68454</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a81e136a34d7b3507</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a81e136a34d7b3507.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #4: Past PR comments" completed</summary>
+<result>Now I have enough information to assess all the comments. Let me compile my findings:
+
+**Assessment of existing Copilot comments on PR #1227:**
+
+1. **`async_get_users()` exception wrapping** (line null) — The current head at lines 166-170 of `async_get_users` shows `BaseZwaveJSServerError` and `HomeAssistantError` are now caught and translated. **Already addressed.**
+
+2. **`async_get_capabilities()` exception wrapping** (line 218) — Lines 212-217 show both exception types are caught. **Already addressed.**
+
+3. **`async_delete_credential()` ignores `ref.type`** (line 321) — Current code at line 316-335 hardcodes `UserCredentialType.PIN_CODE` but does NOT validate `ref.type`. **Still applies.**
+
+4. **`async_set_credential()` ignores `credential.type`** (line 288) — Current code uses `credential.readable_pin` as its type guard (None check) but doesn't explicitly reject non-PIN types. **Partially still applies** — there's an implicit guard but no explicit type validation per the contract.
+
+5. **Name length comment** (line 252, author `raman325`) — Docstring says base orchestration pre-truncates; code at line 244 confirms the docstring makes this clear. **Informational note, not a bug.**
+
+From prior PR #1225, the `async_set_credential` / `async_delete_credential` "unknown → True" convention is now documented in `_base.py` (confirmed lines 1249-1253 and 1267-1269). Both zwave_js implementations return `True` unconditionally. **Already addressed.**
+
+```json
+[
+  {
+    "title": "async_delete_credential does not validate ref.type before hardcoding PIN_CODE",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "316-335",
+    "description": "Copilot comment on PR #1227: \"async_delete_credential() ignores ref.type and always deletes a PIN_CODE. To keep the primitive contract correct (and prevent accidental deletion of the wrong credential kind in future expansions), validate the CredentialRef type and fail fast for unsupported types.\" The current head still hardcodes UserCredentialType.PIN_CODE without checking ref.type. If the base orchestration ever passes a non-PIN CredentialRef (e.g. RFID), it will silently delete the PIN credential in that slot instead of failing cleanly. Explicit early rejection (e.g. `if ref.type is not CredentialType.PIN: raise LockOperationFailed(...)`) would make the unsupported-type case a loud contract violation rather than a silent wrong-type deletion.",
+    "severity": "MEDIUM"
+  },
+  {
+    "title": "async_set_credential does not explicitly reject non-PIN credential types",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "270-315",
+    "description": "Copilot comment on PR #1227: \"async_set_credential() ignores credential.type and will attempt to write any Credential as a PIN_CODE. Since the seam's primitive contract is per-credential-type, this should explicitly reject unsupported types (and avoid silently writing the wrong thing if the base starts passing additional credential types).\" The current head guards via `credential.readable_pin` (None check), which means a non-PIN credential that happens to have a readable_pin value (e.g. a PASSWORD type with a numeric value) would be silently written as a PIN_CODE. An explicit `if credential.type is not CredentialType.PIN: raise CodeRejectedError(...)` check before the readable_pin guard would satisfy the contract.",
+    "severity": "MEDIUM"
+  },
+  {
+    "title": "PR #1225 comment: async_set_credential / async_delete_credential 'unknown → True' contract",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line_range": "1228-1275",
+    "description": "PR #1225 comment: \"The new primitive contract for async_set_credential() also omits the existing BaseLock convention that providers should return True when they cannot determine whether the lock changed, so the coordinator refresh path runs.\" The _base.py abstract docstrings now correctly document this (lines 1249-1253 and 1267-1269 confirmed). The zwave_js implementations return True unconditionally. This is fully addressed and does NOT apply.",
+    "severity": "LOW"
+  }
+]
+```
+
+**Summary of findings that still apply on head 022a41cb:**
+
+- **2 active findings** (both MEDIUM): `async_delete_credential` and `async_set_credential` in `zwave_js.py` do not guard against non-PIN credential types being passed in. The Copilot comments citing these issues remain valid — the code hardcodes `UserCredentialType.PIN_CODE` without checking `ref.type` or `credential.type` respectively. The `readable_pin` guard in `set_credential` is a partial mitigation but not a proper type contract check.
+
+- All exception-wrapping comments (get_users, get_capabilities) have been addressed in the current head.
+- The PR #1225 "unknown → True" convention is fully documented in `_base.py` and both zwave_js methods return `True` unconditionally.
+
+result: PR #1227 has 2 still-applicable prior-comment findings: async_delete_credential and async_set_credential in zwave_js.py do not validate credential/ref type before hardcoding PIN_CODE (MEDIUM severity each); all exception-wrapping and return-value-convention comments from prior PRs are addressed.</result>
+<usage><total_tokens>41199</total_tokens><tool_uses>17</tool_uses><duration_ms>99656</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7e5da92a86b1b1cd</task-id>
+<tool-use-id>toolu_01N2R9YKCC4rop4VyqX6NhXP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a7e5da92a86b1b1cd.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #3: Git history context" completed</summary>
+<result>The analysis is complete. Here are the findings:
+
+```json
+[
+  {
+    "title": "Stale-AVAILABLE infinite-sync-loop guard (commit 5318143c) is permanently removed without an equivalent",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "355-395",
+    "description": "Commit 5318143c ('Fix Z-Wave JS sync loop from stale AVAILABLE events', Feb 2026) added `_handle_usercode_status_update` with an explicit guard: 'Ignore AVAILABLE status if Lock Code Manager expects a PIN on this slot. Some locks send stale AVAILABLE events after a code was set, which would cause infinite sync loops.' This PR removes that entire handler (along with the User Code CC event path) and replaces it with access-control credential node-event subscriptions (`on_credential_changed`, `on_credential_deleted`). The new path has no equivalent 'LCM expects a PIN here, ignore this clear event' guard. If a lock that fires spurious `credential modified` events (analogous to the old stale AVAILABLE) is on the new User Credential CC path, the sync-loop bug could resurface. The PR's `hard_refresh_interval=1h` backstop mitigates drift but does not prevent a spurious credential-changed event from triggering a sync loop. Severity depends on whether any known locks fire spurious credential-modified events on the new access-control path.",
+    "severity": "MEDIUM"
+  },
+  {
+    "title": "Asymmetric masked-PIN / all-zeros disambiguation logic (commits 010980e2, 5318143c) removed without equivalent",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "151-157",
+    "description": "Commit 010980e2 ('Fix infinite sync loop when locks return masked PIN codes', Jan 2026) introduced `_handle_usercode_value_update` with nuanced logic: masked (all-asterisk) values are `unreadable`, all-zero values are only treated as `empty` when `in_use is explicitly False`, and a non-masked non-zero value is `known`. The new `_pin_state(data)` helper replaces all of this with: `if not data: return SlotCredential.unreadable(); else: return SlotCredential.known(data)`. The new access-control credential API delivers `data` as `str | bytes | None`; when `data` is `None` (lock doesn't include value in event), it pushes `unreadable()` — which is correct. But the old guard that distinguished 'all zeros from a partially-loaded cache (not empty)' vs 'explicitly cleared (empty)' is gone. If any Z-Wave User Credential CC firmware delivers `\"0000\"` as the data for an empty slot (analogous to the old User Code CC behavior), the slot would be incorrectly surfaced as a known PIN `\"0000\"` rather than empty.",
+    "severity": "MEDIUM"
+  },
+  {
+    "title": "Non-standard `except A, B:` syntax at two call sites (Python 2 style, should be `except (A, B):`)",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line_range": "655, 1069",
+    "description": "Lines 655 and 1069 use `except LockDisconnected, LockOperationFailed:` (bare comma, Python 2 style) instead of `except (LockDisconnected, LockOperationFailed):` (Python 3 parenthesized tuple). CPython 3.14 does parse `except A, B:` as a tuple handler (catching both) rather than the Python 2 `except ExcType as varname:` form — both exceptions are caught in practice as confirmed by AST inspection. However this is non-idiomatic Python 3 and will likely trigger flake8/ruff `E722` or similar linting warnings. The surrounding code consistently uses the parenthesized form (e.g. line 572: `except (LockDisconnected, LockOperationFailed) as err:`). These two instances appear to be a copy-paste or style inconsistency introduced in this PR and not present on `main`.",
+    "severity": "LOW"
+  },
+  {
+    "title": "`_set_in_progress_code_slot` write-verify sequencing removed; optimistic-update deduplication gone",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "355-400 (new push handler)",
+    "description": "The old `async_set_usercode` / `async_clear_usercode` overrides set `_set_in_progress_code_slot` to the current slot before calling the Z-Wave service, then `_async_verify_write` polled until the push event arrived for that exact slot, deduplicating the subsequent optimistic push. That coordination is removed entirely: the new path has no `_set_in_progress_code_slot` and no write-verify step. LCM-initiated writes now push an optimistic update via `_set_credential` before the credential-changed event arrives. If the lock fires the credential-changed event before the optimistic push is processed, `_push_credential_update` could be called twice for the same slot with the same value. This was guarded on the old path; on the new path the coordinator's `data.get(code_slot) == resolved` dedup (removed from `_handle_usercode_value_update`) is also gone. Net effect: a double push for the same slot value is benign (idempotent coordinator update) but represents a regression in the dedup defense that was deliberately introduced in commit 5318143c.",
+    "severity": "LOW"
+  }
+]
+```
+
+result: History review found 2 MEDIUM and 2 LOW findings — no commit is silently reverted, but the stale-AVAILABLE sync-loop guard (5318143c) and masked/all-zeros PIN disambiguation (010980e2) from the User Code CC path have no direct equivalents on the new access-control credential-event path, and two `except A, B:` (non-parenthesized) style issues were introduced in `_base.py` lines 655 and 1069.</result>
+<usage><total_tokens>87176</total_tokens><tool_uses>70</tool_uses><duration_ms>524417</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7ea9421f8be919a6</task-id>
+<tool-use-id>toolu_01Cb7oEghLg38L6Hpj56fLb1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a7ea9421f8be919a6.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #1: CLAUDE.md compliance" completed</summary>
+<result>Lines 553-554 are both new. `LCM` on line 553 and `PIN` on line 554 are acronyms used in the new docstring. These are docstring bodies — the rule says "Spell out acronyms in code comments." Docstrings are the primary doc-comment form in Python, so this applies.
+
+Now let me also assess severity of all findings and whether the `PIN` ones are worth flagging given that the same file spells out "Personal Identification Number" in many other new docstrings — these two spots are lapses.
+
+Here is my final structured report:
+
+```json
+[
+  {
+    "title": "New except clause uses Python 2 comma syntax — only catches LockDisconnected, silently ignores LockOperationFailed",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line_range": "L1069",
+    "instruction_quote": "No inline/local imports — always import at the top of the file. Restructure modules to avoid circular dependencies. [...] No nonlocal/global [...]",
+    "fix_suggestion": "Change `except LockDisconnected, LockOperationFailed:` to `except (LockDisconnected, LockOperationFailed):` — Python 3 interprets the comma form as `except LockDisconnected as LockOperationFailed:`, so LockOperationFailed is never actually caught.",
+    "note": "This is the primary correctness bug. The pre-existing occurrence at line 655 was already on main and is out of scope."
+  },
+  {
+    "title": "Acronym 'LCM' not spelled out in new docstring for async_setup_internal",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line_range": "L553",
+    "instruction_quote": "Spell out acronyms in code comments instead of using abbreviations.",
+    "fix_suggestion": "Change 'LCM needs' to 'Lock Code Manager needs' in the docstring."
+  },
+  {
+    "title": "Acronym 'PIN' not spelled out in new module-level comment in zwave_js.py",
+    "file_path": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line_range": "L73-L75",
+    "instruction_quote": "Spell out acronyms in code comments instead of using abbreviations.",
+    "fix_suggestion": "Change 'non-PIN types' to 'non-Personal-Identification-Number types' and 'PIN-only' to 'Personal-Identification-Number-only' (or restructure the comment to avoid the shorthand inline, as the surrounding docstrings do)."
+  }
+]
+```
+
+**Sanity check:** The primary correctness finding (Python 2 `except` syntax) is real — `except LockDisconnected, LockOperationFailed:` in Python 3 is parsed as `except LockDisconnected as LockOperationFailed:`, making `LockOperationFailed` the binding name while only `LockDisconnected` is the caught type. The file parses without a `SyntaxError` because it is technically valid Python 3, but it is functionally wrong. No other rule violations were found among the ~3700-line diff: no inline imports, no `nonlocal`/`global`, no Google-style `Args:`/`Returns:` docstring sections, no `hass.data` manipulation in tests, no caplog text assertions, tests use proper fixtures/setup.
+
+result: PR #1227 has one correctness bug (Python 2 `except X, Y:` form silently miscatches in `_truncate_user_name`) and two minor acronym violations in new comments — findings returned as JSON above.</result>
+<usage><total_tokens>100914</total_tokens><tool_uses>72</tool_uses><duration_ms>573045</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2bf9bcd919d68d74</task-id>
+<tool-use-id>toolu_01CCkSfpzwjmfu5ac2Qf4YmZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a2bf9bcd919d68d74.output</output-file>
+<status>completed</status>
+<summary>Agent "Score: acronym CLAUDE.md style" completed</summary>
+<result>Excellent. Now let me verify the context and severity:
+
+**Findings:**
+
+1. **Rule exists**: AGENTS.md L277 states "**Spell out acronyms** in code comments instead of using abbreviations." This is in the Code Style section, so it applies to code review.
+
+2. **Lines confirmed**:
+   - `_base.py` L553: "LCM needs" in a docstring (not comment)
+   - `zwave_js.py` L73-75: "non-PIN types" and "PIN-only" in a comment
+
+3. **Severity assessment**:
+   - The rule is **explicit and mandatory** in AGENTS.md
+   - It applies to both comments AND docstrings (the quote says "code comments" but in practice docstrings count as documentation)
+   - LCM appears in a **docstring** (public API), not a comment, making it more visible
+   - PIN is repeated twice and appears in **comments**
+   - However, the **meaning is crystal clear** from context (LCM=Lock Code Manager, PIN=Personal Identification Number)
+   - This is not a complex refactoring or breaking change — just text substitution
+
+4. **Impact**: Style adherence issue, not a logic bug. But the rule is stated as a directive, and docstrings are part of the public API (visible in help/docs).
+
+```json
+{"score": 75, "reason": "Direct rule violation in AGENTS.md (L277: 'Spell out acronyms'). Finding is real, confirmed in _base.py docstring (L553: 'LCM') and zwave_js comments (L73-75: 'PIN'). High confidence because rule is explicit and mandatory. Not ultra-high (100) because context makes meaning obvious and it's a pure style/text fix, not logic/behavior."}
+```</result>
+<usage><total_tokens>29387</total_tokens><tool_uses>4</tool_uses><duration_ms>27661</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5f141721e402059e</task-id>
+<tool-use-id>toolu_01KFHRuxCCwKQR6XsmWsiUWn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a5f141721e402059e.output</output-file>
+<status>completed</status>
+<summary>Agent "Score: async_set_credential HA error mapping" completed</summary>
+<result>Now, let me trace through: can `lock_helpers.async_set_credential` raise `HomeAssistantError` for non-credential-rejection reasons?
+
+Looking at lock_helpers.py lines 361-453:
+- Line 374-378: If `is_supported()` returns False, it raises `HomeAssistantError` with key `"access_control_not_supported"`
+- Line 382-388: If credential type not supported, raises `ServiceValidationError` (NOT HomeAssistantError)
+- Line 392-405: Length validation raises `ServiceValidationError`
+- Line 406-414: PIN format validation raises `ServiceValidationError`
+- Line 416-434: Slot finding/validation raises `ServiceValidationError`
+- Line 445-448: Call to `set_credential` then `_raise_on_set_credential_error`
+
+So yes! Line 374-378 can raise `HomeAssistantError("access_control_not_supported")` if the node loses access-control support mid-operation.
+
+**This is the real issue**: An `HomeAssistantError` with `translation_key == "access_control_not_supported"` would be caught at line 302-310 in zwave_js.py, and because it's not `"credential_rejected_duplicate"`, it would be mapped to `CodeRejectedError`, which suspends the slot. But this is NOT a credential rejection—it's a transient failure (the lock lost support or became unavailable). It should be `LockOperationFailed` (retry, no suspension) or better yet `LockDisconnected` (retry with backoff).
+
+Let me verify by creating a summary:
+
+```
+Finding: async_set_credential maps all non-duplicate HomeAssistantError to CodeRejectedError
+
+The code catches HomeAssistantError broadly (line 302-310) and only special-cases 
+"credential_rejected_duplicate". Everything else becomes CodeRejectedError.
+
+lock_helpers.async_set_credential can raise HomeAssistantError for:
+1. credential_rejected_* errors (genuine PIN rejections) ✓ correct mapping
+2. credential_rejected_duplicate ✓ handled separately 
+3. access_control_not_supported (transient) ✗ WRONGLY mapped to CodeRejectedError
+
+The third case is NOT a credential rejection—it's a transient failure when 
+access control becomes unavailable mid-operation. Should be LockOperationFailed 
+(retry) not CodeRejectedError (slot suspension).
+```
+
+Score: This is a REAL bug. It can happen if:
+- The lock's access control support is queried once, cached
+- Then between credential_capabilities check and actual set_credential call, support is lost (e.g., device offline/power-cycled)
+- The second is_supported() check would return False, raising HomeAssistantError
+- This would wrongly suspend the slot instead of retrying
+
+However: The bug is unlikely to hit often because the cached calls are called in sequence immediately, and `is_supported()` caches results. You'd need the device to lose support between cache refresh and immediate call. But it IS structurally wrong.
+
+result: Finding is real but moderate severity: incorrect exception mapping for transient device support loss can suspend slots instead of retrying. Only hits if device loses access-control support during the operation.
+
+{"score": 65, "reason": "Real bug: HomeAssistantError from lock_helpers.async_set_credential can carry 'access_control_not_supported' (transient device failure) which is wrongly mapped to CodeRejectedError causing slot suspension instead of retry. Verified that lock_helpers line 374-378 raises HomeAssistantError when support check fails. Bug is structurally real but unlikely to hit often since cached calls run immediately in sequence."}</result>
+<usage><total_tokens>46724</total_tokens><tool_uses>16</tool_uses><duration_ms>120528</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae81ce2c363b3feda</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/ae81ce2c363b3feda.output</output-file>
+<status>completed</status>
+<summary>Agent "Score: credential type guards moved to base" completed</summary>
+<result>Perfect. Now let me summarize my findings:
+
+**Verification Summary:**
+
+1. **Base orchestration asserts BEFORE dispatching**: In `_base.py`, both lifecycle helpers call the type validation assertions:
+   - `_set_credential()` calls `await self._assert_credential_type_supported(credential)` **before** calling `self.async_set_credential()`
+   - `_delete_credential()` calls `await self._assert_credential_ref_supported(ref)` **before** calling `self.async_delete_credential()`
+
+2. **Provider primitives are pure implementation**: The zwave_js provider's `async_set_credential()` and `async_delete_credential()` methods contain NO type validation—they hardcode `UserCredentialType.PIN_CODE` as the Copilot comment noted.
+
+3. **Seam contract is enforced**: The lifecycle helpers (`_set_credential` / `_delete_credential`) are `@final` decorated and are the **ONLY** callers of the provider primitives for native-user locks. The only alternative path (`async_set_credential` is called directly) is for slot-only providers, which don't have users and thus aren't subject to the credential type assertion anyway.
+
+4. **No bypass paths exist**: I verified:
+   - The entry points are `async_internal_set_usercode()` and `async_internal_clear_usercode()`, which are public APIs that properly route to either the direct primitive (slot-only) or the lifecycle helper (native-user)
+   - No other file in the commit directly calls the primitives
+   - The architecture is correctly implemented per the new design
+
+**Result**: The type validation was properly moved from the provider primitive to the base lifecycle helper, making the provider truly "pure write" per the refactoring intent. The Copilot comment identifies the hardcoded `PIN_CODE` but fails to recognize that the base class asserts the type BEFORE the primitive is called. This is a **false positive**.
+
+```json
+{
+  "score": 0,
+  "reason": "Type validation moved to base lifecycle helpers (_set_credential/_delete_credential) which assert before calling provider primitives. Provider primitives correctly assume validated input; no gap exists."
+}
+```</result>
+<usage><total_tokens>36440</total_tokens><tool_uses>24</tool_uses><duration_ms>161568</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adb963ef9b7cd28b5</task-id>
+<tool-use-id>toolu_01NiZBcFetwxM7Q17FArxBCd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/adb963ef9b7cd28b5.output</output-file>
+<status>completed</status>
+<summary>Agent "Score: stale-AVAILABLE guard removal" completed</summary>
+<result>Let me verify the confidence score. Key facts:
+
+1. **Original guard exists**: Yes, in main branch, `_handle_usercode_status_update` checks `desired_credential(code_slot).is_present` before processing AVAILABLE events
+2. **New code has no equivalent guard**: Confirmed. The `on_credential_deleted` handler in PR 1227 directly calls `_push_credential_update(slot, SlotCredential.empty())` with no check
+3. **Events are semantically different**: User Code CC status events vs Access Control CC credential events - different subsystems
+4. **Likelihood of spurious credential events**: Much lower than status events (which the original bug was specifically about), but possible with firmware bugs
+
+The finding is technically correct that the guard was removed and there's no direct equivalent. However:
+
+- **For Access Control CC events**: These are semantically more authoritative than status reports. A credential_deleted event means the credential was actually deleted.
+- **The original bug**: Specifically happened with User Code CC status events, which are less reliable
+- **Practical impact**: If a lock fires spurious credential_deleted events AND LCM has a PIN on that slot, it will create a sync loop. But this is less likely than the original bug because credential deletion events are more semantically authoritative.
+- **Recovery path**: The coordinator would likely detect the mismatch and retry/resync
+
+result: {"score": 35, "reason": "The finding is technically correct: commit 5318143c added a spurious-event guard for User Code CC status updates, and PR 1227 removes that handler without an equivalent guard for the new credential-event path. However, the guard's absence is less critical because (1) Access Control CC credential-deletion events are semantically authoritative (unlike status reports), (2) the original bug was specific to User Code CC stale status events, and (3) a lock firmware bug causing spurious credential_deleted events is unlikely but not impossible. If such a bug occurs, it would cause a sync loop, but recovery is more likely than with the original bug because credential events are part of an access-control audit trail (more policed). Score reflects: real issue, low practical likelihood, but worth noting as a potential regression vector for new event path."}</result>
+<usage><total_tokens>40281</total_tokens><tool_uses>25</tool_uses><duration_ms>200285</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a16a6450178c5fc1c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a16a6450178c5fc1c.output</output-file>
+<status>completed</status>
+<summary>Agent "Score: all-zeros PIN disambiguation removed" completed</summary>
+<result>Perfect! Now I see the event handling. The key line is:
+
+```python
+self._push_credential_update(
+    args.credential_slot, self._pin_state(args.data)
+)
+```
+
+For a "credential added" or "credential modified" event, `args.data` is the data from the event. The question is: **can a lock send a "credential modified" or "credential added" event with data="0000" for an empty slot?**
+
+The Z-Wave spec says:
+- "credential deleted" = credential was cleared
+- "credential added" = credential was set
+- "credential modified" = credential was changed
+
+An event would only be sent when a credential is SET or MODIFIED, not when it's empty. Empty slots don't generate events. When you CLEAR a credential, you get a "credential deleted" event, which calls `SlotCredential.empty()` explicitly.
+
+So the answer is: **User Credential CC does NOT return or emit "0000" for empty slots**. Empty slots are represented by:
+1. Absence from `get_all_credentials_cached()` list
+2. "credential deleted" events that explicitly set `SlotCredential.empty()`
+
+The all-zeros pathology only existed with User Code CC, which:
+1. Subscribed to per-slot value updates
+2. Returned all-zeros when you QUERIED an empty slot
+3. Needed special disambiguation logic (in_use flag) to distinguish "empty slot with value 0000" from "value is 0000"
+
+---
+
+Now let me verify my understanding is correct by checking if there's any way this could go wrong:
+
+1. Could a lock firmware bug return "0000" in a credential event? Possibly, but then `_pin_state("0000")` → `SlotCredential.known("0000")` would surface it as a readable value. This would be a firmware bug issue, not a code issue.
+
+2. Could the code logic be wrong? The logic `if not data` handles None and empty string. If `data="0000"`, it's a truthy non-empty string, so it returns `SlotCredential.known("0000")`. This is correct behavior *if* "0000" was actually set as a credential.
+
+3. Is there a scenario where "0000" could legitimately appear and be mishandled? No - the User Credential CC API doesn't return empty slots at all.
+
+**Conclusion**: This is a **false positive**. The concern is based on User Code CC behavior (all-zeros for empty slots), but User Credential CC is fundamentally different. Empty slots don't appear in the API at all, so `_pin_state` can never receive "0000" for an empty slot. The simplified logic is appropriate for the User Credential CC API.
+
+{"score": 5, "reason": "User Credential CC fundamentally differs from User Code CC: empty slots don't appear in `get_all_credentials_cached()` list and don't generate events - only configured credentials are returned. The all-zeros pathology was specific to User Code CC's per-slot value subscriptions. For User Credential CC, `_pin_state` can only receive data for actually-set credentials, making the simpler logic correct. The finding assumes User Code CC behavior applies to User Credential CC, which is incorrect."}</result>
+<usage><total_tokens>54523</total_tokens><tool_uses>37</tool_uses><duration_ms>317119</duration_ms></usage>
+</task-notification>
+
+---
+
+how will a User Code CC lock behave immediately after this update. Consider PINs that are already in the correct state and ones that aren't
+
+---
+
+we shouldn't have that warning if there's nothing to set
+
+---
+
+1227 merged
+
+---
+
+lets create a fix and submit a PR using the PR issue template from that project
+
+---
+
+continue
+
+---
+
+ok now back to LCM. how do our users map to existing users on the lock? I am thinking about my matter lock which supports fingerprints and NFC. Ideally my PIN gets attached to that same user, but if not, it shouldn't wipe the user with those credentials.
+
+---
+
+just needed verification before continuing. So basically our user persistence is tied to the lock slot. If the user name changes, we check the lock slot user against it. I am trying to figure out how we maintain our own users without conflicting with users managed elsewhere
+
+---
+
+I am looking for idempotency. The same slot should always tie to the same user on the lock otherwise the 1:1 slot:user mapping doesn't hold
+
+---
+
+lets go with the tag in username lcm:{slot}:{display}
+
+---
+
+1. agreed
+2. a - this is only for matter locks and should only be on startup if the state hasn't chagned (basically this is immediately after the upgradew)
+3. lock it in
+
+---
+
+I want this to be done first then 1228 and 1229 merged on top
+
+---
+
+1228 merged
+
+---
+
+clean up the pr-1229 branch
+
+---
+
+yes, you can also delete worktrees from conductor
+
+---
+
+1229 merged
+
+---
+
+lets do a PR for fixing the tags then a PR for matter based on what we discussed
+
+---
+
+sorry ignore my last statement and continue what you were saying
+
+---
+
+makes sense, proceed
+
+---
+
+makes sense, proceed. But let's make the tag lcm{slot}:{name} to save a character
+
+---
+
+like with async_setup and async_setup_internal
+
+---
+
+resume work while I review 1237
+
+---
+
+for 1238, should make_new_tagged_name be make_tagged_name and make_tagged_name be make_legacy_tagged_name instead? I think it's better to call out deprecations than new features
+
+---
+
+both PRs merged
+
+---
+
+there were two PRs left
+
+PR A — shared tag helper + tolerant parser (no behavior change)
+  - Promote/extend _util.py with make_tagged_name(slot, display) emitting lcm:{slot}:{display} and a tolerant parse_tag(name) returning (slot, display, needs_rewrite).
+  - Acceptance: old [LCM:5] Alice parses with needs_rewrite=True; new lcm:5:Alice parses with needs_rewrite=False; non-LCM names return (None, name, False).
+  - akuvox and schlage switch to the new helper but keep writing the old format for now (write-path stays [LCM:5] Alice). This isolates the parser change from any rewrite behavior so a rollback is safe.
+  - Tests: parser round-trips for both formats, mixed-format lock state, name-with-no-tag, display containing colons.
+
+  PR B — matter tag adoption + _truncate_user_name redesign
+  - _truncate_user_name becomes _build_tagged_user_name(slot, display): builds lcm:{slot}:{display}, truncates only display so the total fits max_user_name_length.
+  - Matter's async_set_user switches to find-or-create-by-tag (scan async_get_users() for lcm:{slot}: prefix), drops the credential_index=slot invariant (pass credential_index=None, discover via owner's credentials).
+  - Drop the was_only_credential cleanup in _delete_credential (_base.py:1179-1183). User lifecycle ties to slot config, not credentials.
+  - New slot-teardown hook in the config flow that calls async_delete_user for the LCM-owned user.
+  - Matter-only startup migration: on first connect post-upgrade, if state matches LCM's last-known snapshot, rewrite each LCM-managed slot's user to the tag format. Snapshot fingerprint persisted in .storage.
+  - Tests: tag discovery, fresh slot (CREATE), repeated slot (UPDATE same user_index), coexistence with a non-tagged external user at the same credential_index, startup migration with state-matched and state-drifted cases.
+
+  PR C — Z-Wave U3C tag adoption + akuvox/schlage format rewrite
+  - Z-Wave U3C async_set_user switches to find-or-create-by-tag; drops user_id = slot invariant; allocates user_id at runtime by finding the first free index. (Z-Wave UC stays untouched — implicit-user gate already short-circuits.)
+  - akuvox and schlage write paths switch to the new format. Read paths use the tolerant parser from PR A and rewrite opportunistically on the next operation that already needs to write a name (so no extra command per read).
+  - Tests: U3C tag discovery and free-index allocation, akuvox/schlage round-trip + old-format rewrite on next write.
+
+---
+
+lets get rid of owner if we don't need it. All of this is new in this release and it's a major release
+
+---
+
+is this still part of PR B or are we doing both in one PR now?
+
+---
+
+split. smaller PRs are better
+
+---
+
+go ahead as one PR, your logic makes sense
+
+---
+
+run code review on this PR
+
+---
+
+while we are waiting, can you run cloc on custom_components/ and ts/ so I can see how many lines of code we have
+
+---
+
+<task-notification>
+<task-id>acd5f94f33313afd2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/acd5f94f33313afd2.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #1: CLAUDE.md compliance" completed</summary>
+<result>The "CC" appears in a new `+` line in `__init__.py`. "PR #1077" references are fine — "PR" as a reference to a pull request number is common and acceptable.
+
+Now let me also verify whether `_find_user_index_for_slot` uses a for/break or for/early-return pattern that clearly violates the `next()` preference. The loops return on first match — these are definitely for/early-return (equivalent to for/break with a value capture), which the memory rule says should use `next()`.
+
+Let me check if both loops are complex enough that `next()` is still the right call:
+
+- First loop in `_find_user_index_for_slot`: iterates users, skips if name is None, parses tag, returns user_id if parsed_slot matches. This is a filter-and-map that can be: `next((e.user_id for e in users if e.name and parse_tag(e.name)[0] == slot), None)`
+- Second loop: `next((e.user_id for e in users for cred in e.pin_credentials if cred.slot == slot), None)`
+- `_find_pin_credential_index_for_user`: `next((cred.slot for e in await self.async_get_users() if e.user_id == user_id for cred in e.pin_credentials), None)`
+
+These are all straightforward `next()` rewrites. The CLAUDE.md rule applies.
+
+Summary of findings:
+
+```json
+[
+  {
+    "description": "Three newly introduced helper methods use for-loop-with-early-return instead of next(). _find_user_index_for_slot (two passes at lines 364–373) and _find_pin_credential_index_for_user (lines 475–479) each return on the first matching iteration, which should be expressed as next(..., None).",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 364,
+    "rule": "Prefer comprehensions over loops, next() over for/break, concise idiomatic expressions"
+  },
+  {
+    "description": "Same for/early-return pattern in _find_pin_credential_index_for_user: the nested for loop returns cred.slot on first match instead of using next().",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 475,
+    "rule": "Prefer comprehensions over loops, next() over for/break, concise idiomatic expressions"
+  },
+  {
+    "description": "New comment block in __init__.py uses the acronym 'CC' (for 'Command Class') instead of spelling it out.",
+    "file_path": "custom_components/lock_code_manager/__init__.py",
+    "line": 983,
+    "rule": "Spell out acronyms in code comments instead of using abbreviations"
+  }
+]
+```
+
+---
+
+```json
+[
+  {
+    "description": "_find_user_index_for_slot uses two for-loop-with-early-return passes (lines 364–373) instead of next(). Each pass returns on first match and is a straightforward generator-expression candidate: e.g. next((e.user_id for e in users if e.name and parse_tag(e.name)[0] == slot), None) for the first pass.",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line_number": 364,
+    "rule_violated": "Prefer comprehensions over loops, next() over for/break, concise idiomatic expressions"
+  },
+  {
+    "description": "_find_pin_credential_index_for_user (lines 475-479) uses a nested for loop that returns on the first matched credential slot. This is a for/break-with-value pattern that should be next((cred.slot for e in await ... if e.user_id == user_id for cred in e.pin_credentials), None).",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line_number": 475,
+    "rule_violated": "Prefer comprehensions over loops, next() over for/break, concise idiomatic expressions"
+  },
+  {
+    "description": "The new comment block added to __init__.py uses the acronym 'CC' (shorthand for 'Command Class') on line 983 instead of spelling it out.",
+    "file_path": "custom_components/lock_code_manager/__init__.py",
+    "line_number": 983,
+    "rule_violated": "Spell out acronyms in code comments instead of using abbreviations"
+  }
+]
+```</result>
+<usage><total_tokens>68938</total_tokens><tool_uses>31</tool_uses><duration_ms>171061</duration_ms></usage>
+</task-notification>
+
+---
+
+run cloc on ../home-assistant/componets/zwave_js
+
+---
+
+<task-notification>
+<task-id>abe4fc016803c572d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/abe4fc016803c572d.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #5: Code-comment compliance" completed</summary>
+<result>Now I have all the information I need. Let me compile the final JSON output.
+
+```json
+[
+  {
+    "description": "The `async_delete_user` docstring states a lifecycle invariant that the PR directly breaks. The PR's `_delete_credential` no longer calls `async_delete_user` after removing the last credential; users now persist through credential clear/rewrite cycles. The docstring was not updated.",
+    "file_path": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 1280,
+    "verbatim_quote": "The base calls this once a user's last credential has been removed -- the lifecycle invariant is that a user exists if and only if it owns at least one credential."
+  },
+  {
+    "description": "The `_set_credential` docstring says it 'truncates `user.name` to the lock's advertised limit before handing the user to the provider'. The PR changed this: the helper now calls `_build_tagged_user_name(credential.slot, user.name)` which builds a new `lcm:&lt;slot&gt;:&lt;display&gt;` tagged name — not a simple truncation of the original `user.name`.",
+    "file_path": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 1176,
+    "verbatim_quote": "truncates ``user.name`` to the lock's advertised limit before handing the user to the provider, so each provider's ``async_set_user`` can write the name verbatim."
+  },
+  {
+    "description": "The `_build_tagged_user_name` docstring says 'truncation only ever shortens the user-supplied display, never the prefix'. The implementation at line 1101 does `tagged[: caps.max_user_name_length]` — a simple prefix-of-the-full-tagged-string — which can truncate the prefix when the lock limit is shorter than the prefix length. This is also explicitly contradicted two lines later in the same docstring ('Locks that advertise a length too small to fit even the prefix … return the prefix truncated to the advertised maximum') and confirmed by `test_build_tagged_user_name_truncates_prefix_when_limit_below_overhead`.",
+    "file_path": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 1076,
+    "verbatim_quote": "The tag prefix is sacred -- it's how :func:`._util.parse_tag` recovers the slot binding on subsequent reads -- so truncation only ever shortens the user-supplied display, never the prefix."
+  },
+  {
+    "description": "The `_build_tagged_user_name` docstring says it returns None when '`supports_user_management` is False'. The implementation only checks `caps.max_user_name_length &lt;= 0`; it does not check `caps.supports_user_management`. A lock with `supports_user_management=False` and `max_user_name_length &gt; 0` would receive a tagged name instead of None.",
+    "file_path": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 1080,
+    "verbatim_quote": "Returns ``None`` when the lock has no concept of named users (``max_user_name_length == 0`` or ``supports_user_management`` is False)"
+  }
+]
+```
+
+Here are the findings:
+
+**4 contract/invariant violations found:**
+
+---
+
+**Issue 1 — Strongest violation: lifecycle invariant stale in `async_delete_user`**
+- **File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py`, line 1280
+- **Quote:** `"The base calls this once a user's last credential has been removed -- the lifecycle invariant is that a user exists if and only if it owns at least one credential."`
+- **Violation:** The PR's redesigned `_delete_credential` (now just a thin guard around `async_delete_credential`, no follow-up `async_delete_user` call) explicitly breaks this invariant. Users now persist across PIN clear/rewrite cycles. The `async_delete_user` docstring was not updated to reflect the new lifecycle.
+
+---
+
+**Issue 2 — Stale `_set_credential` docstring**
+- **File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py`, line 1176
+- **Quote:** `"truncates ``user.name`` to the lock's advertised limit before handing the user to the provider, so each provider's ``async_set_user`` can write the name verbatim."`
+- **Violation:** The PR replaced `_truncate_user_name(user.name)` with `_build_tagged_user_name(credential.slot, user.name)`. The operation is no longer a truncation of the original name; it builds a new `lcm:&lt;slot&gt;:&lt;display&gt;` tagged string. The docstring still describes the old behavior.
+
+---
+
+**Issue 3 — Internal inconsistency in `_build_tagged_user_name` docstring**
+- **File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py`, lines 1076–1077
+- **Quote:** `"The tag prefix is sacred -- it's how :func:`._util.parse_tag` recovers the slot binding on subsequent reads -- so truncation only ever shortens the user-supplied display, never the prefix."`
+- **Violation:** The implementation does `tagged[: caps.max_user_name_length]` — a plain prefix-slice of the full tagged string — which CAN truncate the prefix. The same docstring later contradicts this claim by saying "Locks that advertise a length too small to fit even the prefix … return the prefix truncated to the advertised maximum." The `test_build_tagged_user_name_truncates_prefix_when_limit_below_overhead` test confirms prefix truncation does occur.
+
+---
+
+**Issue 4 — `_build_tagged_user_name` docstring overstates the None-return condition**
+- **File:** `/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py`, line 1080
+- **Quote:** `"Returns ``None`` when the lock has no concept of named users (``max_user_name_length == 0`` or ``supports_user_management`` is False)"`
+- **Violation:** The implementation only checks `caps.max_user_name_length &lt;= 0`; it does not check `caps.supports_user_management`. A lock advertising `supports_user_management=False` with `max_user_name_length &gt; 0` (edge case) would receive a tagged name rather than `None`.</result>
+<usage><total_tokens>85688</total_tokens><tool_uses>40</tool_uses><duration_ms>231477</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aef605a27e4fc87ed</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/aef605a27e4fc87ed.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #2: Shallow bug scan" completed</summary>
+<result>OK. So `parse_tag` returns `(None, name)` for an untagged name. In the canonical pass: `if parsed_slot == slot` — if `parsed_slot is None` and `slot` is an int, `None == 5` is False, so untagged users are correctly skipped in the canonical pass.
+
+Now the confirmed bug in the legacy adoption pass:
+- User tagged `lcm:3:alice` with credential at credential_index 7 (auto-allocated by Matter)
+- Querying for slot 7
+- Canonical pass: parses `lcm:3:alice` → `parsed_slot=3`, `3 == 7` is False → skip ✓
+- Legacy pass: `cred.slot == 7` → True → returns this user (tagged for slot 3)!
+
+This would incorrectly adopt the slot-3 user as the anchor for slot 7, potentially causing that user to be deleted via `async_release_managed_slot(7)`.
+
+The fix would be to filter the legacy pass to only consider users with no canonical tag:
+```python
+for existing in users:
+    parsed, _ = parse_tag(existing.name) if existing.name else (None, None)
+    if parsed is not None:
+        continue  # already claimed by a canonical tag
+    for cred in existing.pin_credentials:
+        if cred.slot == slot:
+            return existing.user_id
+```
+
+This is a real behavioral bug introduced by this PR in `/custom_components/lock_code_manager/providers/matter.py`, in `_find_user_index_for_slot`.
+
+```json
+[
+  {
+    "description": "The legacy-adoption pass in `_find_user_index_for_slot` does not exclude users that already carry a canonical `lcm:&lt;slot&gt;:` tag for a *different* slot. After PR-B, Matter auto-allocates credential indices, so a user tagged `lcm:3:alice` might have been assigned credential_index 7. When `_find_user_index_for_slot(7)` is later called (e.g. for a new slot 7, or for `async_release_managed_slot(7)`), the canonical pass correctly skips it (tag parses to slot 3, not 7), but the legacy pass then matches it (`cred.slot == 7`) and returns the slot-3 user's index. This causes `async_release_managed_slot(7)` to delete the user belonging to slot 3, and `async_set_user` on slot 7 to treat the slot-3 user as slot-7's anchor. The legacy pass should filter out any user whose name already parses to an LCM slot.",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line_number": 428,
+    "bug_class": "Logic inversion / wrong variable used"
+  }
+]
+```
+
+**Result:**
+
+```json
+[
+  {
+    "description": "The legacy-adoption pass in `_find_user_index_for_slot` does not exclude users that already carry a canonical `lcm:&lt;slot&gt;:` tag for a *different* slot. After PR-B, Matter auto-allocates credential indices, so a user tagged `lcm:3:alice` might have its credential at index 7. When `_find_user_index_for_slot(7)` runs later (e.g. for a new slot 7, or in `async_release_managed_slot(7)`), the canonical pass correctly rejects it (parsed slot 3 ≠ 7), but the legacy pass then matches it via `cred.slot == 7` and returns the slot-3 user's `user_index`. This would cause `async_release_managed_slot(7)` to delete the user that belongs to slot 3, and `async_set_user` on slot 7 to reuse slot-3's user as slot-7's anchor. The fix is to skip any user in the legacy pass whose name already parses to an LCM slot (i.e. `parse_tag(existing.name)[0] is not None`).",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line_number": 428,
+    "bug_class": "Logic inversion / wrong variable used"
+  }
+]
+```</result>
+<usage><total_tokens>79876</total_tokens><tool_uses>45</tool_uses><duration_ms>302309</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5823db9be4cc7e0a</task-id>
+<tool-use-id>toolu_01Tu1hFTfBJGHHazpPsVmFCC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a5823db9be4cc7e0a.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #4: Prior PR comment patterns" completed</summary>
+<result>Now I have a complete picture. Let me compile the final report:
+
+Here is the result:
+
+---
+
+**Recurring-pattern audit of PR #1239 against prior review comments**
+
+Prior reviews (PRs #1225, #1227, #1228) flagged five recurring patterns in these exact files. Checking each against the PR #1239 diff:
+
+---
+
+### Issue 1 — `ServiceValidationError` swallowed by bare `HomeAssistantError` in UPDATE branch of `async_set_user`
+
+**File:** `custom_components/lock_code_manager/providers/matter.py` (~line 297)
+
+**Pattern flagged in:** PR #1228, comment on `matter.py` (line 184): *"`async_get_users` currently treats `ServiceValidationError` from `get_lock_users` as `LockDisconnected` because it is caught under `HomeAssistantError`."*; also PR #1228 comment on line 235 (`async_get_capabilities`) and line 290 (`get_lock_credential_status`).
+
+**What the PR does:** The UPDATE path in the new `async_set_user` catches `HomeAssistantError` for the `set_lock_user` rename call and logs a warning instead of raising. Since `ServiceValidationError` is a subclass of `HomeAssistantError`, a `ServiceValidationError` from the lock-side UPDATE rename (e.g., "name too long" or "invalid user index") is silently swallowed as a name-set warning rather than surfacing as `LockOperationFailed`. The prior PR #1228 concern was specifically about reachable-but-rejected operations being misclassified — here, a lock that rejects the tagged name format via `ServiceValidationError` would be silently eaten.
+
+**Mitigation note:** The contract inherited from PR #1077 intentionally tolerates name-set failures, so this may be acceptable by design for this specific call site. However, the PR #1228 reviewer explicitly flagged this same pattern in `async_get_capabilities` (line 235) and both prior `ServiceValidationError`-under-`HomeAssistantError` sites in `matter.py` were fixed. The UPDATE branch in this PR reintroduces the same structure without documenting the intentional exception. Consider adding a comment that `ServiceValidationError` is intentionally treated as a tolerated name failure here, or add a `ServiceValidationError` branch above to raise `LockOperationFailed` and let the UPDATE fall through anyway (the name write is advisory).
+
+---
+
+### Issue 2 — `_find_user_index_for_slot` called outside any exception guard in `async_set_user`
+
+**File:** `custom_components/lock_code_manager/providers/matter.py` (~line 279)
+
+**Pattern flagged in:** PR #1227, comment on `zwave_js.py` (null line): *"`async_get_users()` directly awaits reads without mapping exceptions into `LockCodeManagerProviderError`. If it raises, it will bubble past the coordinator's handling."*
+
+**What the PR does:** `async_set_user` calls `await self._find_user_index_for_slot(slot)` (line 279 in the current file, directly before the UPDATE/CREATE branch) with no try/except. `_find_user_index_for_slot` delegates to `self.async_get_users()`, which correctly translates `ServiceValidationError` → `LockOperationFailed` and `HomeAssistantError` → `LockDisconnected`. So the translated LCM exceptions *do* propagate up correctly. This is subtly different from the PR #1227 case — the concern there was about raw HA exceptions escaping; here they're already translated. **This sub-issue is likely a false positive** — exceptions are correctly translated before propagating. No action required.
+
+---
+
+### Issue 3 — `clear_lock_credential` in sync-duplicate retry path — exception handling (FIXED, no re-introduction)
+
+**File:** `custom_components/lock_code_manager/providers/matter.py` (~line 551–560)
+
+**Pattern flagged in:** PR #1228, comment on `matter.py` (null line): *"In the sync-duplicate retry path, `clear_lock_credential(...)` is awaited without translating `ServiceValidationError`/`HomeAssistantError` into LCM provider exceptions."*
+
+**What the PR does:** The new sync-duplicate retry path now has proper exception translation — `ServiceValidationError` → `LockOperationFailed` and `HomeAssistantError` → `LockDisconnected` around the `clear_lock_credential` call (lines 551–560 of matter.py). **This prior concern is correctly addressed and NOT re-introduced.**
+
+---
+
+### Issue 4 — `credential_index` type-check absent in `async_set_credential` / `async_delete_credential`
+
+**File:** `custom_components/lock_code_manager/providers/matter.py` (~lines 491, 583)
+
+**Pattern flagged in:** PR #1227, comments on `zwave_js.py` (lines 288 and 321): *"`async_set_credential()` ignores `credential.type` and will attempt to write any `Credential` as a `PIN_CODE`. Should explicitly reject unsupported types."*; *"`async_delete_credential()` ignores `ref.type`."*
+
+**What the PR does:** The Matter `async_set_credential` and `async_delete_credential` in this PR still do not explicitly guard `credential.type` / `ref.type` before proceeding. The base `_assert_credential_type_supported` is called from `_set_credential` and `_delete_credential` (the base orchestration wrappers), so there is an upstream guard — but it lives in the base helper, not in the provider override itself. The PR #1227 reviewer's concern was that provider overrides could accidentally process the wrong type if the base seam changed. Whether this matters for Matter depends on whether `async_set_credential` and `async_delete_credential` are ever called directly (bypassing the base helper). Given the prior review concern, consider adding an explicit `if credential.type is not CredentialType.PIN: raise CodeRejectedError(...)` guard at the top of both overrides for defense.
+
+---
+
+### Issue 5 — Bare `or ""` / silent-empty-PIN coercion in test files
+
+**Pattern flagged in:** PR #1237, multiple comments across all provider test files (e.g., `tests/providers/matter/test_provider.py` line 1626, and 8 other provider test files): *"Passing `credential.readable_pin or \"\"` reintroduces the empty-string fallback pattern the refactor is removing."*
+
+**What the PR does:** Checked `tests/providers/matter/test_provider.py`, `tests/providers/matter/test_e2e.py`, `tests/providers/test_seam.py`, `tests/providers/zwave_js/test_provider.py` — **no `or ""` coercion pattern found** anywhere in the PR #1239 diff. **Not re-introduced.**
+
+---
+
+```json
+[
+  {
+    "description": "UPDATE branch of async_set_user catches bare HomeAssistantError for the set_lock_user rename, which also swallows ServiceValidationError (a subclass). A lock rejecting the tagged name format via ServiceValidationError is silently treated as a tolerated name-set failure rather than raising LockOperationFailed. This is the same ServiceValidationError-under-HomeAssistantError misclassification pattern flagged in PR #1228 for async_get_capabilities (line 235) and the original get_lock_credential_status path (line 290) — both of those were fixed, but the UPDATE branch reintroduces the structure without documenting the intentional exception. Either add a ServiceValidationError branch above the HomeAssistantError catch to raise LockOperationFailed, or add an explicit comment that ServiceValidationError is intentionally tolerated here under the PR #1077 name-set contract.",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 297,
+    "prior_pr": 1228,
+    "prior_comment_summary": "async_get_capabilities catches ServiceValidationError under HomeAssistantError and raises LockDisconnected. A validation error means the lock is reachable but the request is invalid/unsupported, so it should raise LockOperationFailed instead of triggering the reconnect/retry path."
+  },
+  {
+    "description": "async_set_credential and async_delete_credential in the Matter provider do not explicitly guard credential.type / ref.type at the top of the override. The base seam's _assert_credential_type_supported provides an upstream guard, but the provider overrides themselves accept any type and silently proceed. PR #1227 flagged the same pattern in zwave_js.py: 'async_set_credential() ignores credential.type and will attempt to write any Credential as a PIN_CODE. Should explicitly reject unsupported types.' Adding an explicit CodeRejectedError guard for non-PIN types at the start of each override matches the defensive contract the prior reviewer requested.",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 491,
+    "prior_pr": 1227,
+    "prior_comment_summary": "async_set_credential() ignores credential.type and will attempt to write any Credential as a PIN_CODE. Since the seam's primitive contract is per-credential-type, this should explicitly reject unsupported types."
+  },
+  {
+    "description": "async_delete_credential in the Matter provider does not guard ref.type. Same issue as above for the delete primitive — the PR #1227 reviewer explicitly flagged both set and delete in zwave_js for lacking a type check.",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 583,
+    "prior_pr": 1227,
+    "prior_comment_summary": "async_delete_credential() ignores ref.type and always deletes a PIN_CODE. Validate the CredentialRef type and fail fast for unsupported types."
+  }
+]
+```
+
+**Summary of findings:**
+
+- **3 recurring-pattern issues flagged** (all in `matter.py`):
+  1. `ServiceValidationError` caught under `HomeAssistantError` in the UPDATE branch of `async_set_user` — same misclassification pattern from PR #1228, possibly intentional per the PR #1077 name-set contract but undocumented.
+  2. `async_set_credential` lacks an explicit `credential.type` guard — same pattern from PR #1227 (zwave_js).
+  3. `async_delete_credential` lacks an explicit `ref.type` guard — same pattern from PR #1227 (zwave_js).
+
+- **Not re-introduced:** `or ""` coercion in tests (PR #1237 concern), unguarded `clear_lock_credential` in retry path (PR #1228 concern). Both are clean in this PR.</result>
+<usage><total_tokens>88883</total_tokens><tool_uses>53</tool_uses><duration_ms>327483</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1f79ea77219917fa</task-id>
+<tool-use-id>toolu_01SdJaJusNqbDu8tCbgC5nC3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a1f79ea77219917fa.output</output-file>
+<status>completed</status>
+<summary>Agent "Review #3: Git history context" completed</summary>
+<result>Based on my deep analysis, here are the findings:
+
+```json
+[
+  {
+    "description": "async_clear_usercode uses credential.slot == code_slot to find the owning user, but the PR decouples Matter's credential_index from the LCM slot. The old code (pre-#1228) pinned credential_index to the LCM slot, so this invariant held. The new async_set_credential passes credential_index=None so Matter auto-allocates the first free credential slot (e.g., index=1 for LCM slot=5). After the PR, async_get_users returns User(pin_credentials=[Credential(slot=1)]) for LCM slot 5, and the search 'if credential.slot == code_slot' (1 != 5) finds no owner and silently returns False without clearing anything. The e2e test masks this because the default conftest fixture still uses credential_index == LCM slot for users 'slot1', 'slot2'.",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 958,
+    "historical_context": "The slot=credential_index invariant was established in PR #1228 (commit 3c75dd5b) and maintained through PR #1237. The invariant held so long as set_lock_credential was called with credential_index=code_slot (the LCM slot). This PR breaks that invariant by passing credential_index=None in async_set_credential, but does NOT update the owner-resolution loop in async_clear_usercode. The Matter provider should find the owner by tag (scan users for name matching 'lcm:&lt;slot&gt;:') rather than by credential index, the same way _find_user_index_for_slot does."
+  },
+  {
+    "description": "The old _delete_credential deleted the owning user when it was their last credential (enforcing the user-exists-iff-has-credential invariant from PR #1077). The new _delete_credential is a pass-through with no user cleanup. For Z-Wave User Credential CC (supports_native_users=True, no async_release_managed_slot override), clearing a PIN leaves an empty user record on the lock indefinitely — until the slot is removed from LCM config entirely. The PR's docstring says Z-Wave UC will 'eventually' override async_release_managed_slot, but no such override exists yet, so the regression is live.",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 1217,
+    "historical_context": "PR #1225 (commit 3dc96b37) introduced _delete_credential with explicit delete-on-last-credential user cleanup, with the comment 'the invariant being that a user exists if and only if it owns at least one credential'. The PR removes that invariant without providing an override for Z-Wave UC. Z-Wave UC's async_set_credential addresses credentials by explicit credential_slot=credential.slot (still pinned to the LCM slot), so the broken clear path in issue 1 does NOT apply to Z-Wave UC — but the empty-user accumulation does."
+  },
+  {
+    "description": "Lines 659 and 1096 use 'except LockDisconnected, LockOperationFailed:' (comma-separated, no parentheses). Python 3 parses this as a tuple and catches both — it is not a syntax error — but in Python 2, 'except E, var:' was the syntax for binding the exception to a variable, not catching two types. All other catch-two-exceptions sites in the file use the canonical 'except (A, B) as err:' form (e.g. line 576). This is functional but unconventional and inconsistent with the rest of the file.",
+    "file_path": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 659,
+    "historical_context": "All prior commits used 'except (A, B) as err:' or 'except (A, B):' consistently throughout _base.py. The comma form was introduced only in this PR (commit 46912e18) and appears twice. The code functions correctly, but the inconsistency is a signal this was likely a typo rather than intentional style."
+  },
+  {
+    "description": "The deleted orphan guard ('credential_exists=True but no user_index' -&gt; LockOperationFailed) was added in PR #1228 specifically to handle a documented lock firmware behavior where a credential slot reports as occupied but the lock does not surface its owning user_index in the GetCredentialStatus response. The new find-by-tag approach silently falls through to CREATE in this scenario: it allocates a new user, then calls set_lock_credential(credential_index=None) which auto-scans for a free slot and will get a 'duplicate' failure when it hits the occupied slot. The error is eventually caught, but the failure path is more indirect and the 'duplicate' error message is less diagnostic than the original 'credential_exists=True but no user_index' guard.",
+    "file_path": "custom_components/lock_code_manager/providers/matter.py",
+    "line": 281,
+    "historical_context": "Commit 3c75dd5b (feat(matter): migrate to unified DoorLock credential API, PR #1228) explicitly added the orphan guard and documented it: 'Falling through to CREATE would orphan the original user (it would still exist with zero credentials) and break the user-per-credential invariant, so refuse the write'. The new code's CREATE path does not orphan a user (it auto-allocates a fresh credential_index), so the original orphaning concern is resolved differently — but the 'no user_index surfaced by the lock' lock firmware edge case is no longer surfaced early."
+  }
+]
+```
+
+**Summary of findings:**
+
+**Issue 1 (critical, functional regression):** `async_clear_usercode` in `_base.py` at line 958 uses `credential.slot == code_slot` to find which user owns a slot's credential. For Matter, `credential.slot` is the Matter-internal credential index. Before this PR that index was pinned to the LCM slot number. This PR breaks that pin by passing `credential_index=None` to `set_lock_credential`, so Matter auto-allocates credential index 1, 2, 3... for any new slot. Clearing LCM slot 5 would search for `credential.slot == 5` but the credential lives at index 1, returning `owner_user_id=None` and silently doing nothing. The tests don't catch this because the conftest fixtures still use `credential_index == LCM slot` for their mock users.
+
+**Issue 2 (semantic regression for Z-Wave UC):** The old `_delete_credential` enforced user-exists-iff-has-credential by deleting the user on last credential removal. The new version does nothing post-delete, relying on `async_release_managed_slot`. Z-Wave UC has no override for `async_release_managed_slot`, so empty users will accumulate on Z-Wave UC locks after each PIN clear until the slot is removed from config.
+
+**Issue 3 (style/correctness concern):** Lines 659 and 1096 use `except LockDisconnected, LockOperationFailed:` which is valid Python 3 (parsed as a tuple) but inconsistent with the `except (A, B):` form used everywhere else.
+
+**Issue 4 (early-detection regression):** The removed orphan guard (`credential_exists=True but no user_index`) was added in PR #1228 specifically for a documented lock firmware edge case. It's been replaced by a more indirect path that eventually fails with a `duplicate` error rather than a clear diagnostic.</result>
+<usage><total_tokens>113758</total_tokens><tool_uses>89</tool_uses><duration_ms>604880</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acf11072ed600c3c2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/acf11072ed600c3c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Score N (build_tagged_user_name contradiction)" completed</summary>
+<result>Perfect. Now I have all the information I need. Let me analyze the issue:
+
+**The Issue Analysis:**
+
+1. **Docstring Line 1076-1077 states**: "truncation only ever shortens the user-supplied display, never the prefix"
+2. **Docstring Lines 1090-1092 states**: "Locks that advertise a length too small to fit even the prefix... return the prefix truncated to the advertised maximum"
+3. **Implementation at Line 1101**: `return tagged[: caps.max_user_name_length]` — a plain slice that WILL truncate the prefix when `max_user_name_length` is less than prefix length
+4. **Test at Line 509** confirms: when `max_user_name_length=3`, the result is `"lcm"` (prefix truncated to 3 chars)
+
+This is a **clear internal contradiction**: the first statement says the prefix is never truncated; the second statement and the implementation both show it CAN be truncated. The docstring is internally inconsistent.
+
+**Score: 50**
+
+The contradiction is real and documented by the test, making this a legitimate issue of docstring vs. implementation inconsistency. However, it's primarily a documentation/clarity problem (the implementation correctly handles the edge case), not a functional bug, which prevents a higher score.</result>
+<usage><total_tokens>30907</total_tokens><tool_uses>8</tool_uses><duration_ms>23441</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa6a5de6334114833</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/aa6a5de6334114833.output</output-file>
+<status>completed</status>
+<summary>Agent "Score L (delete_user docstring stale)" completed</summary>
+<result>Perfect. The issue is confirmed. Let me create a comprehensive assessment:
+
+**SCORE: 75**
+
+PR #1239 refactored the credential deletion lifecycle to decouple user management from credential deletion — the `_delete_credential` method signature was changed to remove the `owner` parameter and no longer calls `async_delete_user` when a user's last credential is removed. However, the `async_delete_user` docstring in BaseLock (line 1280–1282) still contains the outdated statement: "The base calls this once a user's last credential has been removed -- the lifecycle invariant is that a user exists if and only if it owns at least one credential." This docstring describes the old behavior that was explicitly removed in this PR, creating clear documentation drift. The PR updated `_delete_credential`'s docstring to reflect the new design but missed updating `async_delete_user`'s docstring.</result>
+<usage><total_tokens>39663</total_tokens><tool_uses>16</tool_uses><duration_ms>62561</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a20057ca07113adf6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/f007f8e0-8e15-49f8-9b78-ca4730e9a56f/tasks/a20057ca07113adf6.output</output-file>
+<status>completed</status>
+<summary>Agent "Score O (None-return condition)" completed</summary>
+<result>Perfect! Now I have all the information I need. Let me verify the issue statement one more time by looking at what the docstring claims versus what the implementation does:
+
+**Docstring claim (lines 1079-1082):** "Returns `None` when the lock has no concept of named users (`max_user_name_length == 0` or `supports_user_management` is False)"
+
+**Implementation (lines 1098-1099):** Only checks `if caps.max_user_name_length &lt;= 0: return None` — does NOT check `caps.supports_user_management`
+
+**Seam gate (line 1189):** The _set_credential method checks `if await self._supports_user_records():` BEFORE calling _build_tagged_user_name
+
+**_supports_user_records implementation (line 1064):** Returns `caps.supports_user_management and caps.max_user_name_length &gt; 0`
+
+So the issue is correct: the implementation is missing a check for `supports_user_management`. However, in practice, the seam's gate prevents the problematic edge case from manifesting because it requires BOTH conditions to be true.
+
+SCORE: 50 + 2 sentences.
+
+The docstring accurately describes the intended behavior (both conditions should gate None returns), but the implementation only checks one condition; the seam's `_supports_user_records` gate prevents the edge case (supports_user_management=False with max_user_name_length&gt;0) from reaching this code in practice, making it a documentation gap rather than a runtime bug.</result>
+<usage><total_tokens>35849</total_tokens><tool_uses>16</tool_uses><duration_ms>42153</duration_ms></usage>
+</task-notification>
+
+---
+
+yes
+
+---
+
+check latest review comments
+
+---
+
+B
+
+---
+
+pull latest. One thought - right now if max characters is < 4 the current format breaks. In that case we should probably fall back to slot number
+
+---
+
+pull latest. One thought - right now if max characters is < 4 in that lcm:1:blah becomes lcm: or worse. In that case we should probably fall back to slot number
+
+---
+
+need to add coverage checks
+
+---
+
+check latest review comments
+
+---
+
+check latest review
+
+---
+
+I am just talking about the part I updated
+
+---
+
+whoops I just saved it, check now
+
+---
+
+find me on the Home Assistant Discord probably to be more specific
+
+---
+
+after you are done check the latest comments from 1239
+
+---
+
+see latest review
+
+---
+
+let it go, it's valid syntax and copilot is bugging
+
+---
+
+1239 merged
+
+---
+
+create C2 as well
+
+---
+
+merged, clean up branches and ff main, then lets take a look at slow tests and figure out if there are delays we can patch out
+
+---
+
+first, check ../lock_code_manager.wiki for any changes to documentation occuring due to our upcoming release: https://github.com/raman325/lock_code_manager/releases/tag/untagged-f2052f741a1d9a043ff7
+
+---
+
+once you've finished initiating the ha core restart, rewrite all three docs as needed and pause before committing and pushing for me to review. lcm was deleted due to my integration tester integration. ignore that and move it in as expected
+
+---
+
+let it run in background
+
+---
+
+after the HA restart I noticed an LCM repair issue but when I clicked on it it said repaired. It was something about a slot being disabled. Can you look through the logic to see where there may have been a "short circuit"
+
+---
+
+yes
+
+---
+
+lets make the closures in zwave_js (on_credential_changed and on_credential_deleted) to private top level methods e.g. self._on_credential_changed
+
+---
+
+check what's going on in the logs on my prod instance. I got another repair issue that slot 1 was disabled on raman's office, but it actually wasn't so something is still bugging out
+
+---
+
+<task-notification>
+<task-id>bftb35xik</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/a1f8b87f-62d0-438a-bc4d-c6b75c2f370b/tasks/bftb35xik.output</output-file>
+<status>completed</status>
+<summary>Background command "Find any HA log files" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+merged and release, clean up branches and ff. We also need to introduce a dark variant of the brand images. The current red is too dark for a dark theme
+
+---
+
+HA was restarted ~90s ago. Re-check the matter logs to see if the 4.0.1 fix worked: spurious slot_suspended issues should stop, but watch for follow-on errors at set_lock_credential (line ~480 in matter.py). Pull the last 5 minutes of LCM-related entries from docker logs homeassistant and assess.
+
+---
+
+merged
+
+---
+
+merged
+
+---
+
+check review comments and address any valid comments in a new PR for https://github.com/raman325/lock_code_manager/pull/1246
+
+---
+
+in a new PR, I think we should add one more intermediary fallback in usernaming between lcm:slot:name, slot:name, and slot which is lcm<slot>
+
+---
+
+continue
+
+---
+
+ff main and then rebase or merge into the current PR and fix conflicts
+
+---
+
+a lot of code to add an additional fallback naming option
+
+---
+
+no its fine
+
+---
+
+check review comments
+
+---
+
+nope merged, ff main and remove stale branches
+
+---
+
+get rid of pr-1239
+
+---
+
+ceck the latest opened issue in the repo
+
+---
+
+per the comments, the pin was working before our release. So either the access control API is not backwards compatible the way we thought it was or we are missing something
+
+---
+
+well isn't the bug somewhere in the capabilities logic? the capabilities should be advertised cleanly across both CCs
+
+---
+
+check review comments
