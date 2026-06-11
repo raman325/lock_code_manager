@@ -1248,3 +1248,7 @@ ceck the latest opened issue in the repo
 ---
 
 per the comments, the pin was working before our release. So either the access control API is not backwards compatible the way we thought it was or we are missing something
+
+---
+
+well isn't the bug somewhere in the capabilities logic? the capabilities should be advertised cleanly across both CCs
