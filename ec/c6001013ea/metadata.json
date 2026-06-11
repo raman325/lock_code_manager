@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ecc6001013ea",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-fallback-review-fixes",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ec/c6001013ea/0/metadata.json",
+      "transcript": "/ec/c6001013ea/0/full.jsonl",
+      "content_hash": "/ec/c6001013ea/0/content_hash.txt",
+      "prompt": "/ec/c6001013ea/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3086,
+    "cache_creation_tokens": 7443517,
+    "cache_read_tokens": 899295205,
+    "output_tokens": 1206570,
+    "api_call_count": 1785
+  }
+}
