@@ -12,7 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const.command_class.access_control import UserCredentialType
+from zwave_js_server.const.command_class.access_control import (
+    SetCredentialResult,
+    UserCredentialType,
+)
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
@@ -450,11 +453,18 @@ def mock_lock_helpers():
 @pytest.fixture
 def mock_access_control(lock_schlage_be469: Node):
     """
-    Give the node a mock access_control with READ methods (Option B).
+    Give the node a mock access_control with READ + WRITE methods.
 
     ``access_control`` is a property on ``Node``, so this patches it at the
     CLASS level for the fixture's scope -- every ``Node`` instance sees the
     mock while the fixture is active, not just ``lock_schlage_be469``.
+
+    LCM's zwave_js provider calls ``set_credential`` and
+    ``delete_credential`` directly on this object (bypassing HA's
+    ``lock_helpers`` whose slot validation breaks for UC-only locks --
+    see issue #1251). Default both to ``SetCredentialResult.OK`` so
+    tests that don't specifically exercise rejection don't have to
+    re-mock them.
     """
     ac = MagicMock()
     ac.get_user_cached = AsyncMock(return_value=None)
@@ -462,5 +472,7 @@ def mock_access_control(lock_schlage_be469: Node):
     ac.get_all_credentials_cached = AsyncMock(return_value=[])
     ac.get_users = AsyncMock(return_value=[])
     ac.get_all_credentials = AsyncMock(return_value=[])
+    ac.set_credential = AsyncMock(return_value=SetCredentialResult.OK)
+    ac.delete_credential = AsyncMock(return_value=SetCredentialResult.OK)
     with patch.object(type(lock_schlage_be469), "access_control", ac):
         yield ac

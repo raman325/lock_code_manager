@@ -16,13 +16,17 @@ from typing import Any, Literal
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import NodeStatus
-from zwave_js_server.const.command_class.access_control import UserCredentialType
+from zwave_js_server.const.command_class.access_control import (
+    SetCredentialResult,
+    UserCredentialType,
+)
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError
 from zwave_js_server.model.node import Node
+from zwave_js_server.util.lock import get_usercodes
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -171,6 +175,9 @@ class ZWaveJSLock(BaseLock):
         extra read. Z-Wave credential types with no domain equivalent
         (BLE, UWB, DESFIRE, unspecified/eye/hand biometrics) are
         dropped.
+
+        Uses the unified ``access_control`` API which dispatches to UC
+        or U3C internally per node-zwave-js v15.23.4+.
         """
         try:
             users = await self.node.access_control.get_users_cached()
@@ -209,7 +216,26 @@ class ZWaveJSLock(BaseLock):
         return list(users_by_id.values())
 
     async def async_get_capabilities(self) -> LockCapabilities:
-        """Report the lock's user/credential capabilities."""
+        """
+        Report the lock's user/credential capabilities.
+
+        Auto-detects User Code CC (UC) vs User Credential CC (U3C) and
+        returns capabilities shaped so the seam routes through the right
+        code path.
+
+        The unified ``access_control`` API in node-zwave-js claims support
+        for both UC and U3C, but ``async_get_credential_capabilities``
+        queries U3C-specific data only. UC-only locks (mostly older
+        500-series firmwares but also some current Z-Wave Plus
+        implementations) come back with the PIN credential type either
+        missing or advertising ``num_slots=0``. When that happens we
+        fall back to reading the lock's UC slot count directly and
+        return slot-only capabilities: ``supports_user_management=False``
+        and ``max_user_name_length=0``, which the seam recognizes as a
+        slot-only provider and routes through the credential-only
+        primitives (``async_set_credential`` / ``async_delete_credential``
+        / ``async_get_users``) without the user lifecycle.
+        """
         try:
             caps = await lock_helpers.async_get_credential_capabilities(self.node)
         except BaseZwaveJSServerError as err:
@@ -217,23 +243,56 @@ class ZWaveJSLock(BaseLock):
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get capabilities failed: {err}") from err
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
-        credential_types = (
-            {
-                CredentialType.PIN: CredentialTypeCapability(
-                    num_slots=pin["num_slots"],
-                    min_length=pin["min_length"],
-                    max_length=pin["max_length"],
-                    supports_learn=pin["supports_learn"],
-                )
-            }
-            if pin
-            else {}
-        )
+
+        if pin and pin["num_slots"] > 0:
+            # U3C path — the lock advertises real PIN credential slots.
+            return LockCapabilities(
+                supports_user_management=caps["supports_user_management"],
+                max_users=caps["max_users"],
+                credential_types={
+                    CredentialType.PIN: CredentialTypeCapability(
+                        num_slots=pin["num_slots"],
+                        min_length=pin["min_length"],
+                        max_length=pin["max_length"],
+                        supports_learn=pin["supports_learn"],
+                    )
+                },
+                max_user_name_length=caps.get("max_user_name_length", 0),
+            )
+
+        # UC path — try the legacy User Code CC. ``get_usercodes`` walks
+        # slot 1, 2, 3, ... in the value DB until ``NotFoundError``, so
+        # the returned list length is the lock's actual UC slot count.
+        # An empty list means the lock genuinely has no PIN support.
+        try:
+            uc_slots = get_usercodes(self.node)
+        except Exception:
+            uc_slots = []
+        if not uc_slots:
+            return LockCapabilities(
+                supports_user_management=False,
+                max_users=0,
+                credential_types={},
+                max_user_name_length=0,
+            )
         return LockCapabilities(
-            supports_user_management=caps["supports_user_management"],
-            max_users=caps["max_users"],
-            credential_types=credential_types,
-            max_user_name_length=caps.get("max_user_name_length", 0),
+            # Force slot-only routing: supports_user_management=False
+            # gates _supports_user_records() at the seam, so the User
+            # lifecycle (async_set_user / async_delete_user) is skipped
+            # and our async_set_credential / async_delete_credential
+            # become the direct call targets.
+            supports_user_management=False,
+            max_users=0,
+            credential_types={
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=len(uc_slots),
+                    # UC spec allows 4-10 ASCII digits per User Code CC v1+.
+                    min_length=4,
+                    max_length=10,
+                    supports_learn=False,
+                )
+            },
+            max_user_name_length=0,
         )
 
     async def async_set_user(self, user: User) -> SetUserResult:
@@ -360,49 +419,78 @@ class ZWaveJSLock(BaseLock):
         name: str | None,
         source: Literal["sync", "direct"],
     ) -> bool:
-        """Write the Personal Identification Number credential under user_id; map device rejections."""
+        """
+        Write the PIN credential under user_id; map device rejections.
+
+        Bypasses ``lock_helpers.async_set_credential`` and calls
+        ``node.access_control.set_credential`` directly. The HA helper
+        validates ``1 <= slot <= num_slots`` using
+        ``get_credential_capabilities_cached()`` which returns U3C-only
+        data -- on a UC-only lock that means zero slots, and the helper
+        rejects with ``Credential slot for pin_code must be between 1
+        and 0`` (issue #1251). The driver-level call unifies UC and U3C
+        internally per the node-zwave-js v15.23.4+ contract, so going
+        direct works for both lock generations. We map the
+        ``SetCredentialResult`` status enum to LCM's typed exceptions
+        in place of HA's translation-key flow.
+        """
         try:
-            await lock_helpers.async_set_credential(
-                self.node,
+            status = await self.node.access_control.set_credential(
                 user_id,
                 UserCredentialType.PIN_CODE,
+                credential.slot,
                 pin,
-                credential_slot=credential.slot,
             )
         except BaseZwaveJSServerError as err:
             # Transient Z-Wave command failure (e.g. a sleeping/battery lock):
-            # route to the retry path rather than a slot suspension.
+            # route to retry rather than slot suspension.
             raise LockDisconnected(
                 f"set credential slot {credential.slot} failed: {err}"
             ) from err
-        except HomeAssistantError as err:
-            if getattr(err, "translation_key", None) == "credential_rejected_duplicate":
-                raise DuplicateCodeError(
-                    code_slot=credential.slot,
-                    lock_entity_id=self.lock.entity_id,
-                ) from err
-            raise CodeRejectedError(
+        if status is SetCredentialResult.OK:
+            return True
+        if status in (
+            SetCredentialResult.ERROR_DUPLICATE_CREDENTIAL,
+            SetCredentialResult.ERROR_DUPLICATE_ADMIN_PIN_CODE,
+        ):
+            raise DuplicateCodeError(
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,
-                reason=str(err),
-            ) from err
-        return True
+            )
+        raise CodeRejectedError(
+            code_slot=credential.slot,
+            lock_entity_id=self.lock.entity_id,
+            reason=f"lock rejected with status {status.name}",
+        )
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
-        """Delete the Personal Identification Number credential addressed by ref."""
+        """
+        Delete the credential addressed by ref.
+
+        Bypasses ``lock_helpers.async_delete_credential`` for the same
+        reason as ``async_set_credential`` -- the helper's slot
+        validation breaks for UC-only locks where
+        ``get_credential_capabilities_cached()`` reports zero slots.
+        Calls ``node.access_control.delete_credential`` directly so
+        the driver's unified UC/U3C dispatch handles both lock
+        generations.
+        """
         try:
-            await lock_helpers.async_delete_credential(
-                self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
+            status = await self.node.access_control.delete_credential(
+                ref.user_id,
+                UserCredentialType.PIN_CODE,
+                ref.slot,
             )
         except BaseZwaveJSServerError as err:
             raise LockDisconnected(
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err
-        except HomeAssistantError as err:
-            raise LockOperationFailed(
-                f"delete credential slot {ref.slot} failed: {err}"
-            ) from err
-        return True
+        if status is SetCredentialResult.OK:
+            return True
+        raise LockOperationFailed(
+            f"delete credential slot {ref.slot} failed: "
+            f"lock rejected with status {status.name}"
+        )
 
     def _get_client_state(self) -> tuple[bool, str]:
         """Return whether the Z-Wave JS client is ready and a retry reason."""

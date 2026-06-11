@@ -76,7 +76,7 @@ class TestFullSetupLifecycle:
 class TestSetAndClearUsercodes:
     """Verify set/clear operations invoke the unified access-control primitives."""
 
-    async def test_set_usercode_calls_lock_helpers(
+    async def test_set_usercode_drives_user_then_credential_primitives(
         self,
         hass: HomeAssistant,
         zwave_js_lock: ZWaveJSLock,
@@ -84,7 +84,7 @@ class TestSetAndClearUsercodes:
         mock_lock_helpers: dict,
         zwave_integration: MockConfigEntry,
     ) -> None:
-        """Setting a code drives async_set_user then async_set_credential via lock_helpers."""
+        """Setting a code runs async_set_user (lock_helpers) then async_set_credential (access_control)."""
         lcm_entry = MockConfigEntry(
             domain=DOMAIN,
             data={
@@ -100,10 +100,15 @@ class TestSetAndClearUsercodes:
         result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
         assert result is True
+        # set_user still goes through lock_helpers (HA's wrapper has the
+        # right shape for user-side mutations).
         mock_lock_helpers["async_set_user"].assert_called_once()
-        mock_lock_helpers["async_set_credential"].assert_called_once()
+        # set_credential bypasses lock_helpers and calls access_control
+        # directly -- the wrapper's slot validation breaks UC-only
+        # locks (issue #1251).
+        mock_access_control.set_credential.assert_called_once()
 
-    async def test_clear_usercode_calls_lock_helpers(
+    async def test_clear_usercode_calls_access_control_delete_credential(
         self,
         hass: HomeAssistant,
         zwave_js_lock: ZWaveJSLock,
@@ -111,7 +116,7 @@ class TestSetAndClearUsercodes:
         mock_lock_helpers: dict,
         zwave_integration: MockConfigEntry,
     ) -> None:
-        """Clearing a slot resolves the owner then calls async_delete_credential."""
+        """Clearing a slot resolves the owner then calls access_control.delete_credential."""
         lcm_entry = MockConfigEntry(
             domain=DOMAIN,
             data={
@@ -141,7 +146,7 @@ class TestSetAndClearUsercodes:
         result = await zwave_js_lock.async_clear_usercode(2)
 
         assert result is True
-        mock_lock_helpers["async_delete_credential"].assert_called_once()
+        mock_access_control.delete_credential.assert_called_once()
 
 
 class TestGetUsercodes:
