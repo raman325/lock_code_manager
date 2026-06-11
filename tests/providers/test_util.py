@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.lock_code_manager.providers._util import (
+    make_compact_tagged_name,
     make_legacy_tagged_name,
     make_tagged_name,
     parse_slot_num,
@@ -28,6 +29,21 @@ class TestMakeTaggedName:
     )
     def test_make_tagged_name(self, slot: int, name: str | None, expected: str) -> None:
         assert make_tagged_name(slot, name) == expected
+
+
+class TestMakeCompactTaggedName:
+    """Compact ``lcm<slot>`` builder for charset-restrictive locks."""
+
+    @pytest.mark.parametrize(
+        ("slot", "expected"),
+        [
+            pytest.param(1, "lcm1", id="single-digit"),
+            pytest.param(42, "lcm42", id="multi-digit"),
+            pytest.param(255, "lcm255", id="max-slot"),
+        ],
+    )
+    def test_make_compact_tagged_name(self, slot: int, expected: str) -> None:
+        assert make_compact_tagged_name(slot) == expected
 
 
 class TestMakeLegacyTaggedName:
@@ -85,8 +101,13 @@ class TestParseTagWithRewrite:
             pytest.param(
                 "[LCM:5]Tight", (5, "Tight", True), id="legacy-no-space-after-bracket"
             ),
-            # Slot-only fallback -- written when the lock's
-            # max_user_name_length can't fit the canonical prefix.
+            # Compact fallback -- written when the lock firmware
+            # rejects the colons in the canonical prefix.
+            pytest.param("lcm1", (1, "", False), id="compact-single-digit"),
+            pytest.param("lcm42", (42, "", False), id="compact-multi-digit"),
+            pytest.param("lcm255", (255, "", False), id="compact-max-slot"),
+            # Slot-only fallback -- written when neither canonical nor
+            # compact tier survives the lock's constraints.
             pytest.param("5", (5, "", False), id="slot-only-single-digit"),
             pytest.param("255", (255, "", False), id="slot-only-multi-digit"),
             # Untagged or malformed -- no match, no rewrite.
@@ -119,6 +140,17 @@ class TestParseTagWithRewrite:
     ) -> None:
         assert parse_tag_with_rewrite(input_name) == expected
 
+    def test_compact_regex_does_not_match_canonical(self) -> None:
+        """Anchored regexes prevent the compact arm from claiming a canonical match.
+
+        The compact regex is ``^lcm(\\d+)$`` (full-anchored) and would
+        not match ``lcm:5:Alice`` (the trailing ``:5:Alice`` violates
+        the ``$`` anchor). Pinning this in a dedicated test so a future
+        edit that relaxes the anchor (or drops it entirely) gets
+        caught.
+        """
+        assert parse_tag_with_rewrite("lcm:5:Alice") == (5, "Alice", False)
+
     def test_canonical_prefix_wins_when_display_contains_legacy_text(self) -> None:
         """The canonical prefix is consumed first; the display is taken verbatim.
 
@@ -141,6 +173,7 @@ class TestParseTag:
         [
             pytest.param("lcm:5:Alice", (5, "Alice"), id="new-format"),
             pytest.param("[LCM:5] Alice", (5, "Alice"), id="legacy-format"),
+            pytest.param("lcm42", (42, ""), id="compact"),
             pytest.param("42", (42, ""), id="slot-only"),
             pytest.param("Alice", (None, "Alice"), id="untagged"),
             pytest.param("", (None, ""), id="empty"),

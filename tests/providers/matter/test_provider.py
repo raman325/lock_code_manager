@@ -2297,11 +2297,12 @@ class TestSetUser:
         SetUser command on an existing user is a metadata-only update,
         and a transient 500 or a rejected name should not block the
         subsequent credential write.
+
+        ``HomeAssistantError`` short-circuits the cascade (the helper
+        raises ``LockDisconnected`` immediately because transport
+        failures aren't charset-recoverable); UPDATE swallows that
+        per the historical contract.
         """
-        # AsyncMock(side_effect=Error) raises the same error on every call.
-        # The new fallback path attempts canonical then slot-only; both raise
-        # here, so the test exercises the "both fail -> tolerate" branch
-        # while keeping the historical HomeAssistantError contract.
         mock_set_user = AsyncMock(side_effect=HomeAssistantError("500"))
         user = User(user_id=2, name="lcm:2:Updated Name")
         with (
@@ -2325,7 +2326,9 @@ class TestSetUser:
             result = await matter_lock_simple.async_set_user(user)
 
         assert result == SetUserResult(user_id=7, created=False)
-        assert mock_set_user.call_count == 2
+        # HomeAssistantError short-circuits the cascade -- only one
+        # attempt is made before LockDisconnected is raised + tolerated.
+        assert mock_set_user.call_count == 1
         assert "failed to update user name" in caplog.text
 
     async def test_set_user_update_tolerates_matter_sdk_error(
@@ -2342,10 +2345,11 @@ class TestSetUser:
         and let MatterError bubble past, causing the seam's catchall to
         spuriously suspend the slot and create a repair issue.
         """
-        # Both canonical and slot-only attempts raise the same error here;
-        # the test exercises the "both attempts fail -> tolerate" branch
-        # for a MatterError specifically. A dedicated test
-        # (test_set_user_update_falls_back_to_slot_only_on_charset_rejection)
+        # All cascade candidates (canonical, compact, slot-only) raise
+        # the same MatterError here; the test exercises the
+        # "all candidates fail -> tolerate" branch for a MatterError
+        # specifically. A dedicated test
+        # (test_set_user_update_falls_back_to_compact_on_charset_rejection)
         # covers the success-on-fallback case.
         mock_set_user = AsyncMock(
             side_effect=UnknownError("InteractionModelError: InvalidCommand (0x85)")
@@ -2375,22 +2379,23 @@ class TestSetUser:
         # subsequent credential write to the right user; only the name
         # update was dropped.
         assert result == SetUserResult(user_id=7, created=False)
-        assert mock_set_user.call_count == 2
+        # MatterError falls through all 3 candidates: canonical -> compact -> slot-only.
+        assert mock_set_user.call_count == 3
         assert "failed to update user name" in caplog.text
         assert "InvalidCommand (0x85)" in caplog.text
 
-    async def test_set_user_create_falls_back_to_slot_only_on_charset_rejection(
+    async def test_set_user_create_falls_back_to_compact_on_charset_rejection(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
     ) -> None:
-        """CREATE retries with the slot-only fallback when canonical is rejected.
+        """CREATE retries with the compact ``lcm<slot>`` fallback on canonical rejection.
 
         Some Matter lock firmwares restrict ``userName`` to alphanumeric
-        and reject the colons in ``lcm:<slot>:``. The provider retries
-        once with the slot-only fallback (``str(slot)``); the tolerant
-        parser recognizes digit-only names as the slot binding, so the
-        slot identity survives subsequent reads.
+        and reject the colons in ``lcm:<slot>:``. The cascade tries the
+        compact ``lcm<slot>`` form first (alphanumeric AND keeps the
+        ownership marker) before falling all the way back to bare
+        ``str(slot)``.
         """
-        # First call fails with InvalidCommand; second succeeds.
+        # First call (canonical) fails; second call (compact) succeeds.
         mock_set_user = AsyncMock(
             side_effect=[
                 UnknownError("InteractionModelError: InvalidCommand (0x85)"),
@@ -2420,25 +2425,61 @@ class TestSetUser:
         first_call_kwargs = mock_set_user.call_args_list[0].kwargs
         second_call_kwargs = mock_set_user.call_args_list[1].kwargs
         assert first_call_kwargs["user_name"] == "lcm:1:Alice"
-        assert second_call_kwargs["user_name"] == "1"
-        assert "rejected canonical tag" in caplog.text
-        assert "InvalidCommand (0x85)" in caplog.text
+        # Compact tier wins; we don't fall all the way to slot-only.
+        assert second_call_kwargs["user_name"] == "lcm1"
+        assert "rejected" in caplog.text and "lcm:1:Alice" in caplog.text
 
-    async def test_set_user_create_raises_when_both_attempts_fail(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    async def test_set_user_create_falls_back_to_slot_only_when_compact_also_rejected(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
     ) -> None:
-        """CREATE surfaces ``LockOperationFailed`` only after BOTH names fail.
+        """When the compact tier also fails, the cascade falls through to slot-only.
 
-        If the lock rejects the canonical AND the slot-only fallback,
-        the failure is more than just a charset issue. Surfacing as
-        ``LockOperationFailed`` lets the seam route through the normal
-        retry path rather than the catchall suspend (which would create
-        a spurious repair issue).
+        A lock that rejects both the colons and the ``lcm`` prefix
+        characters (very restrictive firmware) still gets a working
+        write via the bare digit fallback. The slot binding is still
+        recoverable via the tolerant parser's digit-only arm.
         """
         mock_set_user = AsyncMock(
             side_effect=[
-                UnknownError("InvalidCommand (0x85)"),
-                UnknownError("InvalidCommand again"),
+                UnknownError("colons rejected"),
+                UnknownError("lcm prefix rejected"),
+                {"user_index": 4},
+            ]
+        )
+        user = User(user_id=1, name="lcm:1:Alice")
+        caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+        ):
+            result = await matter_lock_simple.async_set_user(user)
+
+        assert result == SetUserResult(user_id=4, created=True)
+        assert mock_set_user.call_count == 3
+        names_tried = [c.kwargs["user_name"] for c in mock_set_user.call_args_list]
+        assert names_tried == ["lcm:1:Alice", "lcm1", "1"]
+
+    async def test_set_user_create_raises_when_all_attempts_fail(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """CREATE surfaces ``LockOperationFailed`` only after every name fails.
+
+        If the lock rejects canonical, compact, AND slot-only, the
+        failure is more than a charset issue. Surfacing as
+        ``LockOperationFailed`` lets the seam route through the normal
+        retry path rather than the catchall suspend.
+        """
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("canonical rejected"),
+                UnknownError("compact rejected"),
+                UnknownError("slot-only rejected"),
             ]
         )
         user = User(user_id=1, name="lcm:1:Alice")
@@ -2451,25 +2492,27 @@ class TestSetUser:
             ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-            pytest.raises(LockOperationFailed, match="both canonical and slot-only"),
+            pytest.raises(LockOperationFailed, match="all fallback names"),
         ):
             await matter_lock_simple.async_set_user(user)
 
-        assert mock_set_user.call_count == 2
+        assert mock_set_user.call_count == 3
 
     async def test_set_user_create_routes_validation_error_during_fallback(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
-        """A ``ServiceValidationError`` during the slot-only fallback gets typed routing.
+        """A ``ServiceValidationError`` during the cascade gets typed routing.
 
-        Mirrors the primary CREATE attempt's exception handling: the
-        slot-only retry must map ``ServiceValidationError`` to
-        ``LockOperationFailed`` and ``HomeAssistantError`` to
-        ``LockDisconnected`` so a transient validation or disconnect
-        during the fallback doesn't slip past as an untyped exception
-        (which would route to the seam's catchall suspend path and
-        create a spurious repair issue).
+        The helper raises typed seam exceptions immediately on
+        ``ServiceValidationError`` and ``HomeAssistantError`` because
+        those aren't charset-recoverable; trying the next candidate
+        would hit the same wall. Routing them through
+        ``LockOperationFailed`` / ``LockDisconnected`` keeps the seam's
+        retry path in play instead of dropping into the catchall
+        suspend.
         """
+        # Canonical hits MatterError -> falls through; compact hits
+        # ServiceValidationError -> immediate LockOperationFailed.
         mock_set_user = AsyncMock(
             side_effect=[
                 UnknownError("InvalidCommand (0x85)"),
@@ -2486,7 +2529,7 @@ class TestSetUser:
             ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-            pytest.raises(LockOperationFailed, match="rejected slot-only fallback"),
+            pytest.raises(LockOperationFailed, match="rejected input"),
         ):
             await matter_lock_simple.async_set_user(user)
 
@@ -2495,7 +2538,7 @@ class TestSetUser:
     async def test_set_user_create_routes_disconnect_during_fallback(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
-        """A ``HomeAssistantError`` during the slot-only fallback maps to ``LockDisconnected``."""
+        """A ``HomeAssistantError`` during the cascade maps to ``LockDisconnected``."""
         mock_set_user = AsyncMock(
             side_effect=[
                 UnknownError("InvalidCommand (0x85)"),
@@ -2512,22 +2555,20 @@ class TestSetUser:
             ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-            pytest.raises(LockDisconnected, match="slot-only fallback"),
+            pytest.raises(LockDisconnected, match="transport closed"),
         ):
             await matter_lock_simple.async_set_user(user)
 
         assert mock_set_user.call_count == 2
 
-    async def test_set_user_update_falls_back_to_slot_only_on_charset_rejection(
+    async def test_set_user_update_falls_back_to_compact_on_charset_rejection(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
     ) -> None:
-        """UPDATE retries with the slot-only fallback so the slot tag survives.
+        """UPDATE prefers the compact ``lcm<slot>`` tier over bare slot-only.
 
         UPDATE's contract is "tolerate name-set failures," but a
-        successful slot-only rename preserves the slot binding across
-        reads (the digit-only name parses to the same slot). Strictly
-        better than letting the name drift to whatever pre-LCM string
-        the lock had.
+        successful compact rename preserves both the slot binding AND
+        the LCM ownership marker -- strictly better than bare digits.
         """
         mock_set_user = AsyncMock(
             side_effect=[
@@ -2561,24 +2602,25 @@ class TestSetUser:
 
         assert result == SetUserResult(user_id=7, created=False)
         assert mock_set_user.call_count == 2
-        assert mock_set_user.call_args_list[1].kwargs["user_name"] == "2"
-        assert "rejected canonical tag" in caplog.text
-        assert "renamed to slot-only" in caplog.text
+        # Compact tier (lcm2), not bare slot-only (2).
+        assert mock_set_user.call_args_list[1].kwargs["user_name"] == "lcm2"
+        assert "rejected" in caplog.text and "lcm:2:Updated Name" in caplog.text
 
-    async def test_set_user_update_tolerates_when_both_attempts_fail(
+    async def test_set_user_update_tolerates_when_all_attempts_fail(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
     ) -> None:
-        """UPDATE still tolerates the failure when both attempts fail.
+        """UPDATE tolerates the failure when every cascade candidate fails.
 
         The user record at ``existing_user_index`` is still valid; only
         the rename was lost. The subsequent credential write can still
         proceed, so we return the resolved user_id and log a single
-        warning carrying both error messages for diagnosis.
+        warning carrying the last error and the list of tried names.
         """
         mock_set_user = AsyncMock(
             side_effect=[
                 UnknownError("canonical rejected"),
-                UnknownError("slot-only rejected too"),
+                UnknownError("compact rejected"),
+                UnknownError("slot-only rejected"),
             ]
         )
         user = User(user_id=2, name="lcm:2:Bob")
@@ -2603,10 +2645,10 @@ class TestSetUser:
             result = await matter_lock_simple.async_set_user(user)
 
         assert result == SetUserResult(user_id=9, created=False)
-        assert mock_set_user.call_count == 2
+        assert mock_set_user.call_count == 3
         assert "failed to update user name" in caplog.text
-        assert "canonical rejected" in caplog.text
-        assert "slot-only rejected too" in caplog.text
+        # The warning carries the LAST error message + the list of names.
+        assert "slot-only rejected" in caplog.text
 
 
 # =============================================================================

@@ -52,7 +52,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import parse_slot_num, parse_tag
+from ._util import make_compact_tagged_name, parse_slot_num, parse_tag
 from .const import LOGGER
 
 # DoorLock cluster ID (0x0101 = 257)
@@ -366,143 +366,177 @@ class MatterLock(BaseLock):
             #
             # set_lock_user here is a metadata-only name update. The
             # historical Matter contract (PR #1077) tolerated name-set
-            # failures so a transient 500 or a name the lock rejects does
-            # not block the subsequent credential write; the user still
-            # exists at the known index, the only thing lost is the name
-            # update. Log a warning and fall through.
+            # failures so a transient 500 or a name the lock rejects
+            # does not block the subsequent credential write; the user
+            # still exists at the known index, the only thing lost is
+            # the name update. If every candidate in the cascade fails
+            # with MatterError we log a warning and fall through.
+            candidates = self._user_name_candidates(slot, user.name)
             try:
-                await set_lock_user(
+                (
+                    _,
+                    name_used,
+                    prior_failures,
+                ) = await self._try_set_lock_user_with_fallbacks(
                     client,
                     node,
                     user_index=existing_user_index,
-                    user_name=user.name,
+                    candidate_names=candidates,
                 )
-            except (HomeAssistantError, MatterError) as err:
-                # Matter SDK raises ``matter_server.common.errors.MatterError``
-                # subclasses (e.g. ``UnknownError`` carrying
-                # ``InteractionModelError: InvalidCommand (0x85)``); those are
-                # NOT ``HomeAssistantError`` subclasses. Some Matter lock
-                # firmwares reject rename-on-existing-user when the new
-                # name contains non-alphanumeric characters (the colons in
-                # the canonical ``lcm:<slot>:`` prefix). Retry with the
-                # slot-only fallback (``str(slot)``), which the tolerant
-                # parser still recognizes as the slot binding. If the
-                # second attempt also fails, fall through to the
-                # historical "tolerate name-set failures" contract -- the
-                # user record itself remains valid at ``existing_user_index``
-                # so the credential write can still proceed.
-                slot_only_name = str(slot)
-                try:
-                    await set_lock_user(
-                        client,
-                        node,
-                        user_index=existing_user_index,
-                        user_name=slot_only_name,
-                    )
-                except (HomeAssistantError, MatterError) as fallback_err:
-                    LOGGER.warning(
-                        "Lock %s: failed to update user name on slot %s "
-                        "(user_index=%s); continuing without name update. "
-                        "Canonical attempt: %s. Slot-only fallback: %s",
-                        self.lock.entity_id,
-                        slot,
-                        existing_user_index,
-                        err,
-                        fallback_err,
-                    )
-                else:
-                    # DEBUG (not INFO): for a lock that consistently rejects
-                    # the canonical tag, this fires on every set_user run
-                    # (every credential write -- see _base._set_credential).
-                    # We don't want to spam the user's log; the warning
-                    # path on full failure is what they actually need to
-                    # see. DEBUG keeps the diagnostic available without
-                    # the noise.
+            except (LockDisconnected, LockOperationFailed, MatterError) as err:
+                # UPDATE's historical contract (PR #1077): tolerate any
+                # rename failure so the subsequent credential write still
+                # proceeds. The user record is still valid at
+                # ``existing_user_index`` -- the only thing lost is the
+                # cosmetic name update. The helper raises typed seam
+                # exceptions (LockDisconnected for transport failures,
+                # LockOperationFailed for validation rejections,
+                # MatterError when every candidate hit a lock-side
+                # rejection); we swallow all three here on the UPDATE
+                # path and log a warning instead.
+                LOGGER.warning(
+                    "Lock %s: failed to update user name on slot %s "
+                    "(user_index=%s); continuing without name update. "
+                    "Tried %s; last error: %s",
+                    self.lock.entity_id,
+                    slot,
+                    existing_user_index,
+                    candidates,
+                    err,
+                )
+            else:
+                if prior_failures:
+                    # DEBUG (not INFO): for a lock that consistently
+                    # rejects the canonical tag, this fires on every
+                    # set_user run (every credential write -- see
+                    # _base._set_credential). DEBUG keeps the
+                    # diagnostic available without the noise.
                     LOGGER.debug(
-                        "Lock %s: lock rejected canonical tag %r for slot %s "
-                        "(%s); renamed to slot-only %r so the slot binding "
-                        "survives the read",
+                        "Lock %s: lock rejected %d earlier name "
+                        "candidate(s) for slot %s (%s); renamed to %r "
+                        "so the slot binding survives the read",
                         self.lock.entity_id,
-                        user.name,
+                        len(prior_failures),
                         slot,
-                        err,
-                        slot_only_name,
+                        ", ".join(f"{name!r}: {err}" for name, err in prior_failures),
+                        name_used,
                     )
             return SetUserResult(user_id=existing_user_index, created=False)
 
-        # CREATE: no LCM-tagged user exists for this slot yet — let Matter
-        # auto-allocate a free user_index.
+        # CREATE: no LCM-tagged user exists for this slot yet — let
+        # Matter auto-allocate a free user_index. Same cascade as
+        # UPDATE; failure handling differs because we need an allocated
+        # user_index for the subsequent credential write, so a full
+        # exhaustion escalates to LockOperationFailed.
+        candidates = self._user_name_candidates(slot, user.name)
         try:
-            result = await set_lock_user(
+            (
+                result,
+                name_used,
+                prior_failures,
+            ) = await self._try_set_lock_user_with_fallbacks(
                 client,
                 node,
                 user_index=None,
-                user_name=user.name,
+                candidate_names=candidates,
             )
-        except ServiceValidationError as err:
-            raise LockOperationFailed(
-                f"Matter set_lock_user rejected input for {self.lock.entity_id}: {err}"
-            ) from err
-        except HomeAssistantError as err:
-            raise LockDisconnected(
-                f"Matter set_lock_user failed for {self.lock.entity_id}: {err}"
-            ) from err
         except MatterError as err:
-            # Matter SDK error on CREATE with the canonical tagged name.
-            # Some lock firmwares restrict ``userName`` to alphanumeric
-            # characters and reject the colons in ``lcm:<slot>:``. Retry
-            # once with the slot-only fallback (``str(slot)``) -- the
-            # tolerant parser recognizes digit-only names as the slot
-            # binding, so the find-or-create-by-tag lookup still works on
-            # subsequent operations.
-            slot_only_name = str(slot)
+            raise LockOperationFailed(
+                f"Matter set_lock_user failed for {self.lock.entity_id} on "
+                f"all fallback names {candidates}: {err}"
+            ) from err
+        if prior_failures:
+            LOGGER.debug(
+                "Lock %s: lock rejected %d earlier name candidate(s) for "
+                "slot %s (%s); created with %r so the slot binding "
+                "survives the read",
+                self.lock.entity_id,
+                len(prior_failures),
+                slot,
+                ", ".join(f"{name!r}: {err}" for name, err in prior_failures),
+                name_used,
+            )
+        return SetUserResult(user_id=result["user_index"], created=True)
+
+    @staticmethod
+    def _user_name_candidates(slot: int, primary_name: str | None) -> list[str]:
+        """
+        Return the cascade of ``set_lock_user`` userName candidates.
+
+        Order: canonical (carries display) -> compact ``lcm<slot>``
+        (alphanumeric ownership marker, charset-safe) -> slot-only
+        ``str(slot)`` (deepest fallback). Deduplicated while preserving
+        order so a primary_name that already equals one of the
+        fallbacks isn't retried; this avoids wasting a round-trip when
+        ``_build_tagged_user_name`` already collapsed to a fallback for
+        length reasons.
+
+        ``primary_name`` is typed ``str | None`` because the base
+        seam's ``User.name`` field is nullable, but ``_set_credential``
+        in the base already refuses to call us when it would be None;
+        the guard here is defensive.
+        """
+        candidates: list[str] = []
+        if primary_name is not None:
+            candidates.append(primary_name)
+        candidates.extend([make_compact_tagged_name(slot), str(slot)])
+        return list(dict.fromkeys(candidates))
+
+    async def _try_set_lock_user_with_fallbacks(
+        self,
+        client: Any,
+        node: Any,
+        *,
+        user_index: int | None,
+        candidate_names: list[str],
+    ) -> tuple[dict[str, Any], str, list[tuple[str, MatterError]]]:
+        """
+        Try each candidate userName in order; return on first success.
+
+        Returns ``(result, name_used, prior_failures)`` where
+        ``prior_failures`` is the list of ``(name, error)`` tuples for
+        every candidate the lock rejected before this one succeeded
+        (empty when the very first candidate worked).
+
+        ``ServiceValidationError`` and ``HomeAssistantError`` are NOT
+        charset-recoverable -- they signal "validation failed entirely"
+        or "transport closed." Trying the next candidate would hit the
+        same wall, so they raise immediately as ``LockOperationFailed``
+        / ``LockDisconnected``. Only ``MatterError`` (which carries the
+        lock firmware's specific rejection) triggers a fall-through to
+        the next candidate. If every candidate raises ``MatterError``,
+        the last error is re-raised so the caller can decide whether
+        to tolerate or escalate.
+        """
+        failures: list[tuple[str, MatterError]] = []
+        last_matter_error: MatterError | None = None
+        for name in candidate_names:
             try:
                 result = await set_lock_user(
                     client,
                     node,
-                    user_index=None,
-                    user_name=slot_only_name,
+                    user_index=user_index,
+                    user_name=name,
                 )
-            except ServiceValidationError as fallback_err:
-                # Same routing as the primary CREATE attempt -- input
-                # validation failures get LockOperationFailed regardless of
-                # which name attempt triggered them.
+            except ServiceValidationError as err:
                 raise LockOperationFailed(
-                    f"Matter set_lock_user rejected slot-only fallback for "
-                    f"{self.lock.entity_id}: {fallback_err}"
-                ) from fallback_err
-            except HomeAssistantError as fallback_err:
-                # Transport / disconnect during the fallback retry -- same
-                # routing as the primary attempt.
+                    f"Matter set_lock_user rejected input for "
+                    f"{self.lock.entity_id} (user_name={name!r}): {err}"
+                ) from err
+            except HomeAssistantError as err:
                 raise LockDisconnected(
-                    f"Matter set_lock_user failed on slot-only fallback for "
-                    f"{self.lock.entity_id}: {fallback_err}"
-                ) from fallback_err
-            except MatterError as fallback_err:
-                # Both attempts hit lock-side rejections (the original
-                # MatterError and a second MatterError on the slot-only
-                # retry). The lock is rejecting more than just the
-                # charset; surface as LockOperationFailed so the seam
-                # routes through retry rather than the catchall suspend.
-                raise LockOperationFailed(
                     f"Matter set_lock_user failed for {self.lock.entity_id} "
-                    f"on both canonical and slot-only fallback names: "
-                    f"canonical={err}, slot-only={fallback_err}"
-                ) from fallback_err
-            # See the UPDATE-path comment above: DEBUG (not INFO) so a
-            # lock that consistently needs the fallback doesn't flood
-            # the log on every credential write.
-            LOGGER.debug(
-                "Lock %s: lock rejected canonical tag %r for slot %s (%s); "
-                "created with slot-only %r so the slot binding survives the "
-                "read",
-                self.lock.entity_id,
-                user.name,
-                slot,
-                err,
-                slot_only_name,
-            )
-        return SetUserResult(user_id=result["user_index"], created=True)
+                    f"(user_name={name!r}): {err}"
+                ) from err
+            except MatterError as err:
+                failures.append((name, err))
+                last_matter_error = err
+                continue
+            return result, name, failures
+        # Every candidate hit a MatterError -- re-raise the last one so
+        # the caller can choose to tolerate (UPDATE) or escalate (CREATE).
+        assert last_matter_error is not None
+        raise last_matter_error
 
     def _slot_from_seam_user(self, user: User) -> int:
         """
