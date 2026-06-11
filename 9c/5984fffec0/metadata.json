@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9c5984fffec0",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-tolerate-set-lock-user-sdk-errors",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/9c/5984fffec0/0/metadata.json",
+      "transcript": "/9c/5984fffec0/0/full.jsonl",
+      "content_hash": "/9c/5984fffec0/0/content_hash.txt",
+      "prompt": "/9c/5984fffec0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2945,
+    "cache_creation_tokens": 6646537,
+    "cache_read_tokens": 826095860,
+    "output_tokens": 1136119,
+    "api_call_count": 1679
+  }
+}
