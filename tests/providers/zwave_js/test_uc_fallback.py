@@ -10,7 +10,7 @@ module's docstring for the full removal recipe.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -41,8 +41,12 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
+    LockOperationFailed,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.providers._zwave_js_uc import (
+    ZWaveJSUserCodeFallbackSupport,
+)
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
 from .conftest import get_zwave_lock, uc_only_caps_response, uc_slot_walk
@@ -785,3 +789,315 @@ class TestUCFallbackLifecycle:
             mock_lock_helpers["async_delete_credential"].assert_not_called()
         finally:
             await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+
+# ---------------------------------------------------------------------------
+# Error mapping and edge cases
+# ---------------------------------------------------------------------------
+
+
+async def test_support_layer_node_stub_raises() -> None:
+    """The support layer's node property must be overridden by the provider."""
+    with pytest.raises(NotImplementedError):
+        ZWaveJSUserCodeFallbackSupport.node.fget(None)
+
+
+async def test_usercode_cc_version_defaults_to_v1_when_cc_missing(
+    zwave_js_lock: ZWaveJSLock,
+) -> None:
+    """A node without User Code CC in its command-class list defaults to V1.
+
+    An incomplete interview can leave the CC list empty; V1 is the
+    conservative default (it enables the post-write verification poll).
+    """
+    with patch.object(
+        type(zwave_js_lock.node),
+        "command_classes",
+        new_callable=PropertyMock,
+        return_value=[],
+    ):
+        assert zwave_js_lock._usercode_cc_version == 1
+
+
+async def test_uc_get_users_transport_error_raises_lock_disconnected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A transport failure during the value DB walk maps to LockDisconnected."""
+    # Establish UC mode first (detection also walks the value DB)
+    await uc_fallback_lock.async_get_capabilities()
+    mock_uc_utils["get_usercodes"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    with pytest.raises(LockDisconnected, match="get usercodes failed"):
+        await uc_fallback_lock.async_get_users()
+
+
+async def test_uc_get_users_refreshes_when_managed_slot_unknown(
+    hass: HomeAssistant,
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """An unknown managed slot triggers one cache refresh before projecting."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [uc_fallback_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await uc_fallback_lock.async_get_capabilities()
+
+    stale_walk = uc_slot_walk(30)
+    stale_walk[1]["in_use"] = None  # slot 2 unknown
+    fresh_walk = uc_slot_walk(30, occupied={2: "1234"})
+    mock_uc_utils["get_usercodes"].side_effect = [stale_walk, fresh_walk]
+
+    with patch.object(
+        type(uc_fallback_lock.node), "async_refresh_cc_values", new=AsyncMock()
+    ) as refresh:
+        users = await uc_fallback_lock.async_get_users()
+
+    refresh.assert_awaited_once_with(CommandClass.USER_CODE)
+    assert [user.user_id for user in users] == [2]
+    assert users[0].credentials[0].state == SlotCredential.known("1234")
+
+
+async def test_uc_get_users_refresh_failure_raises_lock_disconnected(
+    hass: HomeAssistant,
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A failing cache refresh during the retry maps to LockDisconnected."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [uc_fallback_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await uc_fallback_lock.async_get_capabilities()
+
+    stale_walk = uc_slot_walk(30)
+    stale_walk[1]["in_use"] = None
+    mock_uc_utils["get_usercodes"].side_effect = [stale_walk]
+
+    with (
+        patch.object(
+            type(uc_fallback_lock.node),
+            "async_refresh_cc_values",
+            new=AsyncMock(side_effect=FailedZWaveCommand("cmd", 1, "node gone")),
+        ),
+        pytest.raises(LockDisconnected, match="usercode cache refresh failed"),
+    ):
+        await uc_fallback_lock.async_get_users()
+
+
+async def test_uc_get_users_second_walk_failure_raises_lock_disconnected(
+    hass: HomeAssistant,
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A transport failure on the post-refresh walk maps to LockDisconnected."""
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [uc_fallback_lock.lock.entity_id],
+            CONF_SLOTS: {"2": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    await uc_fallback_lock.async_get_capabilities()
+
+    stale_walk = uc_slot_walk(30)
+    stale_walk[1]["in_use"] = None
+    mock_uc_utils["get_usercodes"].side_effect = [
+        stale_walk,
+        FailedZWaveCommand("cmd", 1, "node gone"),
+    ]
+
+    with (
+        patch.object(
+            type(uc_fallback_lock.node), "async_refresh_cc_values", new=AsyncMock()
+        ),
+        pytest.raises(LockDisconnected, match="get usercodes failed"),
+    ):
+        await uc_fallback_lock.async_get_users()
+
+
+async def test_uc_clear_credential_missing_slot_raises_operation_failed(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Clearing a slot with no value in the DB maps to LockOperationFailed."""
+    mock_uc_utils["clear_usercode"].side_effect = NotFoundError("no such slot")
+
+    ref = CredentialRef(user_id=99, type=CredentialType.PIN, slot=99)
+    with pytest.raises(LockOperationFailed, match="clear usercode slot 99"):
+        await uc_fallback_lock.async_delete_credential(ref)
+
+
+async def test_uc_clear_credential_transport_error_raises_lock_disconnected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A Z-Wave transport failure during clear maps to LockDisconnected."""
+    mock_uc_utils["clear_usercode"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    with pytest.raises(LockDisconnected, match="clear usercode slot 3"):
+        await uc_fallback_lock.async_delete_credential(ref)
+
+
+async def test_uc_clear_credential_failure_status_raises_operation_failed(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A FAIL set-value result during clear maps to LockOperationFailed."""
+    mock_uc_utils["clear_usercode"].return_value = SetValueResult(
+        {"status": SetValueStatus.FAIL}
+    )
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    with pytest.raises(LockOperationFailed, match="FAIL"):
+        await uc_fallback_lock.async_delete_credential(ref)
+
+
+async def test_uc_v1_verify_poll_failure_raises_lock_disconnected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A failing post-write verification poll maps to LockDisconnected.
+
+    The write itself succeeded, so routing to the retry path (rather
+    than suspending the slot) lets the next tick verify the result.
+    """
+    mock_uc_utils["get_usercode_from_node"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    with pytest.raises(LockDisconnected, match="verification poll failed"):
+        await uc_fallback_lock.async_set_credential(
+            user_id=5, credential=credential, pin="4321", name=None, source="sync"
+        )
+
+
+async def test_uc_value_updated_ignores_unrelated_events(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Other command classes, properties, and slot 0 are filtered out."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    uc_fallback_lock.coordinator = mock_coordinator
+
+    for args in (
+        # Different command class
+        {
+            "commandClass": CommandClass.DOOR_LOCK,
+            "property": "userCode",
+            "propertyKey": 2,
+            "newValue": "1234",
+        },
+        # Unrelated User Code CC property
+        {
+            "commandClass": CommandClass.USER_CODE,
+            "property": "keypadMode",
+            "propertyKey": 2,
+            "newValue": 1,
+        },
+        # Slot 0 is not a valid user code slot
+        {
+            "commandClass": CommandClass.USER_CODE,
+            "property": "userCode",
+            "propertyKey": 0,
+            "newValue": "1234",
+        },
+    ):
+        uc_fallback_lock._on_uc_value_updated({"args": args})
+
+    mock_coordinator.push_update.assert_not_called()
+
+
+async def test_uc_value_update_falsy_value_pushes_empty(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A falsy userCode value resolves to an empty slot."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
+    uc_fallback_lock.coordinator = mock_coordinator
+
+    uc_fallback_lock._on_uc_value_updated(
+        {
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": "userCode",
+                "propertyKey": 2,
+                "newValue": None,
+            }
+        }
+    )
+
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+
+
+async def test_uc_value_update_all_zeros_not_in_use_pushes_empty(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """All-zeros with in_use explicitly False resolves to an empty slot."""
+    mock_uc_utils["get_usercode"].side_effect = None
+    mock_uc_utils["get_usercode"].return_value = {
+        "code_slot": 2,
+        "name": "Slot 2",
+        "in_use": False,
+        "usercode": "0000",
+    }
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
+    uc_fallback_lock.coordinator = mock_coordinator
+
+    uc_fallback_lock._on_uc_value_updated(
+        {
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": "userCode",
+                "propertyKey": 2,
+                "newValue": "0000",
+            }
+        }
+    )
+
+    mock_coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+
+
+async def test_uc_value_update_duplicate_value_skipped(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Z-Wave JS sends duplicate events; unchanged values are not re-pushed."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {2: SlotCredential.known("1234")}
+    uc_fallback_lock.coordinator = mock_coordinator
+
+    uc_fallback_lock._on_uc_value_updated(
+        {
+            "args": {
+                "commandClass": CommandClass.USER_CODE,
+                "property": "userCode",
+                "propertyKey": 2,
+                "newValue": "1234",
+            }
+        }
+    )
+
+    mock_coordinator.push_update.assert_not_called()
