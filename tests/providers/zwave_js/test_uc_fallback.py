@@ -315,6 +315,33 @@ async def test_uc_delete_credential_skips_when_already_clear(
     mock_uc_utils["clear_usercode"].assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "current_value",
+    [
+        # Unknown in_use must NOT be treated as already-clear; a partially
+        # populated cache could mask a live PIN, so the clear has to proceed.
+        {"code_slot": 3, "name": "Slot 3", "in_use": None, "usercode": None},
+        # Missing in_use key is the same uncertainty as None.
+        {"code_slot": 3, "name": "Slot 3", "usercode": None},
+    ],
+    ids=["in_use_none", "in_use_missing"],
+)
+async def test_uc_delete_credential_proceeds_when_in_use_unknown(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+    current_value: dict,
+) -> None:
+    """Only an explicit in_use=False short-circuits the clear."""
+    mock_uc_utils["get_usercode"].side_effect = None
+    mock_uc_utils["get_usercode"].return_value = current_value
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    result = await uc_fallback_lock.async_delete_credential(ref)
+
+    assert result is True
+    mock_uc_utils["clear_usercode"].assert_awaited_once_with(uc_fallback_lock.node, 3)
+
+
 async def test_uc_v1_write_polls_slot_after_set(
     uc_fallback_lock: ZWaveJSLock,
     mock_uc_utils: dict,
@@ -1101,3 +1128,39 @@ async def test_uc_value_update_duplicate_value_skipped(
     )
 
     mock_coordinator.push_update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("in_use", "usercode", "expected"),
+    [
+        # Explicit in_use=False is the only "definitely empty" signal.
+        (False, None, SlotCredential.empty()),
+        (False, "", SlotCredential.empty()),
+        # Unknown in_use with no cached value matches the legacy 3.x reader.
+        (None, None, SlotCredential.empty()),
+        # Masked codes are unreadable regardless of in_use -- mirrors the
+        # push-path rule (masked + in_use!=False -> unreadable).
+        (True, "****", SlotCredential.unreadable()),
+        (None, "****", SlotCredential.unreadable()),
+        # Occupied slot without a cached value is unreadable, not empty.
+        (True, None, SlotCredential.unreadable()),
+        # Real codes pass through; unknown in_use must not erase a present PIN.
+        (True, "1234", SlotCredential.known("1234")),
+        (None, "1234", SlotCredential.known("1234")),
+    ],
+    ids=[
+        "false_no_code_empty",
+        "false_blank_code_empty",
+        "none_no_code_empty",
+        "true_masked_unreadable",
+        "none_masked_unreadable",
+        "true_no_cached_value_unreadable",
+        "true_known_code",
+        "none_with_code_known",
+    ],
+)
+def test_uc_slot_state_projection(
+    in_use: bool | None, usercode: str | None, expected: SlotCredential
+) -> None:
+    """_uc_slot_state must distinguish None (unknown) from False (cleared)."""
+    assert ZWaveJSUserCodeFallbackSupport._uc_slot_state(in_use, usercode) == expected

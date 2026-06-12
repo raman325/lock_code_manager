@@ -214,14 +214,22 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         """
         Project a User Code CC slot to a ``SlotCredential``.
 
-        Masked codes (all asterisks) and occupied slots without a cached
-        value count as unreadable; an unknown ``in_use`` (None) with no
-        value counts as empty, matching the legacy 3.x reader.
+        Slots count as empty only when ``in_use`` is explicitly ``False``,
+        or when ``in_use`` is unknown (``None``) with no cached value --
+        the latter matches the legacy 3.x reader. Masked codes (all
+        asterisks) and occupied slots without a cached value count as
+        unreadable; an unknown ``in_use`` with a present value is treated
+        as occupied so a partially populated cache cannot erase a live
+        PIN (mirrors the push-path rule at ``_handle_uc_value_update``).
         """
-        if not in_use:
+        if in_use is False:
             return SlotCredential.empty()
         if not usercode:
-            return SlotCredential.unreadable()
+            return (
+                SlotCredential.empty()
+                if in_use is None
+                else SlotCredential.unreadable()
+            )
         code = str(usercode)
         if code == "*" * len(code):
             return SlotCredential.unreadable()
@@ -349,7 +357,10 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
             current = get_usercode(self.node, code_slot)
         except NotFoundError:
             current = None
-        if current is not None and not current.get(ATTR_IN_USE):
+        # Only an explicit in_use=False short-circuits: a missing/None
+        # ATTR_IN_USE means the cache is partially populated and may hide
+        # a live PIN, so the clear has to proceed.
+        if current is not None and current.get(ATTR_IN_USE) is False:
             _LOGGER.debug(
                 "Lock %s slot %s already cleared, skipping clear",
                 self.lock.entity_id,
