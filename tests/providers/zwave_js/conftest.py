@@ -530,7 +530,7 @@ def mock_uc_utils() -> Generator[dict]:
         "clear_usercode": AsyncMock(return_value=None),
     }
     with patch.multiple(
-        "custom_components.lock_code_manager.providers.zwave_js", **mocks
+        "custom_components.lock_code_manager.providers._zwave_js_uc", **mocks
     ):
         yield mocks
 
