@@ -3,7 +3,7 @@
   "checkpoint_id": "91cbca6795ab",
   "strategy": "manual-commit",
   "branch": "fix/zwave-js-uc-only-lock-fallback",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
     "custom_components/lock_code_manager/providers/zwave_js.py",
@@ -19,13 +19,19 @@
       "transcript": "/91/cbca6795ab/0/full.jsonl",
       "content_hash": "/91/cbca6795ab/0/content_hash.txt",
       "prompt": "/91/cbca6795ab/0/prompt.txt"
+    },
+    {
+      "metadata": "/91/cbca6795ab/1/metadata.json",
+      "transcript": "/91/cbca6795ab/1/full.jsonl",
+      "content_hash": "/91/cbca6795ab/1/content_hash.txt",
+      "prompt": "/91/cbca6795ab/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 7750,
-    "cache_creation_tokens": 70260,
-    "cache_read_tokens": 12066455,
-    "output_tokens": 32239,
-    "api_call_count": 26
+    "input_tokens": 11224,
+    "cache_creation_tokens": 11950749,
+    "cache_read_tokens": 1056848227,
+    "output_tokens": 1438343,
+    "api_call_count": 2063
   }
 }
