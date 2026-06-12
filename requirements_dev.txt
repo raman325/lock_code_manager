@@ -15,5 +15,5 @@ usb-devices>=0.5.1
 uv
 zeroconf==0.149.16
 zha==1.4.1
-zigpy>=1.4.1
+zigpy>=1.6.0
 zwave-js-server-python==0.72.0
