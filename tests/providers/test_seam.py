@@ -205,16 +205,23 @@ async def test_setup_internal_rejects_lock_without_pin_support(
         await lock.async_setup_internal(config_entry)
 
 
-async def test_setup_internal_rejects_lock_without_user_management(
+async def test_setup_internal_accepts_slot_only_capabilities(
     hass: HomeAssistant,
 ) -> None:
-    """A native-user lock missing user management fails setup with a typed error."""
+    """A native-user lock reporting slot-only capabilities completes setup.
 
-    class _NoUserMgmtLock(_NativeStubLock):
+    ``supports_user_management=False`` with PIN support is a valid shape
+    (e.g. the Z-Wave User Code CC fallback): the seam's
+    ``_supports_user_records`` gate routes such locks through the
+    credential primitives without the user lifecycle, so setup must not
+    reject them.
+    """
+
+    class _SlotOnlyCapsLock(_NativeStubLock):
         async def async_get_capabilities(self) -> LockCapabilities:
             return LockCapabilities(
                 supports_user_management=False,
-                max_users=30,
+                max_users=0,
                 credential_types={
                     CredentialType.PIN: CredentialTypeCapability(
                         num_slots=30,
@@ -223,14 +230,16 @@ async def test_setup_internal_rejects_lock_without_user_management(
                         supports_learn=False,
                     ),
                 },
-                max_user_name_length=16,
+                max_user_name_length=0,
             )
 
-    lock = _make_lock(hass, _NoUserMgmtLock, "seam_setup_no_user_mgmt")
+    lock = _make_lock(hass, _SlotOnlyCapsLock, "seam_setup_slot_only_caps")
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
-    with pytest.raises(LockCodeManagerProviderError, match="user management"):
-        await lock.async_setup_internal(config_entry)
+    await lock.async_setup_internal(config_entry)
+
+    assert lock._setup_succeeded is True
+    assert await lock._supports_user_records() is False
 
 
 async def test_setup_internal_skips_capability_check_for_slot_only_providers(

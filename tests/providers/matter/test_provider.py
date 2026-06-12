@@ -165,7 +165,12 @@ async def test_setup_internal_unsupported_lock(
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Base setup raises when the lock doesn't support user management."""
+    """Base setup raises when the lock advertises no PIN credential support.
+
+    ``supports_user_management`` alone no longer fails setup (slot-only
+    locks are served via the seam's credential-primitive routing); the
+    structural requirement is PIN support, which this lock also lacks.
+    """
     mock_get_lock_info = AsyncMock(return_value={"supports_user_management": False})
     with (
         patch.object(
@@ -173,7 +178,9 @@ async def test_setup_internal_unsupported_lock(
         ),
         patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-        pytest.raises(LockCodeManagerError, match="does not support user management"),
+        pytest.raises(
+            LockCodeManagerError, match="does not advertise PIN credential support"
+        ),
     ):
         await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
 

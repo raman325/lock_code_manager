@@ -171,6 +171,7 @@ async def test_hard_refresh_codes_calls_access_control(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """
     Test that async_hard_refresh_codes refreshes both users and credentials from the lock.
@@ -201,6 +202,7 @@ async def test_hard_refresh_codes_calls_access_control(
 async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Z-Wave transport failure during hard refresh surfaces as LockDisconnected."""
     mock_access_control.get_users.side_effect = FailedZWaveCommand(
@@ -214,6 +216,7 @@ async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
 async def test_hard_refresh_codes_maps_ha_error_to_operation_failed(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """A reachable-but-rejected hard refresh surfaces as LockOperationFailed."""
     mock_access_control.get_users.side_effect = HomeAssistantError("rejected")
@@ -229,6 +232,7 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """
     Test that async_get_usercodes projects lock users to slot-keyed credentials.
@@ -260,6 +264,7 @@ async def test_async_get_usercodes_overlays_pin_credentials(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """
     Test that async_get_usercodes projects Personal Identification Number credentials onto slot keys.
@@ -984,6 +989,7 @@ async def test_async_delete_credential_calls_helper_and_returns_true(
 async def test_async_get_users_raises_lock_disconnected_on_zwave_error(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """BaseZwaveJSServerError from access_control reads surfaces as LockDisconnected."""
     mock_access_control.get_users_cached.side_effect = FailedZWaveCommand(
@@ -996,6 +1002,7 @@ async def test_async_get_users_raises_lock_disconnected_on_zwave_error(
 async def test_async_get_users_raises_lock_operation_failed_on_ha_error(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """HomeAssistantError from access_control reads surfaces as LockOperationFailed."""
     mock_access_control.get_users_cached.side_effect = HomeAssistantError("boom")

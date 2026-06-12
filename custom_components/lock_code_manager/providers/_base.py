@@ -551,10 +551,15 @@ class BaseLock:
         """
         Set up lock and coordinator, signaling completion to waiters.
 
-        Validates the lock advertises the capabilities LCM needs
-        (``supports_user_management`` + PIN credentials) for native-user
-        providers; structural failures (``LockCodeManagerProviderError``)
-        propagate and prevent setup. Transport-level failures
+        Validates the lock advertises PIN credential support for
+        native-user providers; structural failures
+        (``LockCodeManagerProviderError``) propagate and prevent setup.
+        ``supports_user_management`` is deliberately NOT required: a
+        native-user provider can serve a slot-only lock (e.g. a Z-Wave
+        User Code CC fallback), in which case the seam's
+        ``_supports_user_records`` gate skips the user lifecycle and
+        routes through the credential primitives directly.
+        Transport-level failures
         (``LockDisconnected``/``LockOperationFailed``) during the
         capability probe OR the provider's own ``async_setup`` are logged
         and the coordinator is created anyway so the integration retries
@@ -564,10 +569,6 @@ class BaseLock:
         try:
             if self.supports_native_users:
                 caps = await self._get_cached_capabilities()
-                if not caps.supports_user_management:
-                    raise LockCodeManagerProviderError(
-                        f"{self.lock.entity_id}: lock does not support user management"
-                    )
                 if CredentialType.PIN not in caps.credential_types:
                     raise LockCodeManagerProviderError(
                         f"{self.lock.entity_id}: lock does not advertise PIN credential support"

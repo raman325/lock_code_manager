@@ -58,8 +58,8 @@ from ..domain.exceptions import (
     LockOperationFailed,
 )
 from ..domain.models import SlotCredential
-from ._base import BaseLock
 from ._util import parse_tag
+from ._zwave_js_uc import ZWaveJSUserCodeFallbackSupport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,8 +107,15 @@ ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
 
 
 @dataclass(repr=False, eq=False)
-class ZWaveJSLock(BaseLock):
-    """Class to represent ZWave JS lock."""
+class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
+    """
+    Class to represent ZWave JS lock.
+
+    Extends the temporary ``ZWaveJSUserCodeFallbackSupport`` layer (see
+    ``_zwave_js_uc.py`` for the removal recipe once the upstream driver
+    fix ships); this class holds only the unified-API implementation and
+    the fallback routing branch points.
+    """
 
     lock_config_entry: ConfigEntry = field(repr=False)
     # Home Assistant event-bus listeners (separate lifecycle from push
@@ -171,7 +178,16 @@ class ZWaveJSLock(BaseLock):
         extra read. Z-Wave credential types with no domain equivalent
         (BLE, UWB, DESFIRE, unspecified/eye/hand biometrics) are
         dropped.
+
+        Uses the unified ``access_control`` API which dispatches to UC
+        or U3C internally per node-zwave-js v15.23.4+. When that API is
+        unusable for this lock (see ``async_get_capabilities``), users
+        are synthesized from the User Code CC value DB instead: one
+        implicit user per occupied slot with ``user_id == slot``,
+        matching the User Code CC model where the user IS the credential.
         """
+        if await self._async_uc_fallback_active():
+            return await self._async_uc_users_from_value_db()
         try:
             users = await self.node.access_control.get_users_cached()
             credentials = await self.node.access_control.get_all_credentials_cached()
@@ -209,7 +225,31 @@ class ZWaveJSLock(BaseLock):
         return list(users_by_id.values())
 
     async def async_get_capabilities(self) -> LockCapabilities:
-        """Report the lock's user/credential capabilities."""
+        """
+        Report the lock's user/credential capabilities.
+
+        Auto-detects User Code CC (UC) vs User Credential CC (U3C) and
+        returns capabilities shaped so the seam routes through the right
+        code path.
+
+        The unified ``access_control`` API in node-zwave-js computes its
+        capabilities from cached interview data; on some locks that data
+        is degenerate -- the PIN credential type comes back either
+        missing or advertising ``num_slots=0`` even though the lock
+        manages codes fine through the legacy User Code CC (issue
+        #1251, upstream fix in zwave-js/zwave-js#8873). When that
+        happens AND the node actually advertises User Code CC, we fall
+        back to reading the lock's UC slot count from the value DB and
+        return slot-only capabilities: ``supports_user_management=False``
+        and ``max_user_name_length=0``, which the seam recognizes as a
+        slot-only lock and routes through the credential-only
+        primitives (``async_set_credential`` / ``async_delete_credential``
+        / ``async_get_users``) without the user lifecycle. All
+        credential operations then use the User Code CC utilities
+        directly. Once the upstream fix ships and the unified API
+        reports usable PIN capabilities for these locks, the fallback
+        detection stops triggering on its own.
+        """
         try:
             caps = await lock_helpers.async_get_credential_capabilities(self.node)
         except BaseZwaveJSServerError as err:
@@ -217,23 +257,34 @@ class ZWaveJSLock(BaseLock):
         except HomeAssistantError as err:
             raise LockOperationFailed(f"get capabilities failed: {err}") from err
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
-        credential_types = (
-            {
-                CredentialType.PIN: CredentialTypeCapability(
-                    num_slots=pin["num_slots"],
-                    min_length=pin["min_length"],
-                    max_length=pin["max_length"],
-                    supports_learn=pin["supports_learn"],
-                )
-            }
-            if pin
-            else {}
-        )
+
+        if pin and pin["num_slots"] > 0:
+            # The unified API advertises real PIN credential slots.
+            self._uc_fallback = False
+            return LockCapabilities(
+                supports_user_management=caps["supports_user_management"],
+                max_users=caps["max_users"],
+                credential_types={
+                    CredentialType.PIN: CredentialTypeCapability(
+                        num_slots=pin["num_slots"],
+                        min_length=pin["min_length"],
+                        max_length=pin["max_length"],
+                        supports_learn=pin["supports_learn"],
+                    )
+                },
+                max_user_name_length=caps.get("max_user_name_length", 0),
+            )
+
+        # Degenerate unified capabilities (issue #1251): try the User Code
+        # CC fallback layer; when it does not apply either, the lock has
+        # no PIN support LCM can manage.
+        if uc_caps := self._uc_fallback_capabilities():
+            return uc_caps
         return LockCapabilities(
-            supports_user_management=caps["supports_user_management"],
-            max_users=caps["max_users"],
-            credential_types=credential_types,
-            max_user_name_length=caps.get("max_user_name_length", 0),
+            supports_user_management=False,
+            max_users=0,
+            credential_types={},
+            max_user_name_length=0,
         )
 
     async def async_set_user(self, user: User) -> SetUserResult:
@@ -360,7 +411,18 @@ class ZWaveJSLock(BaseLock):
         name: str | None,
         source: Literal["sync", "direct"],
     ) -> bool:
-        """Write the Personal Identification Number credential under user_id; map device rejections."""
+        """
+        Write the PIN credential under user_id; map device rejections.
+
+        In UC-fallback mode the write goes through the legacy User Code
+        CC utilities (``set_usercode``), which address the slot directly
+        and never consult the unified API's broken capability data.
+        Otherwise the write goes through HA's
+        ``lock_helpers.async_set_credential``, whose translation-key
+        errors are mapped to LCM's typed exceptions.
+        """
+        if await self._async_uc_fallback_active():
+            return await self._async_uc_set_usercode(credential.slot, pin)
         try:
             await lock_helpers.async_set_credential(
                 self.node,
@@ -371,7 +433,7 @@ class ZWaveJSLock(BaseLock):
             )
         except BaseZwaveJSServerError as err:
             # Transient Z-Wave command failure (e.g. a sleeping/battery lock):
-            # route to the retry path rather than a slot suspension.
+            # route to retry rather than slot suspension.
             raise LockDisconnected(
                 f"set credential slot {credential.slot} failed: {err}"
             ) from err
@@ -389,7 +451,15 @@ class ZWaveJSLock(BaseLock):
         return True
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
-        """Delete the Personal Identification Number credential addressed by ref."""
+        """
+        Delete the credential addressed by ref.
+
+        In UC-fallback mode the clear goes through the legacy User Code
+        CC utilities (``clear_usercode``); otherwise through HA's
+        ``lock_helpers.async_delete_credential``.
+        """
+        if await self._async_uc_fallback_active():
+            return await self._async_uc_clear_usercode(ref.slot)
         try:
             await lock_helpers.async_delete_credential(
                 self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
@@ -428,7 +498,19 @@ class ZWaveJSLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe to access-control credential change events."""
+        """
+        Subscribe to credential change events.
+
+        In unified mode the driver emits ``credential added/modified/
+        deleted`` node events. In UC-fallback mode those events never
+        fire (the driver only emits them from its own unified API
+        methods, which the fallback bypasses), so we subscribe to raw
+        ``value updated`` events for the User Code CC values instead --
+        the same push source the legacy 3.x provider used. When the
+        mode is not yet known (capability probe hasn't run), subscribe
+        to both; the handlers are self-filtering and pushes are
+        idempotent.
+        """
         if self._push_unsubs:
             return
 
@@ -436,12 +518,20 @@ class ZWaveJSLock(BaseLock):
         if not ready:
             raise LockDisconnected(reason)
 
+        subscriptions: list[tuple[str, Callable[[dict[str, Any]], None]]] = []
+        if self._uc_fallback is not False:
+            subscriptions.append(("value updated", self._on_uc_value_updated))
+        if not self._uc_fallback:
+            subscriptions.extend(
+                (
+                    ("credential added", self._on_credential_changed),
+                    ("credential modified", self._on_credential_changed),
+                    ("credential deleted", self._on_credential_deleted),
+                )
+            )
+
         try:
-            for name, handler in (
-                ("credential added", self._on_credential_changed),
-                ("credential modified", self._on_credential_changed),
-                ("credential deleted", self._on_credential_deleted),
-            ):
+            for name, handler in subscriptions:
                 self._register_push_unsub(self.node.on(name, handler))
         except ValueError as err:
             self._clear_push_unsubs()
@@ -498,6 +588,9 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
+
+        if self._uc_handle_duplicate_notification(evt, code_slot):
+            return
 
         self.async_fire_code_slot_event(
             code_slot=code_slot,
@@ -564,6 +657,9 @@ class ZWaveJSLock(BaseLock):
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read users AND credentials fresh from the device, then project to slots."""
+        if await self._async_uc_fallback_active():
+            await self._async_refresh_usercode_cache()
+            return await self.async_get_usercodes()
         try:
             await self.node.access_control.get_users()
             await self.node.access_control.get_all_credentials()
