@@ -16,6 +16,7 @@ from zwave_js_server.const.command_class.access_control import (
     SetCredentialResult,
     UserCredentialType,
 )
+from zwave_js_server.exceptions import NotFoundError
 from zwave_js_server.model.driver import Driver
 from zwave_js_server.model.node import Node
 from zwave_js_server.version import VersionInfo
@@ -459,12 +460,10 @@ def mock_access_control(lock_schlage_be469: Node):
     CLASS level for the fixture's scope -- every ``Node`` instance sees the
     mock while the fixture is active, not just ``lock_schlage_be469``.
 
-    LCM's zwave_js provider calls ``set_credential`` and
-    ``delete_credential`` directly on this object (bypassing HA's
-    ``lock_helpers`` whose slot validation breaks for UC-only locks --
-    see issue #1251). Default both to ``SetCredentialResult.OK`` so
-    tests that don't specifically exercise rejection don't have to
-    re-mock them.
+    The provider's unified-mode reads go through this object; its write
+    primitives are mocked too so UC-fallback tests can assert they are
+    NOT called (UC mode must route through the User Code CC utilities
+    instead -- see issue #1251).
     """
     ac = MagicMock()
     ac.get_user_cached = AsyncMock(return_value=None)
@@ -476,3 +475,81 @@ def mock_access_control(lock_schlage_be469: Node):
     ac.delete_credential = AsyncMock(return_value=SetCredentialResult.OK)
     with patch.object(type(lock_schlage_be469), "access_control", ac):
         yield ac
+
+
+def uc_only_caps_response() -> dict:
+    """Return a degenerate credential-capabilities response (issue #1251).
+
+    This is what ``lock_helpers.async_get_credential_capabilities`` returns
+    when the unified ``access_control`` API has no usable PIN data for the
+    lock: the helper hardcodes ``supports_user_management=True`` but the
+    PIN credential type is missing (or advertises ``num_slots=0``).
+    """
+    return {
+        "supports_user_management": True,
+        "max_users": 0,
+        "supported_user_types": [],
+        "max_user_name_length": 0,
+        "supported_credential_rules": [],
+        "supported_credential_types": {},
+    }
+
+
+def uc_slot_walk(
+    num_slots: int, occupied: dict[int, str | None] | None = None
+) -> list[dict]:
+    """Build a fake ``get_usercodes`` value-DB walk.
+
+    ``occupied`` maps slot -> usercode (None for an occupied slot whose
+    code is not cached); all other slots are returned as not in use.
+    """
+    occupied = occupied or {}
+    return [
+        {
+            "code_slot": slot,
+            "name": f"Slot {slot}",
+            "in_use": slot in occupied,
+            "usercode": occupied.get(slot),
+        }
+        for slot in range(1, num_slots + 1)
+    ]
+
+
+@pytest.fixture
+def mock_uc_utils() -> Generator[dict]:
+    """Patch the User Code CC utilities the UC-fallback path calls.
+
+    ``get_usercode`` defaults to raising ``NotFoundError`` (no cached
+    value), which the provider treats as "proceed with the write".
+    """
+    mocks = {
+        "get_usercodes": MagicMock(return_value=[]),
+        "get_usercode": MagicMock(side_effect=NotFoundError("no cached value")),
+        "get_usercode_from_node": AsyncMock(),
+        "set_usercode": AsyncMock(return_value=None),
+        "clear_usercode": AsyncMock(return_value=None),
+    }
+    with patch.multiple(
+        "custom_components.lock_code_manager.providers.zwave_js", **mocks
+    ):
+        yield mocks
+
+
+@pytest.fixture
+def uc_fallback_lock(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> ZWaveJSLock:
+    """Arrange a lock whose capability probe lands in UC-fallback mode.
+
+    The unified API reports no usable PIN capabilities while the User
+    Code CC value DB walk finds 30 slots. Detection itself runs lazily
+    on the first capability probe or credential operation.
+    """
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].return_value = uc_only_caps_response()
+    mock_uc_utils["get_usercodes"].return_value = uc_slot_walk(30)
+    return zwave_js_lock

@@ -11,22 +11,34 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
+import functools
 import logging
 from typing import Any, Literal
 
 from zwave_js_server.client import Client
-from zwave_js_server.const import NodeStatus
-from zwave_js_server.const.command_class.access_control import (
-    SetCredentialResult,
-    UserCredentialType,
+from zwave_js_server.const import CommandClass, NodeStatus, SetValueStatus
+from zwave_js_server.const.command_class.access_control import UserCredentialType
+from zwave_js_server.const.command_class.lock import (
+    ATTR_CODE_SLOT,
+    ATTR_IN_USE,
+    ATTR_USERCODE,
+    LOCK_USERCODE_PROPERTY,
+    LOCK_USERCODE_STATUS_PROPERTY,
+    CodeSlotStatus,
 )
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
-from zwave_js_server.exceptions import BaseZwaveJSServerError
+from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
 from zwave_js_server.model.node import Node
-from zwave_js_server.util.lock import get_usercodes
+from zwave_js_server.util.lock import (
+    clear_usercode,
+    get_usercode,
+    get_usercode_from_node,
+    get_usercodes,
+    set_usercode,
+)
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -89,6 +101,13 @@ _ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE: dict[UserCredentialType, CredentialType] = {
 }
 
 
+# SetValueResult statuses that mean a User Code CC value write was accepted.
+_UC_SET_VALUE_OK = (
+    SetValueStatus.SUCCESS,
+    SetValueStatus.SUCCESS_UNSUPERVISED,
+    SetValueStatus.WORKING,
+)
+
 # All known Access Control Notification CC events that indicate the lock is locked
 # or unlocked
 ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
@@ -119,6 +138,24 @@ class ZWaveJSLock(BaseLock):
     # subscriptions: registered in ``async_setup``, released in
     # ``async_unload``).
     _listeners: list[Callable[[], None]] = field(init=False, default_factory=list)
+    # Whether the unified access-control API is unusable for PIN management
+    # on this lock and the legacy User Code CC utilities must be used
+    # instead. None until ``async_get_capabilities`` runs the detection.
+    # Deliberately stored (not re-probed per operation) so it shares the
+    # lifetime of the base's capabilities cache: the seam's slot-only
+    # routing decision is frozen from the same snapshot, and flipping one
+    # without the other would route writes incoherently. Both reset
+    # together when the provider is rebuilt (HA restart, LCM reload, or a
+    # zwave_js entry reload -- which a driver upgrade always triggers),
+    # so a lock healed by the upstream fix lands back in unified mode on
+    # its next reload with no LCM change.
+    _uc_fallback: bool | None = field(init=False, default=None)
+    # Slot of a UC-fallback set operation currently in flight. User Code CC
+    # has no in-band duplicate-rejection result; some firmwares report a
+    # duplicate via an Access Control notification instead (sometimes with
+    # userId=0). Tracking the in-flight slot lets the notification handler
+    # attribute that rejection to the right slot.
+    _set_in_progress_code_slot: int | None = field(init=False, default=None)
 
     @property
     def node(self) -> Node:
@@ -177,8 +214,14 @@ class ZWaveJSLock(BaseLock):
         dropped.
 
         Uses the unified ``access_control`` API which dispatches to UC
-        or U3C internally per node-zwave-js v15.23.4+.
+        or U3C internally per node-zwave-js v15.23.4+. When that API is
+        unusable for this lock (see ``async_get_capabilities``), users
+        are synthesized from the User Code CC value DB instead: one
+        implicit user per occupied slot with ``user_id == slot``,
+        matching the User Code CC model where the user IS the credential.
         """
+        if await self._async_uc_fallback_active():
+            return await self._async_uc_users_from_value_db()
         try:
             users = await self.node.access_control.get_users_cached()
             credentials = await self.node.access_control.get_all_credentials_cached()
@@ -223,18 +266,23 @@ class ZWaveJSLock(BaseLock):
         returns capabilities shaped so the seam routes through the right
         code path.
 
-        The unified ``access_control`` API in node-zwave-js claims support
-        for both UC and U3C, but ``async_get_credential_capabilities``
-        queries U3C-specific data only. UC-only locks (mostly older
-        500-series firmwares but also some current Z-Wave Plus
-        implementations) come back with the PIN credential type either
-        missing or advertising ``num_slots=0``. When that happens we
-        fall back to reading the lock's UC slot count directly and
+        The unified ``access_control`` API in node-zwave-js computes its
+        capabilities from cached interview data; on some locks that data
+        is degenerate -- the PIN credential type comes back either
+        missing or advertising ``num_slots=0`` even though the lock
+        manages codes fine through the legacy User Code CC (issue
+        #1251, upstream fix in zwave-js/zwave-js#8873). When that
+        happens AND the node actually advertises User Code CC, we fall
+        back to reading the lock's UC slot count from the value DB and
         return slot-only capabilities: ``supports_user_management=False``
         and ``max_user_name_length=0``, which the seam recognizes as a
-        slot-only provider and routes through the credential-only
+        slot-only lock and routes through the credential-only
         primitives (``async_set_credential`` / ``async_delete_credential``
-        / ``async_get_users``) without the user lifecycle.
+        / ``async_get_users``) without the user lifecycle. All
+        credential operations then use the User Code CC utilities
+        directly. Once the upstream fix ships and the unified API
+        reports usable PIN capabilities for these locks, the fallback
+        detection stops triggering on its own.
         """
         try:
             caps = await lock_helpers.async_get_credential_capabilities(self.node)
@@ -245,7 +293,8 @@ class ZWaveJSLock(BaseLock):
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
 
         if pin and pin["num_slots"] > 0:
-            # U3C path — the lock advertises real PIN credential slots.
+            # The unified API advertises real PIN credential slots.
+            self._uc_fallback = False
             return LockCapabilities(
                 supports_user_management=caps["supports_user_management"],
                 max_users=caps["max_users"],
@@ -260,22 +309,35 @@ class ZWaveJSLock(BaseLock):
                 max_user_name_length=caps.get("max_user_name_length", 0),
             )
 
-        # UC path — try the legacy User Code CC. ``get_usercodes`` walks
-        # slot 1, 2, 3, ... in the value DB until ``NotFoundError``, so
-        # the returned list length is the lock's actual UC slot count.
-        # An empty list means the lock genuinely has no PIN support.
-        # The function only raises ``NotFoundError`` internally (caught
-        # there) and is otherwise pure value-DB walking, so we let any
-        # unexpected exception surface rather than silently mis-routing
-        # the lock to "no PIN support".
-        uc_slots = get_usercodes(self.node)
+        # Degenerate unified capabilities. Only fall back when the node
+        # advertises User Code CC -- without it the legacy utilities
+        # cannot work either, and the lock genuinely has no PIN support
+        # LCM can manage.
+        # ``get_usercodes`` walks slot 1, 2, 3, ... in the value DB until
+        # ``NotFoundError``, so the returned list length is the lock's
+        # actual UC slot count. The function only raises ``NotFoundError``
+        # internally (caught there) and is otherwise pure value-DB
+        # walking, so we let any unexpected exception surface rather
+        # than silently mis-routing the lock to "no PIN support".
+        uc_slots = (
+            get_usercodes(self.node) if self._node_supports_user_code_cc() else []
+        )
         if not uc_slots:
+            self._uc_fallback = False
             return LockCapabilities(
                 supports_user_management=False,
                 max_users=0,
                 credential_types={},
                 max_user_name_length=0,
             )
+        _LOGGER.warning(
+            "Lock %s: unified access-control API reports no usable PIN "
+            "capabilities but the node supports User Code CC with %s slots; "
+            "falling back to legacy User Code CC handling (see issue #1251)",
+            self.lock.entity_id,
+            len(uc_slots),
+        )
+        self._uc_fallback = True
         return LockCapabilities(
             # Force slot-only routing: supports_user_management=False
             # gates _supports_user_records() at the seam, so the User
@@ -295,6 +357,119 @@ class ZWaveJSLock(BaseLock):
             },
             max_user_name_length=0,
         )
+
+    def _node_supports_user_code_cc(self) -> bool:
+        """Return whether the node's endpoint 0 advertises User Code CC."""
+        return any(cc.id == CommandClass.USER_CODE for cc in self.node.command_classes)
+
+    @functools.cached_property
+    def _usercode_cc_version(self) -> int:
+        """Return the User Code CC version supported by this node."""
+        version = next(
+            (
+                cc.version
+                for cc in self.node.command_classes
+                if cc.id == CommandClass.USER_CODE
+            ),
+            0,
+        )
+        if version == 0:
+            _LOGGER.warning(
+                "Lock %s: User Code CC not found on node %s. This may "
+                "indicate an incomplete interview. Defaulting to V1 behavior",
+                self.lock.entity_id,
+                self.node.node_id,
+            )
+            return 1
+        return version
+
+    async def _async_uc_fallback_active(self) -> bool:
+        """
+        Return whether PIN operations must use the User Code CC fallback.
+
+        The flag is computed by ``async_get_capabilities``; when a
+        credential operation arrives before any capability probe (e.g. a
+        direct service call right after a reload), run the probe first so
+        routing never guesses.
+        """
+        if self._uc_fallback is None:
+            await self._get_cached_capabilities()
+        return bool(self._uc_fallback)
+
+    @staticmethod
+    def _uc_slot_state(in_use: bool | None, usercode: str | None) -> SlotCredential:
+        """
+        Project a User Code CC slot to a ``SlotCredential``.
+
+        Masked codes (all asterisks) and occupied slots without a cached
+        value count as unreadable; an unknown ``in_use`` (None) with no
+        value counts as empty, matching the legacy 3.x reader.
+        """
+        if not in_use:
+            return SlotCredential.empty()
+        if not usercode:
+            return SlotCredential.unreadable()
+        code = str(usercode)
+        if code == "*" * len(code):
+            return SlotCredential.unreadable()
+        return SlotCredential.known(code)
+
+    async def _async_uc_users_from_value_db(self) -> list[User]:
+        """
+        Synthesize one implicit user per occupied User Code CC slot.
+
+        User Code CC has no user records -- the user IS the credential --
+        so each occupied slot becomes a user with ``user_id == slot``
+        carrying its single PIN credential. The seam's slot projection
+        and owner-resolution lookups (untagged user with ``user_id ==
+        slot`` owning a PIN at ``credential.slot == slot``) match this
+        shape via their legacy fallback path.
+
+        When any managed slot is missing from the value DB or has an
+        unknown ``in_use`` state, do one hard refresh before projecting
+        so a partially populated cache is not misread as empty slots.
+        """
+        try:
+            slots = get_usercodes(self.node)
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"get usercodes failed: {err}") from err
+        slots_by_num = {int(slot[ATTR_CODE_SLOT]): slot for slot in slots}
+        if any(
+            slot_num not in slots_by_num
+            or slots_by_num[slot_num].get(ATTR_IN_USE) is None
+            for slot_num in self.managed_slots
+        ):
+            _LOGGER.debug(
+                "Lock %s has missing/unknown slots, performing hard refresh",
+                self.lock.entity_id,
+            )
+            await self._async_refresh_usercode_cache()
+            try:
+                slots = get_usercodes(self.node)
+            except BaseZwaveJSServerError as err:
+                raise LockDisconnected(f"get usercodes failed: {err}") from err
+
+        users: list[User] = []
+        for slot_info in slots:
+            slot = int(slot_info[ATTR_CODE_SLOT])
+            state = self._uc_slot_state(
+                slot_info.get(ATTR_IN_USE), slot_info.get(ATTR_USERCODE)
+            )
+            if state.is_empty:
+                continue
+            user = User(user_id=slot, name=None, active=True)
+            user.credentials.append(
+                Credential(type=CredentialType.PIN, slot=slot, state=state)
+            )
+            users.append(user)
+        return users
+
+    async def _async_refresh_usercode_cache(self) -> None:
+        """Refresh all User Code CC values from the device."""
+        try:
+            await self.node.async_refresh_cc_values(CommandClass.USER_CODE)
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"usercode cache refresh failed: {err}") from err
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
@@ -423,24 +598,22 @@ class ZWaveJSLock(BaseLock):
         """
         Write the PIN credential under user_id; map device rejections.
 
-        Bypasses ``lock_helpers.async_set_credential`` and calls
-        ``node.access_control.set_credential`` directly. The HA helper
-        validates ``1 <= slot <= num_slots`` using
-        ``get_credential_capabilities_cached()`` which returns U3C-only
-        data -- on a UC-only lock that means zero slots, and the helper
-        rejects with ``Credential slot for pin_code must be between 1
-        and 0`` (issue #1251). The driver-level call unifies UC and U3C
-        internally per the node-zwave-js v15.23.4+ contract, so going
-        direct works for both lock generations. We map the
-        ``SetCredentialResult`` status enum to LCM's typed exceptions
-        in place of HA's translation-key flow.
+        In UC-fallback mode the write goes through the legacy User Code
+        CC utilities (``set_usercode``), which address the slot directly
+        and never consult the unified API's broken capability data.
+        Otherwise the write goes through HA's
+        ``lock_helpers.async_set_credential``, whose translation-key
+        errors are mapped to LCM's typed exceptions.
         """
+        if await self._async_uc_fallback_active():
+            return await self._async_uc_set_usercode(credential.slot, pin)
         try:
-            status = await self.node.access_control.set_credential(
+            await lock_helpers.async_set_credential(
+                self.node,
                 user_id,
                 UserCredentialType.PIN_CODE,
-                credential.slot,
                 pin,
+                credential_slot=credential.slot,
             )
         except BaseZwaveJSServerError as err:
             # Transient Z-Wave command failure (e.g. a sleeping/battery lock):
@@ -448,50 +621,157 @@ class ZWaveJSLock(BaseLock):
             raise LockDisconnected(
                 f"set credential slot {credential.slot} failed: {err}"
             ) from err
-        if status is SetCredentialResult.OK:
-            return True
-        if status in (
-            SetCredentialResult.ERROR_DUPLICATE_CREDENTIAL,
-            SetCredentialResult.ERROR_DUPLICATE_ADMIN_PIN_CODE,
-        ):
-            raise DuplicateCodeError(
+        except HomeAssistantError as err:
+            if getattr(err, "translation_key", None) == "credential_rejected_duplicate":
+                raise DuplicateCodeError(
+                    code_slot=credential.slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
+            raise CodeRejectedError(
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,
-            )
-        raise CodeRejectedError(
-            code_slot=credential.slot,
-            lock_entity_id=self.lock.entity_id,
-            reason=f"lock rejected with status {status.name}",
-        )
+                reason=str(err),
+            ) from err
+        return True
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ref.
 
-        Bypasses ``lock_helpers.async_delete_credential`` for the same
-        reason as ``async_set_credential`` -- the helper's slot
-        validation breaks for UC-only locks where
-        ``get_credential_capabilities_cached()`` reports zero slots.
-        Calls ``node.access_control.delete_credential`` directly so
-        the driver's unified UC/U3C dispatch handles both lock
-        generations.
+        In UC-fallback mode the clear goes through the legacy User Code
+        CC utilities (``clear_usercode``); otherwise through HA's
+        ``lock_helpers.async_delete_credential``.
         """
+        if await self._async_uc_fallback_active():
+            return await self._async_uc_clear_usercode(ref.slot)
         try:
-            status = await self.node.access_control.delete_credential(
-                ref.user_id,
-                UserCredentialType.PIN_CODE,
-                ref.slot,
+            await lock_helpers.async_delete_credential(
+                self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
             )
         except BaseZwaveJSServerError as err:
             raise LockDisconnected(
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err
-        if status is SetCredentialResult.OK:
-            return True
-        raise LockOperationFailed(
-            f"delete credential slot {ref.slot} failed: "
-            f"lock rejected with status {status.name}"
-        )
+        except HomeAssistantError as err:
+            raise LockOperationFailed(
+                f"delete credential slot {ref.slot} failed: {err}"
+            ) from err
+        return True
+
+    async def _async_uc_set_usercode(self, code_slot: int, usercode: str) -> bool:
+        """
+        Write a usercode through the legacy User Code CC value path.
+
+        Returns False without writing when the cached value already
+        matches (masked codes never match, so they are always
+        rewritten). After a successful write, V1 locks are polled to
+        force-update the value DB (they don't reliably report back),
+        and the new state is pushed optimistically so the next sync
+        tick doesn't read a stale cache and loop.
+        """
+        try:
+            current = get_usercode(self.node, code_slot)
+        except NotFoundError:
+            current = None
+        if current and current.get(ATTR_IN_USE):
+            current_code = str(current.get(ATTR_USERCODE) or "")
+            if current_code != "*" * len(current_code) and usercode == current_code:
+                _LOGGER.debug(
+                    "Lock %s slot %s already has this PIN, skipping set",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return False
+
+        self._set_in_progress_code_slot = code_slot
+        try:
+            result = await set_usercode(self.node, code_slot, usercode)
+        except NotFoundError as err:
+            self._set_in_progress_code_slot = None
+            raise CodeRejectedError(
+                code_slot=code_slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=f"slot not found on lock: {err}",
+            ) from err
+        except BaseZwaveJSServerError as err:
+            self._set_in_progress_code_slot = None
+            raise LockDisconnected(
+                f"set usercode slot {code_slot} failed: {err}"
+            ) from err
+        if result is not None and result.status not in _UC_SET_VALUE_OK:
+            self._set_in_progress_code_slot = None
+            raise CodeRejectedError(
+                code_slot=code_slot,
+                lock_entity_id=self.lock.entity_id,
+                reason=f"set value returned {result.status.name}",
+            )
+        await self._async_uc_verify_write(code_slot, "set")
+        # Optimistic update: the value cache updates asynchronously via push
+        # notification; push now to prevent sync loops from reading stale cache.
+        self._push_credential_update(code_slot, SlotCredential.known(usercode))
+        return True
+
+    async def _async_uc_clear_usercode(self, code_slot: int) -> bool:
+        """
+        Clear a usercode through the legacy User Code CC value path.
+
+        Returns False without writing when the slot is already clear.
+        Mirrors ``_async_uc_set_usercode`` for verification and the
+        optimistic push.
+        """
+        try:
+            current = get_usercode(self.node, code_slot)
+        except NotFoundError:
+            current = None
+        if current is not None and not current.get(ATTR_IN_USE):
+            _LOGGER.debug(
+                "Lock %s slot %s already cleared, skipping clear",
+                self.lock.entity_id,
+                code_slot,
+            )
+            return False
+
+        try:
+            result = await clear_usercode(self.node, code_slot)
+        except NotFoundError as err:
+            raise LockOperationFailed(
+                f"clear usercode slot {code_slot} failed: {err}"
+            ) from err
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(
+                f"clear usercode slot {code_slot} failed: {err}"
+            ) from err
+        if result is not None and result.status not in _UC_SET_VALUE_OK:
+            raise LockOperationFailed(
+                f"clear usercode slot {code_slot} failed: "
+                f"set value returned {result.status.name}"
+            )
+        await self._async_uc_verify_write(code_slot, "clear")
+        # Optimistic update: see _async_uc_set_usercode for rationale.
+        self._push_credential_update(code_slot, SlotCredential.empty())
+        return True
+
+    async def _async_uc_verify_write(
+        self, code_slot: int, operation: Literal["set", "clear"]
+    ) -> None:
+        """
+        Force-update the value cache after a set/clear on a V1 lock.
+
+        V1 locks don't reliably update the Z-Wave JS value cache after a
+        write. Poll the slot directly from the device to force-update the
+        cache before the coordinator reads it, preventing sync loops.
+        Wrap failures as LockDisconnected so they route to the retry path
+        instead of suspending the slot.
+        """
+        if self._usercode_cc_version >= 2:
+            return
+        try:
+            await get_usercode_from_node(self.node, code_slot)
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(
+                f"Post-{operation} verification poll failed for "
+                f"{self.lock.entity_id} slot {code_slot}: {err}"
+            ) from err
 
     def _get_client_state(self) -> tuple[bool, str]:
         """Return whether the Z-Wave JS client is ready and a retry reason."""
@@ -517,7 +797,19 @@ class ZWaveJSLock(BaseLock):
 
     @callback
     def setup_push_subscription(self) -> None:
-        """Subscribe to access-control credential change events."""
+        """
+        Subscribe to credential change events.
+
+        In unified mode the driver emits ``credential added/modified/
+        deleted`` node events. In UC-fallback mode those events never
+        fire (the driver only emits them from its own unified API
+        methods, which the fallback bypasses), so we subscribe to raw
+        ``value updated`` events for the User Code CC values instead --
+        the same push source the legacy 3.x provider used. When the
+        mode is not yet known (capability probe hasn't run), subscribe
+        to both; the handlers are self-filtering and pushes are
+        idempotent.
+        """
         if self._push_unsubs:
             return
 
@@ -525,16 +817,125 @@ class ZWaveJSLock(BaseLock):
         if not ready:
             raise LockDisconnected(reason)
 
+        subscriptions: list[tuple[str, Callable[[dict[str, Any]], None]]] = []
+        if self._uc_fallback is not False:
+            subscriptions.append(("value updated", self._on_uc_value_updated))
+        if not self._uc_fallback:
+            subscriptions.extend(
+                (
+                    ("credential added", self._on_credential_changed),
+                    ("credential modified", self._on_credential_changed),
+                    ("credential deleted", self._on_credential_deleted),
+                )
+            )
+
         try:
-            for name, handler in (
-                ("credential added", self._on_credential_changed),
-                ("credential modified", self._on_credential_changed),
-                ("credential deleted", self._on_credential_deleted),
-            ):
+            for name, handler in subscriptions:
                 self._register_push_unsub(self.node.on(name, handler))
         except ValueError as err:
             self._clear_push_unsubs()
             raise LockDisconnected(f"node not ready: {err}") from err
+
+    def _uc_code_slot_in_use(self, code_slot: int) -> bool | None:
+        """Return whether a User Code CC slot is in use, None when unknown."""
+        try:
+            return get_usercode(self.node, code_slot)[ATTR_IN_USE]
+        except NotFoundError, KeyError:
+            return None
+
+    @callback
+    def _on_uc_value_updated(self, event: dict[str, Any]) -> None:
+        """Handle ``value updated`` node events for User Code CC values."""
+        args: dict[str, Any] = event["args"]
+        if args.get("commandClass") != CommandClass.USER_CODE:
+            return
+
+        property_name = args.get("property")
+        if property_name not in (
+            LOCK_USERCODE_PROPERTY,
+            LOCK_USERCODE_STATUS_PROPERTY,
+        ):
+            return
+
+        code_slot = int(args["propertyKey"])
+        # Slot 0 is not a valid user code slot.
+        if code_slot == 0:
+            return
+
+        # Clear in-progress tracking only on userCode updates for the slot
+        # we were setting. userIdStatus updates don't confirm acceptance and
+        # could race with duplicate-code notifications.
+        if (
+            property_name == LOCK_USERCODE_PROPERTY
+            and code_slot == self._set_in_progress_code_slot
+        ):
+            self._set_in_progress_code_slot = None
+
+        if property_name == LOCK_USERCODE_STATUS_PROPERTY:
+            self._handle_uc_status_update(code_slot, args.get("newValue"))
+        else:
+            self._handle_uc_value_update(code_slot, args.get("newValue"))
+
+    @callback
+    def _handle_uc_status_update(self, code_slot: int, status: Any) -> None:
+        """Handle a userIdStatus value update for a code slot."""
+        if status == CodeSlotStatus.AVAILABLE:
+            # Ignore AVAILABLE status if Lock Code Manager expects a PIN on this
+            # slot. Some locks send stale AVAILABLE events after a code was set,
+            # which would cause infinite sync loops.
+            if (
+                self.coordinator
+                and self.coordinator.desired_credential(code_slot).is_present
+            ):
+                _LOGGER.debug(
+                    "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
+                    "(LCM expects PIN on this slot)",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                return
+
+            # Slot was cleared - update coordinator if needed
+            current = self.coordinator.data.get(code_slot) if self.coordinator else None
+            if self.coordinator and (current is None or not current.is_empty):
+                _LOGGER.debug(
+                    "Lock %s: slot %s userIdStatus=AVAILABLE, marking cleared",
+                    self.lock.entity_id,
+                    code_slot,
+                )
+                self._push_credential_update(code_slot, SlotCredential.empty())
+
+    @callback
+    def _handle_uc_value_update(self, code_slot: int, new_value: Any) -> None:
+        """Handle a userCode value update for a code slot."""
+        if not new_value:
+            resolved = SlotCredential.empty()
+        else:
+            value = str(new_value)
+            slot_in_use = self._uc_code_slot_in_use(code_slot)
+            # Asymmetric in_use checks: masked codes count as unreadable even
+            # when in_use is None (some firmwares mask before reporting
+            # status), but all-zeros only counts as empty when in_use is
+            # explicitly False (zeros from a partially-loaded cache must
+            # not be misread as cleared).
+            if value == "*" * len(value) and slot_in_use is not False:
+                resolved = SlotCredential.unreadable()
+            elif value.strip("0") == "" and slot_in_use is False:
+                resolved = SlotCredential.empty()
+            else:
+                resolved = SlotCredential.known(value)
+
+        # Z-Wave JS sends duplicate events; skip if the value is unchanged.
+        if self.coordinator and self.coordinator.data.get(code_slot) == resolved:
+            return
+
+        _LOGGER.debug(
+            "Lock %s received push update for slot %s: %s",
+            self.lock.entity_id,
+            code_slot,
+            "****" if resolved.is_readable else f"({resolved.as_label()})",
+        )
+        self._push_credential_update(code_slot, resolved)
 
     @callback
     def _on_credential_changed(self, event: dict[str, Any]) -> None:
@@ -587,6 +988,25 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
+
+        # Handle duplicate code rejection — only when LCM initiated the set
+        # (the in-progress slot is only tracked by the UC-fallback write
+        # path; unified-mode writes report duplicates in-band). Mark the
+        # slot as rejected so the sync manager raises DuplicateCodeError
+        # on the next tick, routing through the standard CodeRejectedError
+        # flow. Some Z-Wave lock firmwares report this notification with
+        # userId=0 instead of the offending slot; treat 0 as referring to
+        # the slot we're currently setting.
+        if (
+            evt.data[ATTR_EVENT]
+            == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+            and self._set_in_progress_code_slot is not None
+            and code_slot in (0, self._set_in_progress_code_slot)
+        ):
+            slot = self._set_in_progress_code_slot
+            self._set_in_progress_code_slot = None
+            self.mark_code_rejected(slot)
+            return
 
         self.async_fire_code_slot_event(
             code_slot=code_slot,
@@ -653,6 +1073,9 @@ class ZWaveJSLock(BaseLock):
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Re-read users AND credentials fresh from the device, then project to slots."""
+        if await self._async_uc_fallback_active():
+            await self._async_refresh_usercode_cache()
+            return await self.async_get_usercodes()
         try:
             await self.node.access_control.get_users()
             await self.node.access_control.get_all_credentials()

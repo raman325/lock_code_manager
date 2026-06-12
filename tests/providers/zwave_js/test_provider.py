@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import NodeStatus
+from zwave_js_server.const import CommandClass, NodeStatus, SetValueStatus
 from zwave_js_server.const.command_class.access_control import (
-    SetCredentialResult,
     UserCredentialType,
     UserCredentialUserType,
 )
-from zwave_js_server.exceptions import FailedZWaveCommand
+from zwave_js_server.exceptions import FailedZWaveCommand, NotFoundError
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
+from zwave_js_server.model.value import SetValueResult
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import DOMAIN as ZWAVE_JS_DOMAIN
@@ -45,6 +45,8 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+
+from .conftest import uc_only_caps_response, uc_slot_walk
 
 # Properties tests
 
@@ -172,6 +174,7 @@ async def test_hard_refresh_codes_calls_access_control(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """
     Test that async_hard_refresh_codes refreshes both users and credentials from the lock.
@@ -202,6 +205,7 @@ async def test_hard_refresh_codes_calls_access_control(
 async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """Z-Wave transport failure during hard refresh surfaces as LockDisconnected."""
     mock_access_control.get_users.side_effect = FailedZWaveCommand(
@@ -215,6 +219,7 @@ async def test_hard_refresh_codes_maps_transport_error_to_lock_disconnected(
 async def test_hard_refresh_codes_maps_ha_error_to_operation_failed(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """A reachable-but-rejected hard refresh surfaces as LockOperationFailed."""
     mock_access_control.get_users.side_effect = HomeAssistantError("rejected")
@@ -230,6 +235,7 @@ async def test_async_get_usercodes_returns_projection_with_managed_slots(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """
     Test that async_get_usercodes projects lock users to slot-keyed credentials.
@@ -261,6 +267,7 @@ async def test_async_get_usercodes_overlays_pin_credentials(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """
     Test that async_get_usercodes projects Personal Identification Number credentials onto slot keys.
@@ -330,17 +337,14 @@ async def test_async_internal_set_usercode_calls_primitives(
         1, "5678", name="alice", source="sync"
     )
 
-    # set_user goes through lock_helpers (HA's wrapper has the right
-    # validation for user-side mutations); set_credential bypasses
-    # lock_helpers and goes direct to access_control (the wrapper's
-    # slot validation breaks UC-only locks per issue #1251).
     mock_lock_helpers["async_set_user"].assert_called_once()
-    mock_access_control.set_credential.assert_called_once_with(
-        1,  # user_id from set_user result
-        UserCredentialType.PIN_CODE,
-        1,  # credential slot == LCM slot
-        "5678",
-    )
+    mock_lock_helpers["async_set_credential"].assert_called_once()
+    # Verify the credential call carries the right Personal Identification Number and slot
+    call_args = mock_lock_helpers["async_set_credential"].call_args
+    assert call_args.args[1] == 1  # user_id from set_user result
+    assert call_args.args[2] == UserCredentialType.PIN_CODE
+    assert call_args.args[3] == "5678"
+    assert call_args.kwargs["credential_slot"] == 1
 
 
 async def test_async_internal_clear_usercode_calls_delete_primitives(
@@ -389,11 +393,7 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
 
     await zwave_js_lock.async_internal_clear_usercode(1, source="sync")
 
-    # async_delete_credential goes direct to access_control (bypassing
-    # lock_helpers' validation that breaks UC-only locks). User
-    # deletion is still skipped — slot anchor lifecycle is per the
-    # user-tag idempotency design.
-    mock_access_control.delete_credential.assert_called_once()
+    mock_lock_helpers["async_delete_credential"].assert_called_once()
     mock_lock_helpers["async_delete_user"].assert_not_called()
 
 
@@ -643,263 +643,7 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
     )
 
 
-_LCM_ZWAVE_MODULE = "custom_components.lock_code_manager.providers.zwave_js"
-
-
-def _uc_only_caps_response() -> dict:
-    """Return a credential-capabilities response shaped as if the lock has no U3C.
-
-    This is what ``lock_helpers.async_get_credential_capabilities`` returns
-    for a UC-only lock: the unified ``access_control`` API claims support
-    (``supports_user_management=True``, hardcoded by HA's helper) but the
-    PIN credential type either has zero slots or is missing entirely
-    because the lock doesn't actually implement User Credential CC.
-    """
-    return {
-        "supports_user_management": True,
-        "max_users": 0,
-        "supported_user_types": [],
-        "max_user_name_length": 0,
-        "supported_credential_rules": [],
-        "supported_credential_types": {},
-    }
-
-
-async def test_async_get_capabilities_falls_back_to_uc_when_pin_missing(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """When U3C capabilities omit PIN entirely, fall back to User Code CC.
-
-    This is the production case from issue #1251 -- legacy 500-series
-    locks with only User Code CC support. The capabilities response is
-    structurally valid but PIN is missing from
-    ``supported_credential_types``. The provider should read UC slot
-    count via ``get_usercodes`` and return slot-only capabilities
-    (``supports_user_management=False`` routes through the seam's
-    slot-only path).
-    """
-    mock_lock_helpers[
-        "async_get_credential_capabilities"
-    ].return_value = _uc_only_caps_response()
-
-    # 250-slot User Code CC lock; the value DB has slots 1..250 populated.
-    fake_slots = [
-        {"code_slot": s, "name": f"Slot {s}", "in_use": False, "usercode": None}
-        for s in range(1, 251)
-    ]
-    with patch(f"{_LCM_ZWAVE_MODULE}.get_usercodes", return_value=fake_slots):
-        caps = await zwave_js_lock.async_get_capabilities()
-
-    assert caps.supports_user_management is False
-    assert caps.max_user_name_length == 0
-    assert CredentialType.PIN in caps.credential_types
-    assert caps.credential_types[CredentialType.PIN].num_slots == 250
-
-
-async def test_async_get_capabilities_falls_back_to_uc_when_pin_zero_slots(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """When U3C capabilities advertise PIN with zero slots, also fall back to UC.
-
-    The other shape of the same #1251 bug: the lock enumerates PIN as
-    a supported credential type but reports ``num_slots=0``. Treating
-    that as "PIN supported" makes LCM try slot 1 and HA's upstream
-    helper rejects with ``Credential slot for pin_code must be between
-    1 and 0``. The fix is to treat zero-slot PIN as "no U3C" and try
-    UC instead.
-    """
-    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
-    caps_response = _uc_only_caps_response()
-    caps_response["supported_credential_types"] = {
-        pin_type_str: {
-            "num_slots": 0,  # ← the smoking gun
-            "min_length": 4,
-            "max_length": 8,
-            "supports_learn": False,
-        }
-    }
-    mock_lock_helpers["async_get_credential_capabilities"].return_value = caps_response
-
-    fake_slots = [
-        {"code_slot": s, "name": f"Slot {s}", "in_use": False, "usercode": None}
-        for s in range(1, 31)
-    ]
-    with patch(f"{_LCM_ZWAVE_MODULE}.get_usercodes", return_value=fake_slots):
-        caps = await zwave_js_lock.async_get_capabilities()
-
-    assert caps.supports_user_management is False
-    assert caps.credential_types[CredentialType.PIN].num_slots == 30
-
-
-async def test_async_get_capabilities_empty_when_neither_u3c_nor_uc_available(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """When neither U3C nor UC reports any slots, return empty credential_types.
-
-    The seam's ``_assert_credential_type_supported`` will then refuse
-    PIN operations cleanly via ``CodeRejectedError`` rather than
-    failing with the confusing 'between 1 and 0' message from upstream.
-    """
-    mock_lock_helpers[
-        "async_get_credential_capabilities"
-    ].return_value = _uc_only_caps_response()
-
-    with patch(f"{_LCM_ZWAVE_MODULE}.get_usercodes", return_value=[]):
-        caps = await zwave_js_lock.async_get_capabilities()
-
-    assert caps.supports_user_management is False
-    assert caps.credential_types == {}
-
-
-async def test_uc_mode_set_credential_calls_access_control_directly(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """UC-mode ``async_set_credential`` calls ``node.access_control.set_credential``.
-
-    Bypasses ``lock_helpers.async_set_credential`` (which validates
-    slot range against zero-slot U3C capabilities and rejects with
-    "between 1 and 0"). The driver's unified UC/U3C dispatch handles
-    the actual write internally per node-zwave-js v15.23.4+.
-    """
-    mock_access_control.set_credential = AsyncMock(return_value=SetCredentialResult.OK)
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
-    )
-    result = await zwave_js_lock.async_set_credential(
-        user_id=5,  # driver may treat as slot for UC, ignore otherwise
-        credential=credential,
-        pin="4321",
-        name=None,
-        source="sync",
-    )
-
-    assert result is True
-    mock_access_control.set_credential.assert_called_once_with(
-        5, UserCredentialType.PIN_CODE, 5, "4321"
-    )
-    # HA's helper must NOT have been called -- that's the wrapper with
-    # the broken validation.
-    mock_lock_helpers["async_set_credential"].assert_not_called()
-
-
-async def test_uc_mode_set_credential_maps_duplicate_status_to_typed_error(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A duplicate-credential status from the driver maps to ``DuplicateCodeError``."""
-    mock_access_control.set_credential = AsyncMock(
-        return_value=SetCredentialResult.ERROR_DUPLICATE_CREDENTIAL
-    )
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
-    )
-    with pytest.raises(DuplicateCodeError):
-        await zwave_js_lock.async_set_credential(
-            user_id=5,
-            credential=credential,
-            pin="4321",
-            name=None,
-            source="sync",
-        )
-
-
-async def test_uc_mode_set_credential_maps_other_error_to_code_rejected(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Non-duplicate non-OK statuses map to ``CodeRejectedError``."""
-    mock_access_control.set_credential = AsyncMock(
-        return_value=SetCredentialResult.ERROR_MODIFY_REJECTED_LOCATION_EMPTY
-    )
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
-    )
-    with pytest.raises(CodeRejectedError, match="ERROR_MODIFY_REJECTED_LOCATION_EMPTY"):
-        await zwave_js_lock.async_set_credential(
-            user_id=5,
-            credential=credential,
-            pin="4321",
-            name=None,
-            source="sync",
-        )
-
-
-async def test_uc_mode_delete_credential_calls_access_control_directly(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """UC-mode ``async_delete_credential`` calls ``node.access_control.delete_credential``."""
-    mock_access_control.delete_credential = AsyncMock(
-        return_value=SetCredentialResult.OK
-    )
-
-    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
-    result = await zwave_js_lock.async_delete_credential(ref)
-
-    assert result is True
-    mock_access_control.delete_credential.assert_called_once_with(
-        3, UserCredentialType.PIN_CODE, 3
-    )
-    mock_lock_helpers["async_delete_credential"].assert_not_called()
-
-
-async def test_uc_mode_routes_through_slot_only_seam_path(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """End-to-end: a UC-only lock skips the user lifecycle on async_set_usercode.
-
-    With ``supports_user_management=False`` returned from UC-mode
-    capabilities, the seam's ``_set_credential`` orchestration skips
-    ``async_set_user`` and goes directly to ``async_set_credential``.
-    This pins the integration: a regression that flipped
-    ``supports_user_management`` back to True for UC locks would call
-    ``async_set_user`` and re-route through the broken U3C helpers.
-    """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-            CONF_SLOTS: {"1": {}},
-        },
-    )
-    lcm_entry.add_to_hass(hass)
-    zwave_js_lock._min_operation_delay = 0.0
-    mock_lock_helpers[
-        "async_get_credential_capabilities"
-    ].return_value = _uc_only_caps_response()
-    mock_access_control.set_credential = AsyncMock(return_value=SetCredentialResult.OK)
-
-    fake_slots = [
-        {"code_slot": s, "name": f"Slot {s}", "in_use": False, "usercode": None}
-        for s in range(1, 31)
-    ]
-    with patch(f"{_LCM_ZWAVE_MODULE}.get_usercodes", return_value=fake_slots):
-        await zwave_js_lock.async_set_usercode(1, "5678", name="alice", source="sync")
-
-    # The U3C user helper must NOT have been called -- the slot-only
-    # routing in the seam should have skipped straight to
-    # async_set_credential.
-    mock_lock_helpers["async_set_user"].assert_not_called()
-    mock_access_control.set_credential.assert_called_once_with(
-        1, UserCredentialType.PIN_CODE, 1, "5678"
-    )
+# Write primitive tests (Task 2)
 
 
 async def test_async_set_user_returns_created_when_no_tagged_user_exists(
@@ -1061,13 +805,16 @@ async def test_async_set_credential_returns_true_on_success(
     mock_lock_helpers: dict,
 ) -> None:
     """
-    async_set_credential returns True and calls access_control directly.
+    Test async_set_credential returns True and calls the helper with the right args.
 
-    The provider bypasses ``lock_helpers.async_set_credential`` (whose
-    slot validation breaks UC-only locks per #1251) and calls
-    ``node.access_control.set_credential`` directly. The driver
-    dispatches to UC or U3C internally.
+    The helper is called with the node, user_id, PIN_CODE credential type, the
+    readable Personal Identification Number string, and the credential slot.
     """
+    mock_lock_helpers["async_set_credential"].return_value = {
+        "credential_slot": 2,
+        "user_id": 1,
+    }
+
     credential = Credential(
         type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
     )
@@ -1080,11 +827,13 @@ async def test_async_set_credential_returns_true_on_success(
     )
 
     assert result is True
-    mock_access_control.set_credential.assert_called_once_with(
-        1, UserCredentialType.PIN_CODE, 2, "5678"
+    mock_lock_helpers["async_set_credential"].assert_called_once_with(
+        zwave_js_lock.node,
+        1,
+        UserCredentialType.PIN_CODE,
+        "5678",
+        credential_slot=2,
     )
-    # The HA wrapper must not be touched.
-    mock_lock_helpers["async_set_credential"].assert_not_called()
 
 
 async def test_async_set_credential_raises_duplicate_code_error(
@@ -1093,17 +842,14 @@ async def test_async_set_credential_raises_duplicate_code_error(
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Duplicate-credential status from the driver becomes ``DuplicateCodeError``.
+    Test async_set_credential raises DuplicateCodeError on duplicate rejection.
 
-    The driver returns ``SetCredentialResult.ERROR_DUPLICATE_CREDENTIAL``
-    (or ``ERROR_DUPLICATE_ADMIN_PIN_CODE``) when the lock rejects the
-    write because the PIN matches an existing credential. The provider
-    translates either to ``DuplicateCodeError`` so the seam can disable
-    the slot and surface a clear repair issue.
+    When the lock_helpers helper raises HomeAssistantError with
+    translation_key="credential_rejected_duplicate", the provider must re-raise
+    as DuplicateCodeError so the seam's orchestration can handle it correctly.
     """
-    mock_access_control.set_credential.return_value = (
-        SetCredentialResult.ERROR_DUPLICATE_CREDENTIAL
-    )
+    err = HomeAssistantError(translation_key="credential_rejected_duplicate")
+    mock_lock_helpers["async_set_credential"].side_effect = err
 
     credential = Credential(
         type=CredentialType.PIN, slot=3, state=SlotCredential.known("1111")
@@ -1121,22 +867,20 @@ async def test_async_set_credential_raises_duplicate_code_error(
     assert exc_info.value.lock_entity_id == zwave_js_lock.lock.entity_id
 
 
-async def test_async_set_credential_raises_code_rejected_error_on_other_status(
+async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Non-duplicate non-OK statuses become ``CodeRejectedError``.
+    Test async_set_credential raises CodeRejectedError for non-duplicate rejections.
 
-    Catches the long tail of rejection reasons (location-occupied,
-    manufacturer-security-rules, unknown, etc.). The seam treats
-    ``CodeRejectedError`` as a permanent slot-level rejection and
-    disables the slot with a repair issue.
+    When the lock_helpers helper raises HomeAssistantError with any other
+    translation_key (for example "credential_rejected_unknown"), the provider
+    must re-raise as CodeRejectedError.
     """
-    mock_access_control.set_credential.return_value = (
-        SetCredentialResult.ERROR_ADD_REJECTED_LOCATION_OCCUPIED
-    )
+    err = HomeAssistantError(translation_key="credential_rejected_unknown")
+    mock_lock_helpers["async_set_credential"].side_effect = err
 
     credential = Credential(
         type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
@@ -1162,12 +906,11 @@ async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
     """
     A transient Z-Wave command failure routes to the retry path, not a suspend.
 
-    ``FailedZWaveCommand`` is not a ``HomeAssistantError``; if it
-    escaped, the sync manager would treat it as an unexpected bug and
-    suspend the slot. It must surface as ``LockDisconnected`` so the
-    lock is retried instead.
+    FailedZWaveCommand is not a HomeAssistantError; if it escaped, the sync
+    manager would treat it as an unexpected bug and suspend the slot. It must
+    surface as LockDisconnected so the lock is retried instead.
     """
-    mock_access_control.set_credential.side_effect = FailedZWaveCommand(
+    mock_lock_helpers["async_set_credential"].side_effect = FailedZWaveCommand(
         "cmd", 1, "lock asleep"
     )
     credential = Credential(
@@ -1189,7 +932,7 @@ async def test_async_delete_credential_maps_failed_command_to_lock_disconnected(
     mock_lock_helpers: dict,
 ) -> None:
     """A transient delete failure also routes to the retry path."""
-    mock_access_control.delete_credential.side_effect = FailedZWaveCommand(
+    mock_lock_helpers["async_delete_credential"].side_effect = FailedZWaveCommand(
         "cmd", 1, "lock asleep"
     )
     with pytest.raises(LockDisconnected):
@@ -1220,26 +963,27 @@ async def test_async_delete_user_calls_helper(
     )
 
 
-async def test_async_delete_credential_calls_access_control_and_returns_true(
+async def test_async_delete_credential_calls_helper_and_returns_true(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
     """
-    async_delete_credential calls access_control directly and returns True on success.
+    Test async_delete_credential calls the helper and returns True on success.
 
-    Bypasses ``lock_helpers.async_delete_credential`` for the same
-    UC-only-locks reason that ``async_set_credential`` does -- the
-    driver's unified UC/U3C dispatch handles both lock generations.
+    The helper is called with the node, user_id, PIN_CODE credential type, and
+    the credential slot resolved from the CredentialRef.
     """
     ref = CredentialRef(user_id=2, type=CredentialType.PIN, slot=5)
     result = await zwave_js_lock.async_delete_credential(ref)
 
     assert result is True
-    mock_access_control.delete_credential.assert_called_once_with(
-        2, UserCredentialType.PIN_CODE, 5
+    mock_lock_helpers["async_delete_credential"].assert_called_once_with(
+        zwave_js_lock.node,
+        2,
+        UserCredentialType.PIN_CODE,
+        5,
     )
-    mock_lock_helpers["async_delete_credential"].assert_not_called()
 
 
 # ── Exception wrapping for read primitives ──────────────────────────
@@ -1248,6 +992,7 @@ async def test_async_delete_credential_calls_access_control_and_returns_true(
 async def test_async_get_users_raises_lock_disconnected_on_zwave_error(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """BaseZwaveJSServerError from access_control reads surfaces as LockDisconnected."""
     mock_access_control.get_users_cached.side_effect = FailedZWaveCommand(
@@ -1260,6 +1005,7 @@ async def test_async_get_users_raises_lock_disconnected_on_zwave_error(
 async def test_async_get_users_raises_lock_operation_failed_on_ha_error(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
 ) -> None:
     """HomeAssistantError from access_control reads surfaces as LockOperationFailed."""
     mock_access_control.get_users_cached.side_effect = HomeAssistantError("boom")
@@ -1342,9 +1088,7 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
 
     assert changed is True
     mock_lock_helpers["async_set_user"].assert_not_called()
-    # async_set_credential goes direct to access_control (bypassing
-    # lock_helpers' slot validation that breaks UC-only locks).
-    mock_access_control.set_credential.assert_called_once()
+    mock_lock_helpers["async_set_credential"].assert_called_once()
 
 
 async def test_async_set_user_writes_name_verbatim(
@@ -1485,24 +1229,16 @@ async def test_async_delete_user_maps_ha_error_to_operation_failed(
         await zwave_js_lock.async_delete_user(7)
 
 
-async def test_async_delete_credential_maps_non_ok_status_to_operation_failed(
+async def test_async_delete_credential_maps_ha_error_to_operation_failed(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """A non-OK SetCredentialResult from delete_credential becomes LockOperationFailed.
-
-    The driver returns a status enum for both set and delete. For
-    delete, any non-OK status (location-empty, location-occupied,
-    unknown, etc.) means the credential wasn't removed and we should
-    surface that to the seam so it retries or escalates.
-    """
-    mock_access_control.delete_credential.return_value = (
-        SetCredentialResult.ERROR_MODIFY_REJECTED_LOCATION_EMPTY
+    """A reachable-lock HomeAssistantError during delete-credential surfaces as LockOperationFailed."""
+    mock_lock_helpers["async_delete_credential"].side_effect = HomeAssistantError(
+        "nope"
     )
-    with pytest.raises(
-        LockOperationFailed, match="ERROR_MODIFY_REJECTED_LOCATION_EMPTY"
-    ):
+    with pytest.raises(LockOperationFailed):
         await zwave_js_lock.async_delete_credential(
             CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
         )
@@ -1554,3 +1290,378 @@ async def test_get_client_state_not_ready_when_driver_missing(
 
     assert ready is False
     assert "driver not ready" in reason
+
+
+# ---------------------------------------------------------------------------
+# User Code CC fallback (issue #1251)
+#
+# When the unified access-control API reports no usable PIN capabilities
+# but the node advertises User Code CC, the provider routes all PIN
+# operations through the legacy User Code CC utilities.
+# ---------------------------------------------------------------------------
+
+
+async def test_capabilities_fall_back_to_uc_when_pin_missing(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Degenerate unified capabilities + UC slots found -> slot-only capabilities."""
+    mock_uc_utils["get_usercodes"].return_value = uc_slot_walk(250)
+
+    caps = await uc_fallback_lock.async_get_capabilities()
+
+    assert caps.supports_user_management is False
+    assert caps.max_user_name_length == 0
+    assert CredentialType.PIN in caps.credential_types
+    assert caps.credential_types[CredentialType.PIN].num_slots == 250
+
+
+async def test_capabilities_fall_back_to_uc_when_pin_zero_slots(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> None:
+    """PIN advertised with num_slots=0 (the 'between 1 and 0' shape) -> UC fallback."""
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    caps_response = uc_only_caps_response()
+    caps_response["supported_credential_types"] = {
+        pin_type_str: {
+            "num_slots": 0,
+            "min_length": 4,
+            "max_length": 8,
+            "supports_learn": False,
+        }
+    }
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = caps_response
+
+    caps = await uc_fallback_lock.async_get_capabilities()
+
+    assert caps.supports_user_management is False
+    assert caps.credential_types[CredentialType.PIN].num_slots == 30
+
+
+async def test_capabilities_empty_when_degenerate_and_no_uc_slots(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Degenerate unified capabilities and an empty UC walk -> no PIN support."""
+    mock_uc_utils["get_usercodes"].return_value = []
+
+    caps = await uc_fallback_lock.async_get_capabilities()
+
+    assert caps.supports_user_management is False
+    assert caps.credential_types == {}
+
+
+async def test_capabilities_no_fallback_when_node_lacks_user_code_cc(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Without User Code CC on the node, degenerate capabilities stay degenerate.
+
+    The fallback would be useless (the UC utilities have nothing to talk
+    to), so the value DB walk must not even be attempted.
+    """
+    with patch.object(ZWaveJSLock, "_node_supports_user_code_cc", return_value=False):
+        caps = await uc_fallback_lock.async_get_capabilities()
+
+    assert caps.credential_types == {}
+    mock_uc_utils["get_usercodes"].assert_not_called()
+
+
+async def test_capabilities_healthy_unified_caps_disable_fallback(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> None:
+    """Usable unified capabilities -> no fallback, UC walk not attempted.
+
+    Once the upstream node-zwave-js fix (zwave-js/zwave-js#8873) reports
+    real PIN slots for these locks, this is the path they take and the
+    fallback becomes a no-op.
+    """
+    caps = await zwave_js_lock.async_get_capabilities()
+
+    assert caps.supports_user_management is True
+    assert caps.credential_types[CredentialType.PIN].num_slots == 30
+    mock_uc_utils["get_usercodes"].assert_not_called()
+
+    # Writes route through the HA helper, not the UC utilities.
+    credential = Credential(
+        type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
+    )
+    await zwave_js_lock.async_set_credential(
+        user_id=1, credential=credential, pin="5678", name=None, source="sync"
+    )
+    mock_lock_helpers["async_set_credential"].assert_called_once()
+    mock_uc_utils["set_usercode"].assert_not_called()
+
+
+async def test_uc_set_credential_uses_user_code_cc_util(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> None:
+    """UC-mode writes go through ``set_usercode``, not the unified API."""
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    result = await uc_fallback_lock.async_set_credential(
+        user_id=5, credential=credential, pin="4321", name=None, source="sync"
+    )
+
+    assert result is True
+    mock_uc_utils["set_usercode"].assert_awaited_once_with(
+        uc_fallback_lock.node, 5, "4321"
+    )
+    mock_lock_helpers["async_set_credential"].assert_not_called()
+    mock_access_control.set_credential.assert_not_called()
+
+
+async def test_uc_set_credential_skips_when_code_matches(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A cached identical unmasked code short-circuits the write."""
+    mock_uc_utils["get_usercode"].side_effect = None
+    mock_uc_utils["get_usercode"].return_value = {
+        "code_slot": 5,
+        "name": "Slot 5",
+        "in_use": True,
+        "usercode": "4321",
+    }
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    result = await uc_fallback_lock.async_set_credential(
+        user_id=5, credential=credential, pin="4321", name=None, source="sync"
+    )
+
+    assert result is False
+    mock_uc_utils["set_usercode"].assert_not_called()
+
+
+async def test_uc_set_credential_proceeds_when_masked(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A masked cached code can't be compared, so the write proceeds."""
+    mock_uc_utils["get_usercode"].side_effect = None
+    mock_uc_utils["get_usercode"].return_value = {
+        "code_slot": 5,
+        "name": "Slot 5",
+        "in_use": True,
+        "usercode": "****",
+    }
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    result = await uc_fallback_lock.async_set_credential(
+        user_id=5, credential=credential, pin="4321", name=None, source="sync"
+    )
+
+    assert result is True
+    mock_uc_utils["set_usercode"].assert_awaited_once()
+
+
+async def test_uc_set_credential_failure_status_raises_code_rejected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A FAIL set-value result maps to CodeRejectedError."""
+    mock_uc_utils["set_usercode"].return_value = SetValueResult(
+        {"status": SetValueStatus.FAIL}
+    )
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    with pytest.raises(CodeRejectedError, match="FAIL"):
+        await uc_fallback_lock.async_set_credential(
+            user_id=5, credential=credential, pin="4321", name=None, source="sync"
+        )
+
+
+async def test_uc_set_credential_transport_error_raises_lock_disconnected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A Z-Wave transport failure maps to LockDisconnected (retry path)."""
+    mock_uc_utils["set_usercode"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    with pytest.raises(LockDisconnected, match="set usercode slot 5"):
+        await uc_fallback_lock.async_set_credential(
+            user_id=5, credential=credential, pin="4321", name=None, source="sync"
+        )
+
+
+async def test_uc_set_credential_missing_slot_raises_code_rejected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """A slot with no value in the DB is a permanent rejection, not a retry."""
+    mock_uc_utils["set_usercode"].side_effect = NotFoundError("no such slot")
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=99, state=SlotCredential.known("4321")
+    )
+    with pytest.raises(CodeRejectedError, match="slot not found"):
+        await uc_fallback_lock.async_set_credential(
+            user_id=99, credential=credential, pin="4321", name=None, source="sync"
+        )
+
+
+async def test_uc_delete_credential_uses_clear_usercode(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> None:
+    """UC-mode deletes go through ``clear_usercode``, not the unified API."""
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    result = await uc_fallback_lock.async_delete_credential(ref)
+
+    assert result is True
+    mock_uc_utils["clear_usercode"].assert_awaited_once_with(uc_fallback_lock.node, 3)
+    mock_lock_helpers["async_delete_credential"].assert_not_called()
+    mock_access_control.delete_credential.assert_not_called()
+
+
+async def test_uc_delete_credential_skips_when_already_clear(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Clearing an already-clear slot short-circuits."""
+    mock_uc_utils["get_usercode"].side_effect = None
+    mock_uc_utils["get_usercode"].return_value = {
+        "code_slot": 3,
+        "name": "Slot 3",
+        "in_use": False,
+        "usercode": None,
+    }
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    result = await uc_fallback_lock.async_delete_credential(ref)
+
+    assert result is False
+    mock_uc_utils["clear_usercode"].assert_not_called()
+
+
+async def test_uc_v1_write_polls_slot_after_set(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """V1 locks are polled after a write to force-update the value cache."""
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    await uc_fallback_lock.async_set_credential(
+        user_id=5, credential=credential, pin="4321", name=None, source="sync"
+    )
+
+    mock_uc_utils["get_usercode_from_node"].assert_awaited_once_with(
+        uc_fallback_lock.node, 5
+    )
+
+
+async def test_uc_v2_write_does_not_poll_slot(
+    zwave_js_lock_v2: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> None:
+    """V2+ locks report back reliably; no verification poll."""
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].return_value = uc_only_caps_response()
+    mock_uc_utils["get_usercodes"].return_value = uc_slot_walk(30)
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    await zwave_js_lock_v2.async_set_credential(
+        user_id=5, credential=credential, pin="4321", name=None, source="sync"
+    )
+
+    mock_uc_utils["set_usercode"].assert_awaited_once()
+    mock_uc_utils["get_usercode_from_node"].assert_not_called()
+
+
+async def test_uc_get_users_synthesizes_from_value_db(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_uc_utils: dict,
+) -> None:
+    """UC-mode users come from the value DB walk, one per occupied slot."""
+    mock_uc_utils["get_usercodes"].return_value = [
+        {"code_slot": 1, "name": "Slot 1", "in_use": True, "usercode": "1234"},
+        {"code_slot": 2, "name": "Slot 2", "in_use": True, "usercode": "****"},
+        {"code_slot": 3, "name": "Slot 3", "in_use": False, "usercode": None},
+        {"code_slot": 4, "name": "Slot 4", "in_use": True, "usercode": None},
+    ]
+
+    users = await uc_fallback_lock.async_get_users()
+
+    by_id = {user.user_id: user for user in users}
+    assert set(by_id) == {1, 2, 4}
+    assert by_id[1].credentials[0].slot == 1
+    assert by_id[1].credentials[0].state == SlotCredential.known("1234")
+    assert by_id[2].credentials[0].state == SlotCredential.unreadable()
+    assert by_id[4].credentials[0].state == SlotCredential.unreadable()
+    mock_access_control.get_users_cached.assert_not_called()
+
+
+async def test_uc_hard_refresh_uses_refresh_cc_values(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_uc_utils: dict,
+) -> None:
+    """UC-mode hard refresh re-reads the User Code CC values, not the unified API."""
+    with patch.object(
+        type(uc_fallback_lock.node), "async_refresh_cc_values", new=AsyncMock()
+    ) as refresh:
+        await uc_fallback_lock.async_hard_refresh_codes()
+
+    refresh.assert_awaited_once_with(CommandClass.USER_CODE)
+    mock_access_control.get_users.assert_not_called()
+
+
+async def test_uc_mode_routes_through_slot_only_seam_path(
+    hass: HomeAssistant,
+    uc_fallback_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+    mock_uc_utils: dict,
+) -> None:
+    """End-to-end: a UC-fallback lock skips the user lifecycle on async_set_usercode.
+
+    With ``supports_user_management=False`` from the fallback
+    capabilities, the seam's ``_set_credential`` orchestration skips
+    ``async_set_user`` and goes straight to ``async_set_credential``,
+    which routes through the User Code CC utility.
+    """
+    lcm_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [uc_fallback_lock.lock.entity_id],
+            CONF_SLOTS: {"1": {}},
+        },
+    )
+    lcm_entry.add_to_hass(hass)
+    uc_fallback_lock._min_operation_delay = 0.0
+
+    await uc_fallback_lock.async_set_usercode(1, "5678", name="alice", source="sync")
+
+    mock_lock_helpers["async_set_user"].assert_not_called()
+    mock_uc_utils["set_usercode"].assert_awaited_once_with(
+        uc_fallback_lock.node, 1, "5678"
+    )

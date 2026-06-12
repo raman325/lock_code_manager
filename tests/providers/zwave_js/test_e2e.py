@@ -27,6 +27,8 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
+from .conftest import get_zwave_lock, uc_only_caps_response, uc_slot_walk
+
 
 def async_capture_events(
     hass: HomeAssistant, event_name: str
@@ -76,7 +78,7 @@ class TestFullSetupLifecycle:
 class TestSetAndClearUsercodes:
     """Verify set/clear operations invoke the unified access-control primitives."""
 
-    async def test_set_usercode_drives_user_then_credential_primitives(
+    async def test_set_usercode_calls_lock_helpers(
         self,
         hass: HomeAssistant,
         zwave_js_lock: ZWaveJSLock,
@@ -84,7 +86,7 @@ class TestSetAndClearUsercodes:
         mock_lock_helpers: dict,
         zwave_integration: MockConfigEntry,
     ) -> None:
-        """Setting a code runs async_set_user (lock_helpers) then async_set_credential (access_control)."""
+        """Setting a code drives async_set_user then async_set_credential via lock_helpers."""
         lcm_entry = MockConfigEntry(
             domain=DOMAIN,
             data={
@@ -100,15 +102,10 @@ class TestSetAndClearUsercodes:
         result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
         assert result is True
-        # set_user still goes through lock_helpers (HA's wrapper has the
-        # right shape for user-side mutations).
         mock_lock_helpers["async_set_user"].assert_called_once()
-        # set_credential bypasses lock_helpers and calls access_control
-        # directly -- the wrapper's slot validation breaks UC-only
-        # locks (issue #1251).
-        mock_access_control.set_credential.assert_called_once()
+        mock_lock_helpers["async_set_credential"].assert_called_once()
 
-    async def test_clear_usercode_calls_access_control_delete_credential(
+    async def test_clear_usercode_calls_lock_helpers(
         self,
         hass: HomeAssistant,
         zwave_js_lock: ZWaveJSLock,
@@ -116,7 +113,7 @@ class TestSetAndClearUsercodes:
         mock_lock_helpers: dict,
         zwave_integration: MockConfigEntry,
     ) -> None:
-        """Clearing a slot resolves the owner then calls access_control.delete_credential."""
+        """Clearing a slot resolves the owner then calls async_delete_credential."""
         lcm_entry = MockConfigEntry(
             domain=DOMAIN,
             data={
@@ -146,7 +143,7 @@ class TestSetAndClearUsercodes:
         result = await zwave_js_lock.async_clear_usercode(2)
 
         assert result is True
-        mock_access_control.delete_credential.assert_called_once()
+        mock_lock_helpers["async_delete_credential"].assert_called_once()
 
 
 class TestGetUsercodes:
@@ -277,3 +274,64 @@ class TestEvents:
         # Credential events push unreadable (the lock doesn't expose the Personal
         # Identification Number value in the event; a coordinator refresh reads it).
         assert e2e_zwave_lock.coordinator.data.get(1) == SlotCredential.unreadable()
+
+
+class TestUCFallbackLifecycle:
+    """Full LCM lifecycle against a lock in User Code CC fallback mode (issue #1251)."""
+
+    async def test_setup_succeeds_and_writes_route_through_uc_utils(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        mock_uc_utils: dict,
+    ) -> None:
+        """A UC-fallback lock completes LCM setup and routes PIN writes via UC utils.
+
+        This pins two regressions at once: setup must not reject the
+        slot-only capabilities the fallback reports (the base used to
+        require ``supports_user_management``), and writes must use the
+        User Code CC utilities instead of the unified API whose broken
+        capability data caused 'between 1 and 0' rejections.
+        """
+        mock_lock_helpers[
+            "async_get_credential_capabilities"
+        ].return_value = uc_only_caps_response()
+        mock_uc_utils["get_usercodes"].return_value = uc_slot_walk(
+            30, occupied={2: "1234"}
+        )
+
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [lock_entity.entity_id],
+                CONF_SLOTS: {"2": {}, "4": {}},
+            },
+            unique_id="test_zwave_js_uc_e2e",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+
+        try:
+            lock = get_zwave_lock(hass, lcm_entry, lock_entity)
+            lock._min_operation_delay = 0.0
+
+            # Setting a code skips the user lifecycle and writes via set_usercode
+            result = await lock.async_set_usercode(4, "5678", "Test User")
+            assert result is True
+            mock_lock_helpers["async_set_user"].assert_not_called()
+            mock_uc_utils["set_usercode"].assert_awaited_once_with(lock.node, 4, "5678")
+            mock_access_control.set_credential.assert_not_called()
+
+            # Clearing resolves the owner from the synthesized UC users and
+            # clears via clear_usercode
+            result = await lock.async_clear_usercode(2)
+            assert result is True
+            mock_uc_utils["clear_usercode"].assert_awaited_once_with(lock.node, 2)
+            mock_access_control.delete_credential.assert_not_called()
+            mock_lock_helpers["async_delete_credential"].assert_not_called()
+        finally:
+            await hass.config_entries.async_unload(lcm_entry.entry_id)
