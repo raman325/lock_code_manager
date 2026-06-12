@@ -1,0 +1,271 @@
+# Investigation: UC-only Z-Wave locks reporting "Credential slot for pin_code must be between 1 and 0"
+
+## Primary sources
+
+Original bug report (READ FIRST, including all comments and reactions):
+
+    https://github.com/raman325/lock_code_manager/issues/1251
+
+Local mitigation PR (currently OPEN against `main`, not merged):
+
+    https://github.com/raman325/lock_code_manager/pull/1252
+
+Fetch both with:
+
+    gh issue view 1251 -R raman325/lock_code_manager --comments
+    gh pr view 1252 -R raman325/lock_code_manager --comments
+    gh pr diff 1252 -R raman325/lock_code_manager
+
+The issue thread is where the reporter (jhenkens) and a second affected user
+(randallkn) describe the symptom. The PR thread documents the LCM-side
+investigation, the call-chain trace, the chosen mitigation (bypass
+lock_helpers and call `node.access_control` directly), and the reviewer's
+inline comments + my replies — which establish the current understanding of
+which exception types reach which layer.
+
+## Background
+
+A Home Assistant custom integration called Lock Code Manager (LCM) recently
+migrated from calling the legacy `zwave_js.set_lock_usercode` service to using
+`homeassistant.components.zwave_js.lock_helpers.async_set_credential`. This is
+the new unified user/credential API HA added in 2026.6.x that exposes the
+unified `node.access_control` surface from node-zwave-js v15.23.4+.
+
+After LCM 4.0.x ships this change, some users see their existing Z-Wave locks
+break with this exact error per slot:
+
+    "Credential slot for pin_code must be between 1 and 0."
+
+Two important data points from the issue thread:
+
+- The bug affects SOME users but not all. At least one user (the LCM
+  maintainer himself) with a 700-series User Code CC ("UC")-only lock keeps
+  working fine.
+- jhenkens confirmed they use "ZWaveJS UI" but hasn't yet shared lock
+  make/model. randallkn is also affected, no lock details.
+
+PR #1252 (open, not merged) proposes a local mitigation that (1) detects
+UC-only locks via a fallback walk of UserCodeCC values and (2) bypasses
+`lock_helpers.async_set_credential` entirely by calling
+`node.access_control.set_credential` directly. That unblocks affected users
+without waiting for an upstream fix. We now want to land the actual root-cause
+fix upstream — both to ship a cleaner LCM and so other integrations using
+`lock_helpers` don't hit the same wall.
+
+## Local repo checkouts (use these as the source of truth)
+
+You are running inside the `lock_code_manager` repo. The three upstream
+repositories are checked out as siblings:
+
+    ../home-assistant            # HA core
+        remote `upstream` = home-assistant/core
+        zwave_js component lives at:
+            homeassistant/components/zwave_js/
+        key file: homeassistant/components/zwave_js/lock_helpers.py
+
+    ../zwave-js-server-python    # Python client used by HA
+        remote `upstream` = home-assistant-libs/zwave-js-server-python
+        currently at v0.70.0 (predates the unified AccessControlAPI) —
+        MUST be brought up to date before reading any access_control code
+
+    ../node-zwave-js             # the actual driver
+        remote `upstream` = zwave-js/node-zwave-js
+        key file: packages/zwave-js/src/lib/node/feature-apis/AccessControl.ts
+        device config DB: packages/config/config/devices/
+
+FIRST STEP — fetch and inspect each repo against upstream. Don't merge or
+modify; just fetch and operate against the upstream branch directly:
+
+    cd ../home-assistant && git fetch upstream && git log upstream/dev --oneline -1
+    cd ../zwave-js-server-python && git fetch upstream && git log upstream/main --oneline -1
+    cd ../node-zwave-js && git fetch upstream && git log upstream/master --oneline -1
+
+Then read files from `upstream/<branch>` rather than the local working tree
+(e.g. `git show upstream/master:packages/.../AccessControl.ts`) unless you've
+verified the local tree is current.
+
+## The full call chain (verified by tracing the local checkouts before this prompt was written — confirm against the fresh fetches)
+
+    LCM → homeassistant.components.zwave_js.lock_helpers.async_set_credential
+        → validates `1 <= credential_slot <= type_cap.number_of_credential_slots`
+          and raises ServiceValidationError("credential_slot_out_of_range") on
+          fail. This is where the literal "between 1 and 0" string is produced
+          (translation key `credential_slot_out_of_range` in
+          homeassistant/components/zwave_js/strings.json).
+        → node.access_control.get_credential_capabilities_cached()
+          (zwave_js_server, pure RPC pass-through)
+        → "access_control.get_credential_capabilities_cached" WS RPC
+          (zwave-js-server TS, pass-through to driver)
+        → AccessControlAPI.getCredentialCapabilitiesCached() in
+          packages/zwave-js/src/lib/node/feature-apis/AccessControl.ts
+
+In node-zwave-js the dispatch is on `#usesUserCredentialCC` which currently
+reads:
+
+    get #usesUserCredentialCC(): boolean {
+        return this.endpoint.supportsCC(CommandClasses["User Credential"]);
+    }
+
+With this FIXME comment above it:
+
+    // FIXME: This is technically not correct. A node could support both CCs,
+    // and we may have to decide which one to use, or switch between them on
+    // the fly using Version CC / migration.
+    // This is not implemented yet, so checking for U3C first is fine for now.
+
+`getCredentialCapabilitiesCached`:
+
+- **U3C branch** reads `UserCredentialCCValues.supportedCredentialTypes` and
+  per-type `credentialCapabilities(type)` from the value DB. Only adds an
+  entry to the result map IF the cap value is truthy. If a type is in
+  `supportedTypes` but `credentialCapabilities(type)` returns undefined, the
+  type silently disappears from the result.
+- **UC branch** reads `UserCodeCCValues.supportedUsers` with `?? 0` fallback
+  and unconditionally inserts a single entry of type `#ucCredentialType`
+  (PINCode unless the lock supports non-PIN ASCII chars, in which case
+  Password) with `numberOfCredentialSlots: maxUsers`, min 4, max 10.
+
+(Line numbers omitted intentionally — they may have shifted since this
+prompt was written. Find the symbols by name on the fresh fetch.)
+
+## Working hypotheses (need to be verified or refuted)
+
+These are POSSIBILITIES. Do not assume any of them; treat them as a starting
+set and report which (if any) the evidence actually supports.
+
+### HYPOTHESIS A — Dispatch bug per the FIXME
+
+Some locks advertise BOTH "User Code" CC (0x63) and "User Credential" CC
+(0x83). For those, `#usesUserCredentialCC` returns true → U3C branch runs.
+If the U3C interview is incomplete (or the lock advertises U3C but the U3C
+surface is empty / not fully implemented), the U3C branch returns either an
+empty `supportedCredentialTypes` map (would yield HA's
+`credential_type_not_supported` error — DIFFERENT message) OR a map with PIN
+present but `numberOfCredentialSlots: 0` (would yield "between 1 and 0"). The
+latter is narrow but possible.
+
+### HYPOTHESIS B — Value DB miss in UC branch
+
+Lock advertises UC only. UC branch runs. But `UserCodeCCValues.supportedUsers`
+is `undefined` in the cached value DB (interview never completed, was
+interrupted, or got purged on a driver upgrade), so `?? 0` returns 0 →
+`numberOfCredentialSlots: 0` → "between 1 and 0".
+
+### HYPOTHESIS C — HA wrapper bug (independent of driver)
+
+`lock_helpers.async_set_credential` validates against the cached cap BEFORE
+calling the driver. The driver itself has its own range check on the actual
+`setCredential` call. The HA pre-validation is over-strict and produces a
+misleading error message when the cache is stale (intermediate interview
+state). Even if the driver is right, HA's wrapper rejects the call.
+
+These are not mutually exclusive; A or B explain why the value is 0, C
+explains why the user-visible failure mode is so unfriendly.
+
+## What I want you to investigate
+
+### 1. CC dispatch correctness
+
+- In `../node-zwave-js`, read the device config database at
+  `packages/config/config/devices/` (it's a tree of per-manufacturer JSON
+  files). Search for files that declare BOTH CommandClasses "User Code"
+  (0x63) and "User Credential" (0x83). List any matches by manufacturer +
+  model + file path. If none exist, state that — the hypothesis depends on
+  dual-CC locks existing in the wild.
+- In `../node-zwave-js`, run
+  `git log -S "#usesUserCredentialCC" -- packages/zwave-js/src/lib/node/feature-apis/AccessControl.ts`
+  (or grep the file history) for the introducing commit and any follow-up
+  commits that touched the dispatch. What was the original plan for fixing
+  the FIXME? Is there a tracking issue?
+- Search node-zwave-js, zwave-js-server, and zwave-js-ui issue trackers
+  (use `gh issue list -R zwave-js/node-zwave-js --search "..."` etc.) for
+  dual-CC dispatch bugs, "supportedUsers undefined", or reports matching
+  this exact "between 1 and 0" message.
+
+### 2. HA wrapper correctness
+
+- In `../home-assistant`, find the validation block in
+  `homeassistant/components/zwave_js/lock_helpers.py`
+  (`async_set_credential` and `async_get_credential_capabilities`). Run
+  `git log --follow -p -- homeassistant/components/zwave_js/lock_helpers.py`
+  for the blame trail. Is there an open issue or PR in home-assistant/core
+  discussing whether pre-validation against the cap is the right design?
+- `gh issue list -R home-assistant/core --search "credential_slot_out_of_range OR \"between 1 and\" zwave_js"`
+  and enumerate any matching reports.
+
+### 3. Concrete diagnostic checklist for the affected user
+
+- What's the minimum diagnostic dump that would distinguish A vs B vs C?
+  zwave-js-server has a diagnostics endpoint; the value DB is exportable
+  from zwave-js-ui via the "Dump" button; HA can call services via
+  developer-tools. The diagnostic must be runnable by a non-developer who
+  can copy/paste UI steps. Be specific: name the exact button or service,
+  and what to look for in the output.
+- This checklist will be posted as a comment on
+  https://github.com/raman325/lock_code_manager/issues/1251 so jhenkens
+  and randallkn can run it. Format it as a copy-pasteable markdown block.
+
+### 4. Authoritative answer
+
+- Given everything you found, where does the root cause most likely live
+  (node-zwave-js, zwave-js-server, HA, or multiple)?
+- What's the minimal upstream patch in each layer? Cite the exact file +
+  symbol you'd change.
+- Which patch should be filed first, and is one a prerequisite for the
+  others?
+- For each upstream layer that needs change, what would the PR title and
+  one-paragraph description look like? (We'll need to file them.)
+
+## Constraints
+
+- Don't speculate without sources. If a claim ("some Schlage locks got
+  firmware updates adding U3C") can't be sourced, either find a source or
+  omit the claim. The previous round of analysis on this issue invented
+  dual-CC lock examples without evidence; don't repeat that mistake.
+- Cite every concrete claim with a URL, a file path + line range from one
+  of the three local checkouts (after a fresh fetch), or a GitHub issue
+  number.
+- If a question cannot be answered without the reporter's lock model or
+  value DB dump, say so explicitly and include it in the diagnostic
+  checklist.
+- Use `git show upstream/<branch>:<path>` to read upstream files; the local
+  working tree on these forks may lag upstream. Especially
+  `../zwave-js-server-python` which is on v0.70.0 here, well behind the
+  unified AccessControlAPI.
+
+## Output format
+
+1. Executive summary (3-5 bullets)
+2. Findings against each hypothesis (A/B/C): supported, refuted, or
+   undetermined-pending-diagnostics, with citations for each verdict
+3. Known dual-CC locks: cite device config files by manufacturer/model/path,
+   or state "none found"
+4. Diagnostic checklist for jhenkens/randallkn — copy-pasteable markdown
+   block ready to post on issue #1251
+5. Proposed upstream patches (one per layer that needs change): file +
+   symbol to change, sketch of the fix, and a draft PR title + description
+6. Filing order with reasoning (which fix is a prerequisite for which)
+
+---
+
+what I don't understand is that zwave-js figures out the number of users because it creates that many user id values, right? It's zwave-js that defines this concept of a value, so in order to have the right number of user id status and code values, it has to know the number of supported users, right? we can look at the code and see exactly how it generates those values
+
+---
+
+create a new branch in ../node-zwave-js and create the fix then push a PR using the PR template
+
+---
+
+see my other PR 8866 for comments about references and preferences from the maintainer
+
+---
+
+yes so update this PR. we basically need to check when the access control API is unusable (probably the same checks or similar to the ones you impolemented in zwave-js) and fallback to the User Code CC specific utility methods
+
+---
+
+to be safe, we could check for the presence of both command classes on the node as part of the fallback check. The beauty of doing both is that once the error is fixed, this becomes a no op for free
+
+---
+
+not sure if _uc_fallback should be a stored variable or dynamicall ychecked each time. That's what makes it no op as soon as it's fixed right?
