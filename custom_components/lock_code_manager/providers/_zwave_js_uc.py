@@ -395,20 +395,38 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         Force-update the value cache after a set/clear on a V1 lock.
 
         V1 locks don't reliably update the Z-Wave JS value cache after a
-        write. Poll the slot directly from the device to force-update the
-        cache before the coordinator reads it, preventing sync loops.
-        Wrap failures as LockDisconnected so they route to the retry path
-        instead of suspending the slot.
+        write; this poll fires a CC GET directly at the node to force
+        the value DB to refresh before the next coordinator read.
+
+        When the GET itself fails (the canonical case being a Schlage
+        UC v1 lock whose interview also times out -- issue #1251), log
+        and continue: the SET/CLEAR already ack'd at the wire and the
+        caller immediately emits ``_push_credential_update`` with the
+        true post-write state, so the coordinator already has the
+        truth. Failing the whole operation here turns a flaky lock into
+        a slot-suspension feedback loop -- the exact pathology the
+        fallback is meant to dodge. The hourly hard-refresh backstop
+        reconciles any genuine cache drift.
+
+        Non-Z-Wave exceptions (programming bugs) still propagate.
         """
         if self._usercode_cc_version >= 2:
             return
         try:
             await get_usercode_from_node(self.node, code_slot)
         except BaseZwaveJSServerError as err:
-            raise LockDisconnected(
-                f"Post-{operation} verification poll failed for "
-                f"{self.lock.entity_id} slot {code_slot}: {err}"
-            ) from err
+            # INFO, not WARNING: the per-lock fallback activation already
+            # logs a one-shot WARNING; verify timeouts on a flagged lock
+            # are the predicted consequence of the same interview
+            # pathology and would spam at WARNING level on every write.
+            _LOGGER.info(
+                "Lock %s slot %s: post-%s verification poll failed (%s); "
+                "trusting optimistic push and continuing",
+                self.lock.entity_id,
+                code_slot,
+                operation,
+                err,
+            )
 
     def _uc_code_slot_in_use(self, code_slot: int) -> bool | None:
         """Return whether a User Code CC slot is in use, None when unknown."""
