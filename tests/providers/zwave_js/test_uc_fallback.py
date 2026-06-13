@@ -880,6 +880,16 @@ async def test_support_layer_node_stub_raises() -> None:
         ZWaveJSUserCodeFallbackSupport.node.fget(None)
 
 
+async def test_support_layer_pin_state_stub_raises() -> None:
+    """The support layer's _pin_state must be overridden by the provider.
+
+    It exists only so the UC fallback's read path can reuse the concrete
+    provider's universal masked/withheld projection.
+    """
+    with pytest.raises(NotImplementedError):
+        ZWaveJSUserCodeFallbackSupport._pin_state(None, "1234")
+
+
 async def test_usercode_cc_version_defaults_to_v1_when_cc_missing(
     zwave_js_lock: ZWaveJSLock,
 ) -> None:
@@ -1302,7 +1312,10 @@ async def test_uc_value_update_duplicate_value_skipped(
     ],
 )
 def test_uc_slot_state_projection(
-    in_use: bool | None, usercode: str | None, expected: SlotCredential
+    zwave_js_lock: ZWaveJSLock,
+    in_use: bool | None,
+    usercode: str | None,
+    expected: SlotCredential,
 ) -> None:
     """_uc_slot_state must distinguish None (unknown) from False (cleared)."""
-    assert ZWaveJSUserCodeFallbackSupport._uc_slot_state(in_use, usercode) == expected
+    assert zwave_js_lock._uc_slot_state(in_use, usercode) == expected
