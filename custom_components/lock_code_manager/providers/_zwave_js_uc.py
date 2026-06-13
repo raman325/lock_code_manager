@@ -82,6 +82,21 @@ _UC_SET_VALUE_OK = (
     SetValueStatus.WORKING,
 )
 
+# SetValueResult statuses that are structural impossibilities for this
+# lock/endpoint -- the operation cannot succeed no matter how many times
+# we retry. Surface these as a real rejection. Any *other* non-OK status
+# (notably ``FAIL``) is treated as transient: 3.x routed sets through the
+# HA service ``zwave_js.set_lock_usercode``, which never inspected the
+# status at all, so those locks worked fine on flaky firmware that
+# returned ``FAIL`` intermittently. Raising on transient ``FAIL`` is
+# exactly what disabled TheMegamind's slots on 4.0.3-4.0.4 (#1251).
+_UC_SET_VALUE_FATAL = (
+    SetValueStatus.NO_DEVICE_SUPPORT,
+    SetValueStatus.ENDPOINT_NOT_FOUND,
+    SetValueStatus.NOT_IMPLEMENTED,
+    SetValueStatus.INVALID_VALUE,
+)
+
 
 @dataclass(repr=False, eq=False)
 class ZWaveJSUserCodeFallbackSupport(BaseLock):
@@ -333,11 +348,22 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
                 f"set usercode slot {code_slot} failed: {err}"
             ) from err
         if result is not None and result.status not in _UC_SET_VALUE_OK:
-            self._set_in_progress_code_slot = None
-            raise CodeRejectedError(
-                code_slot=code_slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"set value returned {result.status.name}",
+            if result.status in _UC_SET_VALUE_FATAL:
+                self._set_in_progress_code_slot = None
+                raise CodeRejectedError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=f"set value returned {result.status.name}",
+                )
+            # Transient non-OK (canonically ``FAIL``): match the 3.x
+            # behavior of the HA service we used to call -- log and
+            # let the optimistic push + next sync tick converge.
+            _LOGGER.info(
+                "Lock %s slot %s: set returned %s; "
+                "trusting optimistic push and continuing",
+                self.lock.entity_id,
+                code_slot,
+                result.status.name,
             )
         await self._async_uc_verify_write(code_slot, "set")
         # Optimistic update: the value cache updates asynchronously via push
@@ -379,9 +405,18 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
                 f"clear usercode slot {code_slot} failed: {err}"
             ) from err
         if result is not None and result.status not in _UC_SET_VALUE_OK:
-            raise LockOperationFailed(
-                f"clear usercode slot {code_slot} failed: "
-                f"set value returned {result.status.name}"
+            if result.status in _UC_SET_VALUE_FATAL:
+                raise LockOperationFailed(
+                    f"clear usercode slot {code_slot} failed: "
+                    f"set value returned {result.status.name}"
+                )
+            # Transient non-OK: see _async_uc_set_usercode for rationale.
+            _LOGGER.info(
+                "Lock %s slot %s: clear returned %s; "
+                "trusting optimistic push and continuing",
+                self.lock.entity_id,
+                code_slot,
+                result.status.name,
             )
         await self._async_uc_verify_write(code_slot, "clear")
         # Optimistic update: see _async_uc_set_usercode for rationale.
