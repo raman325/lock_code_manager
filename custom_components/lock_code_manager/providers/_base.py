@@ -424,28 +424,22 @@ class BaseLock:
         When an optimistic write for the slot is outstanding and the observed
         state shows a code present, the observation confirms our write: keep
         the believed value (even if the observation itself is masked/unreadable)
-        and mark it verified. Otherwise -- no pending write, or the slot is now
-        empty -- take the observation as the verified state. Either way the
-        pending entry is cleared.
+        and mark it verified. The one exception is a *readable* observation of a
+        different code -- that is an external change racing our write, so we take
+        the observation rather than masking it with our believed value.
+        Otherwise -- no pending write, or the slot is now empty -- take the
+        observation as the verified state. Either way the pending entry is
+        cleared.
         """
         pending = self._pending_writes.pop(code_slot, None)
         if pending is not None and observed.is_present:
             pin, _deadline = pending
-            self._push_credential_update(code_slot, SlotCredential.known(pin))
+            if observed.is_readable and observed.readable_pin != pin:
+                self._push_credential_update(code_slot, observed)
+            else:
+                self._push_credential_update(code_slot, SlotCredential.known(pin))
             return
         self._push_credential_update(code_slot, observed)
-
-    @callback
-    def _expire_pending_writes(self) -> None:
-        """Drop optimistic writes whose confirmation deadline has passed."""
-        now = time.monotonic()
-        expired = [
-            slot
-            for slot, (_pin, deadline) in self._pending_writes.items()
-            if deadline <= now
-        ]
-        for slot in expired:
-            del self._pending_writes[slot]
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -996,6 +990,13 @@ class BaseLock:
             # unverified. A push event or hard refresh confirms it via
             # _confirm_slot; otherwise the sync tick re-syncs after the TTL.
             self._record_optimistic_write(code_slot, str(usercode))
+        elif result is WriteResult.CONFIRMED:
+            # The lock acknowledged the write: supersede any pending optimistic
+            # state and clear a stale unverified flag from a prior optimistic
+            # write, so the slot can converge instead of churning to a suspend.
+            self._pending_writes.pop(code_slot, None)
+            if self.coordinator is not None:
+                self.coordinator.mark_verified(code_slot)
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.

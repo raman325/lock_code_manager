@@ -722,7 +722,11 @@ class SlotSyncManager:
                     self._state = SyncState.PENDING_CONFIRMATION
                     self._write_state()
                 return
-            # Expired without confirmation: treat as a failed sync attempt.
+            # Expired without confirmation: charge one breaker failure and
+            # re-sync on the NEXT tick. Returning here (rather than falling
+            # through to _perform_sync this tick) avoids double-charging the
+            # breaker when the re-sync itself also fails, and lets a confirming
+            # push that lands between ticks resolve the slot first.
             del self._lock._pending_writes[self._slot_num]
             self._slot_breaker.record_failure()
             _LOGGER.warning(
@@ -731,8 +735,9 @@ class SlotSyncManager:
                 self._log_prefix,
                 self._slot_breaker.failure_count,
             )
-            # expected_in_sync was computed before this; the slot is still
-            # unverified, so it is False -- fall through to the sync path.
+            self._state = SyncState.OUT_OF_SYNC
+            self._write_state()
+            return
 
         # -- OUT_OF_SYNC: check lock reachability, then attempt sync --
         if self._coordinator.unreachable:

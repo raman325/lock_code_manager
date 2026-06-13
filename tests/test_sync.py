@@ -778,13 +778,20 @@ class TestSyncStateMachine:
         with patch.object(
             manager, "_perform_sync", new_callable=AsyncMock, return_value=True
         ) as mock_sync:
+            # Tick 1: the expired pending write is dropped and charged to the
+            # breaker, and the slot parks at OUT_OF_SYNC without re-syncing this
+            # tick (so a concurrent confirming push could still land, and so the
+            # breaker is not double-charged by a same-tick sync failure).
             await manager._async_tick()
+            assert 1 not in manager._lock._pending_writes
+            assert manager._slot_breaker.failure_count > before
+            assert manager._state is SyncState.OUT_OF_SYNC
+            mock_sync.assert_not_called()
 
-        # The expired pending write was dropped and charged to the breaker;
-        # because the code is genuinely absent, the slot does not converge.
-        assert 1 not in manager._lock._pending_writes
-        assert manager._slot_breaker.failure_count > before
-        mock_sync.assert_called()
+            # Tick 2: the code is genuinely absent, so the slot re-syncs.
+            manager.request_sync_check()
+            await manager._async_tick()
+            mock_sync.assert_called()
 
     async def test_syncing_to_out_of_sync_on_lock_disconnected(
         self,

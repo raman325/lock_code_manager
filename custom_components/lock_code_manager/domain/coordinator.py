@@ -163,6 +163,17 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         return self._verified.get(slot, True)
 
     @callback
+    def mark_verified(self, slot: int) -> None:
+        """
+        Clear a slot's unverified flag (it defaults back to verified).
+
+        Called when a write is confirmed by the lock (an authoritative
+        ``WriteResult.CONFIRMED``), so a stale unverified flag from a prior
+        optimistic write on the same slot cannot strand it.
+        """
+        self._verified.pop(slot, None)
+
+    @callback
     def push_update(
         self, updates: dict[int, SlotCredential], *, optimistic: bool = False
     ) -> None:

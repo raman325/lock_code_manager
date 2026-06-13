@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import time
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1096,15 +1095,31 @@ async def test_confirm_slot_empty_observation_clears_pending(
     assert 4 not in lock._pending_writes
 
 
-async def test_expire_pending_writes_drops_only_past_deadline(
+async def test_confirm_slot_takes_differing_readable_external_change(
     hass: HomeAssistant,
 ) -> None:
-    """Expiry drops pending writes whose deadline has passed, keeps the rest."""
-    lock = _make_lock(hass, _DegenerateStubLock, "seam_expire")
-    lock._pending_writes = {
-        1: ("1111", time.monotonic() - 1.0),  # expired
-        2: ("2222", time.monotonic() + 100.0),  # still pending
-    }
-    lock._expire_pending_writes()
+    """A readable observation of a *different* code is an external change: take it."""
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    lock._record_optimistic_write(4, "1234")
+    pushed.clear()
 
-    assert set(lock._pending_writes) == {2}
+    # The lock reports a readable code that differs from what we wrote -- someone
+    # changed it out from under us; surface the observation, not our belief.
+    lock._confirm_slot(4, SlotCredential.known("9999"))
+
+    assert pushed == [({4: SlotCredential.known("9999")}, False)]
+    assert 4 not in lock._pending_writes
+
+
+async def test_confirm_slot_keeps_belief_when_readable_matches(
+    hass: HomeAssistant,
+) -> None:
+    """A readable observation matching the believed PIN confirms it verbatim."""
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    lock._record_optimistic_write(4, "1234")
+    pushed.clear()
+
+    lock._confirm_slot(4, SlotCredential.known("1234"))
+
+    assert pushed == [({4: SlotCredential.known("1234")}, False)]
+    assert 4 not in lock._pending_writes

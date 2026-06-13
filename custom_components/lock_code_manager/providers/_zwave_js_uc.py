@@ -323,12 +323,17 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         """
         Write a usercode through the legacy User Code CC value path.
 
-        Returns False without writing when the cached value already
-        matches (masked codes never match, so they are always
-        rewritten). After a successful write, V1 locks are polled to
-        force-update the value DB (they don't reliably report back),
-        and the new state is pushed optimistically so the next sync
-        tick doesn't read a stale cache and loop.
+        Returns ``WriteResult.NO_CHANGE`` without writing when the cached
+        value already matches (masked codes never match, so they are
+        always rewritten). After a successful write, V1 locks are polled
+        to force-update the value DB (they don't reliably report back),
+        and the new state is pushed optimistically so the next sync tick
+        doesn't read a stale cache and loop.
+
+        Returns ``WriteResult.CONFIRMED`` for a completed write. Note this
+        path does not yet participate in the verified-credential lifecycle
+        (it confirms inline via the V1 poll rather than via a later push),
+        so a masked/unverifiable write is trusted here as it was in 3.x.
         """
         try:
             current = get_usercode(self.node, code_slot)
