@@ -228,11 +228,24 @@ async def test_uc_set_credential_proceeds_when_masked(
     mock_uc_utils["set_usercode"].assert_awaited_once()
 
 
-async def test_uc_set_credential_failure_status_raises_code_rejected(
+async def test_uc_set_fail_status_logs_and_continues(
     uc_fallback_lock: ZWaveJSLock,
     mock_uc_utils: dict,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A FAIL set-value result maps to CodeRejectedError."""
+    """A transient ``FAIL`` set-value status is tolerated, not a rejection.
+
+    3.3.0 routed sets through the HA service ``zwave_js.set_lock_usercode``,
+    which never inspected ``SetValueResult.status`` -- transient ``FAIL``
+    responses (the canonical case on flaky-interview Schlage UC v1 locks,
+    #1251) were silently swallowed and the slot stayed enabled. The
+    structural statuses (``NO_DEVICE_SUPPORT`` etc.) still escalate to
+    ``CodeRejectedError`` because they are real impossibilities.
+    """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    uc_fallback_lock.coordinator = mock_coordinator
+
     mock_uc_utils["set_usercode"].return_value = SetValueResult(
         {"status": SetValueStatus.FAIL}
     )
@@ -240,7 +253,44 @@ async def test_uc_set_credential_failure_status_raises_code_rejected(
     credential = Credential(
         type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
     )
-    with pytest.raises(CodeRejectedError, match="FAIL"):
+    with caplog.at_level(logging.INFO):
+        result = await uc_fallback_lock.async_set_credential(
+            user_id=5, credential=credential, pin="4321", name=None, source="sync"
+        )
+
+    assert result is True
+    mock_coordinator.push_update.assert_called_once_with(
+        {5: SlotCredential.known("4321")}
+    )
+    assert "set returned FAIL" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        SetValueStatus.NO_DEVICE_SUPPORT,
+        SetValueStatus.ENDPOINT_NOT_FOUND,
+        SetValueStatus.NOT_IMPLEMENTED,
+        SetValueStatus.INVALID_VALUE,
+    ],
+    ids=lambda s: s.name,
+)
+async def test_uc_set_fatal_status_raises_code_rejected(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+    status: SetValueStatus,
+) -> None:
+    """Structural-impossibility statuses still raise ``CodeRejectedError``.
+
+    These mean the operation cannot succeed on this device/endpoint --
+    not transient -- so the slot should be rejected loudly.
+    """
+    mock_uc_utils["set_usercode"].return_value = SetValueResult({"status": status})
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    with pytest.raises(CodeRejectedError, match=status.name):
         await uc_fallback_lock.async_set_credential(
             user_id=5, credential=credential, pin="4321", name=None, source="sync"
         )
@@ -982,17 +1032,49 @@ async def test_uc_clear_credential_transport_error_raises_lock_disconnected(
         await uc_fallback_lock.async_delete_credential(ref)
 
 
-async def test_uc_clear_credential_failure_status_raises_operation_failed(
+async def test_uc_clear_fail_status_logs_and_continues(
     uc_fallback_lock: ZWaveJSLock,
     mock_uc_utils: dict,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A FAIL set-value result during clear maps to LockOperationFailed."""
+    """A transient ``FAIL`` clear status is tolerated; mirrors the set path."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    uc_fallback_lock.coordinator = mock_coordinator
+
     mock_uc_utils["clear_usercode"].return_value = SetValueResult(
         {"status": SetValueStatus.FAIL}
     )
 
     ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
-    with pytest.raises(LockOperationFailed, match="FAIL"):
+    with caplog.at_level(logging.INFO):
+        result = await uc_fallback_lock.async_delete_credential(ref)
+
+    assert result is True
+    mock_coordinator.push_update.assert_called_once_with({3: SlotCredential.empty()})
+    assert "clear returned FAIL" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        SetValueStatus.NO_DEVICE_SUPPORT,
+        SetValueStatus.ENDPOINT_NOT_FOUND,
+        SetValueStatus.NOT_IMPLEMENTED,
+        SetValueStatus.INVALID_VALUE,
+    ],
+    ids=lambda s: s.name,
+)
+async def test_uc_clear_fatal_status_raises_operation_failed(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+    status: SetValueStatus,
+) -> None:
+    """Structural-impossibility clear statuses still raise ``LockOperationFailed``."""
+    mock_uc_utils["clear_usercode"].return_value = SetValueResult({"status": status})
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    with pytest.raises(LockOperationFailed, match=status.name):
         await uc_fallback_lock.async_delete_credential(ref)
 
 
