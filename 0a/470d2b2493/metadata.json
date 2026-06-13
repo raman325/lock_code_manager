@@ -4,13 +4,22 @@
   "strategy": "manual-commit",
   "branch": "feat/phase2-verified-credential-lifecycle",
   "checkpoints_count": 1,
-  "files_touched": null,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/providers/test_seam.py"
+  ],
   "sessions": [
     {
       "metadata": "/0a/470d2b2493/0/metadata.json",
       "transcript": "/0a/470d2b2493/0/full.jsonl",
       "content_hash": "/0a/470d2b2493/0/content_hash.txt",
       "prompt": "/0a/470d2b2493/0/prompt.txt"
+    },
+    {
+      "metadata": "/0a/470d2b2493/1/metadata.json",
+      "transcript": "/0a/470d2b2493/1/full.jsonl",
+      "content_hash": "/0a/470d2b2493/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
