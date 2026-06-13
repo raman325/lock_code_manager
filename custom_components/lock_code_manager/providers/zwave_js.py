@@ -242,27 +242,30 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         """
         Report the lock's user/credential capabilities.
 
-        Routes the lock to the right write path based on which credential
-        command class it implements:
+        Routes the lock based on whether the unified API can express its PIN
+        capabilities:
 
-        - **User Credential CC (U3C) with usable PIN capabilities** -> the
-          unified ``access_control`` API (full user lifecycle).
-        - **Everything else that has User Code CC** -> the legacy User
-          Code CC fallback (slot-only). This covers both UC-only locks
-          and dual-CC locks whose U3C capabilities are degenerate.
+        - **Usable PIN capabilities reported** (``num_slots > 0``) -> the
+          unified ``access_control`` API. This is the common path for both
+          U3C locks and healthy User Code CC-only locks. Masked-code locks
+          stay correct here via the universal read projection (``_pin_state``
+          maps a withheld code to ``unreadable``) and tolerant write handling
+          (a driver ``ERROR_UNKNOWN`` from the masked read-back verification
+          is treated as a completed set in ``async_set_credential``, not a
+          rejection) -- see issue #1251.
+        - **Degenerate capabilities** (PIN missing or ``num_slots == 0``) ->
+          the legacy User Code CC fallback (slot-only), which addresses slots
+          directly because the unified API can't even express them. Only the
+          zero-slot variant needs this; a node with no User Code CC at all has
+          no PIN support LCM can manage.
 
-        Every User Code CC-only lock uses the legacy path even when the
-        unified API reports healthy capabilities, because the driver's
-        unified UC write verifies by reading the code back and comparing
-        it to what was written -- which fails for locks that report
-        masked user codes, turning an accepted write into a phantom
-        ``ERROR_UNKNOWN`` rejection (issue #1251; the same path is also
-        where degenerate zero-slot capabilities originate). The legacy
-        ``set_usercode`` path is exactly what LCM 3.x used for these
-        locks and does not do that equality check. Once the upstream
-        driver fixes both the verification and the capability reporting
-        (zwave-js/zwave-js#8873), only true U3C locks need the unified
-        API and this fallback can be removed (see ``_zwave_js_uc.py``).
+        Note: this method does NOT route by command class -- a User Code
+        CC-only lock with healthy capabilities uses the unified path, relying
+        on the projection + tolerant-write handling above rather than the
+        legacy fallback. Only degenerate capabilities trigger the fallback.
+        Once the upstream driver fixes the masked-read verification and the
+        capability reporting (zwave-js/zwave-js#8873), the fallback can be
+        removed entirely (see ``_zwave_js_uc.py``).
         """
         try:
             caps = await lock_helpers.async_get_credential_capabilities(self.node)

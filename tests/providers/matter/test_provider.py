@@ -3188,6 +3188,38 @@ class TestSetCredential:
         # First set raised duplicate; clear failed; no retry attempt is made.
         assert mock_set_credential.call_count == 1
 
+    async def test_set_credential_sync_duplicate_clear_matter_client_exception(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A MatterClientException during the duplicate-retry clear routes to retry.
+
+        Regression guard (#1257): this clear path is independent of the main
+        clear and both set paths; a MatterClientException here must map to
+        LockDisconnected rather than escape to the generic handler and suspend
+        the slot.
+        """
+        mock_set_credential = AsyncMock(
+            side_effect=_make_set_credential_failed_error("duplicate")
+        )
+        mock_clear = AsyncMock(side_effect=MatterClientException("Not connected"))
+        credential = self._make_credential(slot=1, pin="1234")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_user_with_pin(user_id=1, credential_index=10),
+            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+            pytest.raises(LockDisconnected, match="sync-duplicate retry"),
+        ):
+            await matter_lock_simple.async_set_credential(
+                1, credential, "1234", name=None, source="sync"
+            )
+        assert mock_set_credential.call_count == 1
+
     async def test_set_credential_sync_duplicate_clear_service_validation_error(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
