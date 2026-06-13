@@ -10,6 +10,7 @@ module's docstring for the full removal recipe.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -995,15 +996,24 @@ async def test_uc_clear_credential_failure_status_raises_operation_failed(
         await uc_fallback_lock.async_delete_credential(ref)
 
 
-async def test_uc_v1_verify_poll_failure_raises_lock_disconnected(
+async def test_uc_v1_set_verify_failure_logs_warning_and_continues(
     uc_fallback_lock: ZWaveJSLock,
     mock_uc_utils: dict,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A failing post-write verification poll maps to LockDisconnected.
+    """V1 verify failure during set is logged but does not fail the set.
 
-    The write itself succeeded, so routing to the retry path (rather
-    than suspending the slot) lets the next tick verify the result.
+    The wire-level SET already ack'd and the optimistic
+    ``_push_credential_update`` delivers the truth to the coordinator.
+    Failing here turns a flaky-interview lock (issue #1251) into a
+    slot-suspension feedback loop -- the exact pathology the fallback
+    is meant to dodge. The hourly hard-refresh backstop reconciles any
+    cache drift that genuinely matters.
     """
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    uc_fallback_lock.coordinator = mock_coordinator
+
     mock_uc_utils["get_usercode_from_node"].side_effect = FailedZWaveCommand(
         "cmd", 1, "node gone"
     )
@@ -1011,7 +1021,57 @@ async def test_uc_v1_verify_poll_failure_raises_lock_disconnected(
     credential = Credential(
         type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
     )
-    with pytest.raises(LockDisconnected, match="verification poll failed"):
+    with caplog.at_level(logging.WARNING):
+        result = await uc_fallback_lock.async_set_credential(
+            user_id=5, credential=credential, pin="4321", name=None, source="sync"
+        )
+
+    assert result is True
+    mock_coordinator.push_update.assert_called_once_with(
+        {5: SlotCredential.known("4321")}
+    )
+    assert "verification poll failed" in caplog.text
+
+
+async def test_uc_v1_clear_verify_failure_logs_warning_and_continues(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """V1 verify failure during clear is non-fatal too; mirrors the set path."""
+    mock_coordinator = MagicMock()
+    mock_coordinator.data = {}
+    uc_fallback_lock.coordinator = mock_coordinator
+
+    mock_uc_utils["get_usercode_from_node"].side_effect = FailedZWaveCommand(
+        "cmd", 1, "node gone"
+    )
+
+    ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
+    with caplog.at_level(logging.WARNING):
+        result = await uc_fallback_lock.async_delete_credential(ref)
+
+    assert result is True
+    mock_coordinator.push_update.assert_called_once_with({3: SlotCredential.empty()})
+    assert "verification poll failed" in caplog.text
+
+
+async def test_uc_v1_verify_non_zwave_error_propagates(
+    uc_fallback_lock: ZWaveJSLock,
+    mock_uc_utils: dict,
+) -> None:
+    """Non-Z-Wave verify errors still propagate as bugs.
+
+    The softening only covers ``BaseZwaveJSServerError``; a RuntimeError
+    here means a programming bug and must surface for diagnosis rather
+    than be silently swallowed alongside the wire-level timeouts.
+    """
+    mock_uc_utils["get_usercode_from_node"].side_effect = RuntimeError("bug")
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
+    )
+    with pytest.raises(RuntimeError, match="bug"):
         await uc_fallback_lock.async_set_credential(
             user_id=5, credential=credential, pin="4321", name=None, source="sync"
         )
