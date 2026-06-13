@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "18c469f4c1f4",
+  "strategy": "manual-commit",
+  "branch": "feat/phase2-verified-credential-lifecycle",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
+    "tests/providers/test_seam.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/providers/zwave_js/test_uc_fallback.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/18/c469f4c1f4/0/metadata.json",
+      "transcript": "/18/c469f4c1f4/0/full.jsonl",
+      "content_hash": "/18/c469f4c1f4/0/content_hash.txt",
+      "prompt": "/18/c469f4c1f4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 153276,
+    "cache_creation_tokens": 2335666,
+    "cache_read_tokens": 220130480,
+    "output_tokens": 522562,
+    "api_call_count": 445
+  }
+}
