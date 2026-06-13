@@ -69,6 +69,11 @@ from .const import LOGGER
 _LOGGER = logging.getLogger(__name__)
 
 MIN_OPERATION_DELAY = 2.0
+
+# How long an optimistic write waits for confirmation (push event or hard-refresh
+# presence) before the sync layer gives up waiting and re-syncs. See the Phase 2
+# push-as-commit spec.
+PENDING_WRITE_TTL = 60.0
 _OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
     "get": "get from",
     "set": "set on",
@@ -206,6 +211,15 @@ class BaseLock:
     _setup_running: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
     _rejected_code_slots: set[int] = field(default_factory=set, init=False)
+    # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
+    # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
+    # A confirmation -- a push event or a hard-refresh read observing the slot
+    # present -- clears the entry and re-pushes the believed value as verified;
+    # if none arrives before the deadline, the sync layer re-syncs. See the
+    # Phase 2 push-as-commit spec.
+    _pending_writes: dict[int, tuple[str, float]] = field(
+        default_factory=dict, init=False
+    )
     # Reconnect task spawned by the config-entry state listener when the lock
     # integration transitions to LOADED. Tracked so async_unload can cancel it
     # before teardown -- otherwise a late reconnect can call
@@ -369,11 +383,69 @@ class BaseLock:
     @final
     @callback
     def _push_credential_update(
-        self, code_slot: int, credential: SlotCredential
+        self, code_slot: int, credential: SlotCredential, *, optimistic: bool = False
     ) -> None:
-        """Push a coordinator credential update; no-op when no coordinator is attached."""
-        if self.coordinator is not None:
+        """
+        Push a coordinator credential update; no-op when no coordinator is attached.
+
+        ``optimistic=True`` marks the slot unverified (an ambiguous write we are
+        treating as completed but have not confirmed). The default keeps the
+        slot verified.
+        """
+        if self.coordinator is None:
+            return
+        # Only pass the kwarg when optimistic, so the common verified push keeps
+        # its plain call shape (and existing call-shape assertions hold).
+        if optimistic:
+            self.coordinator.push_update({code_slot: credential}, optimistic=True)
+        else:
             self.coordinator.push_update({code_slot: credential})
+
+    @callback
+    def _record_optimistic_write(self, code_slot: int, pin: str) -> None:
+        """
+        Record an outstanding optimistic write and push its believed value.
+
+        Called by the seam when ``async_set_credential`` returns OPTIMISTIC.
+        The slot is pushed as ``known(pin)`` but marked unverified; it awaits
+        a confirmation (push event or hard-refresh presence) via
+        ``_confirm_slot``, or re-syncs once the deadline passes.
+        """
+        self._pending_writes[code_slot] = (pin, time.monotonic() + PENDING_WRITE_TTL)
+        self._push_credential_update(
+            code_slot, SlotCredential.known(pin), optimistic=True
+        )
+
+    @callback
+    def _confirm_slot(self, code_slot: int, observed: SlotCredential) -> None:
+        """
+        Resolve an observation (push event or hard-refresh read) for a slot.
+
+        When an optimistic write for the slot is outstanding and the observed
+        state shows a code present, the observation confirms our write: keep
+        the believed value (even if the observation itself is masked/unreadable)
+        and mark it verified. Otherwise -- no pending write, or the slot is now
+        empty -- take the observation as the verified state. Either way the
+        pending entry is cleared.
+        """
+        pending = self._pending_writes.pop(code_slot, None)
+        if pending is not None and observed.is_present:
+            pin, _deadline = pending
+            self._push_credential_update(code_slot, SlotCredential.known(pin))
+            return
+        self._push_credential_update(code_slot, observed)
+
+    @callback
+    def _expire_pending_writes(self) -> None:
+        """Drop optimistic writes whose confirmation deadline has passed."""
+        now = time.monotonic()
+        expired = [
+            slot
+            for slot, (_pin, deadline) in self._pending_writes.items()
+            if deadline <= now
+        ]
+        for slot in expired:
+            del self._pending_writes[slot]
 
     @final
     def is_slot_managed(self, code_slot: int) -> bool:
@@ -919,6 +991,11 @@ class BaseLock:
             name=name,
             source=source,
         )
+        if result is WriteResult.OPTIMISTIC:
+            # Ambiguous write: record it pending and push the believed value as
+            # unverified. A push event or hard refresh confirms it via
+            # _confirm_slot; otherwise the sync tick re-syncs after the TTL.
+            self._record_optimistic_write(code_slot, str(usercode))
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.

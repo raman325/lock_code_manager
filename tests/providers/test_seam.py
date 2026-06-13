@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import time
 from typing import Literal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -930,7 +931,7 @@ class _CredentialWriteFailsLock(_NativeStubLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         self.calls.append(("set_credential", user_id, credential.slot))
         raise CodeRejectedError(
             code_slot=credential.slot, lock_entity_id=self.lock.entity_id
@@ -1021,3 +1022,89 @@ async def test_set_usercode_logs_warning_when_rollback_user_delete_fails(
 
     assert ("delete_user", 3) in lock.calls
     assert "failed to roll back newly created user 3" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: optimistic-write pending tracking + confirmation (base helpers)
+# ---------------------------------------------------------------------------
+
+
+def _slot_only_lock_with_coordinator(hass: HomeAssistant):
+    """Build a _DegenerateStubLock with a mock coordinator that records pushes."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_optimistic")
+    coord = MagicMock()
+    coord.data = {}
+    pushed: list[tuple[dict, bool]] = []
+
+    def _push(updates, *, optimistic=False):
+        coord.data = {**coord.data, **updates}
+        pushed.append((dict(updates), optimistic))
+
+    coord.push_update.side_effect = _push
+    lock.coordinator = coord
+    return lock, pushed
+
+
+async def test_record_optimistic_write_pushes_unverified_and_tracks_pending(
+    hass: HomeAssistant,
+) -> None:
+    """An optimistic write pushes the believed value unverified and records pending."""
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    lock._record_optimistic_write(4, "1234")
+
+    assert pushed == [({4: SlotCredential.known("1234")}, True)]
+    assert 4 in lock._pending_writes
+    assert lock._pending_writes[4][0] == "1234"
+
+
+async def test_confirm_slot_keeps_believed_value_on_present_observation(
+    hass: HomeAssistant,
+) -> None:
+    """A present (even masked) observation confirms a pending write as verified."""
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    lock._record_optimistic_write(4, "1234")
+    pushed.clear()
+
+    # The lock reports the slot present but unreadable (masked) -- still confirms.
+    lock._confirm_slot(4, SlotCredential.unreadable())
+
+    assert pushed == [({4: SlotCredential.known("1234")}, False)]
+    assert 4 not in lock._pending_writes
+
+
+async def test_confirm_slot_takes_observation_when_no_pending(
+    hass: HomeAssistant,
+) -> None:
+    """With no pending write, the observation is taken verbatim as verified."""
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    lock._confirm_slot(2, SlotCredential.unreadable())
+
+    assert pushed == [({2: SlotCredential.unreadable()}, False)]
+
+
+async def test_confirm_slot_empty_observation_clears_pending(
+    hass: HomeAssistant,
+) -> None:
+    """An empty observation (slot cleared) overrides a pending write."""
+    lock, pushed = _slot_only_lock_with_coordinator(hass)
+    lock._record_optimistic_write(4, "1234")
+    pushed.clear()
+
+    lock._confirm_slot(4, SlotCredential.empty())
+
+    assert pushed == [({4: SlotCredential.empty()}, False)]
+    assert 4 not in lock._pending_writes
+
+
+async def test_expire_pending_writes_drops_only_past_deadline(
+    hass: HomeAssistant,
+) -> None:
+    """Expiry drops pending writes whose deadline has passed, keeps the rest."""
+    lock = _make_lock(hass, _DegenerateStubLock, "seam_expire")
+    lock._pending_writes = {
+        1: ("1111", time.monotonic() - 1.0),  # expired
+        2: ("2222", time.monotonic() + 100.0),  # still pending
+    }
+    lock._expire_pending_writes()
+
+    assert set(lock._pending_writes) == {2}
