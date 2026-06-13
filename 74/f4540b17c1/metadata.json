@@ -6,7 +6,11 @@
   "checkpoints_count": 6,
   "files_touched": [
     "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
-    "custom_components/lock_code_manager/providers/zwave_js.py"
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/providers/zwave_js/test_uc_fallback.py"
   ],
   "sessions": [
     {
@@ -14,13 +18,19 @@
       "transcript": "/74/f4540b17c1/0/full.jsonl",
       "content_hash": "/74/f4540b17c1/0/content_hash.txt",
       "prompt": "/74/f4540b17c1/0/prompt.txt"
+    },
+    {
+      "metadata": "/74/f4540b17c1/1/metadata.json",
+      "transcript": "/74/f4540b17c1/1/full.jsonl",
+      "content_hash": "/74/f4540b17c1/1/content_hash.txt",
+      "prompt": "/74/f4540b17c1/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 103742,
-    "cache_creation_tokens": 2105460,
-    "cache_read_tokens": 116800868,
-    "output_tokens": 394172,
-    "api_call_count": 304
+    "input_tokens": 103763,
+    "cache_creation_tokens": 2280942,
+    "cache_read_tokens": 117530426,
+    "output_tokens": 400823,
+    "api_call_count": 315
   }
 }

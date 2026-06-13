@@ -1,0 +1,5 @@
+right now we specify the failure modes that we absolutely wont accept and everything else is a soft failure (we log it but continue). Instead, I want the soft failure to be explicit (a list of only one at the moment, FAIL), and everything else that's not successful to be a hard fial
+
+---
+
+we will have to do this in a new branch and PR because the current one is merged
