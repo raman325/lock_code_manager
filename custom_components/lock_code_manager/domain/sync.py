@@ -857,6 +857,16 @@ class SlotSyncManager:
                     self._state = SyncState.OUT_OF_SYNC
                     return
 
+        # An optimistic (ambiguous) set records a pending write: don't judge it
+        # now -- wait for the lock to confirm it (a push event or hard refresh)
+        # in PENDING_CONFIRMATION. The breaker is only charged when that wait
+        # times out (handled at the top of the tick), so a masked-but-accepted
+        # write is not penalised before its confirming event arrives.
+        if self._slot_num in self._lock._pending_writes:
+            self._state = SyncState.PENDING_CONFIRMATION
+            self._write_state()
+            return
+
         # Check if sync actually worked.
         slot_state = self._resolve_slot_state()
         if slot_state is not None and self.calculate_in_sync(slot_state):

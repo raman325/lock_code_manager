@@ -119,6 +119,40 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
         return {int(k): v for k, v in data.items()}
 
+    def _apply_read(
+        self, observed: dict[int, SlotCredential]
+    ) -> dict[int, SlotCredential]:
+        """
+        Resolve a genuine read (poll or hard refresh) against pending writes.
+
+        A read is the dropped-push backstop for the verified-credential
+        lifecycle: for a slot with an outstanding optimistic write, observing
+        the slot present confirms our write -- keep the believed value and mark
+        it verified. Observing it still absent means the write has not landed
+        yet, so keep waiting (stay unverified, pending intact). Slots with no
+        pending write are genuine observations and are marked verified. See the
+        Phase 2 push-as-commit spec.
+        """
+        out: dict[int, SlotCredential] = {}
+        for slot, cred in observed.items():
+            pending = self._lock._pending_writes.get(slot)
+            if pending is not None and cred.is_present:
+                pin, _deadline = pending
+                del self._lock._pending_writes[slot]
+                out[slot] = SlotCredential.known(pin)
+                self._verified[slot] = True
+            elif pending is not None:
+                out[slot] = cred
+                self._verified[slot] = False
+            else:
+                out[slot] = cred
+                self._verified.pop(slot, None)
+        # Keep the verified map in lockstep with the read.
+        self._verified = {
+            slot: flag for slot, flag in self._verified.items() if slot in out
+        }
+        return out
+
     def is_verified(self, slot: int) -> bool:
         """
         Return whether the slot's credential is a confirmed observation.
@@ -259,7 +293,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             raise UpdateFailed from err
 
         self._reset_backoff()
-        return self._normalize_keys(data)
+        return self._apply_read(self._normalize_keys(data))
 
     async def _async_drift_check(self, now: datetime) -> None:
         """Perform a hard refresh to detect out-of-band code changes."""
@@ -279,8 +313,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             self._lock.lock.entity_id,
         )
         try:
-            new_data = self._normalize_keys(
-                await self._lock.async_internal_hard_refresh_codes()
+            new_data = self._apply_read(
+                self._normalize_keys(
+                    await self._lock.async_internal_hard_refresh_codes()
+                )
             )
         except LockCodeManagerError as err:
             self._apply_backoff()

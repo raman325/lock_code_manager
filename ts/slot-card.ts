@@ -973,6 +973,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                 statusText = 'Syncing';
                 icon = 'mdi:sync';
                 break;
+            case 'pending_confirmation':
+                // An optimistic write was sent and we're waiting for the lock to
+                // confirm it (push event or hard refresh). Transient; resolves to
+                // synced on confirmation or re-syncs on timeout.
+                iconClass = 'syncing';
+                statusText = 'Confirming';
+                icon = 'mdi:progress-clock';
+                break;
             case 'suspended':
                 iconClass = 'suspended';
                 statusText = 'Suspended';
