@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "49038c7ae9a3",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-js-uc-verify-soften",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
+    "tests/providers/zwave_js/test_uc_fallback.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/49/038c7ae9a3/0/metadata.json",
+      "transcript": "/49/038c7ae9a3/0/full.jsonl",
+      "content_hash": "/49/038c7ae9a3/0/content_hash.txt",
+      "prompt": "/49/038c7ae9a3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65,
+    "cache_creation_tokens": 497828,
+    "cache_read_tokens": 9558089,
+    "output_tokens": 53045,
+    "api_call_count": 50
+  }
+}
