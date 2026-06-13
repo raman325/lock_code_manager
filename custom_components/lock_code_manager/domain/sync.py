@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
@@ -401,7 +402,16 @@ class SlotSyncManager:
         that PIN changes trigger a re-set even when the lock code is
         unreadable, and that taking over a slot with an existing masked code
         triggers a set.
+
+        An unverified slot (an optimistic write still awaiting confirmation,
+        or one whose confirmation never arrived) is never in sync: the
+        coordinator holds the believed value but the lock has not confirmed it,
+        so the tick must keep watching (PENDING_CONFIRMATION) or re-sync rather
+        than declare success. Slots with no recorded flag read as verified, so
+        this is a no-op for providers that never write optimistically.
         """
+        if not self._coordinator.is_verified(self._slot_num):
+            return False
         credential = slot_state.coordinator_code
         if slot_state.active_state == STATE_ON:
             if credential is not None:
@@ -698,6 +708,31 @@ class SlotSyncManager:
             )
             self._write_state()
             return
+
+        # -- PENDING_CONFIRMATION: an optimistic write is awaiting confirmation.
+        # Don't re-write while waiting; a push event / hard refresh resolves it
+        # (clearing the pending entry). On timeout, count a breaker failure and
+        # fall through to re-sync -- so a write the lock never committed ends in
+        # a visible suspend, never a silent in-sync.
+        pending = self._lock._pending_writes.get(self._slot_num)
+        if pending is not None:
+            _pin, deadline = pending
+            if time.monotonic() < deadline:
+                if self._state is not SyncState.PENDING_CONFIRMATION:
+                    self._state = SyncState.PENDING_CONFIRMATION
+                    self._write_state()
+                return
+            # Expired without confirmation: treat as a failed sync attempt.
+            del self._lock._pending_writes[self._slot_num]
+            self._slot_breaker.record_failure()
+            _LOGGER.warning(
+                "%s: optimistic write not confirmed within the timeout; "
+                "re-syncing (attempt %s)",
+                self._log_prefix,
+                self._slot_breaker.failure_count,
+            )
+            # expected_in_sync was computed before this; the slot is still
+            # unverified, so it is False -- fall through to the sync path.
 
         # -- OUT_OF_SYNC: check lock reachability, then attempt sync --
         if self._coordinator.unreachable:
