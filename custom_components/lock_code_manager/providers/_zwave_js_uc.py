@@ -415,7 +415,11 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         try:
             await get_usercode_from_node(self.node, code_slot)
         except BaseZwaveJSServerError as err:
-            _LOGGER.warning(
+            # INFO, not WARNING: the per-lock fallback activation already
+            # logs a one-shot WARNING; verify timeouts on a flagged lock
+            # are the predicted consequence of the same interview
+            # pathology and would spam at WARNING level on every write.
+            _LOGGER.info(
                 "Lock %s slot %s: post-%s verification poll failed (%s); "
                 "trusting optimistic push and continuing",
                 self.lock.entity_id,

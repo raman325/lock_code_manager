@@ -996,12 +996,12 @@ async def test_uc_clear_credential_failure_status_raises_operation_failed(
         await uc_fallback_lock.async_delete_credential(ref)
 
 
-async def test_uc_v1_set_verify_failure_logs_warning_and_continues(
+async def test_uc_v1_set_verify_failure_is_non_fatal(
     uc_fallback_lock: ZWaveJSLock,
     mock_uc_utils: dict,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """V1 verify failure during set is logged but does not fail the set.
+    """V1 verify failure during set is logged at INFO and does not fail the set.
 
     The wire-level SET already ack'd and the optimistic
     ``_push_credential_update`` delivers the truth to the coordinator.
@@ -1021,7 +1021,7 @@ async def test_uc_v1_set_verify_failure_logs_warning_and_continues(
     credential = Credential(
         type=CredentialType.PIN, slot=5, state=SlotCredential.known("4321")
     )
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         result = await uc_fallback_lock.async_set_credential(
             user_id=5, credential=credential, pin="4321", name=None, source="sync"
         )
@@ -1033,12 +1033,12 @@ async def test_uc_v1_set_verify_failure_logs_warning_and_continues(
     assert "verification poll failed" in caplog.text
 
 
-async def test_uc_v1_clear_verify_failure_logs_warning_and_continues(
+async def test_uc_v1_clear_verify_failure_is_non_fatal(
     uc_fallback_lock: ZWaveJSLock,
     mock_uc_utils: dict,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """V1 verify failure during clear is non-fatal too; mirrors the set path."""
+    """V1 verify failure during clear is logged at INFO and does not fail the clear."""
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}
     uc_fallback_lock.coordinator = mock_coordinator
@@ -1048,7 +1048,7 @@ async def test_uc_v1_clear_verify_failure_logs_warning_and_continues(
     )
 
     ref = CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         result = await uc_fallback_lock.async_delete_credential(ref)
 
     assert result is True
