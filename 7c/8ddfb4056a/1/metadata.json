@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "7c8ddfb4056a",
+  "session_id": "b52570f3-297c-48de-929c-16f82353f027",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T18:40:57.317204Z",
+  "branch": "fix/zwave-js-uc-explicit-soft-failures",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/zwave_js/test_uc_fallback.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bf0966023725",
+  "checkpoint_transcript_start": 87,
+  "transcript_lines_at_start": 87,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-13T18:40:57.268222Z",
+    "agent_lines": 113,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 113,
+    "agent_percentage": 100
+  }
+}
