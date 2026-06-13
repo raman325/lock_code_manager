@@ -50,6 +50,7 @@ from ..domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
 )
 from ..domain.exceptions import (
     CodeRejectedError,
@@ -433,7 +434,7 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Write the PIN credential under user_id; map device rejections.
 
@@ -487,13 +488,13 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
                     credential.slot,
                     err,
                 )
-                return True
+                return WriteResult.CONFIRMED
             raise CodeRejectedError(
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,
                 reason=str(err),
             ) from err
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """

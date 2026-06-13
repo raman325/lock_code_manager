@@ -59,6 +59,13 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             config_entry=config_entry,
         )
         self.data: dict[int, SlotCredential] = {}
+        # Per-slot "verified" flag, kept in lockstep with ``data``. A slot is
+        # unverified only while an optimistic (ambiguous-but-treated-as-completed)
+        # write awaits confirmation; every other source -- genuine push events,
+        # polls, hard refreshes, and authoritative writes -- is verified. Absent
+        # slots read as verified, so poll/cloud providers (which never push an
+        # optimistic update) are unaffected. See the Phase 2 push-as-commit spec.
+        self._verified: dict[int, bool] = {}
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -112,14 +119,48 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
         return {int(k): v for k, v in data.items()}
 
+    def is_verified(self, slot: int) -> bool:
+        """
+        Return whether the slot's credential is a confirmed observation.
+
+        Absent slots default to verified: a slot is only unverified while an
+        optimistic write awaits confirmation (push event or hard refresh).
+        """
+        return self._verified.get(slot, True)
+
     @callback
-    def push_update(self, updates: dict[int, SlotCredential]) -> None:
-        """Push one or more slot updates and notify listening entities."""
+    def push_update(
+        self, updates: dict[int, SlotCredential], *, optimistic: bool = False
+    ) -> None:
+        """
+        Push one or more slot updates and notify listening entities.
+
+        ``optimistic=True`` marks the pushed slots unverified (an ambiguous
+        write we are treating as completed but have not yet confirmed). The
+        default, ``False``, marks them verified -- every existing caller keeps
+        today's behavior.
+        """
         if not updates:
             return
 
-        new_data = {**self.data, **self._normalize_keys(updates)}
+        normalized = self._normalize_keys(updates)
+        new_data = {**self.data, **normalized}
+        verified = not optimistic
+
+        # Record the verified flag for the pushed slots regardless of whether
+        # the value changed: an optimistic re-push of the same value still
+        # flips the slot to unverified.
+        for slot in normalized:
+            self._verified[slot] = verified
+        # Keep the verified map in lockstep with data.
+        self._verified = {
+            slot: flag for slot, flag in self._verified.items() if slot in new_data
+        }
+
         if new_data == self.data:
+            # Verified-flag-only change: the sync layer reads ``is_verified``
+            # directly on its next tick, and entities don't render the flag, so
+            # there's nothing to notify and no reachability proof (no new data).
             return
 
         # A successful push update proves the lock is reachable, so reset

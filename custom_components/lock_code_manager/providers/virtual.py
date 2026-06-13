@@ -10,7 +10,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+    WriteResult,
+    user_from_slot,
+)
 from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
@@ -73,7 +79,7 @@ class VirtualLock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a code slot.
 
@@ -83,9 +89,9 @@ class VirtualLock(BaseLock):
         slot_key = str(credential.slot)
         new_data = CodeSlotData(code=pin, name=name)
         if slot_key in self._data and self._data[slot_key] == new_data:
-            return False
+            return WriteResult.NO_CHANGE
         self._data[slot_key] = new_data
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """

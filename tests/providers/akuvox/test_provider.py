@@ -17,6 +17,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    WriteResult,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -376,7 +377,7 @@ class TestSetCredential:
             source="direct",
         )
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         assert modify_calls[0]["name"] == "lcm:1:Guest"
 
     async def test_set_credential_migrates_legacy_format_tag_on_write(
@@ -420,7 +421,7 @@ class TestSetCredential:
             source="direct",
         )
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         # Friendly portion preserved verbatim; only the format changed.
         assert modify_calls[0]["name"] == "lcm:1:Guest"
 

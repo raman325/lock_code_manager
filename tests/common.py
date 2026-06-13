@@ -19,6 +19,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -95,17 +96,17 @@ class MockLCMLock(BaseLock):
         usercode: str,
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
-    ) -> bool:
+    ) -> WriteResult:
         """
         Set a usercode on a code slot.
 
-        Returns True if the value was changed, False if already set.
+        Returns CONFIRMED if the value was changed, NO_CHANGE if already set.
         """
         if self.codes.get(code_slot) == usercode:
-            return False
+            return WriteResult.NO_CHANGE
         self.codes[code_slot] = usercode
         self.service_calls["set_usercode"].append((code_slot, usercode, name))
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """

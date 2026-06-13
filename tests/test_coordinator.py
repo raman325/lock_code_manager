@@ -199,6 +199,61 @@ async def test_push_update_bulk_updates(
     assert push_coordinator.data[3] == SlotCredential.empty()  # Cleared
 
 
+async def test_is_verified_defaults_true_for_absent_slot(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """A slot with no recorded verified flag reads as verified."""
+    assert push_coordinator.is_verified(7) is True
+
+
+async def test_push_update_default_marks_verified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """The default (optimistic=False) push marks the slot verified."""
+    push_coordinator.push_update({1: SlotCredential.known("9999")})
+    assert push_coordinator.is_verified(1) is True
+
+
+async def test_push_update_optimistic_marks_unverified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """An optimistic push marks the slot unverified."""
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+    assert push_coordinator.data[1] == SlotCredential.known("9999")
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_push_update_verified_push_clears_unverified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """A later verified push of a new value re-verifies the slot."""
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+    assert push_coordinator.is_verified(1) is False
+
+    push_coordinator.push_update({1: SlotCredential.unreadable()})
+    assert push_coordinator.is_verified(1) is True
+
+
+async def test_push_update_optimistic_same_value_flips_flag_without_notifying(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """An optimistic re-push of the same value flips the flag but doesn't notify."""
+    push_coordinator.data = {1: SlotCredential.known("9999")}
+    with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
+        push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+        mock_set_updated.assert_not_called()
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_verified_map_pruned_with_data(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """The verified map drops slots no longer present in data."""
+    push_coordinator.push_update({1: SlotCredential.known("1111")}, optimistic=True)
+    # The internal map should only track slots still in data.
+    assert set(push_coordinator._verified) <= set(push_coordinator.data)
+
+
 async def test_push_update_ignores_empty_updates(
     push_coordinator: LockUsercodeUpdateCoordinator,
 ):

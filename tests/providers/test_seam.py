@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
     credential_from_slot,
     user_from_slot,
 )
@@ -83,7 +84,7 @@ class _NativeStubLock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         self.calls.append(("set_credential", user_id, credential.slot))
         self.last_set_credential = {
             "user_id": user_id,
@@ -93,7 +94,7 @@ class _NativeStubLock(BaseLock):
             "source": source,
         }
         self._users[user_id].credentials = [credential]
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         self.calls.append(("delete_credential", ref.user_id, ref.slot))
@@ -144,10 +145,10 @@ class _DegenerateStubLock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         self.calls.append(("set_credential", user_id, credential.slot))
         self._slots[credential.slot] = credential.state
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         self.calls.append(("delete_credential", ref.user_id, ref.slot))
@@ -673,7 +674,7 @@ async def test_set_usercode_native_user_first_and_threads_id(
     """Native set creates the user first, then its credential, threading the id."""
     lock = _make_lock(hass, _NativeStubLock, "seam_set_native")
     changed = await lock.async_set_usercode(3, "9999", name="alice")
-    assert changed is True
+    assert changed is WriteResult.CONFIRMED
     assert lock.calls == [
         ("set_user", 3, "lcm:3:alice"),
         ("set_credential", 3, 3),
@@ -685,7 +686,7 @@ async def test_set_usercode_degenerate_skips_user(hass: HomeAssistant) -> None:
     """Slot-only set writes the credential directly, no user operation."""
     lock = _make_lock(hass, _DegenerateStubLock, "seam_set_degen")
     changed = await lock.async_set_usercode(3, "9999")
-    assert changed is True
+    assert changed is WriteResult.CONFIRMED
     assert lock.calls == [("set_credential", 3, 3)]
     assert lock._slots[3].matches("9999")
 

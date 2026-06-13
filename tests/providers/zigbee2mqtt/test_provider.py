@@ -16,6 +16,7 @@ from homeassistant.exceptions import HomeAssistantError
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
+    WriteResult,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -606,7 +607,7 @@ class TestAsyncSetClearHardRefresh:
                     name=None,
                     source="direct",
                 )
-                is True
+                is WriteResult.CONFIRMED
             )
 
     async def test_async_set_credential_publish_oserror_raises_lock_disconnected(

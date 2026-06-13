@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
@@ -68,7 +69,7 @@ class TestSetAndClearUsercodes:
         ):
             result = await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         assert matter_mock_helpers["set_lock_credential"].call_count >= 1
 
     async def test_clear_usercode(

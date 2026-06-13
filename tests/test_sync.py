@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
 )
+from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -1514,7 +1515,9 @@ class TestBreakerTickSoleMutatorInvariant:
         # branch must then record a failure.
         with (
             patch.object(
-                lock_provider, "async_set_usercode", AsyncMock(return_value=None)
+                lock_provider,
+                "async_set_usercode",
+                AsyncMock(return_value=WriteResult.CONFIRMED),
             ),
             patch.object(
                 manager._coordinator, "async_refresh", AsyncMock(return_value=None)

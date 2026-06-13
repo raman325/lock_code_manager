@@ -64,6 +64,7 @@ from ..domain.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     User,
+    WriteResult,
 )
 from ..domain.exceptions import (
     CodeRejectedError,
@@ -316,7 +317,9 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         except BaseZwaveJSServerError as err:
             raise LockDisconnected(f"usercode cache refresh failed: {err}") from err
 
-    async def _async_uc_set_usercode(self, code_slot: int, usercode: str) -> bool:
+    async def _async_uc_set_usercode(
+        self, code_slot: int, usercode: str
+    ) -> WriteResult:
         """
         Write a usercode through the legacy User Code CC value path.
 
@@ -339,7 +342,7 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
                     self.lock.entity_id,
                     code_slot,
                 )
-                return False
+                return WriteResult.NO_CHANGE
 
         self._set_in_progress_code_slot = code_slot
         try:
@@ -378,7 +381,7 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         # Optimistic update: the value cache updates asynchronously via push
         # notification; push now to prevent sync loops from reading stale cache.
         self._push_credential_update(code_slot, SlotCredential.known(usercode))
-        return True
+        return WriteResult.CONFIRMED
 
     async def _async_uc_clear_usercode(self, code_slot: int) -> bool:
         """

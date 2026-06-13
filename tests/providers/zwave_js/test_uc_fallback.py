@@ -38,6 +38,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    WriteResult,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -172,7 +173,7 @@ async def test_uc_set_credential_uses_user_code_cc_util(
         user_id=5, credential=credential, pin="4321", name=None, source="sync"
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     mock_uc_utils["set_usercode"].assert_awaited_once_with(
         uc_fallback_lock.node, 5, "4321"
     )
@@ -200,7 +201,7 @@ async def test_uc_set_credential_skips_when_code_matches(
         user_id=5, credential=credential, pin="4321", name=None, source="sync"
     )
 
-    assert result is False
+    assert result is WriteResult.NO_CHANGE
     mock_uc_utils["set_usercode"].assert_not_called()
 
 
@@ -224,7 +225,7 @@ async def test_uc_set_credential_proceeds_when_masked(
         user_id=5, credential=credential, pin="4321", name=None, source="sync"
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     mock_uc_utils["set_usercode"].assert_awaited_once()
 
 
@@ -258,7 +259,7 @@ async def test_uc_set_fail_status_logs_and_continues(
             user_id=5, credential=credential, pin="4321", name=None, source="sync"
         )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     mock_coordinator.push_update.assert_called_once_with(
         {5: SlotCredential.known("4321")}
     )
@@ -853,7 +854,7 @@ class TestUCFallbackLifecycle:
 
             # Setting a code skips the user lifecycle and writes via set_usercode
             result = await lock.async_set_usercode(4, "5678", "Test User")
-            assert result is True
+            assert result is WriteResult.CONFIRMED
             mock_lock_helpers["async_set_user"].assert_not_called()
             mock_uc_utils["set_usercode"].assert_awaited_once_with(lock.node, 4, "5678")
             mock_access_control.set_credential.assert_not_called()
@@ -1118,7 +1119,7 @@ async def test_uc_v1_set_verify_failure_is_non_fatal(
             user_id=5, credential=credential, pin="4321", name=None, source="sync"
         )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     mock_coordinator.push_update.assert_called_once_with(
         {5: SlotCredential.known("4321")}
     )

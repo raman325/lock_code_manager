@@ -47,6 +47,7 @@ from ..domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
     credential_from_slot,
     user_from_slot,
 )
@@ -854,17 +855,15 @@ class BaseLock:
         usercode: str,
         name: str | None = None,
         source: Literal["sync", "direct"] = "direct",
-    ) -> bool:
+    ) -> WriteResult:
         """
         Set a usercode on a code slot via the User->Credential primitives.
 
         Projects the slot to a single Personal Identification Number
         credential. Native-user providers run the create-on-first user
         lifecycle via ``_set_credential``; slot-only providers write the
-        credential directly, addressing it by slot. Returns True if the value
-        changed, False if it was already set to this value -- and True when the
-        provider cannot determine whether a change occurred, so the coordinator
-        refreshes and verifies the actual state.
+        credential directly, addressing it by slot. Returns the provider's
+        ``WriteResult`` (NO_CHANGE / CONFIRMED / OPTIMISTIC).
         """
         state = SlotCredential.known(usercode)
         credential = credential_from_slot(code_slot, state)
@@ -911,7 +910,7 @@ class BaseLock:
                     lock_entity_id=self.lock.entity_id,
                 )
 
-        changed = await self._execute_rate_limited(
+        result: WriteResult = await self._execute_rate_limited(
             "set",
             self.async_set_usercode,
             code_slot,
@@ -923,7 +922,7 @@ class BaseLock:
         # Skip coordinator refresh for push providers — they update optimistically
         # via push_update(), and refreshing from cache could overwrite with stale
         # data when the driver defers cache updates until device confirmation.
-        if changed and self.coordinator and not self.supports_push:
+        if result.changed and self.coordinator and not self.supports_push:
             await self.coordinator.async_request_refresh()
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -1223,7 +1222,7 @@ class BaseLock:
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Run the create-on-first user lifecycle around a credential write.
 
@@ -1367,9 +1366,9 @@ class BaseLock:
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
-        Set or update one credential, returning whether the lock changed.
+        Set or update one credential, returning the write outcome.
 
         Every migrated provider implements this. ``user_id`` identifies the
         owning user for native-user providers; slot-only providers ignore it
@@ -1384,11 +1383,12 @@ class BaseLock:
         code name). A ``name`` of ``None`` means leave any existing name
         unchanged, never clear it.
 
-        Return True if the value changed, False if it was already set to this
-        value. When the provider cannot determine whether a change occurred
-        (for example a write-only lock), return True: the returned flag drives
-        the coordinator refresh, so reporting True makes it re-read and verify
-        rather than leaving stale state.
+        Return ``WriteResult.NO_CHANGE`` if the value was already set,
+        ``WriteResult.CONFIRMED`` when the lock acknowledged the write, and
+        ``WriteResult.OPTIMISTIC`` when the result is ambiguous (the write may
+        have landed but is unconfirmed -- e.g. a write-only/masked lock). The
+        outcome drives the coordinator refresh and the verified/unverified
+        slot lifecycle.
         """
         self._raise_not_implemented(
             "async_set_credential",

@@ -26,7 +26,13 @@ from typing import Literal
 
 from homeassistant.config_entries import ConfigEntry
 
-from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+    WriteResult,
+    user_from_slot,
+)
 from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -356,7 +362,7 @@ class SchlageLock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a slot.
 
@@ -418,7 +424,7 @@ class SchlageLock(BaseLock):
             self.lock.entity_id,
             code_slot,
         )
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
