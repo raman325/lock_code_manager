@@ -5,11 +5,33 @@
   "branch": "feat/phase2-verified-credential-lifecycle",
   "checkpoints_count": 2,
   "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/domain/credentials.py",
     "custom_components/lock_code_manager/providers/_base.py",
     "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/common.py",
+    "tests/providers/akuvox/test_e2e.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/matter/test_e2e.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/schlage/test_e2e.py",
+    "tests/providers/schlage/test_provider.py",
     "tests/providers/test_seam.py",
+    "tests/providers/virtual/test_provider.py",
+    "tests/providers/zha/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_provider.py",
+    "tests/providers/zwave_js/test_e2e.py",
     "tests/providers/zwave_js/test_provider.py",
-    "tests/providers/zwave_js/test_uc_fallback.py"
+    "tests/providers/zwave_js/test_uc_fallback.py",
+    "tests/test_coordinator.py",
+    "tests/test_sync.py"
   ],
   "sessions": [
     {
@@ -17,6 +39,12 @@
       "transcript": "/18/c469f4c1f4/0/full.jsonl",
       "content_hash": "/18/c469f4c1f4/0/content_hash.txt",
       "prompt": "/18/c469f4c1f4/0/prompt.txt"
+    },
+    {
+      "metadata": "/18/c469f4c1f4/1/metadata.json",
+      "transcript": "/18/c469f4c1f4/1/full.jsonl",
+      "content_hash": "/18/c469f4c1f4/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
