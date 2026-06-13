@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6e93c13cbac8",
+  "strategy": "manual-commit",
+  "branch": "feat/phase2-verified-credential-lifecycle",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/6e/93c13cbac8/0/metadata.json",
+      "transcript": "/6e/93c13cbac8/0/full.jsonl",
+      "content_hash": "/6e/93c13cbac8/0/content_hash.txt",
+      "prompt": "/6e/93c13cbac8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 173463,
+    "cache_creation_tokens": 2459970,
+    "cache_read_tokens": 299104327,
+    "output_tokens": 601724,
+    "api_call_count": 532
+  }
+}

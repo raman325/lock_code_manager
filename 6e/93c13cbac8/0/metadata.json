@@ -1,0 +1,22 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "6e93c13cbac8",
+  "session_id": "aaa2322e-c03b-46fe-b73b-07239acb0f17",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-13T20:23:51.371072Z",
+  "branch": "feat/phase2-verified-credential-lifecycle",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "931fdc01f83e",
+  "token_usage": {
+    "input_tokens": 173463,
+    "cache_creation_tokens": 2459970,
+    "cache_read_tokens": 299104327,
+    "output_tokens": 601724,
+    "api_call_count": 532
+  },
+  "session_metrics": {
+    "turn_count": 15
+  }
+}
