@@ -1685,6 +1685,36 @@ class TestGetUsers:
             users = await matter_lock_simple.async_get_users()
         assert users == []
 
+    async def test_get_users_skips_raw_user_without_user_index(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A raw lock user with no user_index is skipped (cannot be projected)."""
+        mock_get_lock_users = AsyncMock(
+            return_value={
+                "max_users": 10,
+                "users": [
+                    {"user_index": None, "credentials": [{"type": "pin", "index": 1}]},
+                    {
+                        "user_index": 2,
+                        "user_name": "Bob",
+                        "credentials": [{"type": "pin", "index": 2}],
+                    },
+                ],
+            }
+        )
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
+        ):
+            users = await matter_lock_simple.async_get_users()
+
+        assert [user.user_id for user in users] == [2]
+
     async def test_get_users_pin_credentials_become_unreadable(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
@@ -3018,6 +3048,79 @@ class TestSetCredential:
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(DuplicateCodeError),
+        ):
+            await matter_lock_simple.async_set_credential(
+                1, credential, "1234", name=None, source="sync"
+            )
+
+        assert mock_set_credential.call_count == 2
+        assert mock_clear.call_count == 1
+
+    async def test_set_credential_duplicate_sync_retry_transient_routes_to_retry(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A transient status on the post-clear retry routes to retry (#1257).
+
+        The sync-duplicate path clears the existing credential and retries;
+        if that retry returns an unmapped ``unknown(N)`` status (lock not
+        ready), it must route to LockDisconnected rather than permanently
+        disabling the slot.
+        """
+        mock_set_credential = AsyncMock(
+            side_effect=[
+                _make_set_credential_failed_error("duplicate"),
+                _make_set_credential_failed_error("unknown(133)"),
+            ]
+        )
+        mock_clear = AsyncMock(return_value={})
+        credential = self._make_credential(slot=1, pin="1234")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_user_with_pin(user_id=1, credential_index=10),
+            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock_simple.async_set_credential(
+                1, credential, "1234", name=None, source="sync"
+            )
+
+        assert mock_set_credential.call_count == 2
+        assert mock_clear.call_count == 1
+
+    async def test_set_credential_duplicate_sync_retry_definitive_rejection_raises(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """A definitive rejection on the post-clear retry raises CodeRejectedError.
+
+        Distinct from the transient (``unknown(N)``) retry, a recognized
+        rejection such as ``occupied`` is permanent, so it surfaces as a
+        code rejection rather than routing to retry.
+        """
+        mock_set_credential = AsyncMock(
+            side_effect=[
+                _make_set_credential_failed_error("duplicate"),
+                _make_set_credential_failed_error("occupied"),
+            ]
+        )
+        mock_clear = AsyncMock(return_value={})
+        credential = self._make_credential(slot=1, pin="1234")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            self._patch_user_with_pin(user_id=1, credential_index=10),
+            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+            pytest.raises(CodeRejectedError),
         ):
             await matter_lock_simple.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
