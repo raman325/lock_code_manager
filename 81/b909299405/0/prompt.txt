@@ -1,0 +1,49 @@
+once you are done, run code review on the PR
+
+---
+
+for 6,  0ambiguous rwrite means an event comes in that we didn't trigger?
+
+---
+
+got it, fix 1, 2, add comment for 4, dedupe 5
+
+---
+
+push
+
+---
+
+merged. Now let's ff main and clean up then plan out phase 2. Two thoughts:
+
+1. what if we added a lifecycle to slots in the coordinator unverified -> verified. Push and polls can switch unverified to verified. For unreadable codes, for push providers we can rely on the push update. For poll providers we trust the lock saying successful
+2. what if we extend the coordinator ush method with a new argument `optimistic_update` which defaults to False and optimistic updates set to True
+
+this is how we can do a roundtrip unverified commit followed by a verification through a push or follow up poll. Since matter and zwave_js provide push updates, we can use that for unreadable codes. For the polling providers, maybe we just have no verified transition and we accept unverified values. The only time we react is if we get some sort of update that isn't verified. Idk we have to think about this a little more carefully but these are ideas on how we can design the push to commit. Also, let's consider how to do this in the base if possible since there are common touch points that push providers share
+
+---
+
+1. lets give it one minute
+2. to be safe probably
+3. an enum sounds right
+4. parallel dict is fine
+5. acceptable
+draft the spec based on this
+
+---
+
+implement
+
+---
+
+we'll need ot make sure the frontend handles the new transition state
+after you have created the PR, run code review. I am concerned about us being overly loose or overly restrictive so make sure there is an agent that is stepping through all the possibilities (different initial states) with each provider and walking through the code to ensure that the workflows and end states states work as expected
+one way to handle the minute timer for retry is to schedule a task for one minute later using HA helpers and then cancel the task if we don't need to retry
+
+---
+
+you don't need to use the scheduling mechanism for the one minute tracker, just throwing out options and extra context
+
+---
+
+continue
