@@ -1,0 +1,33 @@
+see issues 1251 and 1257. Something has changed since 3.3.0 and we need to figure out what
+
+---
+
+first, lets open an issue in zwave-js/zwave-js reporting the issue and where the logic is failing
+
+---
+
+second - should we just have a fallback through UC if access control fails and UC exists on the lock? so basically the circuit breaker happens on trying access control API > trying UC API > failure
+
+---
+
+should we just ignore the set value result since we do verification anyway? If the verification fails, don't we mark the slot dirty and try again anyway?
+
+---
+
+why do we project **** to readable? The zwave_js provider should see that and know thats an unreadable code just like it does in the UC path
+
+---
+
+all of the business logic we added in UC is valid in U3C too given that locks use one or the other, sometimes both, and they're supposed to be interchangeable. So we need to mirror the business logic which would address this issue
+
+---
+
+regarding relying on _last_set_pin - since the locks should push events to us when the PIN is updated, that should be our trigger for knowing that even though it's unreadable, we likely just set it
+
+---
+
+without a commit push, how do we know that the PIN is set? when it's unreadable that's the only way right? _last_set_pin is really _last_set_pin_needs_confirmation and should be set to `None` when it's been confirmed. When it's None, that's treated as an external write, vs when it's not maybe?
+
+---
+
+another way to do it would be to always clear the lock before setting it. That way we can capture the status state change as confirmation, whether the code is masked or not, like the driver did
