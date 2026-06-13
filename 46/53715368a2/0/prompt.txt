@@ -1,0 +1,9 @@
+once you are done, run code review on the PR
+
+---
+
+for 6,  0ambiguous rwrite means an event comes in that we didn't trigger?
+
+---
+
+got it, fix 1, 2, add comment for 4, dedupe 5

@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "4653715368a2",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-js-uc-explicit-soft-failures",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/46/53715368a2/0/metadata.json",
+      "transcript": "/46/53715368a2/0/full.jsonl",
+      "content_hash": "/46/53715368a2/0/content_hash.txt",
+      "prompt": "/46/53715368a2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15219,
+    "cache_creation_tokens": 52161,
+    "cache_read_tokens": 14402704,
+    "output_tokens": 21528,
+    "api_call_count": 21
+  }
+}
