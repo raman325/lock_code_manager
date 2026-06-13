@@ -1,0 +1,25 @@
+oops merged too early. Lets push a new PR with this change
+
+---
+
+continue
+
+---
+
+no I was mistaken. Why didn't you call out this difference when I asked you to do the comparison to LCM 3.x
+
+---
+
+that change wasn't introduced in 3.3.0 I don't believe so I am a bit confused
+
+---
+
+let's be more clear. Compare 4.0.4 legacy path to 3.3.0 existing implementation and identify any differences in behavior. Presumably now we are correctly routing the user through the fallback path so the only reason why it wouldn't work after LCM 4 is if we changed something
+
+---
+
+lets first ff main and clcean up stale branches. Then you will seea ll tags
+
+---
+
+I agree with 2
