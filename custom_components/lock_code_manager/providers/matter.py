@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
 
+from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import MatterError
 from matter_server.common.models import EventType
 
@@ -69,6 +70,20 @@ _LOCK_DATA_TYPE_PIN = 6
 _DATA_OP_ADD = 0
 _DATA_OP_CLEAR = 1
 _DATA_OP_MODIFY = 2
+
+
+def _is_transient_credential_status(status: str) -> bool:
+    """
+    Return True for a SetCredential status that should be retried, not rejected.
+
+    HA's matter ``lock_helpers`` maps recognized DlStatus values to names
+    (``success`` / ``failure`` / ``duplicate`` / ``occupied``) and formats
+    anything else as ``unknown(<code>)``. An unmapped status is treated as
+    transient (route to the retry path) -- notably ``unknown(133)`` observed
+    while a lock is not fully ready right after startup (issue #1257) --
+    rather than a definitive rejection that permanently disables the slot.
+    """
+    return status.startswith("unknown(")
 
 
 def _lcm_slot_from_raw_users_by_user_index(
@@ -684,8 +699,12 @@ class MatterLock(BaseLock):
                 lock_entity_id=self.lock.entity_id,
                 reason=str(err),
             ) from err
-        except HomeAssistantError as err:
-            # Transport / endpoint failure -> route to the retry path.
+        except (HomeAssistantError, MatterError, MatterClientException) as err:
+            # Transport / connectivity / server failure -> route to the retry
+            # path. MatterError and MatterClientException are independent of
+            # HomeAssistantError (e.g. ``InvalidState: Not connected`` during
+            # startup, issue #1257), so they must be caught explicitly or they
+            # escape to the generic handler and suspend the slot.
             raise LockDisconnected(
                 f"Matter set_lock_credential failed for {self.lock.entity_id}: {err}"
             ) from err
@@ -749,6 +768,16 @@ class MatterLock(BaseLock):
             )
         except SetCredentialFailedError as err:
             status = (err.translation_placeholders or {}).get("status", "")
+            if _is_transient_credential_status(status):
+                # Unmapped/unknown status (e.g. ``unknown(133)`` seen while the
+                # lock is not fully ready at startup, issue #1257). Route to the
+                # retry path rather than permanently disabling the slot: a later
+                # tick after Matter is ready will succeed. Recognized rejections
+                # (occupied/failure) fall through to CodeRejectedError below.
+                raise LockDisconnected(
+                    f"Matter set_lock_credential returned a transient status "
+                    f"'{status}' for {self.lock.entity_id} slot {slot}"
+                ) from err
             if status != "duplicate":
                 raise CodeRejectedError(
                     code_slot=slot,
@@ -805,6 +834,11 @@ class MatterLock(BaseLock):
                         code_slot=slot,
                         lock_entity_id=self.lock.entity_id,
                     ) from retry_err
+                if _is_transient_credential_status(retry_status):
+                    raise LockDisconnected(
+                        f"Matter set_lock_credential returned a transient status "
+                        f"'{retry_status}' for {self.lock.entity_id} slot {slot}"
+                    ) from retry_err
                 raise CodeRejectedError(
                     code_slot=slot,
                     lock_entity_id=self.lock.entity_id,
@@ -846,7 +880,9 @@ class MatterLock(BaseLock):
                 f"Matter clear_lock_credential rejected input for "
                 f"{self.lock.entity_id}: {err}"
             ) from err
-        except HomeAssistantError as err:
+        except (HomeAssistantError, MatterError, MatterClientException) as err:
+            # Connectivity/server failure (incl. ``InvalidState: Not connected``
+            # at startup, issue #1257) -> retry rather than suspend.
             raise LockDisconnected(
                 f"Matter clear_lock_credential failed for {self.lock.entity_id}: {err}"
             ) from err

@@ -133,6 +133,16 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         """Return the Z-Wave JS node; the concrete provider supplies this."""
         raise NotImplementedError
 
+    def _pin_state(self, data: str | bytes | None) -> SlotCredential:
+        """
+        Project raw credential data to a SlotCredential.
+
+        Universal masked/withheld-aware projection, implemented by the
+        concrete provider (``ZWaveJSLock._pin_state``) and reused here so
+        the UC fallback's read path matches the unified path exactly.
+        """
+        raise NotImplementedError
+
     def _node_supports_user_code_cc(self) -> bool:
         """Return whether the node's endpoint 0 advertises User Code CC."""
         return any(cc.id == CommandClass.USER_CODE for cc in self.node.command_classes)
@@ -173,15 +183,14 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
 
     def _uc_fallback_capabilities(self) -> LockCapabilities | None:
         """
-        Detect the fallback and build slot-only capabilities for it.
+        Build slot-only capabilities for a degenerate-capability lock.
 
-        Called by ``async_get_capabilities`` after the unified API
-        reported no usable PIN support. Only falls back when the node
-        advertises User Code CC -- without it the legacy utilities
-        cannot work either, and the lock genuinely has no PIN support
-        LCM can manage -- and when the User Code CC value DB walk finds
-        slots. Sets ``_uc_fallback`` accordingly and returns None when
-        no fallback is possible.
+        Called by ``async_get_capabilities`` only when the unified API
+        reports no usable PIN slots (the #1251 zero-slot variant). Falls
+        back to the legacy User Code CC value-DB walk for the slot count.
+        Returns None -- and clears ``_uc_fallback`` -- when the node has
+        no User Code CC, so a true U3C lock with degenerate caps (which
+        the legacy utilities can't help) is not mis-routed here.
 
         ``get_usercodes`` walks slot 1, 2, 3, ... in the value DB until
         ``NotFoundError``, so the returned list length is the lock's
@@ -190,18 +199,19 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         walking, so we let any unexpected exception surface rather
         than silently mis-routing the lock to "no PIN support".
         """
-        uc_slots = (
-            get_usercodes(self.node) if self._node_supports_user_code_cc() else []
-        )
-        if not uc_slots:
+        if not self._node_supports_user_code_cc():
             self._uc_fallback = False
             return None
-        _LOGGER.warning(
-            "Lock %s: unified access-control API reports no usable PIN "
-            "capabilities but the node supports User Code CC with %s slots; "
-            "falling back to legacy User Code CC handling (see issue #1251)",
+        num_slots = len(get_usercodes(self.node))
+        if not num_slots:
+            self._uc_fallback = False
+            return None
+        _LOGGER.debug(
+            "Lock %s: unified API reports no usable PIN slots but the node "
+            "supports User Code CC (%s slots); using the legacy User Code "
+            "CC value path (see issue #1251)",
             self.lock.entity_id,
-            len(uc_slots),
+            num_slots,
         )
         self._uc_fallback = True
         return LockCapabilities(
@@ -214,7 +224,7 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
             max_users=0,
             credential_types={
                 CredentialType.PIN: CredentialTypeCapability(
-                    num_slots=len(uc_slots),
+                    num_slots=num_slots,
                     # UC spec allows 4-10 ASCII digits per User Code CC v1+.
                     min_length=4,
                     max_length=10,
@@ -224,18 +234,20 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
             max_user_name_length=0,
         )
 
-    @staticmethod
-    def _uc_slot_state(in_use: bool | None, usercode: str | None) -> SlotCredential:
+    def _uc_slot_state(
+        self, in_use: bool | None, usercode: str | None
+    ) -> SlotCredential:
         """
         Project a User Code CC slot to a ``SlotCredential``.
 
-        Slots count as empty only when ``in_use`` is explicitly ``False``,
-        or when ``in_use`` is unknown (``None``) with no cached value --
-        the latter matches the legacy 3.x reader. Masked codes (all
-        asterisks) and occupied slots without a cached value count as
-        unreadable; an unknown ``in_use`` with a present value is treated
-        as occupied so a partially populated cache cannot erase a live
-        PIN (mirrors the push-path rule at ``_handle_uc_value_update``).
+        Adds the User Code CC ``in_use`` (userIdStatus) gate on top of the
+        shared ``_pin_state`` projection. Slots count as empty only when
+        ``in_use`` is explicitly ``False``, or when ``in_use`` is unknown
+        (``None``) with no cached value -- the latter matches the legacy
+        3.x reader. An occupied (or unknown-but-present) slot defers to
+        ``_pin_state`` so masked/withheld codes map to unreadable exactly
+        as on the unified path, and a partially populated cache cannot
+        erase a live PIN.
         """
         if in_use is False:
             return SlotCredential.empty()
@@ -245,10 +257,7 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
                 if in_use is None
                 else SlotCredential.unreadable()
             )
-        code = str(usercode)
-        if code == "*" * len(code):
-            return SlotCredential.unreadable()
-        return SlotCredential.known(code)
+        return self._pin_state(usercode)
 
     async def _async_uc_users_from_value_db(self) -> list[User]:
         """

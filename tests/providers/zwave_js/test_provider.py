@@ -442,6 +442,34 @@ async def test_is_device_available_returns_false_on_exception(
 # Credential API tests (Option B: readable PINs via node.access_control)
 
 
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ("1234", SlotCredential.known("1234")),
+        (b"1234", SlotCredential.known("1234")),
+        (None, SlotCredential.unreadable()),
+        ("", SlotCredential.unreadable()),
+        # Masked/withheld codes carry no usable value -> unreadable, NOT
+        # known("****") (which would surface a wrong PIN and never reconcile).
+        ("****", SlotCredential.unreadable()),
+        ("**********", SlotCredential.unreadable()),
+    ],
+    ids=["known_str", "known_bytes", "none", "empty", "masked", "masked_long"],
+)
+async def test_pin_state_projects_masked_codes_as_unreadable(
+    zwave_js_lock: ZWaveJSLock,
+    data: str | bytes | None,
+    expected: SlotCredential,
+) -> None:
+    """The unified read projection maps masked/withheld codes to unreadable.
+
+    Mirrors the UC fallback's _uc_slot_state so a masked code read through
+    the unified access-control path is not mistaken for a readable PIN
+    (issue #1251 working-capability variant).
+    """
+    assert zwave_js_lock._pin_state(data) == expected
+
+
 async def test_async_get_users_returns_all_mappable_credential_types(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
@@ -870,13 +898,13 @@ async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error
     mock_lock_helpers: dict,
 ) -> None:
     """
-    Test async_set_credential raises CodeRejectedError for non-duplicate rejections.
+    Test async_set_credential raises CodeRejectedError for definitive rejections.
 
-    When the lock_helpers helper raises HomeAssistantError with any other
-    translation_key (for example "credential_rejected_unknown"), the provider
-    must re-raise as CodeRejectedError.
+    When the lock_helpers helper raises HomeAssistantError with a definitive
+    rejection translation_key (for example "credential_rejected_manufacturer_rules"),
+    the provider must re-raise as CodeRejectedError.
     """
-    err = HomeAssistantError(translation_key="credential_rejected_unknown")
+    err = HomeAssistantError(translation_key="credential_rejected_manufacturer_rules")
     mock_lock_helpers["async_set_credential"].side_effect = err
 
     credential = Credential(
@@ -893,6 +921,39 @@ async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error
 
     assert exc_info.value.code_slot == 4
     assert not isinstance(exc_info.value, DuplicateCodeError)
+
+
+async def test_async_set_credential_tolerates_error_unknown_as_completed_set(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A driver ERROR_UNKNOWN (credential_rejected_unknown) is treated as a
+    completed set, not a rejection.
+
+    The driver returns ERROR_UNKNOWN when its post-write verification can't
+    confirm the code -- notably for locks that report the user code back
+    masked, where the write actually succeeded (issue #1251). The provider
+    must return True and let reconciliation verify, instead of raising
+    CodeRejectedError (which would permanently disable an accepted write).
+    """
+    mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
+        translation_key="credential_rejected_unknown"
+    )
+
+    credential = Credential(
+        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
+    )
+    result = await zwave_js_lock.async_set_credential(
+        user_id=1,
+        credential=credential,
+        pin="2222",
+        name=None,
+        source="sync",
+    )
+
+    assert result is True
 
 
 async def test_async_set_credential_maps_failed_command_to_lock_disconnected(

@@ -157,12 +157,26 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         return True
 
     def _pin_state(self, data: str | bytes | None) -> SlotCredential:
-        """Project Z-Wave credential data to a SlotCredential (readable when present)."""
+        """
+        Project Z-Wave credential data to a SlotCredential.
+
+        Universal across both command classes (User Code CC and User
+        Credential CC): a present slot whose code we can read becomes
+        ``known``; a present slot whose code is withheld becomes
+        ``unreadable``. Many locks report the PIN back masked (all
+        asterisks) or omit it entirely for security -- those carry no
+        comparable value, so they are unreadable, NOT ``known`` of the
+        masked string (which would surface a wrong PIN and never
+        reconcile against the configured one).
+        """
         if not data:
             return SlotCredential.unreadable()
         # CredentialData.data is str | bytes; decode bytes so a Personal
         # Identification Number is the digit string, not "b'1234'".
-        return SlotCredential.known(data if isinstance(data, str) else data.decode())
+        code = data if isinstance(data, str) else data.decode()
+        if not code or code == "*" * len(code):
+            return SlotCredential.unreadable()
+        return SlotCredential.known(code)
 
     async def async_get_users(self) -> list[User]:
         """
@@ -228,27 +242,27 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         """
         Report the lock's user/credential capabilities.
 
-        Auto-detects User Code CC (UC) vs User Credential CC (U3C) and
-        returns capabilities shaped so the seam routes through the right
-        code path.
+        Routes the lock to the right write path based on which credential
+        command class it implements:
 
-        The unified ``access_control`` API in node-zwave-js computes its
-        capabilities from cached interview data; on some locks that data
-        is degenerate -- the PIN credential type comes back either
-        missing or advertising ``num_slots=0`` even though the lock
-        manages codes fine through the legacy User Code CC (issue
-        #1251, upstream fix in zwave-js/zwave-js#8873). When that
-        happens AND the node actually advertises User Code CC, we fall
-        back to reading the lock's UC slot count from the value DB and
-        return slot-only capabilities: ``supports_user_management=False``
-        and ``max_user_name_length=0``, which the seam recognizes as a
-        slot-only lock and routes through the credential-only
-        primitives (``async_set_credential`` / ``async_delete_credential``
-        / ``async_get_users``) without the user lifecycle. All
-        credential operations then use the User Code CC utilities
-        directly. Once the upstream fix ships and the unified API
-        reports usable PIN capabilities for these locks, the fallback
-        detection stops triggering on its own.
+        - **User Credential CC (U3C) with usable PIN capabilities** -> the
+          unified ``access_control`` API (full user lifecycle).
+        - **Everything else that has User Code CC** -> the legacy User
+          Code CC fallback (slot-only). This covers both UC-only locks
+          and dual-CC locks whose U3C capabilities are degenerate.
+
+        Every User Code CC-only lock uses the legacy path even when the
+        unified API reports healthy capabilities, because the driver's
+        unified UC write verifies by reading the code back and comparing
+        it to what was written -- which fails for locks that report
+        masked user codes, turning an accepted write into a phantom
+        ``ERROR_UNKNOWN`` rejection (issue #1251; the same path is also
+        where degenerate zero-slot capabilities originate). The legacy
+        ``set_usercode`` path is exactly what LCM 3.x used for these
+        locks and does not do that equality check. Once the upstream
+        driver fixes both the verification and the capability reporting
+        (zwave-js/zwave-js#8873), only true U3C locks need the unified
+        API and this fallback can be removed (see ``_zwave_js_uc.py``).
         """
         try:
             caps = await lock_helpers.async_get_credential_capabilities(self.node)
@@ -259,7 +273,10 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
 
         if pin and pin["num_slots"] > 0:
-            # The unified API advertises real PIN credential slots.
+            # The unified API advertises real PIN credential slots. Use it;
+            # the universal read projection (``_pin_state``) and tolerant
+            # write handling below keep masked-code locks working on this
+            # path regardless of which CC the driver dispatches to.
             self._uc_fallback = False
             return LockCapabilities(
                 supports_user_management=caps["supports_user_management"],
@@ -275,11 +292,14 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
                 max_user_name_length=caps.get("max_user_name_length", 0),
             )
 
-        # Degenerate unified capabilities (issue #1251): try the User Code
-        # CC fallback layer; when it does not apply either, the lock has
-        # no PIN support LCM can manage.
+        # Degenerate unified capabilities (issue #1251 zero-slot variant):
+        # the unified API can't even express the lock's PIN slots, so it
+        # can't write through them. Fall back to the legacy User Code CC
+        # utilities, which address slots directly. When the node has no
+        # User Code CC either, the lock genuinely has no PIN support.
         if uc_caps := self._uc_fallback_capabilities():
             return uc_caps
+        self._uc_fallback = False
         return LockCapabilities(
             supports_user_management=False,
             max_users=0,
@@ -420,6 +440,17 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         Otherwise the write goes through HA's
         ``lock_helpers.async_set_credential``, whose translation-key
         errors are mapped to LCM's typed exceptions.
+
+        A driver ``ERROR_UNKNOWN`` (HA key ``credential_rejected_unknown``)
+        is treated as a COMPLETED set rather than a rejection: the driver
+        returns it when its post-write verification can't confirm the
+        code, which notably happens for locks that report the user code
+        back masked/withheld -- there the write actually succeeded
+        (``userIdStatus`` -> Enabled). Reconciliation (the sync manager's
+        last-set tracking + the masked-as-unreadable read-back) verifies
+        it, instead of permanently disabling an accepted write (#1251).
+        Definitive rejections (duplicate, occupied, manufacturer rules,
+        validation) still surface as typed errors.
         """
         if await self._async_uc_fallback_active():
             return await self._async_uc_set_usercode(credential.slot, pin)
@@ -438,11 +469,22 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
                 f"set credential slot {credential.slot} failed: {err}"
             ) from err
         except HomeAssistantError as err:
-            if getattr(err, "translation_key", None) == "credential_rejected_duplicate":
+            key = getattr(err, "translation_key", None)
+            if key == "credential_rejected_duplicate":
                 raise DuplicateCodeError(
                     code_slot=credential.slot,
                     lock_entity_id=self.lock.entity_id,
                 ) from err
+            if key == "credential_rejected_unknown":
+                _LOGGER.debug(
+                    "Lock %s slot %s: driver returned ERROR_UNKNOWN; treating "
+                    "as a completed set pending reconciliation (the lock may "
+                    "report the code back masked -- see issue #1251): %s",
+                    self.lock.entity_id,
+                    credential.slot,
+                    err,
+                )
+                return True
             raise CodeRejectedError(
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,

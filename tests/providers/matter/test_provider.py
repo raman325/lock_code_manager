@@ -8,6 +8,7 @@ import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
@@ -3174,6 +3175,59 @@ class TestSetCredential:
                 1, credential, "1234", name=None, source="direct"
             )
 
+    async def test_set_credential_unknown_status_routes_to_retry(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """An unmapped ``unknown(N)`` status routes to retry, not disable (#1257).
+
+        Seen when a lock is not fully ready right after startup: the write
+        must retry on a later tick rather than permanently disabling the slot.
+        """
+        mock_set_credential = AsyncMock(
+            side_effect=_make_set_credential_failed_error("unknown(133)")
+        )
+        credential = self._make_credential(slot=1, pin="1234")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock_simple.async_set_credential(
+                1, credential, "1234", name=None, source="sync"
+            )
+
+    async def test_set_credential_matter_client_exception_routes_to_retry(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """``InvalidState: Not connected`` at startup routes to retry (#1257).
+
+        MatterClientException is independent of HomeAssistantError, so without
+        an explicit catch it would escape to the generic handler and suspend
+        the slot instead of retrying.
+        """
+        mock_set_credential = AsyncMock(
+            side_effect=MatterClientException("Not connected")
+        )
+        credential = self._make_credential(slot=1, pin="1234")
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock_simple.async_set_credential(
+                1, credential, "1234", name=None, source="sync"
+            )
+
     async def test_set_credential_create_passes_credential_index_none(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
@@ -3416,6 +3470,29 @@ class TestDeleteCredential:
             ),
             patch.object(
                 matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock_simple.async_delete_credential(ref)
+
+    async def test_delete_credential_matter_client_exception_routes_to_retry(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """``InvalidState: Not connected`` during clear routes to retry (#1257)."""
+        mock_clear = AsyncMock(side_effect=MatterClientException("Not connected"))
+        ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
+        with (
+            patch.object(
+                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
+            ),
+            patch.object(
+                matter_lock_simple,
+                "_find_pin_credential_index_for_user",
+                AsyncMock(return_value=5),
             ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockDisconnected),

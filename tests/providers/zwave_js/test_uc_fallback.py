@@ -1302,7 +1302,10 @@ async def test_uc_value_update_duplicate_value_skipped(
     ],
 )
 def test_uc_slot_state_projection(
-    in_use: bool | None, usercode: str | None, expected: SlotCredential
+    zwave_js_lock: ZWaveJSLock,
+    in_use: bool | None,
+    usercode: str | None,
+    expected: SlotCredential,
 ) -> None:
     """_uc_slot_state must distinguish None (unknown) from False (cleared)."""
-    assert ZWaveJSUserCodeFallbackSupport._uc_slot_state(in_use, usercode) == expected
+    assert zwave_js_lock._uc_slot_state(in_use, usercode) == expected
