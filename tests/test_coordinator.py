@@ -1,6 +1,7 @@
 """Test the coordinator module."""
 
 from datetime import timedelta
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -909,3 +910,79 @@ async def test_unreachable_clears_on_recovery(
     assert (
         poll_coordinator.update_interval == poll_coordinator._original_update_interval
     )
+
+
+async def test_confirm_pending_writes_confirms_present_masked(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """An on-demand confirm read of a present-but-masked slot verifies it.
+
+    This is the order-independent confirmation that replaces waiting for a push
+    node-zwave-js never sends for a masked write: the slot reads back present
+    (unreadable), so the believed PIN is confirmed and pending is cleared.
+    """
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+    assert push_coordinator.is_verified(1) is False
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.unreadable()}),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 not in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is True
+    assert push_coordinator.data[1] == SlotCredential.known("9999")
+
+
+async def test_confirm_pending_writes_keeps_absent_slot_pending(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A confirm read that finds the slot absent leaves it pending to re-sync."""
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.empty()}),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_confirm_pending_writes_tolerates_read_failure(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A failed confirm read is non-fatal and leaves pending state untouched."""
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_confirm_pending_writes_noop_without_pending(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """With no pending writes the confirm path never touches the lock."""
+    mock_refresh = AsyncMock()
+    with patch.object(push_lock, "async_hard_refresh_codes", mock_refresh):
+        await push_coordinator.async_confirm_pending_writes()
+
+    mock_refresh.assert_not_called()

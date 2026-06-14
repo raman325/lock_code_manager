@@ -987,9 +987,16 @@ class BaseLock:
         )
         if result is WriteResult.OPTIMISTIC:
             # Ambiguous write: record it pending and push the believed value as
-            # unverified. A push event or hard refresh confirms it via
-            # _confirm_slot; otherwise the sync tick re-syncs after the TTL.
+            # unverified, then actively read the lock back to confirm it. Some
+            # stacks send no confirming push for an ambiguous write (node-zwave-js
+            # emits no credential event when its post-write verify fails on a
+            # masked lock), so waiting passively would let the breaker suspend a
+            # slot whose code actually landed before the hourly drift refresh can
+            # run. The read confirms a present-but-masked slot; a genuinely-absent
+            # slot stays pending and the sync tick re-syncs after the TTL.
             self._record_optimistic_write(code_slot, str(usercode))
+            if self.coordinator is not None:
+                await self.coordinator.async_confirm_pending_writes()
         elif result is WriteResult.CONFIRMED:
             # The lock acknowledged the write: supersede any pending optimistic
             # state and clear a stale unverified flag from a prior optimistic

@@ -1040,6 +1040,8 @@ def _slot_only_lock_with_coordinator(hass: HomeAssistant):
         pushed.append((dict(updates), optimistic))
 
     coord.push_update.side_effect = _push
+    coord.async_confirm_pending_writes = AsyncMock()
+    coord.async_request_refresh = AsyncMock()
     lock.coordinator = coord
     return lock, pushed
 
@@ -1054,6 +1056,30 @@ async def test_record_optimistic_write_pushes_unverified_and_tracks_pending(
     assert pushed == [({4: SlotCredential.known("1234")}, True)]
     assert 4 in lock._pending_writes
     assert lock._pending_writes[4][0] == "1234"
+
+
+async def test_optimistic_set_actively_confirms_instead_of_waiting(
+    hass: HomeAssistant,
+) -> None:
+    """An OPTIMISTIC write records pending AND drives an on-demand confirm read.
+
+    The confirm read is the durable, order-independent backstop: some stacks
+    send no push for an ambiguous write, so the seam must read the slot back
+    rather than wait passively (which would let the breaker suspend a slot whose
+    code actually landed).
+    """
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    with (
+        patch.object(BaseLock, "async_is_integration_connected", return_value=True),
+        patch.object(
+            lock, "async_set_usercode", AsyncMock(return_value=WriteResult.OPTIMISTIC)
+        ),
+    ):
+        await lock.async_internal_set_usercode(4, "1234", "carol")
+
+    assert 4 in lock._pending_writes
+    lock.coordinator.async_confirm_pending_writes.assert_awaited_once()
 
 
 async def test_confirm_slot_keeps_believed_value_on_present_observation(

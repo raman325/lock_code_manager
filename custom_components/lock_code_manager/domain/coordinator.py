@@ -173,6 +173,50 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         """
         self._verified.pop(slot, None)
 
+    async def async_confirm_pending_writes(self) -> None:
+        """
+        Actively read the lock back to confirm outstanding optimistic writes.
+
+        An ambiguous write (``WriteResult.OPTIMISTIC``) gets no confirming push
+        on some stacks: node-zwave-js, for one, emits no ``credential
+        added/modified`` event when its own post-write verification fails on a
+        lock that reports codes back masked -- the event and the ``ERROR_UNKNOWN``
+        result are mutually exclusive. Waiting for the hourly drift refresh would
+        let the breaker suspend a slot whose code actually landed (~3 attempts in
+        the 5-minute window, long before the hourly backstop). So the seam calls
+        this immediately after recording an optimistic write.
+
+        This is the order-independent confirmation path: it does not depend on
+        receiving any event. A hard read observes the slot present-but-masked
+        (LCM projects masked codes to ``unreadable`` rather than repeating the
+        driver's ``userCode == codeData`` check) and ``_apply_read`` confirms it;
+        a genuinely-absent slot stays pending and re-syncs on the next tick.
+
+        A failed read is non-fatal and does not apply backoff: the slot stays
+        pending and the sync tick reconciles it within the TTL.
+        """
+        if not self._lock._pending_writes:
+            return
+        try:
+            new_data = self._apply_read(
+                self._normalize_keys(
+                    await self._lock.async_internal_hard_refresh_codes()
+                )
+            )
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "On-demand confirmation read failed for %s: %s; leaving pending "
+                "writes for the sync tick to reconcile",
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
+        # _apply_read already cleared pending + flipped the verified flag in
+        # place, so the confirmation takes effect even when the data is
+        # unchanged; only the listener notification is gated on a real delta.
+        if new_data != self.data:
+            self.async_set_updated_data(new_data)
+
     @callback
     def push_update(
         self, updates: dict[int, SlotCredential], *, optimistic: bool = False
