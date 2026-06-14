@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "1a64c8fdb5ac",
+  "session_id": "aaa2322e-c03b-46fe-b73b-07239acb0f17",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-14T01:14:41.652921Z",
+  "branch": "feat/phase2-verified-credential-lifecycle",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/providers/test_seam.py",
+    "tests/test_coordinator.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "80a8334badd4",
+  "token_usage": {
+    "input_tokens": 243349,
+    "cache_creation_tokens": 2922512,
+    "cache_read_tokens": 324068129,
+    "output_tokens": 713056,
+    "api_call_count": 638
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-14T01:14:40.188527Z",
+    "agent_lines": 0,
+    "human_added": 154,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 154,
+    "agent_percentage": 0
+  }
+}

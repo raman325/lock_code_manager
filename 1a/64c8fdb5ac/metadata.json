@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "1a64c8fdb5ac",
+  "strategy": "manual-commit",
+  "branch": "feat/phase2-verified-credential-lifecycle",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/providers/test_seam.py",
+    "tests/test_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/64c8fdb5ac/0/metadata.json",
+      "transcript": "/1a/64c8fdb5ac/0/full.jsonl",
+      "content_hash": "/1a/64c8fdb5ac/0/content_hash.txt",
+      "prompt": "/1a/64c8fdb5ac/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 243349,
+    "cache_creation_tokens": 2922512,
+    "cache_read_tokens": 324068129,
+    "output_tokens": 713056,
+    "api_call_count": 638
+  }
+}
