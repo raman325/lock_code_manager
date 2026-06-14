@@ -47,3 +47,15 @@ you don't need to use the scheduling mechanism for the one minute tracker, just 
 ---
 
 continue
+
+---
+
+I think we can leave it as documented, presumably everything will get fixed upstream and we can eliminate the UC fallback path completely
+
+---
+
+run one more code review. Again go through all states, but let's stress test failure points as well as success points and make sure there are no false positives
+
+---
+
+first trace it to confirm the order empirically, then implement an order independent fix for durability
