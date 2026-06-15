@@ -178,7 +178,6 @@ class LockCodesCard extends LockCodesCardBase {
     // Editing methods for unmanaged slots
     private _startEditing(e: Event, slot: LockCoordinatorSlotData): void {
         e.stopPropagation();
-        // Save current reveal state before editing
         this._wasRevealedBeforeEdit = this._revealed;
         // For editing, we need the actual code - trigger reveal if masked
         if (!this._revealed) {

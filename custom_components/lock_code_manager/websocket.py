@@ -116,11 +116,6 @@ CALENDAR_ATTR_START_TIME = "start_time"
 CALENDAR_ATTR_END_TIME = "end_time"
 
 
-# =============================================================================
-# State Helper Functions
-# =============================================================================
-
-
 def _slot_code_payload(
     code: str | SlotCredential | None,
     *,
@@ -241,11 +236,6 @@ def _get_last_changed(
         if state.last_changed:
             return state.last_changed.isoformat()
     return None
-
-
-# =============================================================================
-# Config Entry Helpers
-# =============================================================================
 
 
 def _find_config_entry_by_title(hass: HomeAssistant, title: str) -> ConfigEntry | None:
@@ -751,7 +741,6 @@ def _get_condition_entity_data(
     if not state:
         return None
 
-    # Extract domain from entity_id
     domain = split_entity_id(condition_entity_id)[0]
     is_active = state.state == STATE_ON
 
@@ -921,7 +910,6 @@ def _serialize_slot_card_data(
     calendar_next_event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Serialize slot data for the slot card."""
-    # Get slot metadata using module-level helpers
     name = _get_text_state(hass, slot_entities.name_entity_id) or ""
     pin = _get_text_state(hass, slot_entities.pin_entity_id)
     enabled = _get_bool_state(hass, slot_entities.enabled_entity_id)
@@ -931,10 +919,8 @@ def _serialize_slot_card_data(
         hass, slot_entities.event_entity_id
     )
 
-    # Get condition entity from config using helper
     condition_entity_id = _get_slot_condition_entity_id(config_entry, slot_num)
 
-    # Build per-lock status
     entry_locks = config_entry.runtime_data.locks
     entry_lock_ids = get_entry_config(config_entry).locks
 
@@ -950,7 +936,6 @@ def _serialize_slot_card_data(
         if (lock := entry_locks.get(lock_entity_id))
     ]
 
-    # Build result
     result: dict[str, Any] = {
         ATTR_SLOT_NUM: slot_num,
         ATTR_CONFIG_ENTRY_ID: config_entry.entry_id,
@@ -1031,7 +1016,6 @@ async def subscribe_code_slot(
     slot_num = msg[ATTR_SLOT]
     reveal = msg["reveal"]
 
-    # Validate slot exists in config
     if not get_entry_config(config_entry).has_slot(slot_num):
         connection.send_error(
             msg["id"],

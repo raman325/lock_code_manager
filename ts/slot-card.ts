@@ -31,6 +31,19 @@ import {
 
 const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
+/** HTMLElement extended with HA's runtime-injected `hass` property. */
+interface HassElement extends HTMLElement {
+    hass?: HomeAssistant;
+}
+
+/** Subset of HA's loadCardHelpers() return value we depend on. */
+interface CardHelpers {
+    createCardElement: (config: { entities: string[]; type: string }) => HTMLElement & {
+        constructor: { getConfigElement?: () => Promise<unknown> };
+    };
+    createRowElement: (config: { entity: string }) => HTMLElement;
+}
+
 /** Domains the Manage Condition entity picker is restricted to. */
 const CONDITION_DOMAINS = [
     'calendar',
@@ -863,15 +876,10 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
      */
     private async _ensureEntityPickerLoaded(): Promise<void> {
         if (customElements.get('ha-entity-picker')) return;
-        const loadHelpers = (window as Window & { loadCardHelpers?: () => Promise<unknown> })
-            .loadCardHelpers;
+        const loadHelpers = window.loadCardHelpers;
         if (!loadHelpers) return;
         try {
-            const helpers = (await loadHelpers()) as {
-                createCardElement: (config: { entities: string[]; type: string }) => HTMLElement & {
-                    constructor: { getConfigElement?: () => Promise<unknown> };
-                };
-            };
+            const helpers = await loadHelpers();
             const cardElement = helpers.createCardElement({ entities: [], type: 'entities' });
             await cardElement.constructor.getConfigElement?.();
         } catch (err) {
@@ -893,15 +901,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
     private async _getEntityRow(entityId: string): Promise<HTMLElement> {
         const cached = this._entityRowCache.get(entityId);
         if (cached) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (cached as any).hass = this._hass;
+            (cached as HassElement).hass = this._hass;
             return cached;
         }
 
-        // Use HA's loadCardHelpers to get createRowElement, which handles
-        // lazy-loading and domain-to-row mapping automatically
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const loadHelpers = (window as any).loadCardHelpers;
+        const loadHelpers = window.loadCardHelpers;
         if (!loadHelpers) {
             const fallback = document.createElement('div');
             fallback.textContent = entityId;
@@ -909,9 +913,8 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         }
         try {
             const helpers = await loadHelpers();
-            const el = helpers.createRowElement({ entity: entityId }) as HTMLElement;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (el as any).hass = this._hass;
+            const el = helpers.createRowElement({ entity: entityId }) as HassElement;
+            el.hass = this._hass;
             this._entityRowCache.set(entityId, el);
             return el;
         } catch (err) {
@@ -1043,7 +1046,6 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
     // _toggleReveal inherited from mixin
 
-    // Render helper for collapsible sections
     private _renderCollapsible(
         title: string,
         expanded: boolean,
@@ -1412,6 +1414,7 @@ declare global {
             preview?: boolean;
             type: string;
         }>;
+        loadCardHelpers?: () => Promise<CardHelpers>;
     }
 }
 

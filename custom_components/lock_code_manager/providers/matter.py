@@ -399,13 +399,12 @@ class MatterLock(BaseLock):
         if existing_user_index is not None:
             # UPDATE: rename via set_lock_user.
             #
-            # set_lock_user here is a metadata-only name update. The
-            # historical Matter contract (PR #1077) tolerated name-set
-            # failures so a transient 500 or a name the lock rejects
-            # does not block the subsequent credential write; the user
-            # still exists at the known index, the only thing lost is
-            # the name update. If every candidate in the cascade fails
-            # with MatterError we log a warning and fall through.
+            # set_lock_user here is a metadata-only name update.
+            # Name-set failures must not block the subsequent credential
+            # write -- the user still exists at the known index and only
+            # the cosmetic name update is lost. The cascade tries each
+            # candidate name; if every one fails with MatterError we log
+            # a warning and fall through.
             candidates = self._user_name_candidates(slot, user.name)
             try:
                 (
@@ -419,16 +418,15 @@ class MatterLock(BaseLock):
                     candidate_names=candidates,
                 )
             except (LockDisconnected, LockOperationFailed, MatterError) as err:
-                # UPDATE's historical contract (PR #1077): tolerate any
-                # rename failure so the subsequent credential write still
-                # proceeds. The user record is still valid at
-                # ``existing_user_index`` -- the only thing lost is the
-                # cosmetic name update. The helper raises typed seam
-                # exceptions (LockDisconnected for transport failures,
+                # UPDATE tolerates any rename failure so the subsequent
+                # credential write still proceeds. The user record is
+                # still valid at ``existing_user_index`` -- only the
+                # cosmetic name update is lost. The helper raises typed
+                # seam exceptions (LockDisconnected for transport,
                 # LockOperationFailed for validation rejections,
                 # MatterError when every candidate hit a lock-side
-                # rejection); we swallow all three here on the UPDATE
-                # path and log a warning instead.
+                # rejection); all three are swallowed here on the UPDATE
+                # path and logged as a warning.
                 LOGGER.warning(
                     "Lock %s: failed to update user name on slot %s "
                     "(user_index=%s); continuing without name update. "
@@ -693,8 +691,8 @@ class MatterLock(BaseLock):
 
         ``credential_index=None`` auto-allocates the next free credential slot
         (CREATE). Passing an existing index addresses the user's current PIN
-        credential for MODIFY. ``code_slot`` is the LCM slot only and is used
-        for error reporting; it is no longer pinned to the Matter index.
+        credential for MODIFY. ``code_slot`` is the LCM slot, used only for
+        error reporting; the Matter credential index is opaque to LCM.
 
         Raises SetCredentialFailedError on lock rejection,
         CodeRejectedError on validation failure,
@@ -733,11 +731,10 @@ class MatterLock(BaseLock):
         """
         Return the user's current Matter PIN credential index, or ``None``.
 
-        LCM no longer pins ``credential_index`` to the LCM slot; instead it
-        treats Matter's credential index as opaque and rediscovers it per
-        operation. This helper deliberately walks the **raw** lock-side
-        user data (not ``async_get_users``) so the returned value is the
-        Matter credential index Matter expects for
+        LCM treats Matter's credential index as opaque and rediscovers it
+        per operation. This helper deliberately walks the **raw**
+        lock-side user data (not ``async_get_users``) so the returned
+        value is the Matter credential index Matter expects for
         ``set_lock_credential`` / ``clear_lock_credential`` -- not the
         LCM-projected slot that ``async_get_users`` exposes upward.
         """
@@ -1004,8 +1001,8 @@ class MatterLock(BaseLock):
         Only PIN credentials (credentialType=1) trigger the event -- other
         credential types (RFID, fingerprint, etc.) are ignored.
 
-        The event's ``credentials[].credentialIndex`` is the Matter credential
-        index, which is no longer pinned to the LCM slot under the user-tag
+        The event's ``credentials[].credentialIndex`` is the Matter
+        credential index, which LCM treats as opaque under the user-tag
         model. To find the LCM slot we resolve via the event's top-level
         ``userIndex`` -> user.name -> ``lcm:<slot>:`` tag, falling back to
         walking the user list for a PIN credential at ``credentialIndex``
@@ -1131,12 +1128,12 @@ class MatterLock(BaseLock):
         the owning user's name and parsing its ``lcm:<slot>:`` tag --
         ``userIndex`` alone is sufficient. ``dataIndex`` (the Matter
         credential index) is captured best-effort for log context only;
-        it's no longer pinned to the LCM slot under the user-tag model
-        and dropping otherwise-resolvable events when it's missing or
-        malformed would silently lose state updates. The lookup is async
-        (a fresh ``_raw_lock_users`` round-trip) so the callback
-        schedules a task rather than blocking the event loop. Events
-        for users LCM doesn't own (untagged names) are ignored.
+        under the user-tag model it is opaque to LCM, and dropping
+        otherwise-resolvable events when it's missing or malformed would
+        silently lose state updates. The lookup is async (a fresh
+        ``_raw_lock_users`` round-trip) so the callback schedules a task
+        rather than blocking the event loop. Events for users LCM
+        doesn't own (untagged names) are ignored.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
 

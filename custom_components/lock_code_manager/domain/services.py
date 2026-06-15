@@ -45,7 +45,6 @@ async def async_set_slot_condition(
     if not hass.states.get(entity_id):
         raise ServiceValidationError(f"Entity {entity_id} not found")
 
-    # Check for excluded platforms
     ent_reg = er.async_get(hass)
     entity_entry = ent_reg.async_get(entity_id)
     if entity_entry and entity_entry.platform in EXCLUDED_CONDITION_PLATFORMS:

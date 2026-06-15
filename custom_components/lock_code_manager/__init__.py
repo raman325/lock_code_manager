@@ -322,7 +322,6 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     await _async_register_strategy_resource(hass)
 
-    # Set up websocket API
     await async_websocket_setup(hass)
     _LOGGER.debug("Finished setting up websocket API")
 
@@ -776,12 +775,9 @@ async def async_remove_entry(
 
     Called by Home Assistant only on entry deletion -- not on unload,
     reload, disable, or HA restart. The repair issues created by this
-    integration are flagged ``is_persistent=True`` precisely so they
-    survive restarts and reloads; deleting them in ``async_unload_entry``
-    (the previous behavior) wiped them on every restart, causing the
-    "click an issue and it says repaired" short-circuit. With cleanup
-    moved here, persistent issues persist until the user actually
-    removes the entry.
+    integration are flagged ``is_persistent=True`` so they survive
+    restarts and reloads; clearing them belongs here, not in
+    ``async_unload_entry``, so they outlive any non-deletion unload.
     """
     entry_id = config_entry.entry_id
     config = get_entry_config(config_entry)
@@ -1018,7 +1014,6 @@ async def async_update_listener(
                 err,
             )
 
-    # Remove old lock entities
     if locks_to_remove:
         _LOGGER.debug(
             "%s (%s): Removing locks %s", entry_id, entry_title, locks_to_remove

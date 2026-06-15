@@ -225,7 +225,6 @@ class Zigbee2MQTTLock(BaseLock):
                     )
             return
 
-        # Handle users data in state update
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
             updates: dict[int, SlotCredential] = {}
@@ -274,7 +273,6 @@ class Zigbee2MQTTLock(BaseLock):
                 )
                 self.coordinator.push_update(updates)
 
-        # Handle response to get request with pin_code data
         pin_code_data = payload.get("pin_code")
         if pin_code_data and isinstance(pin_code_data, dict):
             raw_user = pin_code_data.get("user")
@@ -581,9 +579,9 @@ class Zigbee2MQTTLock(BaseLock):
         slot_states: dict[int, SlotCredential] = {}
 
         # Query one slot at a time so Zigbee2MQTT / firmware can answer each GET before
-        # the next. Parallel gathers plus per-slot timeouts used to raise and fail the
-        # entire refresh, leaving coordinator.data empty — sync then skips every slot
-        # (see SlotSyncManager._resolve_slot_state).
+        # the next. Parallel gather + per-slot timeouts can fail the entire refresh and
+        # leave coordinator.data empty -- sync then skips every slot (see
+        # SlotSyncManager._resolve_slot_state).
         # Transient publish/timeout/read failures use the unreadable credential so sync
         # does not treat the slot as confirmed-empty and storm reprogramming after MQTT
         # recovery.

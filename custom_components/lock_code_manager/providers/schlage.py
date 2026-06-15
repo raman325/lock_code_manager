@@ -60,10 +60,9 @@ class SchlageLock(BaseLock):
     and ``SlotCredential.empty()`` for cleared slots.
     """
 
-    # Tracks whether the initial auto-tag pass already ran for this
-    # provider instance. Skips re-tagging on reconnects so a drifted
-    # device list does not produce double-tag / rename storms. Reset
-    # naturally when the provider instance is recreated on full reload.
+    # Guards the initial auto-tag pass: skips re-tagging on reconnects so a
+    # drifted device list cannot produce double-tag / rename storms. Reset
+    # on full reload when the provider instance is recreated.
     _tagged_once: bool = field(default=False, init=False)
 
     @property
