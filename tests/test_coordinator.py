@@ -880,6 +880,24 @@ async def test_push_update_marks_reached(
     assert push_coordinator._reached_once is True
 
 
+async def test_drift_check_success_marks_reached(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A successful drift hard refresh is a reach and marks the lock reached."""
+    push_coordinator.last_update_success = True
+    assert push_coordinator._reached_once is False
+
+    with patch.object(
+        push_lock,
+        "async_internal_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.known("1234")}),
+    ):
+        await push_coordinator._async_drift_check(dt_util.utcnow())
+
+    assert push_coordinator._reached_once is True
+
+
 async def test_unreachable_reflects_backoff_trip(
     poll_coordinator: LockUsercodeUpdateCoordinator,
     poll_lock: MockLCMLock,

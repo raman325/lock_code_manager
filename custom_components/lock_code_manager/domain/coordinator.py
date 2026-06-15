@@ -266,6 +266,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             )
             return
 
+        # A successful hard refresh is a genuine reach -- mark it so a later
+        # outage can raise lock_offline even if the lock's only successful
+        # contact was via drift detection rather than a poll/push.
+        self._reached_once = True
+
         # Push subscription retry is handled by the config entry state
         # listener and connection transition handler — no need to retry here.
 
