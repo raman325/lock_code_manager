@@ -191,19 +191,16 @@ class WriteResult(StrEnum):
     """
     Outcome of a credential write (``async_set_credential``).
 
-    Replaces the old ``bool`` return, distinguishing three cases the seam
-    needs:
-
-    - ``NO_CHANGE`` -- the value was already set; nothing was written (the old
-      ``False``). The coordinator is not refreshed.
-    - ``CONFIRMED`` -- the lock acknowledged the write (the old ``True``). The
-      slot is marked verified; non-push providers refresh to read it back.
-    - ``OPTIMISTIC`` -- the write returned an ambiguous result we are treating
-      as completed but have NOT confirmed (e.g. a Z-Wave driver
-      ``ERROR_UNKNOWN`` from a masked read-back). The slot is marked unverified
-      and awaits confirmation via a push event or hard refresh; if none
-      arrives, it re-syncs rather than silently reporting success. See the
-      Phase 2 push-as-commit spec.
+    - ``NO_CHANGE`` -- the value was already set; nothing was written. The
+      coordinator is not refreshed.
+    - ``CONFIRMED`` -- the lock acknowledged the write. The slot is marked
+      verified; non-push providers refresh to read it back.
+    - ``OPTIMISTIC`` -- the write returned an ambiguous result we treat as
+      completed but have NOT confirmed (e.g. a Z-Wave driver
+      ``ERROR_UNKNOWN`` from a masked read-back). The slot is marked
+      unverified and awaits confirmation via a push event or hard refresh;
+      if none arrives, it re-syncs rather than silently reporting success.
+      See the Phase 2 push-as-commit spec.
     """
 
     NO_CHANGE = "no_change"

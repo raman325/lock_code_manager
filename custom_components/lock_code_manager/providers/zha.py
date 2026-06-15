@@ -37,10 +37,6 @@ from ._base import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# ZCL DoorLock event mappings
-# ---------------------------------------------------------------------------
-
 OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.Lock: True,
     DoorLock.OperationEvent.KeyLock: True,
@@ -61,11 +57,6 @@ OPERATION_SOURCE_NAMES: dict[int, str] = {
     DoorLock.OperationEventSource.RFID: "RFID",
     DoorLock.OperationEventSource.Indeterminate: "Unknown",
 }
-
-
-# ---------------------------------------------------------------------------
-# Provider
-# ---------------------------------------------------------------------------
 
 
 @dataclass(repr=False, eq=False)

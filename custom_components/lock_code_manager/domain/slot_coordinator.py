@@ -1,13 +1,13 @@
 """
 Per-slot entity coordinator.
 
-A SlotEntityCoordinator instance owns the per-slot state surface that
-text, switch, and active-binary-sensor entities used to compute on their
-own. Entities become read-only views over the coordinator: they register
-write callbacks for state changes and dispatch user intent (set a PIN,
-toggle enabled) through the coordinator. The coordinator updates the
-canonical config entry, manages slot-level repair issues, and asks the
-per-lock SlotSyncManagers to re-evaluate on the next tick.
+A SlotEntityCoordinator instance owns the per-slot state surface for the
+text, switch, and active-binary-sensor entities. Entities are read-only
+views over the coordinator: they register write callbacks for state
+changes and dispatch user intent (set a PIN, toggle enabled) through the
+coordinator. The coordinator updates the canonical config entry, manages
+slot-level repair issues, and asks the per-lock SlotSyncManagers to
+re-evaluate on the next tick.
 
 There is one SlotEntityCoordinator per (config_entry, slot_num); the per-
 lock SlotSyncManager remains one per (config_entry, slot_num, lock).

@@ -131,14 +131,12 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
     def _handle_add_locks(self, locks: list[BaseLock]) -> None:
         """Handle lock entities being added."""
         super()._handle_add_locks(locks)
-        # Write state to reflect new event_types and unsupported_locks
         self.async_write_ha_state()
 
     @callback
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity being removed."""
         super()._handle_remove_lock(lock_entity_id)
-        # Write state to reflect new event_types and unsupported_locks
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:

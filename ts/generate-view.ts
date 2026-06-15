@@ -320,6 +320,27 @@ export function getSlotMapping(
     };
 }
 
+/**
+ * Wraps a list of entity card configs as either a fold-entity-row group
+ * (preceded by a divider) or a plain section header followed by the cards.
+ */
+function wrapAsFoldOrSection(
+    entityCards: { entity: string; name?: string }[],
+    label: string,
+    useFoldEntityRow: boolean
+) {
+    return useFoldEntityRow
+        ? [
+              DIVIDER_CARD,
+              {
+                  entities: entityCards,
+                  head: { label, type: 'section' },
+                  type: 'custom:fold-entity-row'
+              }
+          ]
+        : [{ label, type: 'section' }, ...entityCards];
+}
+
 /** @internal - exported for testing via generate-view.internal.ts */
 export function maybeGenerateFoldEntityRowCard(
     hass: HomeAssistant,
@@ -330,25 +351,7 @@ export function maybeGenerateFoldEntityRowCard(
 ) {
     if (entities.length === 0) return [];
     const entityCards = generateEntityCards(hass, configEntry, entities);
-    return useFoldEntityRow
-        ? [
-              DIVIDER_CARD,
-              {
-                  entities: entityCards,
-                  head: {
-                      label,
-                      type: 'section'
-                  },
-                  type: 'custom:fold-entity-row'
-              }
-          ]
-        : [
-              {
-                  label,
-                  type: 'section'
-              },
-              ...entityCards
-          ];
+    return wrapAsFoldOrSection(entityCards, label, useFoldEntityRow);
 }
 
 /** @internal - exported for testing via generate-view.internal.ts */
@@ -363,28 +366,7 @@ export function maybeGenerateFoldEntityRowConditionCard(
     if (conditionEntities.length === 0 && calendarEntityId == null) return [];
     const entityCards = generateEntityCards(hass, configEntry, conditionEntities);
     if (calendarEntityId != null) {
-        entityCards.unshift({
-            entity: calendarEntityId
-        });
+        entityCards.unshift({ entity: calendarEntityId });
     }
-
-    return useFoldEntityRow
-        ? [
-              DIVIDER_CARD,
-              {
-                  entities: entityCards,
-                  head: {
-                      label,
-                      type: 'section'
-                  },
-                  type: 'custom:fold-entity-row'
-              }
-          ]
-        : [
-              {
-                  label,
-                  type: 'section'
-              },
-              ...entityCards
-          ];
+    return wrapAsFoldOrSection(entityCards, label, useFoldEntityRow);
 }

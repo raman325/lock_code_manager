@@ -64,8 +64,6 @@ from ._zwave_js_uc import ZWaveJSUserCodeFallbackSupport
 
 _LOGGER = logging.getLogger(__name__)
 
-# String key used by lock_helpers for Personal Identification Number credentials
-# in the supported_credential_types dict returned by async_get_credential_capabilities.
 _PIN_TYPE_STR = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
 
 # Z-Wave UserCredentialType -> domain CredentialType. The domain vocabulary
@@ -318,7 +316,7 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         The base seam passes a tagged ``user.name`` (``lcm:<slot>:<display>``)
         whose slot is the LCM-side identity for this credential. The Z-Wave
         lock's own ``user_id`` is whatever Z-Wave happens to allocate; LCM
-        no longer pins it to the slot. Discovery on every call:
+        treats it as opaque and rediscovers it via the tag on every call:
 
         1. Scan the lock's current user list for a user whose name carries
            the same ``lcm:<slot>:`` tag.
@@ -553,11 +551,10 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         deleted`` node events. In UC-fallback mode those events never
         fire (the driver only emits them from its own unified API
         methods, which the fallback bypasses), so we subscribe to raw
-        ``value updated`` events for the User Code CC values instead --
-        the same push source the legacy 3.x provider used. When the
-        mode is not yet known (capability probe hasn't run), subscribe
-        to both; the handlers are self-filtering and pushes are
-        idempotent.
+        ``value updated`` events for the User Code CC values instead.
+        When the mode is not yet known (capability probe hasn't run),
+        subscribe to both; the handlers are self-filtering and pushes
+        are idempotent.
         """
         if self._push_unsubs:
             return

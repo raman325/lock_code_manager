@@ -89,8 +89,6 @@ class EntityCallbackRegistry:
     lock_added: list[LockUpdateCallback] = field(default_factory=list)
     lock_removed: list[LockRemoveCallback] = field(default_factory=list)
 
-    # --- Registration methods (return unregister functions) ---
-
     def register_standard_adder(
         self, callback: StandardEntityCallback
     ) -> UnregisterFunc:
@@ -156,8 +154,6 @@ class EntityCallbackRegistry:
             if callback in self.lock_removed
             else None
         )
-
-    # --- Invocation methods (called by __init__.py orchestrator) ---
 
     @callback
     def invoke_standard_adders(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:

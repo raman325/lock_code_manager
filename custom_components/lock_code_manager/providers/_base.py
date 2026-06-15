@@ -1038,12 +1038,12 @@ class BaseLock:
         # Owner resolution is two-pass to match the same identity rule the
         # set path uses (see Matter's _find_user_index_for_slot). The
         # canonical pass matches by the ``lcm:<slot>:`` tag in user.name;
-        # the legacy fallback handles pre-PR-B installs where
-        # ``credential.slot`` was pinned to the LCM slot. Matching by
-        # ``credential.slot == code_slot`` alone is unsafe once providers
-        # let the lock auto-allocate the credential index -- a tagged
-        # user for slot A whose credential lands at index B would be
-        # mis-matched when clearing slot B.
+        # the fallback adopts installs from before user-tag matching,
+        # where ``credential.slot`` was pinned to the LCM slot. Matching
+        # by ``credential.slot == code_slot`` alone is unsafe once
+        # providers let the lock auto-allocate the credential index -- a
+        # tagged user for slot A whose credential lands at index B would
+        # be mis-matched when clearing slot B.
         users = await self.async_get_users()
         # Both lookups require the user to actually own a PIN credential
         # at the slot we're clearing. Under the persistent-user-anchor
