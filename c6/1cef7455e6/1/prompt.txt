@@ -1,0 +1,9 @@
+use aislopt o identify things we nee dot clean up yarn dlx aislop scan
+
+---
+
+also do a sweep of docstrings and comments to get rid of narrations, historical context, and obvious things that code already tells you and clean those up
+
+---
+
+also do a sweep of docstrings and comments to get rid of narrations, historical context, and obvious things that code already tells you and clean those up. and yes make those three changes
