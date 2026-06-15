@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
+    WriteResult,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -66,7 +67,7 @@ class TestSetAndClearCredentials:
             source="direct",
         )
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         assert akuvox_mock_services["add_user"].call_count >= 1
 
     async def test_set_credential_existing(
@@ -100,7 +101,7 @@ class TestSetAndClearCredentials:
             source="direct",
         )
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         assert akuvox_mock_services["modify_user"].call_count >= 1
 
     async def test_delete_credential(

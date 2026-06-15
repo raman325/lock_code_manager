@@ -1,6 +1,7 @@
 """Test the coordinator module."""
 
 from datetime import timedelta
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -197,6 +198,61 @@ async def test_push_update_bulk_updates(
     assert push_coordinator.data[1] == SlotCredential.known("9999")
     assert push_coordinator.data[2] == SlotCredential.known("2222")  # Unchanged
     assert push_coordinator.data[3] == SlotCredential.empty()  # Cleared
+
+
+async def test_is_verified_defaults_true_for_absent_slot(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """A slot with no recorded verified flag reads as verified."""
+    assert push_coordinator.is_verified(7) is True
+
+
+async def test_push_update_default_marks_verified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """The default (optimistic=False) push marks the slot verified."""
+    push_coordinator.push_update({1: SlotCredential.known("9999")})
+    assert push_coordinator.is_verified(1) is True
+
+
+async def test_push_update_optimistic_marks_unverified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """An optimistic push marks the slot unverified."""
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+    assert push_coordinator.data[1] == SlotCredential.known("9999")
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_push_update_verified_push_clears_unverified(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """A later verified push of a new value re-verifies the slot."""
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+    assert push_coordinator.is_verified(1) is False
+
+    push_coordinator.push_update({1: SlotCredential.unreadable()})
+    assert push_coordinator.is_verified(1) is True
+
+
+async def test_push_update_optimistic_same_value_flips_flag_without_notifying(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """An optimistic re-push of the same value flips the flag but doesn't notify."""
+    push_coordinator.data = {1: SlotCredential.known("9999")}
+    with patch.object(push_coordinator, "async_set_updated_data") as mock_set_updated:
+        push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+        mock_set_updated.assert_not_called()
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_verified_map_pruned_with_data(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+):
+    """The verified map drops slots no longer present in data."""
+    push_coordinator.push_update({1: SlotCredential.known("1111")}, optimistic=True)
+    # The internal map should only track slots still in data.
+    assert set(push_coordinator._verified) <= set(push_coordinator.data)
 
 
 async def test_push_update_ignores_empty_updates(
@@ -854,3 +910,118 @@ async def test_unreachable_clears_on_recovery(
     assert (
         poll_coordinator.update_interval == poll_coordinator._original_update_interval
     )
+
+
+async def test_confirm_pending_writes_confirms_present_masked(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """An on-demand confirm read of a present-but-masked slot verifies it.
+
+    This is the order-independent confirmation that replaces waiting for a push
+    node-zwave-js never sends for a masked write: the slot reads back present
+    (unreadable), so the believed PIN is confirmed and pending is cleared.
+    """
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+    assert push_coordinator.is_verified(1) is False
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.unreadable()}),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 not in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is True
+    assert push_coordinator.data[1] == SlotCredential.known("9999")
+
+
+async def test_confirm_pending_writes_keeps_absent_slot_pending(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A confirm read that finds the slot absent leaves it pending to re-sync."""
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(return_value={1: SlotCredential.empty()}),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_confirm_pending_writes_tolerates_read_failure(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A failed confirm read is non-fatal and leaves pending state untouched."""
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=LockDisconnected("offline")),
+    ):
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_confirm_pending_writes_noop_without_pending(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """With no pending writes the confirm path never touches the lock."""
+    mock_refresh = AsyncMock()
+    with patch.object(push_lock, "async_hard_refresh_codes", mock_refresh):
+        await push_coordinator.async_confirm_pending_writes()
+
+    mock_refresh.assert_not_called()
+
+
+async def test_confirm_pending_writes_swallows_unexpected_error(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A non-LCM error from the confirm read must not escape (it would suspend the slot)."""
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        # Must not raise: the seam awaits this and a raise would suspend the slot.
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_apply_read_takes_differing_readable_external_change(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A read observing a readable code different from a pending write takes the observation.
+
+    Mirrors BaseLock._confirm_slot: a drift/poll read of an externally-changed
+    readable code must not be masked by the believed value.
+    """
+    push_lock._pending_writes[1] = ("1234", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
+
+    out = push_coordinator._apply_read({1: SlotCredential.known("9999")})
+
+    assert out[1] == SlotCredential.known("9999")
+    assert 1 not in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is True

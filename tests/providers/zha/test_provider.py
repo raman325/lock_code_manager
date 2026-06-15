@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
+    WriteResult,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -171,7 +172,7 @@ async def test_set_credential(
         3, credential, "5678", name="Test User", source="direct"
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     cluster.set_pin_code.assert_called_once_with(
         3,
         DoorLock.UserStatus.Enabled,

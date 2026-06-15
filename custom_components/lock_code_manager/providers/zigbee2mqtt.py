@@ -19,7 +19,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+    WriteResult,
+    user_from_slot,
+)
 from ..domain.exceptions import LockDisconnected, LockOperationFailed
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -411,7 +417,7 @@ class Zigbee2MQTTLock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a code slot.
 
@@ -474,7 +480,7 @@ class Zigbee2MQTTLock(BaseLock):
         )
         # Optimistic coordinator update after publish (MQTT QoS 0); hard_refresh mitigates drift.
         self._push_credential_update(code_slot, SlotCredential.known(pin))
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """

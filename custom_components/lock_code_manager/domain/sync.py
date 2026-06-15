@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
@@ -401,7 +402,16 @@ class SlotSyncManager:
         that PIN changes trigger a re-set even when the lock code is
         unreadable, and that taking over a slot with an existing masked code
         triggers a set.
+
+        An unverified slot (an optimistic write still awaiting confirmation,
+        or one whose confirmation never arrived) is never in sync: the
+        coordinator holds the believed value but the lock has not confirmed it,
+        so the tick must keep watching (PENDING_CONFIRMATION) or re-sync rather
+        than declare success. Slots with no recorded flag read as verified, so
+        this is a no-op for providers that never write optimistically.
         """
+        if not self._coordinator.is_verified(self._slot_num):
+            return False
         credential = slot_state.coordinator_code
         if slot_state.active_state == STATE_ON:
             if credential is not None:
@@ -699,6 +709,48 @@ class SlotSyncManager:
             self._write_state()
             return
 
+        # -- PENDING_CONFIRMATION: an optimistic write is awaiting confirmation.
+        # Don't re-write while waiting; a push event / hard refresh resolves it
+        # (clearing the pending entry). On timeout, count a breaker failure and
+        # fall through to re-sync -- so a write the lock never committed ends in
+        # a visible suspend, never a silent in-sync.
+        pending = self._lock._pending_writes.get(self._slot_num)
+        if pending is not None:
+            believed_pin, deadline = pending
+            # A pending write only gates reconciliation while it still reflects
+            # the desired state. If the user changed the PIN or disabled the slot
+            # while the write was outstanding, the entry is stale: drop it and
+            # reconcile the new target instead of holding PENDING_CONFIRMATION
+            # (and re-syncing the old value) until the deadline.
+            still_wanted = (
+                slot_state.active_state == STATE_ON
+                and slot_state.pin_state == believed_pin
+            )
+            if still_wanted and time.monotonic() < deadline:
+                if self._state is not SyncState.PENDING_CONFIRMATION:
+                    self._state = SyncState.PENDING_CONFIRMATION
+                    self._write_state()
+                return
+            # Drop the entry and re-sync on the NEXT tick. Returning here (rather
+            # than falling through to _perform_sync this tick) lets a confirming
+            # push that lands between ticks resolve the slot first, and avoids
+            # double-charging the breaker when the re-sync itself also fails.
+            del self._lock._pending_writes[self._slot_num]
+            if still_wanted:
+                # Genuine timeout: the write we still want never confirmed.
+                self._slot_breaker.record_failure()
+                _LOGGER.warning(
+                    "%s: optimistic write not confirmed within the timeout; "
+                    "re-syncing (attempt %s)",
+                    self._log_prefix,
+                    self._slot_breaker.failure_count,
+                )
+            # A stale entry (desired state changed) is not a sync failure, so it
+            # does not charge the breaker.
+            self._state = SyncState.OUT_OF_SYNC
+            self._write_state()
+            return
+
         # -- OUT_OF_SYNC: check lock reachability, then attempt sync --
         if self._coordinator.unreachable:
             self._state = SyncState.SUSPENDED
@@ -821,6 +873,16 @@ class SlotSyncManager:
                         self._slot_breaker.record_failure()
                     self._state = SyncState.OUT_OF_SYNC
                     return
+
+        # An optimistic (ambiguous) set records a pending write: don't judge it
+        # now -- wait for the lock to confirm it (a push event or hard refresh)
+        # in PENDING_CONFIRMATION. The breaker is only charged when that wait
+        # times out (handled at the top of the tick), so a masked-but-accepted
+        # write is not penalised before its confirming event arrives.
+        if self._slot_num in self._lock._pending_writes:
+            self._state = SyncState.PENDING_CONFIRMATION
+            self._write_state()
+            return
 
         # Check if sync actually worked.
         slot_state = self._resolve_slot_state()

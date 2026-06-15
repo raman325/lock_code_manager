@@ -35,6 +35,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -851,7 +852,7 @@ async def test_async_set_credential_returns_true_on_success(
         source="sync",
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     mock_lock_helpers["async_set_credential"].assert_called_once_with(
         zwave_js_lock.node,
         1,
@@ -923,7 +924,7 @@ async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error
     assert not isinstance(exc_info.value, DuplicateCodeError)
 
 
-async def test_async_set_credential_tolerates_error_unknown_as_completed_set(
+async def test_async_set_credential_error_unknown_returns_optimistic(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
@@ -935,8 +936,9 @@ async def test_async_set_credential_tolerates_error_unknown_as_completed_set(
     The driver returns ERROR_UNKNOWN when its post-write verification can't
     confirm the code -- notably for locks that report the user code back
     masked, where the write actually succeeded (issue #1251). The provider
-    must return True and let reconciliation verify, instead of raising
-    CodeRejectedError (which would permanently disable an accepted write).
+    must return OPTIMISTIC so the seam records it pending and lets a
+    confirmation (push/refresh) verify it, instead of raising CodeRejectedError
+    (which would permanently disable an accepted write).
     """
     mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
         translation_key="credential_rejected_unknown"
@@ -953,7 +955,7 @@ async def test_async_set_credential_tolerates_error_unknown_as_completed_set(
         source="sync",
     )
 
-    assert result is True
+    assert result is WriteResult.OPTIMISTIC
 
 
 async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
@@ -1144,7 +1146,7 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
 
     changed = await zwave_js_lock.async_set_usercode(5, "9999", name="alice")
 
-    assert changed is True
+    assert changed is WriteResult.CONFIRMED
     mock_lock_helpers["async_set_user"].assert_not_called()
     mock_lock_helpers["async_set_credential"].assert_called_once()
 

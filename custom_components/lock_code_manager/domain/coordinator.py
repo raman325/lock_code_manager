@@ -59,6 +59,13 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             config_entry=config_entry,
         )
         self.data: dict[int, SlotCredential] = {}
+        # Per-slot "verified" flag, kept in lockstep with ``data``. A slot is
+        # unverified only while an optimistic (ambiguous-but-treated-as-completed)
+        # write awaits confirmation; every other source -- genuine push events,
+        # polls, hard refreshes, and authoritative writes -- is verified. Absent
+        # slots read as verified, so poll/cloud providers (which never push an
+        # optimistic update) are unaffected. See the Phase 2 push-as-commit spec.
+        self._verified: dict[int, bool] = {}
         self._config_entry = config_entry
         self._lock_breaker = CircuitBreaker(
             BACKOFF_FAILURE_THRESHOLD,
@@ -112,14 +119,155 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         """Coerce slot keys to ``int``. Raises ValueError/TypeError if a key cannot be cast."""
         return {int(k): v for k, v in data.items()}
 
+    def _apply_read(
+        self, observed: dict[int, SlotCredential]
+    ) -> dict[int, SlotCredential]:
+        """
+        Resolve a genuine read (poll or hard refresh) against pending writes.
+
+        A read is the dropped-push backstop for the verified-credential
+        lifecycle: for a slot with an outstanding optimistic write, observing
+        the slot present confirms our write -- keep the believed value and mark
+        it verified. The one exception (mirroring ``BaseLock._confirm_slot``) is
+        a *readable* observation of a different code: that is an external change
+        racing our write, so take the observation rather than masking it with
+        the believed value -- otherwise a drift refresh, whose whole purpose is
+        to surface out-of-band changes, would silently overwrite one. Observing
+        the slot still absent means the write has not landed yet, so keep waiting
+        (stay unverified, pending intact). Slots with no pending write are
+        genuine observations and are marked verified. See the Phase 2
+        push-as-commit spec.
+        """
+        out: dict[int, SlotCredential] = {}
+        for slot, cred in observed.items():
+            pending = self._lock._pending_writes.get(slot)
+            if pending is not None and cred.is_present:
+                pin, _deadline = pending
+                del self._lock._pending_writes[slot]
+                if cred.is_readable and cred.readable_pin != pin:
+                    out[slot] = cred
+                else:
+                    out[slot] = SlotCredential.known(pin)
+                self._verified[slot] = True
+            elif pending is not None:
+                out[slot] = cred
+                self._verified[slot] = False
+            else:
+                out[slot] = cred
+                self._verified.pop(slot, None)
+        # Keep the verified map in lockstep with the read.
+        self._verified = {
+            slot: flag for slot, flag in self._verified.items() if slot in out
+        }
+        return out
+
+    def is_verified(self, slot: int) -> bool:
+        """
+        Return whether the slot's credential is a confirmed observation.
+
+        Absent slots default to verified: a slot is only unverified while an
+        optimistic write awaits confirmation (push event or hard refresh).
+        """
+        return self._verified.get(slot, True)
+
     @callback
-    def push_update(self, updates: dict[int, SlotCredential]) -> None:
-        """Push one or more slot updates and notify listening entities."""
+    def mark_verified(self, slot: int) -> None:
+        """
+        Clear a slot's unverified flag (it defaults back to verified).
+
+        Called when a write is confirmed by the lock (an authoritative
+        ``WriteResult.CONFIRMED``), so a stale unverified flag from a prior
+        optimistic write on the same slot cannot strand it.
+        """
+        self._verified.pop(slot, None)
+
+    async def async_confirm_pending_writes(self) -> None:
+        """
+        Actively read the lock back to confirm outstanding optimistic writes.
+
+        An ambiguous write (``WriteResult.OPTIMISTIC``) gets no confirming push
+        on some stacks: node-zwave-js, for one, emits no ``credential
+        added/modified`` event when its own post-write verification fails on a
+        lock that reports codes back masked -- the event and the ``ERROR_UNKNOWN``
+        result are mutually exclusive. Waiting for the hourly drift refresh would
+        let the breaker suspend a slot whose code actually landed (~3 attempts in
+        the 5-minute window, long before the hourly backstop). So the seam calls
+        this immediately after recording an optimistic write.
+
+        This is the order-independent confirmation path: it does not depend on
+        receiving any event. A hard read observes the slot present-but-masked
+        (LCM projects masked codes to ``unreadable`` rather than repeating the
+        driver's ``userCode == codeData`` check) and ``_apply_read`` confirms it;
+        a genuinely-absent slot stays pending and re-syncs on the next tick.
+
+        A failed read is non-fatal and does not apply backoff: the slot stays
+        pending and the sync tick reconciles it within the TTL.
+        """
+        if not self._lock._pending_writes:
+            return
+        try:
+            new_data = self._apply_read(
+                self._normalize_keys(
+                    await self._lock.async_internal_hard_refresh_codes()
+                )
+            )
+        except LockCodeManagerError as err:
+            _LOGGER.debug(
+                "On-demand confirmation read failed for %s: %s; leaving pending "
+                "writes for the sync tick to reconcile",
+                self._lock.lock.entity_id,
+                err,
+            )
+            return
+        except Exception:
+            # The confirmation read is a best-effort backstop, never fatal: it
+            # must not escape into the set seam and suspend the slot. The pending
+            # write stays recorded and the sync tick reconciles it via the TTL.
+            _LOGGER.exception(
+                "Unexpected error during on-demand confirmation read for %s; "
+                "leaving pending writes for the sync tick to reconcile",
+                self._lock.lock.entity_id,
+            )
+            return
+        # _apply_read already cleared pending + flipped the verified flag in
+        # place, so the confirmation takes effect even when the data is
+        # unchanged; only the listener notification is gated on a real delta.
+        if new_data != self.data:
+            self.async_set_updated_data(new_data)
+
+    @callback
+    def push_update(
+        self, updates: dict[int, SlotCredential], *, optimistic: bool = False
+    ) -> None:
+        """
+        Push one or more slot updates and notify listening entities.
+
+        ``optimistic=True`` marks the pushed slots unverified (an ambiguous
+        write we are treating as completed but have not yet confirmed). The
+        default, ``False``, marks them verified -- every existing caller keeps
+        today's behavior.
+        """
         if not updates:
             return
 
-        new_data = {**self.data, **self._normalize_keys(updates)}
+        normalized = self._normalize_keys(updates)
+        new_data = {**self.data, **normalized}
+        verified = not optimistic
+
+        # Record the verified flag for the pushed slots regardless of whether
+        # the value changed: an optimistic re-push of the same value still
+        # flips the slot to unverified.
+        for slot in normalized:
+            self._verified[slot] = verified
+        # Keep the verified map in lockstep with data.
+        self._verified = {
+            slot: flag for slot, flag in self._verified.items() if slot in new_data
+        }
+
         if new_data == self.data:
+            # Verified-flag-only change: the sync layer reads ``is_verified``
+            # directly on its next tick, and entities don't render the flag, so
+            # there's nothing to notify and no reachability proof (no new data).
             return
 
         # A successful push update proves the lock is reachable, so reset
@@ -218,7 +366,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             raise UpdateFailed from err
 
         self._reset_backoff()
-        return self._normalize_keys(data)
+        return self._apply_read(self._normalize_keys(data))
 
     async def _async_drift_check(self, now: datetime) -> None:
         """Perform a hard refresh to detect out-of-band code changes."""
@@ -238,8 +386,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             self._lock.lock.entity_id,
         )
         try:
-            new_data = self._normalize_keys(
-                await self._lock.async_internal_hard_refresh_codes()
+            new_data = self._apply_read(
+                self._normalize_keys(
+                    await self._lock.async_internal_hard_refresh_codes()
+                )
             )
         except LockCodeManagerError as err:
             self._apply_backoff()

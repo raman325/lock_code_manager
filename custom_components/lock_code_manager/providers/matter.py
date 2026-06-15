@@ -43,6 +43,7 @@ from ..domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
 )
 from ..domain.exceptions import (
     CodeRejectedError,
@@ -759,7 +760,7 @@ class MatterLock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Write a Personal Identification Number credential to the lock.
 
@@ -871,7 +872,7 @@ class MatterLock(BaseLock):
                 ) from retry_err
 
         self._push_credential_update(slot, SlotCredential.unreadable())
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """

@@ -1766,6 +1766,23 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(text).toContain('mdi:sync');
         });
 
+        it('renders pending_confirmation state with progress-clock icon', () => {
+            const lock = {
+                code: '1234',
+                codeLength: undefined,
+                entityId: 'lock.test',
+                inSync: false,
+                lastSynced: undefined,
+                lockEntityId: 'lock.test',
+                name: 'Test Lock',
+                syncStatus: 'pending_confirmation'
+            };
+            const result = (card as any)._renderLockRow(lock);
+            const text = flattenTemplateValues(result);
+            expect(text).toContain('Confirming');
+            expect(text).toContain('mdi:progress-clock');
+        });
+
         it('renders suspended state with alert-circle icon', () => {
             const lock = {
                 code: null,

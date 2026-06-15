@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 
@@ -99,7 +100,7 @@ class TestSetAndClearUsercodes:
 
         result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         mock_lock_helpers["async_set_user"].assert_called_once()
         mock_lock_helpers["async_set_credential"].assert_called_once()
 

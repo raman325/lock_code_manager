@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +22,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     MAX_SYNC_ATTEMPTS,
 )
+from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     LockDisconnected,
@@ -59,10 +61,15 @@ def _slot(
     )
 
 
-def _manager(last_set_pin: str | None = None) -> SlotSyncManager:
-    """Build a mock SlotSyncManager with _last_set_pin set."""
+def _manager(
+    last_set_pin: str | None = None, *, verified: bool = True, slot_num: int = 1
+) -> SlotSyncManager:
+    """Build a mock SlotSyncManager with _last_set_pin and a verified coordinator."""
     mgr = MagicMock(spec=SlotSyncManager)
     mgr._last_set_pin = last_set_pin
+    mgr._slot_num = slot_num
+    mgr._coordinator = MagicMock()
+    mgr._coordinator.is_verified.return_value = verified
     mgr.calculate_in_sync = SlotSyncManager.calculate_in_sync.__get__(mgr)
     return mgr
 
@@ -211,6 +218,22 @@ class TestCalculateInSync:
         assert (
             _manager(last_set_pin=last_set_pin).calculate_in_sync(_slot(**slot_kwargs))
             is expected
+        )
+
+    def test_unverified_slot_is_never_in_sync(self) -> None:
+        """An unverified slot is not in sync even when the value would match.
+
+        Phase 2: an optimistic write awaiting confirmation holds the believed
+        value in the coordinator, but the lock has not confirmed it, so the
+        tick must keep watching / re-sync rather than declare success.
+        """
+        slot = _slot(active=STATE_ON, pin="1234", coordinator_code="1234")
+        assert (
+            _manager(last_set_pin="1234", verified=True).calculate_in_sync(slot) is True
+        )
+        assert (
+            _manager(last_set_pin="1234", verified=False).calculate_in_sync(slot)
+            is False
         )
 
 
@@ -664,6 +687,148 @@ class TestSyncStateMachine:
 
         await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
         assert manager._state is SyncState.IN_SYNC
+
+    async def test_pending_optimistic_write_holds_in_pending_confirmation(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """An unexpired pending write parks the slot in PENDING_CONFIRMATION.
+
+        The tick must not re-write while waiting for the lock to confirm.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # Arrange an outstanding (unexpired) optimistic write.
+        manager._lock._pending_writes[1] = ("1234", time.monotonic() + 100.0)
+        manager._coordinator.push_update(
+            {1: SlotCredential.known("1234")}, optimistic=True
+        )
+        manager.request_sync_check()
+
+        with patch.object(
+            manager, "_perform_sync", new_callable=AsyncMock
+        ) as mock_sync:
+            await manager._async_tick()
+
+        assert manager._state is SyncState.PENDING_CONFIRMATION
+        mock_sync.assert_not_called()
+
+    async def test_pending_optimistic_write_confirmed_reaches_in_sync(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A confirmation (push/refresh) of a pending write reaches IN_SYNC.
+
+        End-to-end masked-accepted convergence: optimistic write parks in
+        PENDING_CONFIRMATION; a credential event confirming the slot present
+        (even masked) marks it verified and the next tick is IN_SYNC.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # Optimistic write outstanding (unexpired).
+        manager._lock._pending_writes[1] = ("1234", time.monotonic() + 100.0)
+        manager._coordinator.push_update(
+            {1: SlotCredential.known("1234")}, optimistic=True
+        )
+        manager.request_sync_check()
+        with patch.object(manager, "_perform_sync", new_callable=AsyncMock):
+            await manager._async_tick()
+        assert manager._state is SyncState.PENDING_CONFIRMATION
+
+        # The lock confirms the slot present but masked -> believed value kept,
+        # marked verified, pending cleared.
+        manager._lock._confirm_slot(1, SlotCredential.unreadable())
+        assert 1 not in manager._lock._pending_writes
+        assert manager._coordinator.is_verified(1) is True
+
+        manager.request_sync_check()
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+        assert manager._state is SyncState.IN_SYNC
+
+    async def test_pending_optimistic_write_expiry_records_failure_and_resyncs(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """An expired pending write counts a breaker failure and re-syncs."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # Genuine failure: the code never landed on the lock, so a re-read
+        # cannot confirm it. Arrange an already-expired optimistic write whose
+        # value is NOT present on the lock.
+        manager._lock.codes.pop(1, None)
+        manager._lock._pending_writes[1] = ("1234", time.monotonic() - 1.0)
+        manager._coordinator.push_update(
+            {1: SlotCredential.known("1234")}, optimistic=True
+        )
+        manager.request_sync_check()
+        before = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager, "_perform_sync", new_callable=AsyncMock, return_value=True
+        ) as mock_sync:
+            # Tick 1: the expired pending write is dropped and charged to the
+            # breaker, and the slot parks at OUT_OF_SYNC without re-syncing this
+            # tick (so a concurrent confirming push could still land, and so the
+            # breaker is not double-charged by a same-tick sync failure).
+            await manager._async_tick()
+            assert 1 not in manager._lock._pending_writes
+            assert manager._slot_breaker.failure_count > before
+            assert manager._state is SyncState.OUT_OF_SYNC
+            mock_sync.assert_not_called()
+
+            # Tick 2: the code is genuinely absent, so the slot re-syncs.
+            manager.request_sync_check()
+            await manager._async_tick()
+            mock_sync.assert_called()
+
+    async def test_pending_write_abandoned_when_desired_changes(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A pending write no longer matching the desired state is dropped, no charge."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # An optimistic write is still in its (un-expired) confirmation window,
+        # but its believed value no longer matches the desired PIN -- the user
+        # changed it while the write was outstanding. The stale entry must not
+        # hold the slot in PENDING_CONFIRMATION (re-syncing the old value) until
+        # the deadline; it is dropped and the new target re-syncs.
+        desired = manager._resolve_slot_state().pin_state
+        stale_pin = f"{desired}9"
+        manager._lock._pending_writes[1] = (stale_pin, time.monotonic() + 60.0)
+        manager._coordinator.push_update(
+            {1: SlotCredential.known(stale_pin)}, optimistic=True
+        )
+        manager.request_sync_check()
+        before = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager, "_perform_sync", new_callable=AsyncMock, return_value=True
+        ) as mock_sync:
+            await manager._async_tick()
+
+        # Stale entry dropped; a desired-state change is not a sync failure, so
+        # the breaker is not charged; the slot leaves PENDING_CONFIRMATION.
+        assert 1 not in manager._lock._pending_writes
+        assert manager._slot_breaker.failure_count == before
+        assert manager._state is SyncState.OUT_OF_SYNC
+        mock_sync.assert_not_called()
 
     async def test_syncing_to_out_of_sync_on_lock_disconnected(
         self,
@@ -1514,7 +1679,9 @@ class TestBreakerTickSoleMutatorInvariant:
         # branch must then record a failure.
         with (
             patch.object(
-                lock_provider, "async_set_usercode", AsyncMock(return_value=None)
+                lock_provider,
+                "async_set_usercode",
+                AsyncMock(return_value=WriteResult.CONFIRMED),
             ),
             patch.object(
                 manager._coordinator, "async_refresh", AsyncMock(return_value=None)

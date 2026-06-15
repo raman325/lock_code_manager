@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
+    WriteResult,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -64,7 +65,7 @@ class TestSetAndClearCredentials:
             source="direct",
         )
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         assert schlage_mock_services["add_code"].call_count >= 1
         add_call = schlage_mock_services["add_code"].call_args[0][0]
         assert add_call.data["name"] == "lcm:1:Test User"

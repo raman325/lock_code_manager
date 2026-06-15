@@ -24,7 +24,13 @@ from homeassistant.components.zha.helpers import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 
-from ..domain.credentials import Credential, CredentialRef, User, user_from_slot
+from ..domain.credentials import (
+    Credential,
+    CredentialRef,
+    User,
+    WriteResult,
+    user_from_slot,
+)
 from ..domain.exceptions import CodeRejectedError, LockDisconnected
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -228,7 +234,7 @@ class ZHALock(BaseLock):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a slot.
 
@@ -267,7 +273,7 @@ class ZHALock(BaseLock):
                 reason=f"set_pin_code rejected: status {result.status}",
             )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """

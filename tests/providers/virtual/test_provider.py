@@ -5,6 +5,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
     User,
+    WriteResult,
     credential_from_slot,
     user_from_slot,
 )
@@ -27,7 +28,7 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         name="test",
         source="direct",
     )
-    assert changed is True
+    assert changed is WriteResult.CONFIRMED
     assert lock._data["1"] == {"code": "1234", "name": "test"}
 
     # Setting the same value should return False (no change)
@@ -38,7 +39,7 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         name="test",
         source="direct",
     )
-    assert changed is False
+    assert changed is WriteResult.NO_CHANGE
 
     # Changing the code should return True
     changed = await lock.async_set_credential(
@@ -48,7 +49,7 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         name="test",
         source="direct",
     )
-    assert changed is True
+    assert changed is WriteResult.CONFIRMED
     assert lock._data["1"] == {"code": "5678", "name": "test"}
 
     # Changing the name should return True
@@ -59,7 +60,7 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         name="new_name",
         source="direct",
     )
-    assert changed is True
+    assert changed is WriteResult.CONFIRMED
     assert lock._data["1"] == {"code": "5678", "name": "new_name"}
 
 

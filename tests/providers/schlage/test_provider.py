@@ -16,6 +16,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    WriteResult,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
@@ -539,7 +540,7 @@ async def test_set_credential_replaces_existing(
         source="direct",
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     # add_code called with new tagged name
     add_call = add_handler.call_args[0][0]
     assert add_call.data["name"] == "lcm:1:New Name"
@@ -584,7 +585,7 @@ async def test_set_credential_preserves_existing_name(
         source="direct",
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     # Name unchanged so existing_full_name == tagged_name, deduplicated to 1 delete
     assert delete_handler.call_count == 1
     delete_call = delete_handler.call_args[0][0]
@@ -632,7 +633,7 @@ async def test_set_credential_migrates_legacy_format_tag_on_write(
         source="direct",
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
     add_call = add_handler.call_args[0][0]
     # The new value is written under the canonical tag, NOT the legacy tag.
     assert add_call.data["name"] == "lcm:1:Guest"
@@ -673,7 +674,7 @@ async def test_set_credential_already_exists_treated_as_success(
         source="direct",
     )
 
-    assert result is True
+    assert result is WriteResult.CONFIRMED
 
 
 async def test_set_credential_non_exists_error_still_raises(

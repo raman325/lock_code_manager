@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
@@ -2912,7 +2913,7 @@ class TestSetCredential:
                 name="Alice",
                 source="direct",
             )
-        assert result is True
+        assert result is WriteResult.CONFIRMED
 
     async def test_set_credential_pushes_unreadable_optimistically(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
@@ -3017,7 +3018,7 @@ class TestSetCredential:
                 1, credential, "1234", name=None, source="sync"
             )
 
-        assert result is True
+        assert result is WriteResult.CONFIRMED
         assert mock_set_credential.call_count == 2
         assert mock_clear.call_count == 1
         # First call uses the existing credential_index (MODIFY); retry uses

@@ -50,6 +50,7 @@ from ..domain.credentials import (
     LockCapabilities,
     SetUserResult,
     User,
+    WriteResult,
 )
 from ..domain.exceptions import (
     CodeRejectedError,
@@ -433,7 +434,7 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         *,
         name: str | None,
         source: Literal["sync", "direct"],
-    ) -> bool:
+    ) -> WriteResult:
         """
         Write the PIN credential under user_id; map device rejections.
 
@@ -481,19 +482,21 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
             if key == "credential_rejected_unknown":
                 _LOGGER.debug(
                     "Lock %s slot %s: driver returned ERROR_UNKNOWN; treating "
-                    "as a completed set pending reconciliation (the lock may "
-                    "report the code back masked -- see issue #1251): %s",
+                    "as an optimistic (unconfirmed) set -- the lock may report "
+                    "the code back masked (see issue #1251). The seam records it "
+                    "pending until a credential event or hard refresh confirms "
+                    "it; otherwise it re-syncs: %s",
                     self.lock.entity_id,
                     credential.slot,
                     err,
                 )
-                return True
+                return WriteResult.OPTIMISTIC
             raise CodeRejectedError(
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,
                 reason=str(err),
             ) from err
-        return True
+        return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
@@ -595,7 +598,10 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         args = event["args"]  # CredentialChangedArgs (pre-parsed by the library)
         if args.credential_type != UserCredentialType.PIN_CODE:
             return
-        self._push_credential_update(args.credential_slot, self._pin_state(args.data))
+        # Route through _confirm_slot: a credential event confirms a pending
+        # optimistic write (keeping the believed value even when the lock
+        # reports it masked); otherwise it is an external change taken as-is.
+        self._confirm_slot(args.credential_slot, self._pin_state(args.data))
 
     @callback
     def _on_credential_deleted(self, event: dict[str, Any]) -> None:
@@ -603,7 +609,7 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
         args = event["args"]  # CredentialDeletedArgs (pre-parsed by the library)
         if args.credential_type != UserCredentialType.PIN_CODE:
             return
-        self._push_credential_update(args.credential_slot, SlotCredential.empty())
+        self._confirm_slot(args.credential_slot, SlotCredential.empty())
 
     @callback
     def teardown_push_subscription(self) -> None:
