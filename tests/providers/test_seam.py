@@ -1058,6 +1058,21 @@ async def test_record_optimistic_write_pushes_unverified_and_tracks_pending(
     assert lock._pending_writes[4][0] == "1234"
 
 
+async def test_clear_usercode_drops_stale_pending_write(
+    hass: HomeAssistant,
+) -> None:
+    """Clearing a slot supersedes and drops any outstanding optimistic set."""
+    lock, _pushed = _slot_only_lock_with_coordinator(hass)
+    lock._min_operation_delay = 0.0
+    lock._record_optimistic_write(4, "1234")
+    assert 4 in lock._pending_writes
+
+    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
+        await lock.async_internal_clear_usercode(4)
+
+    assert 4 not in lock._pending_writes
+
+
 async def test_optimistic_set_actively_confirms_instead_of_waiting(
     hass: HomeAssistant,
 ) -> None:

@@ -1093,6 +1093,10 @@ class BaseLock:
             code_slot,
             source,
         )
+        # A clear supersedes any outstanding optimistic set on this slot, so the
+        # stale pending entry must not keep gating reconciliation (the sync tick
+        # keys PENDING_CONFIRMATION on this dict).
+        self._pending_writes.pop(code_slot, None)
         changed = await self._execute_rate_limited(
             "clear", self.async_clear_usercode, code_slot
         )

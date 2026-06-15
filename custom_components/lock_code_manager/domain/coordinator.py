@@ -128,10 +128,15 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         A read is the dropped-push backstop for the verified-credential
         lifecycle: for a slot with an outstanding optimistic write, observing
         the slot present confirms our write -- keep the believed value and mark
-        it verified. Observing it still absent means the write has not landed
-        yet, so keep waiting (stay unverified, pending intact). Slots with no
-        pending write are genuine observations and are marked verified. See the
-        Phase 2 push-as-commit spec.
+        it verified. The one exception (mirroring ``BaseLock._confirm_slot``) is
+        a *readable* observation of a different code: that is an external change
+        racing our write, so take the observation rather than masking it with
+        the believed value -- otherwise a drift refresh, whose whole purpose is
+        to surface out-of-band changes, would silently overwrite one. Observing
+        the slot still absent means the write has not landed yet, so keep waiting
+        (stay unverified, pending intact). Slots with no pending write are
+        genuine observations and are marked verified. See the Phase 2
+        push-as-commit spec.
         """
         out: dict[int, SlotCredential] = {}
         for slot, cred in observed.items():
@@ -139,7 +144,10 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             if pending is not None and cred.is_present:
                 pin, _deadline = pending
                 del self._lock._pending_writes[slot]
-                out[slot] = SlotCredential.known(pin)
+                if cred.is_readable and cred.readable_pin != pin:
+                    out[slot] = cred
+                else:
+                    out[slot] = SlotCredential.known(pin)
                 self._verified[slot] = True
             elif pending is not None:
                 out[slot] = cred
@@ -209,6 +217,16 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
                 "writes for the sync tick to reconcile",
                 self._lock.lock.entity_id,
                 err,
+            )
+            return
+        except Exception:
+            # The confirmation read is a best-effort backstop, never fatal: it
+            # must not escape into the set seam and suspend the slot. The pending
+            # write stays recorded and the sync tick reconciles it via the TTL.
+            _LOGGER.exception(
+                "Unexpected error during on-demand confirmation read for %s; "
+                "leaving pending writes for the sync tick to reconcile",
+                self._lock.lock.entity_id,
             )
             return
         # _apply_read already cleared pending + flipped the verified flag in

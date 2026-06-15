@@ -986,3 +986,42 @@ async def test_confirm_pending_writes_noop_without_pending(
         await push_coordinator.async_confirm_pending_writes()
 
     mock_refresh.assert_not_called()
+
+
+async def test_confirm_pending_writes_swallows_unexpected_error(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A non-LCM error from the confirm read must not escape (it would suspend the slot)."""
+    push_lock._pending_writes[1] = ("9999", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("9999")}, optimistic=True)
+
+    with patch.object(
+        push_lock,
+        "async_hard_refresh_codes",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        # Must not raise: the seam awaits this and a raise would suspend the slot.
+        await push_coordinator.async_confirm_pending_writes()
+
+    assert 1 in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is False
+
+
+async def test_apply_read_takes_differing_readable_external_change(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+    push_lock: MockLCMPushLock,
+) -> None:
+    """A read observing a readable code different from a pending write takes the observation.
+
+    Mirrors BaseLock._confirm_slot: a drift/poll read of an externally-changed
+    readable code must not be masked by the believed value.
+    """
+    push_lock._pending_writes[1] = ("1234", time.monotonic() + 60.0)
+    push_coordinator.push_update({1: SlotCredential.known("1234")}, optimistic=True)
+
+    out = push_coordinator._apply_read({1: SlotCredential.known("9999")})
+
+    assert out[1] == SlotCredential.known("9999")
+    assert 1 not in push_lock._pending_writes
+    assert push_coordinator.is_verified(1) is True

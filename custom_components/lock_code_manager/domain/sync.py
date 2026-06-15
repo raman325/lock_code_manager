@@ -716,25 +716,37 @@ class SlotSyncManager:
         # a visible suspend, never a silent in-sync.
         pending = self._lock._pending_writes.get(self._slot_num)
         if pending is not None:
-            _pin, deadline = pending
-            if time.monotonic() < deadline:
+            believed_pin, deadline = pending
+            # A pending write only gates reconciliation while it still reflects
+            # the desired state. If the user changed the PIN or disabled the slot
+            # while the write was outstanding, the entry is stale: drop it and
+            # reconcile the new target instead of holding PENDING_CONFIRMATION
+            # (and re-syncing the old value) until the deadline.
+            still_wanted = (
+                slot_state.active_state == STATE_ON
+                and slot_state.pin_state == believed_pin
+            )
+            if still_wanted and time.monotonic() < deadline:
                 if self._state is not SyncState.PENDING_CONFIRMATION:
                     self._state = SyncState.PENDING_CONFIRMATION
                     self._write_state()
                 return
-            # Expired without confirmation: charge one breaker failure and
-            # re-sync on the NEXT tick. Returning here (rather than falling
-            # through to _perform_sync this tick) avoids double-charging the
-            # breaker when the re-sync itself also fails, and lets a confirming
-            # push that lands between ticks resolve the slot first.
+            # Drop the entry and re-sync on the NEXT tick. Returning here (rather
+            # than falling through to _perform_sync this tick) lets a confirming
+            # push that lands between ticks resolve the slot first, and avoids
+            # double-charging the breaker when the re-sync itself also fails.
             del self._lock._pending_writes[self._slot_num]
-            self._slot_breaker.record_failure()
-            _LOGGER.warning(
-                "%s: optimistic write not confirmed within the timeout; "
-                "re-syncing (attempt %s)",
-                self._log_prefix,
-                self._slot_breaker.failure_count,
-            )
+            if still_wanted:
+                # Genuine timeout: the write we still want never confirmed.
+                self._slot_breaker.record_failure()
+                _LOGGER.warning(
+                    "%s: optimistic write not confirmed within the timeout; "
+                    "re-syncing (attempt %s)",
+                    self._log_prefix,
+                    self._slot_breaker.failure_count,
+                )
+            # A stale entry (desired state changed) is not a sync failure, so it
+            # does not charge the breaker.
             self._state = SyncState.OUT_OF_SYNC
             self._write_state()
             return

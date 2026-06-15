@@ -793,6 +793,43 @@ class TestSyncStateMachine:
             await manager._async_tick()
             mock_sync.assert_called()
 
+    async def test_pending_write_abandoned_when_desired_changes(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A pending write no longer matching the desired state is dropped, no charge."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+        await async_trigger_sync_tick(hass, SLOT_1_IN_SYNC_ENTITY, set_dirty=False)
+
+        # An optimistic write is still in its (un-expired) confirmation window,
+        # but its believed value no longer matches the desired PIN -- the user
+        # changed it while the write was outstanding. The stale entry must not
+        # hold the slot in PENDING_CONFIRMATION (re-syncing the old value) until
+        # the deadline; it is dropped and the new target re-syncs.
+        desired = manager._resolve_slot_state().pin_state
+        stale_pin = f"{desired}9"
+        manager._lock._pending_writes[1] = (stale_pin, time.monotonic() + 60.0)
+        manager._coordinator.push_update(
+            {1: SlotCredential.known(stale_pin)}, optimistic=True
+        )
+        manager.request_sync_check()
+        before = manager._slot_breaker.failure_count
+
+        with patch.object(
+            manager, "_perform_sync", new_callable=AsyncMock, return_value=True
+        ) as mock_sync:
+            await manager._async_tick()
+
+        # Stale entry dropped; a desired-state change is not a sync failure, so
+        # the breaker is not charged; the slot leaves PENDING_CONFIRMATION.
+        assert 1 not in manager._lock._pending_writes
+        assert manager._slot_breaker.failure_count == before
+        assert manager._state is SyncState.OUT_OF_SYNC
+        mock_sync.assert_not_called()
+
     async def test_syncing_to_out_of_sync_on_lock_disconnected(
         self,
         hass: HomeAssistant,
