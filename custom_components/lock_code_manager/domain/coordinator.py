@@ -66,6 +66,11 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             backoff_max=timedelta(seconds=BACKOFF_MAX_SECONDS),
         )
         self._original_update_interval: timedelta | None = update_interval
+        # Whether the lock has ever been reached successfully. A lock that has
+        # never been reached is "not ready yet" (e.g. its integration is still
+        # starting up after a Home Assistant restart), not "offline" -- so it
+        # must not raise the lock_offline repair during the startup window.
+        self._reached_once = False
 
         # Set up drift detection timer for locks with hard_refresh_interval
         if lock.hard_refresh_interval:
@@ -163,7 +168,15 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
                     new_interval.total_seconds(),
                 )
 
-        if self._lock_breaker.failure_count == POLL_FAILURE_ALERT_THRESHOLD:
+        # Only a lock that was reached at least once can go "offline". A lock
+        # that has never been reached is still coming up (e.g. its integration
+        # is mid-startup after a HA restart, surfacing transient "not connected"
+        # errors); raising lock_offline there produces a repair that is created
+        # and then auto-cleared the moment the integration finishes loading.
+        if (
+            self._reached_once
+            and self._lock_breaker.failure_count == POLL_FAILURE_ALERT_THRESHOLD
+        ):
             async_create_issue(
                 self.hass,
                 DOMAIN,
@@ -184,6 +197,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
 
     def _reset_backoff(self) -> None:
         """Reset the lock breaker and restore the original update interval."""
+        # A successful reach proves the lock is (now) reachable; from here on a
+        # later drop is a genuine outage that may raise lock_offline.
+        self._reached_once = True
         if self._lock_breaker.failure_count > 0:
             _LOGGER.info(
                 "Lock %s recovered after %d consecutive failures",

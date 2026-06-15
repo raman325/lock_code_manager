@@ -726,6 +726,7 @@ async def test_poll_failure_alert_created_after_threshold(
 ) -> None:
     """Test that a repair issue is created after POLL_FAILURE_ALERT_THRESHOLD failures."""
     poll_coordinator.last_update_success = True
+    poll_coordinator._reached_once = True  # lock was online before going offline
 
     mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
@@ -748,6 +749,7 @@ async def test_poll_failure_alert_not_created_before_threshold(
 ) -> None:
     """Test that no repair issue exists before reaching the alert threshold."""
     poll_coordinator.last_update_success = True
+    poll_coordinator._reached_once = True  # lock was online before going offline
 
     mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
@@ -768,6 +770,7 @@ async def test_poll_failure_alert_dismissed_on_recovery(
 ) -> None:
     """Test that the repair issue is dismissed when the lock recovers."""
     poll_coordinator.last_update_success = True
+    poll_coordinator._reached_once = True  # lock was online before going offline
 
     mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_fail):
@@ -800,6 +803,7 @@ async def test_lock_offline_issue_persists_across_shutdown(
     The issue is persistent and only cleaned up on entry unload or recovery.
     """
     poll_coordinator.last_update_success = True
+    poll_coordinator._reached_once = True  # lock was online before going offline
 
     mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_fail):
@@ -814,6 +818,66 @@ async def test_lock_offline_issue_persists_across_shutdown(
     # Shutdown should NOT delete the issue — it persists across restarts
     await poll_coordinator.async_shutdown()
     assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+
+async def test_lock_offline_not_created_when_never_reached(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
+    hass: HomeAssistant,
+) -> None:
+    """
+    A lock that has never been reached must not raise lock_offline.
+
+    During the startup window (e.g. the lock's integration is still loading
+    after a HA restart) every poll fails with a transient "not connected"
+    error. Raising lock_offline there produces a repair that is created and
+    then auto-cleared the moment the integration finishes loading -- the flap
+    reported in issue #1257. ``_reached_once`` stays False until a real reach,
+    so the alert is suppressed.
+    """
+    assert poll_coordinator._reached_once is False
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Not connected"))
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD + 2):
+            with pytest.raises(UpdateFailed):
+                await poll_coordinator.async_get_usercodes()
+
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{poll_lock.lock.entity_id}"
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_lock_offline_created_after_reach_then_drop(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
+    hass: HomeAssistant,
+) -> None:
+    """Once reached, a later sustained outage raises lock_offline normally."""
+    # A first successful poll proves the lock was online.
+    mock_get_ok = AsyncMock(return_value={1: "1234"})
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_ok):
+        await poll_coordinator.async_get_usercodes()
+    assert poll_coordinator._reached_once is True
+
+    mock_get_fail = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get_fail):
+        for _ in range(POLL_FAILURE_ALERT_THRESHOLD):
+            with pytest.raises(UpdateFailed):
+                await poll_coordinator.async_get_usercodes()
+
+    issue_registry = async_get_issue_registry(hass)
+    issue_id = f"lock_offline_{poll_lock.lock.entity_id}"
+    assert issue_registry.async_get_issue(DOMAIN, issue_id) is not None
+
+
+async def test_push_update_marks_reached(
+    push_coordinator: LockUsercodeUpdateCoordinator,
+) -> None:
+    """A push update proves the lock is reachable and marks it reached."""
+    assert push_coordinator._reached_once is False
+    push_coordinator.push_update({1: SlotCredential.known("9999")})
+    assert push_coordinator._reached_once is True
 
 
 async def test_unreachable_reflects_backoff_trip(
