@@ -7,7 +7,8 @@ identify codes by user-name rather than by slot number (Schlage, Akuvox,
 and -- once the unified-user migration lands -- Matter and Z-Wave User
 Credential CC).
 
-Four tag formats coexist during the migration window:
+Three formats are emitted today; a fourth (legacy) is still tolerated on
+read for locks whose names were written by older releases.
 
 * Canonical ``lcm:<slot>:<name>`` -- the consolidated format every new
   write uses when the lock's ``max_user_name_length`` can fit the full
@@ -27,13 +28,11 @@ Four tag formats coexist during the migration window:
   digits, but only encountered on locks with absurdly small name limits
   or firmwares that reject even ``lcm<slot>``, so the tradeoff is
   accepted.
-* Legacy ``[LCM:<slot>] <name>`` -- written by Schlage/Akuvox today.
-  Still emitted by ``make_legacy_tagged_name`` while those providers
-  migrate; their reads tolerate it via ``parse_tag_with_rewrite``, which
-  signals a legacy match so the caller can rewrite the lock-stored name
-  in place at the next write opportunity. The legacy emitter is the
-  deprecation marker -- ``_legacy_`` in the name is intentional so
-  reviewers see at the call site that the writer hasn't migrated yet.
+* Legacy ``[LCM:<slot>] <name>`` -- read-only. Older Schlage/Akuvox
+  releases wrote this format; ``parse_tag`` still recognizes it so the
+  integration can identify its own users on locks that haven't been
+  rewritten yet. The next write naturally replaces the lock-stored name
+  with the canonical format.
 """
 
 from __future__ import annotations
@@ -65,65 +64,33 @@ def make_compact_tagged_name(slot_num: int) -> str:
     return f"lcm{slot_num}"
 
 
-def make_legacy_tagged_name(slot_num: int, name: str | None = None) -> str:
-    """
-    Return a code name in the legacy ``[LCM:<slot>]`` format.
-
-    Deprecated: kept for Schlage/Akuvox until they migrate to the
-    canonical format with read-time detect-and-rewrite. New call sites
-    should use ``make_tagged_name``.
-    """
-    base = name or f"Code Slot {slot_num}"
-    return f"[LCM:{slot_num}] {base}"
-
-
 def parse_tag(name: str) -> tuple[int | None, str]:
     """
-    Parse a Lock Code Manager slot tag, tolerant of both formats.
+    Parse a Lock Code Manager slot tag, tolerant of all known formats.
 
-    Returns ``(slot_num, friendly_name)`` when either format matches, or
-    ``(None, original_name)`` otherwise. Callers that care about
-    rewriting legacy tags in place should use ``parse_tag_with_rewrite``
-    instead.
-    """
-    slot, friendly, _ = parse_tag_with_rewrite(name)
-    return slot, friendly
-
-
-def parse_tag_with_rewrite(name: str) -> tuple[int | None, str, bool]:
-    """
-    Parse a slot tag and signal whether it needs format migration.
-
-    Returns ``(slot_num, friendly_name, needs_rewrite)``. ``needs_rewrite``
-    is True only when the legacy ``[LCM:<slot>]`` format matched; the
-    caller can re-emit via ``make_tagged_name`` on the next write to
-    migrate the lock-stored name in place. The canonical
-    ``lcm:<slot>:`` format, the slot-only fallback, and untagged names
-    all return ``needs_rewrite=False``.
-
-    Match priority: canonical, then legacy, then compact, then
-    slot-only digits. The compact and slot-only branches are
+    Returns ``(slot_num, friendly_name)`` when any format matches, or
+    ``(None, original_name)`` otherwise. Match priority: canonical,
+    legacy, compact, slot-only. The compact and slot-only branches are
     charset-/length-constrained fallbacks emitted by Matter (and
     eventually other providers) when the lock rejects the canonical
-    name. The display portion is empty for both fallbacks because the
-    name only carries the slot binding. Bare digits being treated as
-    a slot tag is intentional but ambiguous with external users whose
-    names happen to be digit-only -- the ambiguity is the cost of
-    preserving the slot binding on constrained locks.
+    name; their display portion is empty because the name only carries
+    the slot binding. The legacy ``[LCM:<slot>]`` format is read-only
+    -- nothing emits it anymore -- but is still recognized so older
+    lock-stored names continue to identify as LCM-owned until the next
+    write rewrites them in the canonical format. Bare digits being
+    treated as a slot tag is intentional but ambiguous with external
+    users whose names happen to be digit-only; the ambiguity is the
+    cost of preserving the slot binding on constrained locks.
     """
-    match = _TAG_RE.match(name)
-    if match:
-        return int(match.group(1)), match.group(2), False
-    match = _LEGACY_SLOT_TAG_RE.match(name)
-    if match:
-        return int(match.group(1)), match.group(2), True
-    match = _COMPACT_TAG_RE.match(name)
-    if match:
-        return int(match.group(1)), "", False
-    match = _SLOT_ONLY_RE.match(name)
-    if match:
-        return int(match.group(1)), "", False
-    return None, name, False
+    if match := _TAG_RE.match(name):
+        return int(match.group(1)), match.group(2)
+    if match := _LEGACY_SLOT_TAG_RE.match(name):
+        return int(match.group(1)), match.group(2)
+    if match := _COMPACT_TAG_RE.match(name):
+        return int(match.group(1)), ""
+    if match := _SLOT_ONLY_RE.match(name):
+        return int(match.group(1)), ""
+    return None, name
 
 
 def parse_slot_num(value: object) -> int | None:
