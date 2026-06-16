@@ -69,13 +69,13 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.websocket import (
     SlotEntities,
+    _build_slot_entities,
     _find_config_entry_by_title,
     _get_bool_state,
     _get_condition_entity_data,
     _get_last_changed,
     _get_next_calendar_event,
     _get_slot_condition_entity_id,
-    _get_slot_entity_data,
     _get_slot_state_entity_ids,
     _get_text_state,
     _serialize_slot,
@@ -2568,7 +2568,9 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
     ws_client = await hass_ws_client(hass)
 
     # Get real entity data for the initial call
-    real_entity_data = _get_slot_entity_data(hass, lock_code_manager_config_entry, 1)
+    real_entity_data = _build_slot_entities(
+        er.async_get(hass), lock_code_manager_config_entry.entry_id, 1
+    )
 
     # Create a synthetic new entity that will appear on subsequent calls
     new_entity_id = "text.mock_title_code_slot_1_extra"
@@ -2577,7 +2579,7 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
 
     counter = {"calls": 0}
 
-    def _mock_get_slot_entity_data(hass_arg, config_entry_arg, slot_num_arg):
+    def _mock_build_slot_entities(ent_reg_arg, entry_id_arg, slot_num_arg):
         """Return growing entity data to simulate entities appearing."""
         counter["calls"] += 1
         if counter["calls"] <= 1:
@@ -2594,8 +2596,8 @@ async def test_subscribe_code_slot_entity_tracking_refreshes_on_update(
         )
 
     with patch(
-        "custom_components.lock_code_manager.websocket._get_slot_entity_data",
-        side_effect=_mock_get_slot_entity_data,
+        "custom_components.lock_code_manager.websocket._build_slot_entities",
+        side_effect=_mock_build_slot_entities,
     ):
         await ws_client.send_json(
             {
@@ -2815,7 +2817,7 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
 
     with (
         patch(
-            "custom_components.lock_code_manager.websocket._get_slot_entity_data",
+            "custom_components.lock_code_manager.websocket._build_slot_entities",
             return_value=empty_entity_data,
         ),
         patch(
