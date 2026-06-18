@@ -931,18 +931,18 @@ class MatterLock(BaseLock):
 
     async def async_is_device_available(self) -> bool:
         """
-        Return whether the Matter lock device is available for commands.
+        Return whether the Matter lock is reachable, per the lock entity's state.
 
-        Defers to the lock entity's Home Assistant availability -- the same
-        signal the Matter integration derives from ``node.available`` -- rather
-        than re-deriving the node from the device registry and round-tripping
-        ``get_lock_info``. Re-derivation matches the device against
-        ``matter_client.get_nodes()``, which the client wipes and rebuilds while
-        reconnecting to the server (e.g. a joint Home Assistant + matter-server
-        restart); during that window the lookup returns None even though the lock
-        is reachable and its entity is available, tripping the breaker on a
-        transient (issue #1268). Entity availability is sticky across that window,
-        and the read primitives still surface a genuine outage as LockDisconnected.
+        Matter reachability is layered: Home Assistant to the matter-server
+        (websocket transport), then the matter-server to the lock (IP / Thread /
+        Bluetooth Low Energy). The lock entity's availability (``node.available``)
+        is the integration's own answer to "can the server reach this lock",
+        computed after it sorts those layers out, and it survives a transport blip
+        -- unlike re-deriving the node from the device registry, which transiently
+        fails while the matter client rebuilds its node set on reconnect and would
+        trip the breaker on a fault that isn't about the lock (issue #1268). The
+        read primitives still resolve the node, so a genuine outage surfaces as
+        LockDisconnected.
         """
         state = self.hass.states.get(self.lock.entity_id)
         return state is not None and state.state not in (
