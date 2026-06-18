@@ -1,0 +1,13 @@
+ok that's merged. Now how do we fix bug 1?
+
+---
+
+the incorrect assumption made in matter is that it operates the same way as zwave-js where the config entry reloads when we can't talk to the driver. But I realized that it's different for matter, there is no hardware controller and a transport disappearing doesnt mean the fabric is gone. That was the incorrect assumtion encoded in the existing implementation I believe
+
+---
+
+put more accurately, there are more failure modes for matter and they have different behaviors that make it more complicated than zwave. zwave its can we talk to the controller and can the controller talk to the lock. For matter its can the fabric talk to the matter server, can the matter server talk to the lock, and if it can't, is it because of the lock or the undelrying transport mecahnism
+
+---
+
+yes and I have no idea about historical context, it doesn't really matter, what matters is the code now

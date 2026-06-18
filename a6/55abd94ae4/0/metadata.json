@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a655abd94ae4",
+  "session_id": "767d0b4b-61ce-40e4-a26a-8aa50590fb1c",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T15:55:00.760647Z",
+  "branch": "fix/matter-availability-entity-state",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "8d4ba5f7e76a",
+  "token_usage": {
+    "input_tokens": 53789,
+    "cache_creation_tokens": 491784,
+    "cache_read_tokens": 17781737,
+    "output_tokens": 108487,
+    "api_call_count": 97
+  },
+  "session_metrics": {
+    "turn_count": 7
+  }
+}

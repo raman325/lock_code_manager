@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "a655abd94ae4",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-availability-entity-state",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/a6/55abd94ae4/0/metadata.json",
+      "transcript": "/a6/55abd94ae4/0/full.jsonl",
+      "content_hash": "/a6/55abd94ae4/0/content_hash.txt",
+      "prompt": "/a6/55abd94ae4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 53789,
+    "cache_creation_tokens": 491784,
+    "cache_read_tokens": 17781737,
+    "output_tokens": 108487,
+    "api_call_count": 97
+  }
+}
