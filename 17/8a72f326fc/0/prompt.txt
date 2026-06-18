@@ -1,0 +1,1 @@
+we don't need the extra comment context. If anything, the guard we had should have had a comment explaining why we werent using the native failure mechanism

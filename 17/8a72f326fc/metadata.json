@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "178a72f326fc",
+  "strategy": "manual-commit",
+  "branch": "fix/coordinator-cold-start-false-success",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/8a72f326fc/0/metadata.json",
+      "transcript": "/17/8a72f326fc/0/full.jsonl",
+      "content_hash": "/17/8a72f326fc/0/content_hash.txt",
+      "prompt": "/17/8a72f326fc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 139,
+    "cache_creation_tokens": 5498,
+    "cache_read_tokens": 857304,
+    "output_tokens": 4274,
+    "api_call_count": 5
+  }
+}
