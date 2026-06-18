@@ -32,6 +32,7 @@ from homeassistant.components.matter.lock_helpers import (
     set_lock_user,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
@@ -48,7 +49,6 @@ from ..domain.credentials import (
 from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
-    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
 )
@@ -240,12 +240,25 @@ class MatterLock(BaseLock):
             return None
 
     def _require_client_and_node(self) -> tuple[Any, Any]:
-        """Get client and node, raising LockDisconnected if unavailable."""
+        """
+        Get client and node, raising LockDisconnected if either is unavailable.
+
+        The two failures are reported separately because they mean different
+        things: a missing client is the Matter integration not being loaded,
+        while an unresolved node is the device not being in the client's current
+        node set -- which happens transiently while the client rebuilds that set
+        on reconnect (issue #1268).
+        """
         client = self._get_matter_client()
-        node = self._get_matter_node()
-        if not client or not node:
+        if not client:
             raise LockDisconnected(
-                f"Matter client or node unavailable for {self.lock.entity_id}"
+                f"Matter client unavailable for {self.lock.entity_id}"
+            )
+        node = self._get_matter_node()
+        if not node:
+            raise LockDisconnected(
+                f"Matter node not found for {self.lock.entity_id}; device is not "
+                "in the Matter client's current node set"
             )
         return client, node
 
@@ -917,18 +930,25 @@ class MatterLock(BaseLock):
         """No matter-specific setup; base validates required capabilities."""
 
     async def async_is_device_available(self) -> bool:
-        """Return whether the Matter lock device is available for commands."""
-        try:
-            client, node = self._require_client_and_node()
-            await get_lock_info(client, node)
-        except (LockCodeManagerProviderError, HomeAssistantError) as err:
-            LOGGER.debug(
-                "Lock %s: availability check failed: %s",
-                self.lock.entity_id,
-                err,
-            )
-            return False
-        return True
+        """
+        Return whether the Matter lock device is available for commands.
+
+        Defers to the lock entity's Home Assistant availability -- the same
+        signal the Matter integration derives from ``node.available`` -- rather
+        than re-deriving the node from the device registry and round-tripping
+        ``get_lock_info``. Re-derivation matches the device against
+        ``matter_client.get_nodes()``, which the client wipes and rebuilds while
+        reconnecting to the server (e.g. a joint Home Assistant + matter-server
+        restart); during that window the lookup returns None even though the lock
+        is reachable and its entity is available, tripping the breaker on a
+        transient (issue #1268). Entity availability is sticky across that window,
+        and the read primitives still surface a genuine outage as LockDisconnected.
+        """
+        state = self.hass.states.get(self.lock.entity_id)
+        return state is not None and state.state not in (
+            STATE_UNAVAILABLE,
+            STATE_UNKNOWN,
+        )
 
     # -- Event subscription via push framework --------------------------------
 

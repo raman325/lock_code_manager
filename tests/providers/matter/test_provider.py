@@ -14,6 +14,7 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
@@ -117,44 +118,46 @@ class TestConnection(ServiceProviderConnectionTests):
 class TestDeviceAvailability:
     """Device availability tests for Matter provider."""
 
-    async def test_is_device_available_success(
+    async def test_is_device_available_follows_entity_state(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
     ) -> None:
-        """Test device availability returns True on successful helper call."""
-        mock_get_lock_info = AsyncMock(return_value={})
-        with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
-            patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-        ):
+        """Availability is True when the lock entity reports a usable state."""
+        hass.states.async_set(matter_lock_simple.lock.entity_id, "locked")
+        assert await matter_lock_simple.async_is_device_available() is True
+
+    async def test_is_device_available_false_when_entity_unavailable(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Availability is False when the lock entity is unavailable."""
+        hass.states.async_set(matter_lock_simple.lock.entity_id, STATE_UNAVAILABLE)
+        assert await matter_lock_simple.async_is_device_available() is False
+
+    async def test_is_device_available_false_when_entity_unknown(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Availability is False when the lock entity state is unknown."""
+        hass.states.async_set(matter_lock_simple.lock.entity_id, STATE_UNKNOWN)
+        assert await matter_lock_simple.async_is_device_available() is False
+
+    async def test_is_device_available_false_when_entity_missing(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Availability is False when the lock entity has no state yet."""
+        assert await matter_lock_simple.async_is_device_available() is False
+
+    async def test_is_device_available_ignores_node_resolution(
+        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    ) -> None:
+        """Availability follows entity state, not node re-derivation (issue #1268).
+
+        During a Matter server reconnect the client wipes and rebuilds its node
+        set, so ``get_node_from_device_entry`` transiently returns None while the
+        lock entity stays available. The gate must not trip on that transient --
+        otherwise the breaker suspends a reachable lock for a full backoff cycle.
+        """
+        hass.states.async_set(matter_lock_simple.lock.entity_id, "locked")
+        with patch.object(matter_lock_simple, "_get_matter_node", return_value=None):
             assert await matter_lock_simple.async_is_device_available() is True
-
-    async def test_is_device_available_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
-    ) -> None:
-        """Test device availability returns False when helper call fails."""
-        mock_get_lock_info = AsyncMock(side_effect=HomeAssistantError("device offline"))
-        with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
-            patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-        ):
-            assert await matter_lock_simple.async_is_device_available() is False
-
-    async def test_is_device_available_no_client(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
-    ) -> None:
-        """Test device availability returns False when client unavailable."""
-        with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-            assert await matter_lock_simple.async_is_device_available() is False
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +364,7 @@ async def test_get_usercodes_client_unavailable(
 ) -> None:
     """Test async_get_usercodes raises LockDisconnected when client/node unavailable."""
     with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-        with pytest.raises(LockDisconnected, match="client or node unavailable"):
+        with pytest.raises(LockDisconnected, match="Matter client unavailable"):
             await matter_lock_simple.async_get_usercodes()
 
 
@@ -485,7 +488,7 @@ async def test_require_client_and_node_no_client(
 ) -> None:
     """Test _require_client_and_node raises LockDisconnected when client is None."""
     with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-        with pytest.raises(LockDisconnected, match="client or node unavailable"):
+        with pytest.raises(LockDisconnected, match="Matter client unavailable"):
             matter_lock_simple._require_client_and_node()
 
 
@@ -499,7 +502,7 @@ async def test_require_client_and_node_no_node(
         ),
         patch.object(matter_lock_simple, "_get_matter_node", return_value=None),
     ):
-        with pytest.raises(LockDisconnected, match="client or node unavailable"):
+        with pytest.raises(LockDisconnected, match="Matter node not found"):
             matter_lock_simple._require_client_and_node()
 
 
