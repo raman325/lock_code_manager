@@ -373,16 +373,9 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             data = await self._lock.async_internal_get_usercodes()
         except LockCodeManagerError as err:
             self._apply_backoff()
-            # Always surface the failure. Returning {} here would be recorded
-            # by DataUpdateCoordinator as a successful (empty) update -- flipping
-            # last_update_success to True, logging a misleading "recovered", and
-            # feeding empty data to the sync layer while the lock is still
-            # unreachable (issue #1268). The initial-refresh caller in
-            # BaseLock.async_setup_internal already catches UpdateFailed so a
-            # cold-start failure leaves entities unavailable without aborting
-            # setup; coordinator-backed entities key on slot presence in
-            # ``data`` (still the initialized {} either way), so raising changes
-            # no user-visible state -- it only keeps the coordinator honest.
+            # Don't swallow into {}: DataUpdateCoordinator records any return as
+            # a success, so an empty return fakes a "recovered" while the lock
+            # is still unreachable (#1268).
             raise UpdateFailed from err
 
         self._reset_backoff()
