@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "22e74aa312bd",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-availability-entity-state",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/22/e74aa312bd/0/metadata.json",
+      "transcript": "/22/e74aa312bd/0/full.jsonl",
+      "content_hash": "/22/e74aa312bd/0/content_hash.txt",
+      "prompt": "/22/e74aa312bd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9783,
+    "cache_creation_tokens": 74760,
+    "cache_read_tokens": 8699303,
+    "output_tokens": 43102,
+    "api_call_count": 40
+  }
+}
