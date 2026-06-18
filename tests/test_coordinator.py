@@ -477,20 +477,51 @@ async def test_backoff_failure_counter_increments(
             assert poll_coordinator._lock_breaker.failure_count == i
 
 
-async def test_backoff_first_failure_returns_empty_dict(
+async def test_cold_start_failure_raises_update_failed(
     poll_coordinator: LockUsercodeUpdateCoordinator,
     poll_lock: MockLCMLock,
 ) -> None:
-    """Test that first failure returns empty dict when no prior success."""
-    # No successful update yet
+    """A failure before any successful poll raises UpdateFailed, never a false success.
+
+    Returning {} here would be recorded by DataUpdateCoordinator as a successful
+    update, flipping last_update_success to True and logging a misleading
+    "recovered" while the lock is still unreachable (issue #1268). The breaker
+    still records the failure.
+    """
+    # No successful update yet (cold start).
     poll_coordinator.last_update_success = False
 
     mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
     with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
-        result = await poll_coordinator.async_get_usercodes()
+        with pytest.raises(UpdateFailed):
+            await poll_coordinator.async_get_usercodes()
 
-    assert result == {}
     assert poll_coordinator._lock_breaker.failure_count == 1
+
+
+async def test_cold_start_repeated_failures_keep_raising(
+    poll_coordinator: LockUsercodeUpdateCoordinator,
+    poll_lock: MockLCMLock,
+) -> None:
+    """Sustained cold-start failures keep raising; no tick masquerades as success.
+
+    Regression for issue #1268: the old guard returned {} whenever
+    last_update_success was False. DataUpdateCoordinator records that as a
+    successful empty update -- flipping last_update_success True (logged
+    "recovered" / "success: True" in 0.000s), feeding empty data to the sync
+    layer ("Slot not in coordinator data, skipping"), then failing again next
+    tick. With the guard gone, last_update_success staying False never diverts
+    a failure into a fake success: every tick raises and the breaker counts it.
+    """
+    # Lock never reached; last_update_success stays False across the outage.
+    poll_coordinator.last_update_success = False
+
+    mock_get = AsyncMock(side_effect=LockDisconnected("Lock offline"))
+    with patch.object(poll_lock, "async_internal_get_usercodes", mock_get):
+        for i in range(1, 6):
+            with pytest.raises(UpdateFailed):
+                await poll_coordinator.async_get_usercodes()
+            assert poll_coordinator._lock_breaker.failure_count == i
 
 
 async def test_backoff_subsequent_failure_raises_update_failed(
