@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8ef8b7284b27",
+  "strategy": "manual-commit",
+  "branch": "dependabot/npm_and_yarn/markdownlint-cli-0.49.0",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/frontend-checks.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/f8b7284b27/0/metadata.json",
+      "transcript": "/8e/f8b7284b27/0/full.jsonl",
+      "content_hash": "/8e/f8b7284b27/0/content_hash.txt",
+      "prompt": "/8e/f8b7284b27/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 564,
+    "cache_creation_tokens": 37193,
+    "cache_read_tokens": 7210546,
+    "output_tokens": 22301,
+    "api_call_count": 24
+  }
+}
