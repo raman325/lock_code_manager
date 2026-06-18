@@ -1,0 +1,9 @@
+see kyleberry's comments in 1257 and 1268. What's going on?
+
+---
+
+lets draft a bug 2 fix in the coordinator and open a PR
+
+---
+
+1. yes, 2. no

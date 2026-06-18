@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "ab3843e55ed4",
+  "session_id": "767d0b4b-61ce-40e4-a26a-8aa50590fb1c",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-18T15:19:54.305983Z",
+  "branch": "fix/coordinator-cold-start-false-success",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py",
+    "tests/test_coordinator.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "829080d07926",
+  "token_usage": {
+    "input_tokens": 42625,
+    "cache_creation_tokens": 148707,
+    "cache_read_tokens": 4777716,
+    "output_tokens": 35897,
+    "api_call_count": 38
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-18T15:19:54.115231Z",
+    "agent_lines": 0,
+    "human_added": 35,
+    "human_modified": 11,
+    "human_removed": 0,
+    "total_committed": 35,
+    "agent_percentage": 0
+  }
+}
