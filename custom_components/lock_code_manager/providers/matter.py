@@ -218,7 +218,10 @@ class MatterLock(BaseLock):
         fresh rather than trusting the cached entry (issue #1268).
         """
         entity = self.ent_reg.async_get(self.lock.entity_id)
-        device_id = entity.device_id if entity else self.lock.device_id
+        # Prefer the live device_id, but fall back to the snapshot's device_id
+        # when the registry entry is missing OR carries no device (a registry
+        # entry momentarily detached from its device must not strand the lock).
+        device_id = (entity.device_id if entity else None) or self.lock.device_id
         if not device_id:
             return None
         return self.dev_reg.async_get(device_id)
@@ -336,6 +339,15 @@ class MatterLock(BaseLock):
             )
         node = self._get_matter_node()
         if not node:
+            # A client whose server_info has not arrived yet (e.g. mid-reconnect)
+            # cannot resolve any node. Report that as "not ready" rather than
+            # "node not found", so a transient is not misdiagnosed as a device or
+            # fabric mismatch (issue #1268 review).
+            if getattr(client, "server_info", None) is None:
+                raise LockDisconnected(
+                    f"Matter client for {self.lock.entity_id} is not ready "
+                    "(server info unavailable)"
+                )
             self._log_node_resolution_failure(client)
             raise LockDisconnected(
                 f"Matter node not found for {self.lock.entity_id}; device is not "

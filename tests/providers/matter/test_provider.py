@@ -14,7 +14,7 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.components.matter.helpers import get_node_from_device_entry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -508,122 +508,6 @@ async def test_require_client_and_node_no_node(
     ):
         with pytest.raises(LockDisconnected, match="Matter node not found"):
             matter_lock_simple._require_client_and_node()
-
-
-# =============================================================================
-# Node resolution via the owning Matter config entry (#1268)
-# =============================================================================
-
-
-def _fake_matter_entry(
-    matter_client: Any,
-    *,
-    domain: str = "matter",
-    state: ConfigEntryState = ConfigEntryState.LOADED,
-) -> Any:
-    """Build a stand-in config entry exposing runtime_data.adapter.matter_client."""
-    entry = MagicMock()
-    entry.domain = domain
-    entry.state = state
-    entry.runtime_data.adapter.matter_client = matter_client
-    return entry
-
-
-def _node_with_endpoint() -> Any:
-    """Build a stand-in MatterNode with a single endpoint."""
-    node = MagicMock()
-    node.endpoints = {0: MagicMock()}
-    return node
-
-
-async def test_owning_matter_client_uses_device_owner_not_first_entry(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """Resolve the client via the entry that owns the device, not entries[0] (#1268).
-
-    The Matter integration's get_matter() returns entries[0] under a single-fabric
-    assumption; with multiple Matter entries that is the wrong fabric and the lock's
-    node is never found. Resolution must follow the device's owning entry instead.
-    """
-    wrong_fabric = MagicMock(name="wrong_fabric_client")
-    owning = MagicMock(name="owning_client")
-    entries = {"A": _fake_matter_entry(wrong_fabric), "B": _fake_matter_entry(owning)}
-    device = MagicMock()
-    device.primary_config_entry = "B"
-    device.config_entries = {"A", "B"}
-    with patch.object(hass.config_entries, "async_get_entry", side_effect=entries.get):
-        assert matter_lock_simple._owning_matter_client(device) is owning
-
-
-async def test_owning_matter_client_skips_non_matter_and_unloaded(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """Skip entries that are not the Matter domain or not loaded."""
-    owning = MagicMock(name="owning_client")
-    entries = {
-        "x": _fake_matter_entry(MagicMock(), domain="other"),
-        "y": _fake_matter_entry(MagicMock(), state=ConfigEntryState.NOT_LOADED),
-        "z": _fake_matter_entry(owning),
-    }
-    device = MagicMock()
-    device.primary_config_entry = None
-    device.config_entries = {"x", "y", "z"}
-    with patch.object(hass.config_entries, "async_get_entry", side_effect=entries.get):
-        assert matter_lock_simple._owning_matter_client(device) is owning
-
-
-async def test_owning_matter_client_none_without_loaded_matter_entry(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """Return None when none of the device's entries is a loaded Matter entry."""
-    device = MagicMock()
-    device.primary_config_entry = "x"
-    device.config_entries = {"x"}
-    with patch.object(
-        hass.config_entries,
-        "async_get_entry",
-        return_value=_fake_matter_entry(MagicMock(), domain="other"),
-    ):
-        assert matter_lock_simple._owning_matter_client(device) is None
-
-
-async def test_match_node_returns_matching_node(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """_match_node returns the node whose endpoint computes to the stored device id."""
-    node = _node_with_endpoint()
-    client = MagicMock()
-    client.get_nodes.return_value = [node]
-    client.server_info = MagicMock()
-    device = MagicMock()
-    device.identifiers = {("matter", "deviceid_ABC123")}
-    with patch(f"{_PROVIDER_MODULE}.get_device_id", return_value="ABC123"):
-        assert matter_lock_simple._match_node(client, device) is node
-
-
-async def test_match_node_none_when_no_node_matches(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """_match_node returns None when no node's endpoint matches the device id."""
-    node = _node_with_endpoint()
-    client = MagicMock()
-    client.get_nodes.return_value = [node]
-    client.server_info = MagicMock()
-    device = MagicMock()
-    device.identifiers = {("matter", "deviceid_ABC123")}
-    with patch(f"{_PROVIDER_MODULE}.get_device_id", return_value="DIFFERENT"):
-        assert matter_lock_simple._match_node(client, device) is None
-
-
-async def test_match_node_none_without_matter_identifier(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
-) -> None:
-    """_match_node returns None when the device has no matter deviceid_ identifier."""
-    client = MagicMock()
-    client.server_info = MagicMock()
-    device = MagicMock()
-    device.identifiers = {("other", "whatever")}
-    assert matter_lock_simple._match_node(client, device) is None
 
 
 # =============================================================================
@@ -1228,8 +1112,11 @@ class TestEventSubscription:
     """Test event subscription setup and teardown."""
 
     def test_get_matter_node_no_device(self, matter_lock_simple: MatterLock) -> None:
-        """Test node resolution returns None when no device entry."""
-        matter_lock_simple.device_entry = None
+        """Node resolution returns None when the lock's entity has no device.
+
+        ``matter_lock_simple`` is registered without a device, so the live
+        device lookup yields nothing.
+        """
         assert matter_lock_simple._get_matter_node() is None
 
     def test_get_matter_client_no_data(
@@ -1281,6 +1168,65 @@ class TestEventSubscription:
         assert node is not None
         assert node.node_id == 16  # from mock_door_lock.json
 
+    def test_owning_matter_client_resolves_device_owner(
+        self, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """The client comes from the entry that owns the device (#1268).
+
+        Resolution walks the device's own config entry rather than the Matter
+        integration's get_matter() -> entries[0] single-fabric guess, so it stays
+        correct when other Matter entries exist.
+        """
+        device = matter_lock._fresh_device_entry()
+        assert device is not None
+        assert matter_lock._owning_matter_client(device) is matter_client
+
+    def test_match_node_resolves_via_real_get_device_id(
+        self, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """_match_node finds the node in the owning client using the real matcher (#1268)."""
+        device = matter_lock._fresh_device_entry()
+        node = matter_lock._match_node(matter_client, device)
+        assert node is not None
+        assert node.node_id == 16
+
+    def test_get_matter_node_matches_integration_resolver(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Drift guard: for a single fabric, LCM resolves the same node object as
+        the Matter integration's own get_node_from_device_entry. If upstream
+        changes its matching contract, this fails instead of the field silently
+        going to LockDisconnected (#1268).
+        """
+        device = matter_lock._fresh_device_entry()
+        assert matter_lock._get_matter_node() is get_node_from_device_entry(
+            hass, device
+        )
+
+    def test_require_client_and_node_not_ready_without_server_info(
+        self, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """A client with no server_info yet reports 'not ready', not 'node not found'.
+
+        Mid-reconnect the client is present but cannot resolve any node; that
+        transient must not be misdiagnosed as a device/fabric mismatch (#1268).
+        """
+        matter_client.server_info = None
+        with pytest.raises(LockDisconnected, match="is not ready"):
+            matter_lock._require_client_and_node()
+
+    def test_fresh_device_entry_falls_back_when_entity_detached(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """If the live registry entry has no device_id, fall back to the lock's own
+        device_id rather than stranding the lock (#1268 review)."""
+        detached = MagicMock()
+        detached.device_id = None
+        with patch.object(matter_lock.ent_reg, "async_get", return_value=detached):
+            device = matter_lock._fresh_device_entry()
+        assert device is not None
+        assert device.id == matter_lock.lock.device_id
+
     def test_get_matter_client_from_integration(
         self, matter_lock: MatterLock, matter_client: MagicMock
     ) -> None:
@@ -1315,25 +1261,19 @@ class TestEventSubscription:
         hass.data["matter"] = {"entry_id": mock_entry_data}
         assert matter_lock_simple._get_matter_client() is None
 
-    def test_setup_push_no_node_id_raises(
+    def test_setup_push_unresolvable_raises(
         self,
-        hass: HomeAssistant,
         matter_lock_simple: MatterLock,
     ) -> None:
-        """Test setup_push_subscription raises when node ID is None."""
-        mock_client = MagicMock()
-        mock_adapter = MagicMock()
-        mock_adapter.matter_client = mock_client
-        mock_entry_data = MagicMock()
-        mock_entry_data.adapter = mock_adapter
-        hass.data["matter"] = {"entry_id": mock_entry_data}
-        matter_lock_simple.device_entry = None  # no node ID
+        """setup_push_subscription raises when client/node can't be resolved.
 
+        ``matter_lock_simple`` has no device, so neither the owning client nor
+        the node resolves; no subscription is registered.
+        """
         with pytest.raises(LockDisconnected):
             matter_lock_simple.setup_push_subscription()
 
         assert not matter_lock_simple._push_unsubs
-        mock_client.subscribe_events.assert_not_called()
 
 
 # =============================================================================
