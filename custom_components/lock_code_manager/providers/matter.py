@@ -18,10 +18,11 @@ from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import MatterError
 from matter_server.common.models import EventType
 
-from homeassistant.components.matter.helpers import (
-    get_matter,
-    get_node_from_device_entry,
+from homeassistant.components.matter.const import (
+    DOMAIN as MATTER_DOMAIN,
+    ID_TYPE_DEVICE_ID,
 )
+from homeassistant.components.matter.helpers import get_device_id
 from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
     clear_lock_credential,
@@ -31,7 +32,7 @@ from homeassistant.components.matter.lock_helpers import (
     set_lock_credential,
     set_lock_user,
 )
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -207,33 +208,112 @@ class MatterLock(BaseLock):
         """
         return True
 
-    def _get_matter_node(self) -> Any | None:
+    def _fresh_device_entry(self) -> Any | None:
         """
-        Get the MatterNode for this lock from the Matter integration.
+        Re-resolve the lock's device entry from the registry on every call.
 
-        Uses the Matter integration's helper to resolve the node from the
-        device entry, which correctly handles the device identifier format.
-        Returns the node object with .node_id and access to the client.
+        The snapshot captured at setup (``self.device_entry``) can go stale --
+        e.g. the device is re-created when the lock is re-commissioned -- so read
+        the current device_id from the entity registry and look the device up
+        fresh rather than trusting the cached entry (issue #1268).
         """
-        if not self.device_entry:
+        entity = self.ent_reg.async_get(self.lock.entity_id)
+        device_id = entity.device_id if entity else self.lock.device_id
+        if not device_id:
+            return None
+        return self.dev_reg.async_get(device_id)
+
+    def _owning_matter_client(self, device: Any) -> Any | None:
+        """
+        Return the matter_client of the Matter config entry that owns ``device``.
+
+        The Matter integration's ``get_node_from_device_entry`` resolves through
+        ``get_matter()``, which returns ``entries[0]`` under a documented
+        single-fabric assumption ("This assumes only one Matter connection/fabric
+        can exist"). With more than one Matter entry that picks an arbitrary
+        fabric whose node set never contains this lock, so resolution fails
+        permanently even though the lock entity -- bound to its own entry's
+        client -- keeps working (issue #1268). Resolve against the entry that
+        actually owns the device instead, preferring its primary config entry.
+        """
+        seen: set[str] = set()
+        for entry_id in (device.primary_config_entry, *device.config_entries):
+            if not entry_id or entry_id in seen:
+                continue
+            seen.add(entry_id)
+            entry = self.hass.config_entries.async_get_entry(entry_id)
+            if (
+                entry is not None
+                and entry.domain == MATTER_DOMAIN
+                and entry.state is ConfigEntryState.LOADED
+            ):
+                return entry.runtime_data.adapter.matter_client
+        return None
+
+    def _match_node(self, client: Any, device: Any) -> Any | None:
+        """
+        Find ``device``'s MatterNode within ``client``'s current node set.
+
+        Mirrors the Matter integration's ``get_node_from_device_entry`` matching
+        -- compare the device's stored ``deviceid_`` identifier against each
+        node endpoint's computed device id -- but against the owning entry's
+        client. Uses ``str.removeprefix``, not ``str.lstrip``: ``lstrip`` takes a
+        character set, not a prefix, and would corrupt ids that happen to start
+        with one of those characters.
+        """
+        prefix = f"{ID_TYPE_DEVICE_ID}_"
+        device_id_full = next(
+            (
+                identifier[1]
+                for identifier in device.identifiers
+                if identifier[0] == MATTER_DOMAIN and identifier[1].startswith(prefix)
+            ),
+            None,
+        )
+        if device_id_full is None:
+            return None
+        device_id = device_id_full.removeprefix(prefix)
+        server_info = client.server_info
+        if server_info is None:
+            return None
+        return next(
+            (
+                node
+                for node in client.get_nodes()
+                for endpoint in node.endpoints.values()
+                if get_device_id(server_info, endpoint) == device_id
+            ),
+            None,
+        )
+
+    def _get_matter_client(self) -> Any | None:
+        """Return the MatterClient of the entry that owns this lock's device."""
+        device = self._fresh_device_entry()
+        if device is None:
             return None
         try:
-            return get_node_from_device_entry(self.hass, self.device_entry)
+            return self._owning_matter_client(device)
         except Exception as err:
             LOGGER.debug(
-                "Failed to resolve Matter node for %s: %s",
+                "Failed to get Matter client for %s: %s",
                 self.lock.entity_id,
                 err,
             )
             return None
 
-    def _get_matter_client(self) -> Any | None:
-        """Get the MatterClient via the Matter integration helper."""
+    def _get_matter_node(self) -> Any | None:
+        """Resolve this lock's MatterNode via its owning entry's client."""
+        device = self._fresh_device_entry()
+        if device is None:
+            return None
         try:
-            return get_matter(self.hass).matter_client
+            client = self._owning_matter_client(device)
+            if client is None:
+                return None
+            return self._match_node(client, device)
         except Exception as err:
             LOGGER.debug(
-                "Failed to get Matter client for %s: %s",
+                "Failed to resolve Matter node for %s: %s",
                 self.lock.entity_id,
                 err,
             )
@@ -245,9 +325,9 @@ class MatterLock(BaseLock):
 
         The two failures are reported separately because they mean different
         things: a missing client is the Matter integration not being loaded,
-        while an unresolved node is the device not being in the client's current
-        node set -- which happens transiently while the client rebuilds that set
-        on reconnect (issue #1268).
+        while an unresolved node is the device not being in the owning client's
+        current node set (issue #1268). On a node miss, log the comparison so
+        the cause -- multiple fabrics vs a stale device -- is diagnosable.
         """
         client = self._get_matter_client()
         if not client:
@@ -256,11 +336,49 @@ class MatterLock(BaseLock):
             )
         node = self._get_matter_node()
         if not node:
+            self._log_node_resolution_failure(client)
             raise LockDisconnected(
                 f"Matter node not found for {self.lock.entity_id}; device is not "
                 "in the Matter client's current node set"
             )
         return client, node
+
+    def _log_node_resolution_failure(self, client: Any) -> None:
+        """
+        Log why node resolution failed -- diagnostic only, never raises.
+
+        Surfaces the data that distinguishes the candidate causes (issue #1268):
+        more than one loaded Matter entry (wrong-fabric resolution) vs a stale
+        or unmatched device identifier.
+        """
+        try:
+            device = self._fresh_device_entry()
+            matter_entries = self.hass.config_entries.async_loaded_entries(
+                MATTER_DOMAIN
+            )
+            try:
+                node_count = len(client.get_nodes())
+            except Exception:
+                node_count = -1
+            LOGGER.debug(
+                "Matter node resolution failed for %s: device_identifiers=%s, "
+                "primary_config_entry=%s, device_config_entries=%s, "
+                "loaded_matter_entries=%s, owning_client_node_count=%s, "
+                "server_info_present=%s",
+                self.lock.entity_id,
+                getattr(device, "identifiers", None),
+                getattr(device, "primary_config_entry", None),
+                getattr(device, "config_entries", None),
+                [entry.entry_id for entry in matter_entries],
+                node_count,
+                getattr(client, "server_info", None) is not None,
+            )
+        except Exception:
+            LOGGER.debug(
+                "Matter node resolution failed for %s (diagnostics unavailable)",
+                self.lock.entity_id,
+                exc_info=True,
+            )
 
     # -- Credential primitives -----------------------------------------------
 
