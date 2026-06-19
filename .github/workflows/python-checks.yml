@@ -32,7 +32,7 @@ jobs:
     name: Ruff
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -52,7 +52,7 @@ jobs:
     name: Mypy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -75,7 +75,7 @@ jobs:
       matrix:
         python-version: ${{ fromJSON(needs.setup.outputs.python-versions) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
