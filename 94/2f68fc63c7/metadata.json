@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "942f68fc63c7",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-owning-entry-node-resolution",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/2f68fc63c7/0/metadata.json",
+      "transcript": "/94/2f68fc63c7/0/full.jsonl",
+      "content_hash": "/94/2f68fc63c7/0/content_hash.txt",
+      "prompt": "/94/2f68fc63c7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65001,
+    "cache_creation_tokens": 1254209,
+    "cache_read_tokens": 38854310,
+    "output_tokens": 202367,
+    "api_call_count": 160
+  }
+}

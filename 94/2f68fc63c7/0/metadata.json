@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "942f68fc63c7",
+  "session_id": "767d0b4b-61ce-40e4-a26a-8aa50590fb1c",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-19T19:58:00.820213Z",
+  "branch": "fix/matter-owning-entry-node-resolution",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/providers/matter/test_provider.py",
+    "custom_components/lock_code_manager/providers/matter.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8d3ca4b61a7e",
+  "token_usage": {
+    "input_tokens": 65001,
+    "cache_creation_tokens": 1254209,
+    "cache_read_tokens": 38854310,
+    "output_tokens": 202367,
+    "api_call_count": 160
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-19T19:58:00.454245Z",
+    "agent_lines": 265,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 265,
+    "agent_percentage": 100
+  }
+}
