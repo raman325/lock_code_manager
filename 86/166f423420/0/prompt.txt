@@ -1,0 +1,25 @@
+already shipped the release but it didn't resolve the issue, see 1268
+
+---
+
+check the logs shared
+
+---
+
+b
+
+---
+
+run code review on this PR
+
+---
+
+how do we access the entity class instance for 3? There's no contract on where those are accessed eitehr
+
+---
+
+address 1 and 4/5 as you suggested, fix the tests for #6 to either describe their intent, do what they were supposed to do originally, or do both
+
+---
+
+yes

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "86166f423420",
+  "strategy": "manual-commit",
+  "branch": "refactor/matter-tests-integration-harness",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/86/166f423420/0/metadata.json",
+      "transcript": "/86/166f423420/0/full.jsonl",
+      "content_hash": "/86/166f423420/0/content_hash.txt",
+      "prompt": "/86/166f423420/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 85864,
+    "cache_creation_tokens": 1959653,
+    "cache_read_tokens": 73980954,
+    "output_tokens": 312525,
+    "api_call_count": 228
+  }
+}
