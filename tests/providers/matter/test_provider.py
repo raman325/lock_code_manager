@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
 from datetime import timedelta
 import logging
 from typing import Any
@@ -15,6 +14,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.matter.helpers import get_node_from_device_entry
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -155,10 +155,12 @@ class TestDeviceAvailability:
         set, so ``get_node_from_device_entry`` transiently returns None while the
         lock entity stays available. The gate must not trip on that transient --
         otherwise the breaker suspends a reachable lock for a full backoff cycle.
+
+        ``matter_lock_simple`` has no device, so node resolution naturally
+        returns None -- the same observable state as a mid-reconnect node wipe.
         """
         hass.states.async_set(matter_lock_simple.lock.entity_id, "locked")
-        with patch.object(matter_lock_simple, "_get_matter_node", return_value=None):
-            assert await matter_lock_simple.async_is_device_available() is True
+        assert await matter_lock_simple.async_is_device_available() is True
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ class TestDeviceAvailability:
 
 async def test_setup_internal_unsupported_lock(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Base setup raises when the lock advertises no PIN credential support.
@@ -179,21 +181,17 @@ async def test_setup_internal_unsupported_lock(
     """
     mock_get_lock_info = AsyncMock(return_value={"supports_user_management": False})
     with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
         pytest.raises(
             LockCodeManagerError, match="does not advertise PIN credential support"
         ),
     ):
-        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+        await matter_lock.async_setup_internal(simple_lcm_config_entry)
 
 
 async def test_setup_internal_no_pin_support(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Base setup raises when the lock supports users but not PIN credentials."""
@@ -204,14 +202,10 @@ async def test_setup_internal_no_pin_support(
         }
     )
     with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
         patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
         pytest.raises(LockCodeManagerError, match="PIN credential"),
     ):
-        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+        await matter_lock.async_setup_internal(simple_lcm_config_entry)
 
 
 # ---------------------------------------------------------------------------
@@ -221,19 +215,12 @@ async def test_setup_internal_no_pin_support(
 
 async def test_get_usercodes_no_users(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
-    simple_lcm_config_entry: MockConfigEntry,
+    e2e_matter_lock: MatterLock,
+    matter_mock_helpers: dict[str, AsyncMock],
 ) -> None:
     """Test get_usercodes when no users exist on the lock."""
-    mock_get_lock_users = AsyncMock(return_value={"max_users": 10, "users": []})
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
-        codes = await matter_lock_simple.async_get_usercodes()
+    matter_mock_helpers["get_lock_users"].return_value = {"max_users": 10, "users": []}
+    codes = await e2e_matter_lock.async_get_usercodes()
 
     assert codes[1] is SlotCredential.empty()
     assert codes[2] is SlotCredential.empty()
@@ -241,24 +228,18 @@ async def test_get_usercodes_no_users(
 
 async def test_get_usercodes_no_configured_slots(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
 ) -> None:
     """Test get_usercodes returns empty dict when no slots configured and no occupied slots."""
     mock_get_lock_users = AsyncMock(return_value={"users": []})
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
-        codes = await matter_lock_simple.async_get_usercodes()
+    with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
+        codes = await matter_lock.async_get_usercodes()
     assert codes == {}
 
 
 async def test_get_usercodes_unmanaged_occupied_slots(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
 ) -> None:
     """Test get_usercodes includes unmanaged occupied slots as UNREADABLE_CODE."""
     mock_get_lock_users = AsyncMock(
@@ -275,20 +256,14 @@ async def test_get_usercodes_unmanaged_occupied_slots(
             ]
         }
     )
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
-        codes = await matter_lock_simple.async_get_usercodes()
+    with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
+        codes = await matter_lock.async_get_usercodes()
     assert codes == {5: SlotCredential.unreadable(), 8: SlotCredential.unreadable()}
 
 
 async def test_get_usercodes_none_credential_index_skipped(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
 ) -> None:
     """Test that PIN credentials with a None index are skipped."""
     mock_get_lock_users = AsyncMock(
@@ -306,14 +281,8 @@ async def test_get_usercodes_none_credential_index_skipped(
             ]
         }
     )
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
-        codes = await matter_lock_simple.async_get_usercodes()
+    with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
+        codes = await matter_lock.async_get_usercodes()
     # Only slot 4 should appear; the credential with no index is skipped
     assert codes == {4: SlotCredential.unreadable()}
 
@@ -325,31 +294,22 @@ async def test_get_usercodes_none_credential_index_skipped(
 
 async def test_hard_refresh_codes(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
-    simple_lcm_config_entry: MockConfigEntry,
+    e2e_matter_lock: MatterLock,
+    matter_mock_helpers: dict[str, AsyncMock],
 ) -> None:
     """Test hard_refresh_codes returns same result as get_usercodes."""
-    mock_get_lock_users = AsyncMock(
-        return_value={
-            "max_users": 10,
-            "users": [
-                {
-                    "user_index": 1,
-                    "credentials": [
-                        {"type": "pin", "index": 2},
-                    ],
-                }
-            ],
-        }
-    )
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
-        codes = await matter_lock_simple.async_hard_refresh_codes()
+    matter_mock_helpers["get_lock_users"].return_value = {
+        "max_users": 10,
+        "users": [
+            {
+                "user_index": 1,
+                "credentials": [
+                    {"type": "pin", "index": 2},
+                ],
+            }
+        ],
+    }
+    codes = await e2e_matter_lock.async_hard_refresh_codes()
 
     assert codes[1] is SlotCredential.empty()
     assert codes[2] is SlotCredential.unreadable()
@@ -363,56 +323,44 @@ async def test_hard_refresh_codes(
 async def test_get_usercodes_client_unavailable(
     hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
-    """Test async_get_usercodes raises LockDisconnected when client/node unavailable."""
-    with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-        with pytest.raises(LockDisconnected, match="Matter client unavailable"):
-            await matter_lock_simple.async_get_usercodes()
+    """Test async_get_usercodes raises LockDisconnected when client/node unavailable.
+
+    ``matter_lock_simple`` has no device, so the owning client never
+    resolves -- the natural client-unavailable state.
+    """
+    with pytest.raises(LockDisconnected, match="Matter client unavailable"):
+        await matter_lock_simple.async_get_usercodes()
 
 
 async def test_get_usercodes_get_lock_users_communication_error(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
+    hass: HomeAssistant, matter_lock: MatterLock
 ) -> None:
     """Test async_get_usercodes raises LockDisconnected on HomeAssistantError from get_lock_users."""
     mock_get_lock_users = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
+    with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
         with pytest.raises(LockDisconnected, match="get_lock_users failed"):
-            await matter_lock_simple.async_get_usercodes()
+            await matter_lock.async_get_usercodes()
 
 
 async def test_get_usercodes_multiple_credential_types(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
-    simple_lcm_config_entry: MockConfigEntry,
+    e2e_matter_lock: MatterLock,
+    matter_mock_helpers: dict[str, AsyncMock],
 ) -> None:
     """Test that only PIN credentials are considered, not other types like RFID."""
-    mock_get_lock_users = AsyncMock(
-        return_value={
-            "max_users": 10,
-            "users": [
-                {
-                    "user_index": 1,
-                    "credentials": [
-                        {"type": "rfid", "index": 1},
-                        {"type": "pin", "index": 2},
-                    ],
-                },
-            ],
-        }
-    )
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-    ):
-        codes = await matter_lock_simple.async_get_usercodes()
+    matter_mock_helpers["get_lock_users"].return_value = {
+        "max_users": 10,
+        "users": [
+            {
+                "user_index": 1,
+                "credentials": [
+                    {"type": "rfid", "index": 1},
+                    {"type": "pin", "index": 2},
+                ],
+            },
+        ],
+    }
+    codes = await e2e_matter_lock.async_get_usercodes()
 
     # Slot 1 has only RFID credential, not PIN
     assert codes[1] is SlotCredential.empty()
@@ -420,21 +368,25 @@ async def test_get_usercodes_multiple_credential_types(
     assert codes[2] is SlotCredential.unreadable()
 
 
-async def test_get_matter_node_exception_returns_none(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
+async def test_node_resolution_exception_surfaces_disconnected(
+    hass: HomeAssistant, matter_lock: MatterLock
 ) -> None:
-    """_get_matter_node swallows resolution errors and returns None."""
+    """Node resolution swallows resolution errors and surfaces as unavailable.
+
+    A failure inside the owning-client lookup is swallowed to None, so the
+    public ``_require_client_and_node`` gate reports the lock disconnected
+    rather than letting the exception escape.
+    """
     with (
+        patch.object(matter_lock, "_fresh_device_entry", return_value=MagicMock()),
         patch.object(
-            matter_lock_simple, "_fresh_device_entry", return_value=MagicMock()
-        ),
-        patch.object(
-            matter_lock_simple,
+            matter_lock,
             "_owning_matter_client",
             side_effect=Exception("node lookup failed"),
         ),
+        pytest.raises(LockDisconnected),
     ):
-        assert matter_lock_simple._get_matter_node() is None
+        matter_lock._require_client_and_node()
 
 
 async def test_setup_internal_client_unavailable(
@@ -442,72 +394,65 @@ async def test_setup_internal_client_unavailable(
     matter_lock_simple: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Transient client/node unavailability logs and continues without raising."""
-    with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+    """Transient client/node unavailability logs and continues without raising.
+
+    ``matter_lock_simple`` has no device, so the owning client never
+    resolves -- the natural client-unavailable state.
+    """
+    await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
     assert matter_lock_simple._capabilities_cache is None
 
 
 async def test_setup_internal_caps_service_validation_error(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """ServiceValidationError from get_lock_info logs and continues."""
     mock_get_lock_info = AsyncMock(side_effect=ServiceValidationError("bad input"))
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-    ):
-        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
-    assert matter_lock_simple._capabilities_cache is None
+    with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
+        await matter_lock.async_setup_internal(simple_lcm_config_entry)
+    assert matter_lock._capabilities_cache is None
 
 
 async def test_setup_internal_caps_communication_error(
     hass: HomeAssistant,
-    matter_lock_simple: MatterLock,
+    matter_lock: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
     """Base setup logs and continues on HomeAssistantError from get_lock_info."""
     mock_get_lock_info = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=MagicMock()),
-        patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-    ):
+    with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
         # async_get_capabilities maps HomeAssistantError → LockDisconnected;
         # async_setup_internal catches that and logs a warning so the
         # coordinator can be created and retry once the lock comes online.
-        await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
-    assert matter_lock_simple._capabilities_cache is None
+        await matter_lock.async_setup_internal(simple_lcm_config_entry)
+    assert matter_lock._capabilities_cache is None
 
 
 async def test_require_client_and_node_no_client(
     hass: HomeAssistant, matter_lock_simple: MatterLock
 ) -> None:
-    """Test _require_client_and_node raises LockDisconnected when client is None."""
-    with patch.object(matter_lock_simple, "_get_matter_client", return_value=None):
-        with pytest.raises(LockDisconnected, match="Matter client unavailable"):
-            matter_lock_simple._require_client_and_node()
+    """Test _require_client_and_node raises LockDisconnected when client is None.
+
+    ``matter_lock_simple`` has no device, so the owning client never
+    resolves.
+    """
+    with pytest.raises(LockDisconnected, match="Matter client unavailable"):
+        matter_lock_simple._require_client_and_node()
 
 
 async def test_require_client_and_node_no_node(
-    hass: HomeAssistant, matter_lock_simple: MatterLock
+    hass: HomeAssistant, matter_lock: MatterLock, matter_client: MagicMock
 ) -> None:
-    """Test _require_client_and_node raises LockDisconnected when node is None."""
-    with (
-        patch.object(
-            matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-        ),
-        patch.object(matter_lock_simple, "_get_matter_node", return_value=None),
-    ):
-        with pytest.raises(LockDisconnected, match="Matter node not found"):
-            matter_lock_simple._require_client_and_node()
+    """Test _require_client_and_node raises LockDisconnected when node is None.
+
+    The client resolves (server_info present) but its node set is empty, so
+    the device cannot be matched -- the "node not found" branch.
+    """
+    matter_client.get_nodes.return_value = []
+    with pytest.raises(LockDisconnected, match="Matter node not found"):
+        matter_lock._require_client_and_node()
 
 
 # =============================================================================
@@ -584,22 +529,11 @@ def _make_node_event(
 
 
 class TestLockOperationEvent:
-    """Test _handle_lock_operation callback and code-slot event firing."""
+    """Test _handle_lock_operation callback and code-slot event firing.
 
-    @pytest.fixture(autouse=True)
-    def _stub_matter_client_and_node(
-        self, matter_lock_simple: MatterLock
-    ) -> Generator[None]:
-        """LockOperation dispatch needs to reach ``_raw_lock_users``."""
-        with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
-        ):
-            yield
+    These tests use ``matter_lock`` (the real Matter integration) so node-event
+    dispatch resolves a live client+node and reaches ``_raw_lock_users``.
+    """
 
     @staticmethod
     def _patch_users(users: list[dict]) -> Any:
@@ -610,7 +544,7 @@ class TestLockOperationEvent:
         )
 
     async def test_unlock_with_pin_credential(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Unlock with PIN credential fires a code slot event.
 
@@ -619,7 +553,7 @@ class TestLockOperationEvent:
         not be used as the code slot directly.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -630,7 +564,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -652,11 +586,11 @@ class TestLockOperationEvent:
         assert fired[0]["action_text"] == "unlocked"
 
     async def test_lock_with_pin_credential(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Lock with PIN credential fires a code slot event."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -667,7 +601,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -687,7 +621,7 @@ class TestLockOperationEvent:
         assert fired[0]["action_text"] == "locked"
 
     async def test_projects_lcm_slot_from_tag_when_credential_index_differs(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """The regression: Matter-auto-allocated credential index must not become the LCM slot.
 
@@ -698,7 +632,7 @@ class TestLockOperationEvent:
         fire on slot 3 (from the owning user's tag), NOT slot 11.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -709,7 +643,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -727,7 +661,7 @@ class TestLockOperationEvent:
         assert fired[0]["code_slot"] == 3
 
     async def test_preserves_slot_zero_resolved_by_user_index(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Slot 0 from the primary resolver must not fall through to the fallback.
 
@@ -737,7 +671,7 @@ class TestLockOperationEvent:
         different slot. The fix is to gate on ``is None`` explicitly.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -756,7 +690,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -774,7 +708,7 @@ class TestLockOperationEvent:
         assert fired[0]["code_slot"] == 0
 
     async def test_credential_index_as_string_is_coerced(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Some Matter implementations send ``credentialIndex`` as a string.
 
@@ -784,7 +718,7 @@ class TestLockOperationEvent:
         when ``userIndex`` is absent.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -795,7 +729,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -814,7 +748,7 @@ class TestLockOperationEvent:
         assert fired[0]["code_slot"] == 7
 
     async def test_falls_back_to_credential_index_walk_when_user_index_missing(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Matter spec allows ``userIndex`` to be omitted on LockOperation.
 
@@ -824,7 +758,7 @@ class TestLockOperationEvent:
         elides ``userIndex`` from PIN operations.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -835,7 +769,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -853,7 +787,7 @@ class TestLockOperationEvent:
         assert fired[0]["code_slot"] == 7
 
     async def test_lock_op_for_untagged_user_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """LockOperation on a non-LCM-tagged user fires no code slot event.
 
@@ -862,7 +796,7 @@ class TestLockOperationEvent:
         worse than not firing.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -873,7 +807,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -890,14 +824,14 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_lock_op_with_no_resolvable_owner_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Neither ``userIndex`` nor ``credentialIndex`` matches a known user."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users([]):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -914,17 +848,17 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_lock_op_dispatch_swallows_lock_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Transport failure during owner lookup logs and drops the event."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with patch(
             f"{_PROVIDER_MODULE}.get_lock_users",
             AsyncMock(side_effect=HomeAssistantError("transport down")),
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -941,14 +875,14 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_rfid_credential_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """RFID (credentialType=2) does not fire a code slot event."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users([]):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -965,14 +899,14 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_fingerprint_credential_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Fingerprint (credentialType=3) does not fire a code slot event."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users([]):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -989,14 +923,14 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_wrong_cluster_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Events from non-DoorLock clusters are ignored upstream of dispatch."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users([]):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     cluster_id=6,  # OnOff cluster
@@ -1008,14 +942,14 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_wrong_event_id_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Non-LockOperation DoorLock events are ignored upstream of dispatch."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users([]):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=3,  # LockOperationError
@@ -1026,24 +960,24 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    def test_no_credentials_ignored(self, matter_lock_simple: MatterLock) -> None:
+    def test_no_credentials_ignored(self, matter_lock: MatterLock) -> None:
         """Event without credentials is ignored."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(data={"lockOperationType": 1}),
         )
 
         assert len(fired) == 0
 
-    def test_empty_credentials_ignored(self, matter_lock_simple: MatterLock) -> None:
+    def test_empty_credentials_ignored(self, matter_lock: MatterLock) -> None:
         """Event with empty credentials list is ignored."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(data={"lockOperationType": 1, "credentials": []}),
         )
@@ -1051,7 +985,7 @@ class TestLockOperationEvent:
         assert len(fired) == 0
 
     async def test_no_operation_type(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Event without ``lockOperationType`` fires with ``to_locked=None``.
 
@@ -1061,7 +995,7 @@ class TestLockOperationEvent:
         the PIN use.
         """
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
@@ -1072,7 +1006,7 @@ class TestLockOperationEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
@@ -1091,13 +1025,13 @@ class TestLockOperationEvent:
         assert fired[0]["action_text"] == "operated"
 
     async def test_none_data_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Event with ``None`` data is ignored (no credentials)."""
         fired: list[dict[str, Any]] = []
-        matter_lock_simple.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        matter_lock_simple._on_node_event(None, _make_node_event(data=None))
+        matter_lock._on_node_event(None, _make_node_event(data=None))
         await hass.async_block_till_done()
 
         assert len(fired) == 0
@@ -1111,20 +1045,31 @@ class TestLockOperationEvent:
 class TestEventSubscription:
     """Test event subscription setup and teardown."""
 
-    def test_get_matter_node_no_device(self, matter_lock_simple: MatterLock) -> None:
-        """Node resolution returns None when the lock's entity has no device.
+    def test_node_unresolvable_when_no_device(
+        self, matter_lock_simple: MatterLock
+    ) -> None:
+        """Resolution yields nothing when the lock's entity has no device.
 
         ``matter_lock_simple`` is registered without a device, so the live
-        device lookup yields nothing.
+        device lookup yields nothing and the resolution gate reports the
+        lock disconnected.
         """
-        assert matter_lock_simple._get_matter_node() is None
+        with pytest.raises(LockDisconnected):
+            matter_lock_simple._require_client_and_node()
 
-    def test_get_matter_client_no_data(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    async def test_client_unresolvable_when_no_matter_data(
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """Test _get_matter_client returns None when no Matter data."""
-        hass.data.pop("matter", None)
-        assert matter_lock_simple._get_matter_client() is None
+        """Resolution reports client unavailable when no Matter integration data.
+
+        Unloading the Matter entry drops its loaded runtime data, so the
+        owning-client lookup finds nothing even though the device exists.
+        """
+        for entry in hass.config_entries.async_entries("matter"):
+            assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+        with pytest.raises(LockDisconnected, match="Matter client unavailable"):
+            matter_lock._require_client_and_node()
 
     def test_setup_push_idempotent(self, matter_lock_simple: MatterLock) -> None:
         """Test setup_push_subscription is a no-op if already subscribed."""
@@ -1133,11 +1078,11 @@ class TestEventSubscription:
         # If it tried to subscribe again, it would fail (no client)
         assert matter_lock_simple._push_unsubs
 
-    def test_setup_push_no_client_raises(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
-    ) -> None:
-        """Test setup_push_subscription raises when client unavailable."""
-        hass.data.pop("matter", None)
+    def test_setup_push_no_client_raises(self, matter_lock_simple: MatterLock) -> None:
+        """setup_push_subscription raises when the client/node can't be resolved.
+
+        ``matter_lock_simple`` has no device, so resolution yields no client.
+        """
         with pytest.raises(LockDisconnected):
             matter_lock_simple.setup_push_subscription()
 
@@ -1162,11 +1107,31 @@ class TestEventSubscription:
 
     # -- Tests using the full Matter integration fixture --
 
-    def test_get_matter_node_resolves(self, matter_lock: MatterLock) -> None:
+    def test_node_resolves(self, matter_lock: MatterLock) -> None:
         """Test node resolves from real Matter integration device."""
-        node = matter_lock._get_matter_node()
+        _client, node = matter_lock._require_client_and_node()
         assert node is not None
         assert node.node_id == 16  # from mock_door_lock.json
+
+    def test_resolution_with_multiple_fabrics_uses_device_owner(
+        self, hass: HomeAssistant, matter_lock: MatterLock, matter_client: MagicMock
+    ) -> None:
+        """With more than one Matter fabric loaded, resolution follows the device's
+        owning entry, not an arbitrary first entry (#1268).
+
+        Adds a second loaded Matter entry whose client does not have this lock;
+        resolution must still return the owning fabric's client and node.
+        """
+        other = MockConfigEntry(domain="matter", title="other fabric")
+        other.add_to_hass(hass)
+        other._async_set_state(hass, ConfigEntryState.LOADED, None)
+        other.runtime_data = MagicMock()
+        other.runtime_data.adapter.matter_client = MagicMock(name="other_fabric")
+
+        client, node, _device = matter_lock._resolve()
+        assert client is matter_client
+        assert node is not None
+        assert node.node_id == 16
 
     def test_owning_matter_client_resolves_device_owner(
         self, matter_lock: MatterLock, matter_client: MagicMock
@@ -1190,7 +1155,7 @@ class TestEventSubscription:
         assert node is not None
         assert node.node_id == 16
 
-    def test_get_matter_node_matches_integration_resolver(
+    def test_node_matches_integration_resolver(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Drift guard: for a single fabric, LCM resolves the same node object as
@@ -1199,9 +1164,8 @@ class TestEventSubscription:
         going to LockDisconnected (#1268).
         """
         device = matter_lock._fresh_device_entry()
-        assert matter_lock._get_matter_node() is get_node_from_device_entry(
-            hass, device
-        )
+        _client, node = matter_lock._require_client_and_node()
+        assert node is get_node_from_device_entry(hass, device)
 
     def test_require_client_and_node_not_ready_without_server_info(
         self, matter_lock: MatterLock, matter_client: MagicMock
@@ -1227,11 +1191,11 @@ class TestEventSubscription:
         assert device is not None
         assert device.id == matter_lock.lock.device_id
 
-    def test_get_matter_client_from_integration(
+    def test_client_from_integration(
         self, matter_lock: MatterLock, matter_client: MagicMock
     ) -> None:
-        """Test _get_matter_client returns the client from the real integration."""
-        client = matter_lock._get_matter_client()
+        """Test resolution returns the client from the real integration."""
+        client, _node = matter_lock._require_client_and_node()
         assert client is matter_client
 
     def test_setup_push_subscription_success(
@@ -1253,13 +1217,20 @@ class TestEventSubscription:
 
     # -- Tests using the simple fixture (no integration needed) --
 
-    def test_get_matter_client_bad_adapter(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+    def test_client_unavailable_when_owning_client_is_none(
+        self, matter_lock: MatterLock
     ) -> None:
-        """Test _get_matter_client returns None when adapter has no matter_client."""
-        mock_entry_data = MagicMock(spec=[])  # no attributes
-        hass.data["matter"] = {"entry_id": mock_entry_data}
-        assert matter_lock_simple._get_matter_client() is None
+        """Resolution reports client unavailable when the owning entry yields no client.
+
+        The device exists, but its owning Matter entry exposes no usable
+        ``matter_client`` (e.g. an adapter missing the attribute), so the
+        resolution gate surfaces a disconnect rather than proceeding.
+        """
+        with (
+            patch.object(matter_lock, "_owning_matter_client", return_value=None),
+            pytest.raises(LockDisconnected, match="Matter client unavailable"),
+        ):
+            matter_lock._require_client_and_node()
 
     def test_setup_push_unresolvable_raises(
         self,
@@ -1282,22 +1253,11 @@ class TestEventSubscription:
 
 
 class TestLockUserChangeEvent:
-    """Test _handle_lock_user_change callback and coordinator push updates."""
+    """Test _handle_lock_user_change callback and coordinator push updates.
 
-    @pytest.fixture(autouse=True)
-    def _stub_matter_client_and_node(
-        self, matter_lock_simple: MatterLock
-    ) -> Generator[None]:
-        """LockUserChange dispatch needs to reach _raw_lock_users."""
-        with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
-        ):
-            yield
+    These tests use ``matter_lock`` (the real Matter integration) so node-event
+    dispatch resolves a live client+node and reaches ``_raw_lock_users``.
+    """
 
     @staticmethod
     def _patch_users(users: list[dict]) -> Any:
@@ -1308,7 +1268,7 @@ class TestLockUserChangeEvent:
         )
 
     async def test_pin_added_pushes_unknown(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Adding a PIN credential pushes SlotCredential.unreadable() to the slot the user owns.
 
@@ -1318,7 +1278,7 @@ class TestLockUserChangeEvent:
         """
         mock_coordinator = MagicMock()
         mock_coordinator.data = {3: SlotCredential.empty()}
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
             [
@@ -1329,7 +1289,7 @@ class TestLockUserChangeEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1348,12 +1308,12 @@ class TestLockUserChangeEvent:
         )
 
     async def test_pin_modified_pushes_unknown(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Modifying a PIN credential pushes SlotCredential.unreadable() to the LCM slot."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {5: SlotCredential.unreadable()}
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
             [
@@ -1364,7 +1324,7 @@ class TestLockUserChangeEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1383,12 +1343,12 @@ class TestLockUserChangeEvent:
         )
 
     async def test_pin_cleared_pushes_empty(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Clearing a PIN credential pushes SlotCredential.empty() to the LCM slot."""
         mock_coordinator = MagicMock()
         mock_coordinator.data = {2: SlotCredential.unreadable()}
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
             [
@@ -1399,7 +1359,7 @@ class TestLockUserChangeEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1418,7 +1378,7 @@ class TestLockUserChangeEvent:
         )
 
     async def test_pin_event_for_untagged_user_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Events on users without an ``lcm:<slot>:`` tag are ignored.
 
@@ -1427,7 +1387,7 @@ class TestLockUserChangeEvent:
         not push spurious updates into LCM's coordinator.
         """
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
             [
@@ -1438,7 +1398,7 @@ class TestLockUserChangeEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1455,7 +1415,7 @@ class TestLockUserChangeEvent:
         mock_coordinator.push_update.assert_not_called()
 
     async def test_pin_event_with_unknown_operation_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """LockUserChange with an unrecognized dataOperationType is dropped.
 
@@ -1464,9 +1424,9 @@ class TestLockUserChangeEvent:
         state with the wrong semantics.
         """
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1483,7 +1443,7 @@ class TestLockUserChangeEvent:
         mock_coordinator.push_update.assert_not_called()
 
     async def test_pin_event_with_missing_data_index_still_fires(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Events with no ``dataIndex`` still push if ``userIndex`` resolves.
 
@@ -1495,7 +1455,7 @@ class TestLockUserChangeEvent:
         """
         mock_coordinator = MagicMock()
         mock_coordinator.data = {3: SlotCredential.empty()}
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
             [
@@ -1506,7 +1466,7 @@ class TestLockUserChangeEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1525,7 +1485,7 @@ class TestLockUserChangeEvent:
         )
 
     async def test_pin_event_dispatch_swallows_lock_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """If the owner lookup fails (LockDisconnected), the dispatch logs and returns.
 
@@ -1535,13 +1495,13 @@ class TestLockUserChangeEvent:
         surface the change.
         """
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with patch(
             f"{_PROVIDER_MODULE}.get_lock_users",
             AsyncMock(side_effect=HomeAssistantError("transport down")),
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1558,7 +1518,7 @@ class TestLockUserChangeEvent:
         mock_coordinator.push_update.assert_not_called()
 
     async def test_pin_event_for_user_with_no_name_ignored(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A nameless user-record yields no LCM tag -> ignore.
 
@@ -1567,7 +1527,7 @@ class TestLockUserChangeEvent:
         so the event is dropped (untagged-user contract).
         """
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
             [
@@ -1578,7 +1538,7 @@ class TestLockUserChangeEvent:
                 },
             ]
         ):
-            matter_lock_simple._on_node_event(
+            matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     event_id=4,
@@ -1594,12 +1554,12 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_non_pin_data_type_ignored(self, matter_lock_simple: MatterLock) -> None:
+    def test_non_pin_data_type_ignored(self, matter_lock: MatterLock) -> None:
         """Non-PIN LockDataType (e.g. RFID=7) is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1613,12 +1573,12 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_missing_data_index_ignored(self, matter_lock_simple: MatterLock) -> None:
+    def test_missing_data_index_ignored(self, matter_lock: MatterLock) -> None:
         """Event with no dataIndex is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1632,14 +1592,12 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_non_integer_data_index_ignored(
-        self, matter_lock_simple: MatterLock
-    ) -> None:
+    def test_non_integer_data_index_ignored(self, matter_lock: MatterLock) -> None:
         """Non-integer dataIndex logs warning and is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1653,14 +1611,12 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_unknown_operation_type_ignored(
-        self, matter_lock_simple: MatterLock
-    ) -> None:
+    def test_unknown_operation_type_ignored(self, matter_lock: MatterLock) -> None:
         """Unknown DataOperationType is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1674,13 +1630,11 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.push_update.assert_not_called()
 
-    def test_no_coordinator_does_not_crash(
-        self, matter_lock_simple: MatterLock
-    ) -> None:
+    def test_no_coordinator_does_not_crash(self, matter_lock: MatterLock) -> None:
         """LockUserChange with no coordinator attached does not crash."""
-        matter_lock_simple.coordinator = None
+        matter_lock.coordinator = None
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 event_id=4,
@@ -1693,12 +1647,12 @@ class TestLockUserChangeEvent:
         )
         # No assert — just verifying it doesn't raise
 
-    def test_wrong_cluster_ignored(self, matter_lock_simple: MatterLock) -> None:
+    def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
         """Event from non-DoorLock cluster is ignored."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
 
-        matter_lock_simple._on_node_event(
+        matter_lock._on_node_event(
             None,
             _make_node_event(
                 cluster_id=999,  # not DoorLock
@@ -1719,9 +1673,9 @@ class TestLockUserChangeEvent:
 # =============================================================================
 
 
-async def test_supports_native_users(matter_lock_simple: MatterLock) -> None:
+async def test_supports_native_users(matter_lock: MatterLock) -> None:
     """Test that Matter locks report native user support."""
-    assert matter_lock_simple.supports_native_users is True
+    assert matter_lock.supports_native_users is True
 
 
 # =============================================================================
@@ -1733,24 +1687,18 @@ class TestGetUsers:
     """Test async_get_users projects lock users onto User domain objects."""
 
     async def test_get_users_empty(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Returns empty list when lock has no users."""
         mock_get_lock_users = AsyncMock(return_value={"max_users": 10, "users": []})
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
         assert users == []
 
     async def test_get_users_skips_raw_user_without_user_index(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A raw lock user with no user_index is skipped (cannot be projected)."""
         mock_get_lock_users = AsyncMock(
@@ -1767,20 +1715,14 @@ class TestGetUsers:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
 
         assert [user.user_id for user in users] == [2]
 
     async def test_get_users_pin_credentials_become_unreadable(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Each PIN credential becomes a Credential with unreadable state."""
         mock_get_lock_users = AsyncMock(
@@ -1796,15 +1738,9 @@ class TestGetUsers:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
 
         assert len(users) == 1
         user = users[0]
@@ -1818,7 +1754,7 @@ class TestGetUsers:
         assert cred.state is SlotCredential.unreadable()
 
     async def test_get_users_projects_lcm_slot_from_tag_when_credential_index_differs(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Tagged users carry their LCM slot in the name; Credential.slot is the LCM slot.
 
@@ -1843,22 +1779,16 @@ class TestGetUsers:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
 
         assert len(users) == 1
         cred = users[0].credentials[0]
         assert cred.slot == 5
 
     async def test_get_users_untagged_user_falls_back_to_credential_index(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Untagged users keep ``credential_index == slot`` (the legacy invariant).
 
@@ -1880,22 +1810,16 @@ class TestGetUsers:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
 
         assert len(users) == 1
         cred = users[0].credentials[0]
         assert cred.slot == 5
 
     async def test_get_users_non_pin_credentials_excluded(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Non-PIN credentials (RFID etc.) are not included in the user's credentials."""
         mock_get_lock_users = AsyncMock(
@@ -1914,15 +1838,9 @@ class TestGetUsers:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
 
         assert len(users) == 1
         user = users[0]
@@ -1930,7 +1848,7 @@ class TestGetUsers:
         assert user.credentials[0].type is CredentialType.PIN
 
     async def test_get_users_multiple_users(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Multiple lock users produce multiple User objects."""
         mock_get_lock_users = AsyncMock(
@@ -1951,55 +1869,37 @@ class TestGetUsers:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
         ):
-            users = await matter_lock_simple.async_get_users()
+            users = await matter_lock.async_get_users()
 
         assert len(users) == 2
         assert users[0].user_id == 1
         assert users[1].user_id == 3
 
     async def test_get_users_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """HomeAssistantError from get_lock_users raises LockDisconnected."""
         mock_get_lock_users = AsyncMock(
             side_effect=HomeAssistantError("connection lost")
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_get_users()
+            await matter_lock.async_get_users()
 
     async def test_get_users_service_validation_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """ServiceValidationError from get_lock_users raises LockOperationFailed."""
         mock_get_lock_users = AsyncMock(side_effect=ServiceValidationError("bad input"))
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
             pytest.raises(LockOperationFailed, match="rejected input"),
         ):
-            await matter_lock_simple.async_get_users()
+            await matter_lock.async_get_users()
 
 
 # =============================================================================
@@ -2011,7 +1911,7 @@ class TestGetCapabilities:
     """Test async_get_capabilities maps lock_info to LockCapabilities."""
 
     async def test_get_capabilities_full(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """All fields present produce a complete LockCapabilities."""
         mock_get_lock_info = AsyncMock(
@@ -2025,15 +1925,9 @@ class TestGetCapabilities:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
         ):
-            caps = await matter_lock_simple.async_get_capabilities()
+            caps = await matter_lock.async_get_capabilities()
 
         assert isinstance(caps, LockCapabilities)
         assert caps.supports_user_management is True
@@ -2049,7 +1943,7 @@ class TestGetCapabilities:
         assert pin_cap.supports_learn is False
 
     async def test_get_capabilities_none_fields_default_to_zero(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """None capacity fields default to 0 instead of raising."""
         mock_get_lock_info = AsyncMock(
@@ -2063,15 +1957,9 @@ class TestGetCapabilities:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
         ):
-            caps = await matter_lock_simple.async_get_capabilities()
+            caps = await matter_lock.async_get_capabilities()
 
         assert caps.max_users == 0
         pin_cap = caps.capability_for(CredentialType.PIN)
@@ -2081,7 +1969,7 @@ class TestGetCapabilities:
         assert pin_cap.max_length == 0
 
     async def test_get_capabilities_no_pin_support_empty_types(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Lock without PIN support has empty credential_types mapping."""
         mock_get_lock_info = AsyncMock(
@@ -2095,52 +1983,34 @@ class TestGetCapabilities:
             }
         )
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
         ):
-            caps = await matter_lock_simple.async_get_capabilities()
+            caps = await matter_lock.async_get_capabilities()
 
         assert caps.capability_for(CredentialType.PIN) is None
         assert not caps.supports(CredentialType.PIN)
 
     async def test_get_capabilities_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """HomeAssistantError from get_lock_info raises LockDisconnected."""
         mock_get_lock_info = AsyncMock(side_effect=HomeAssistantError("offline"))
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_get_capabilities()
+            await matter_lock.async_get_capabilities()
 
     async def test_get_capabilities_service_validation_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """ServiceValidationError from get_lock_info raises LockOperationFailed."""
         mock_get_lock_info = AsyncMock(side_effect=ServiceValidationError("bad input"))
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
             pytest.raises(LockOperationFailed, match="rejected input"),
         ):
-            await matter_lock_simple.async_get_capabilities()
+            await matter_lock.async_get_capabilities()
 
 
 # =============================================================================
@@ -2159,23 +2029,17 @@ class TestSetUser:
         )
 
     async def test_set_user_creates_when_no_tagged_or_legacy_user(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """No LCM-owned user exists for the slot -> auto-allocate."""
         mock_set_user = AsyncMock(return_value={"user_index": 1})
         # Seam passes user.name already tagged.
         user = User(user_id=1, name="lcm:1:Alice")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=1, created=True)
         call_kwargs = mock_set_user.call_args.kwargs
@@ -2183,18 +2047,12 @@ class TestSetUser:
         assert call_kwargs["user_name"] == "lcm:1:Alice"
 
     async def test_set_user_updates_when_tagged_user_already_exists(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """An lcm:<slot>: tagged user is found -> UPDATE that user_index."""
         mock_set_user = AsyncMock(return_value={"user_index": 42})
         user = User(user_id=2, name="lcm:2:Bob-rename")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2206,7 +2064,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=42, created=False)
         call_kwargs = mock_set_user.call_args.kwargs
@@ -2214,7 +2072,7 @@ class TestSetUser:
         assert call_kwargs["user_name"] == "lcm:2:Bob-rename"
 
     async def test_set_user_adopts_untagged_legacy_user_owning_pin_at_slot(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Pre-PR-B Matter LCM pinned credential_index=slot. Adopt that user.
 
@@ -2225,12 +2083,6 @@ class TestSetUser:
         mock_set_user = AsyncMock(return_value={"user_index": 99})
         user = User(user_id=5, name="lcm:5:Carol")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2242,7 +2094,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         # The legacy user is adopted (not orphaned): existing user_index
         # is reused, name gets rewritten to the tagged form.
@@ -2252,7 +2104,7 @@ class TestSetUser:
         assert call_kwargs["user_name"] == "lcm:5:Carol"
 
     async def test_set_user_falls_back_to_user_id_when_name_is_untagged(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """``_slot_from_seam_user`` falls back to user.user_id for untagged names.
 
@@ -2266,16 +2118,10 @@ class TestSetUser:
         # user.user_id = 9 is the LCM slot fallback; name has no lcm:<slot>: tag.
         user = User(user_id=9, name="Unparseable name")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         # CREATE path runs because no canonical/legacy match for slot 9.
         # The verbatim un-tagged name flows through to set_lock_user.
@@ -2285,7 +2131,7 @@ class TestSetUser:
         assert call_kwargs["user_name"] == "Unparseable name"
 
     async def test_set_user_legacy_pass_skips_users_tagged_for_other_slots(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A tagged user whose Matter credential index happens to equal our slot is NOT adopted.
 
@@ -2299,12 +2145,6 @@ class TestSetUser:
         mock_set_user = AsyncMock(return_value={"user_index": 100})
         user = User(user_id=7, name="lcm:7:Eve")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     # User tagged for slot 3, but its PIN credential happens
@@ -2319,7 +2159,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         # CREATE (auto-allocate) because no canonical match for slot 7
         # and the legacy pass correctly skipped the slot-3 user.
@@ -2329,22 +2169,16 @@ class TestSetUser:
         assert call_kwargs["user_name"] == "lcm:7:Eve"
 
     async def test_set_user_create_auto_allocates_and_returns_allocated_index(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """set_lock_user returns the Matter-assigned user_index on CREATE."""
         mock_set_user = AsyncMock(return_value={"user_index": 5})
         user = User(user_id=3, name="lcm:3:Eve")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         # The LCM slot is 3 but Matter allocated user_index=5; the
         # provider returns the lock-side identifier so the seam can
@@ -2353,45 +2187,33 @@ class TestSetUser:
         assert result.created is True
 
     async def test_set_user_create_raises_lock_disconnected_on_ha_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """HomeAssistantError from set_lock_user on CREATE -> LockDisconnected."""
         mock_set_user = AsyncMock(side_effect=HomeAssistantError("offline"))
         user = User(user_id=1, name="lcm:1:Alice")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_set_user(user)
+            await matter_lock.async_set_user(user)
 
     async def test_set_user_create_raises_operation_failed_on_validation(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """ServiceValidationError from set_lock_user on CREATE -> LockOperationFailed."""
         mock_set_user = AsyncMock(side_effect=ServiceValidationError("bad name"))
         user = User(user_id=1, name="lcm:1:Mallory")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
             pytest.raises(LockOperationFailed, match="rejected input"),
         ):
-            await matter_lock_simple.async_set_user(user)
+            await matter_lock.async_set_user(user)
 
     async def test_set_user_update_tolerates_name_set_failure(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+        self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
         """UPDATE name-set failure is logged; the user_index is still returned.
 
@@ -2408,12 +2230,6 @@ class TestSetUser:
         mock_set_user = AsyncMock(side_effect=HomeAssistantError("500"))
         user = User(user_id=2, name="lcm:2:Updated Name")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2425,7 +2241,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=7, created=False)
         # HomeAssistantError short-circuits the cascade -- only one
@@ -2434,7 +2250,7 @@ class TestSetUser:
         assert "failed to update user name" in caplog.text
 
     async def test_set_user_update_tolerates_matter_sdk_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+        self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
         """UPDATE swallows ``matter_server.common.errors.MatterError``.
 
@@ -2458,12 +2274,6 @@ class TestSetUser:
         )
         user = User(user_id=2, name="lcm:2:Updated Name")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2475,7 +2285,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         # The user_index is still returned so the seam can route the
         # subsequent credential write to the right user; only the name
@@ -2487,7 +2297,7 @@ class TestSetUser:
         assert "InvalidCommand (0x85)" in caplog.text
 
     async def test_set_user_create_falls_back_to_compact_on_charset_rejection(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+        self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
         """CREATE retries with the compact ``lcm<slot>`` fallback on canonical rejection.
 
@@ -2511,16 +2321,10 @@ class TestSetUser:
         # without depending on global pytest logging configuration.
         caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=4, created=True)
         assert mock_set_user.call_count == 2
@@ -2532,7 +2336,7 @@ class TestSetUser:
         assert "rejected" in caplog.text and "lcm:1:Alice" in caplog.text
 
     async def test_set_user_create_falls_back_to_slot_only_when_compact_also_rejected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+        self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
         """When the compact tier also fails, the cascade falls through to slot-only.
 
@@ -2551,16 +2355,10 @@ class TestSetUser:
         user = User(user_id=1, name="lcm:1:Alice")
         caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=4, created=True)
         assert mock_set_user.call_count == 3
@@ -2568,7 +2366,7 @@ class TestSetUser:
         assert names_tried == ["lcm:1:Alice", "lcm1", "1"]
 
     async def test_set_user_create_raises_when_all_attempts_fail(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """CREATE surfaces ``LockOperationFailed`` only after every name fails.
 
@@ -2586,22 +2384,16 @@ class TestSetUser:
         )
         user = User(user_id=1, name="lcm:1:Alice")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
             pytest.raises(LockOperationFailed, match="all fallback names"),
         ):
-            await matter_lock_simple.async_set_user(user)
+            await matter_lock.async_set_user(user)
 
         assert mock_set_user.call_count == 3
 
     async def test_set_user_create_routes_validation_error_during_fallback(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A ``ServiceValidationError`` during the cascade gets typed routing.
 
@@ -2623,22 +2415,16 @@ class TestSetUser:
         )
         user = User(user_id=1, name="lcm:1:Alice")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
             pytest.raises(LockOperationFailed, match="rejected input"),
         ):
-            await matter_lock_simple.async_set_user(user)
+            await matter_lock.async_set_user(user)
 
         assert mock_set_user.call_count == 2
 
     async def test_set_user_create_routes_disconnect_during_fallback(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A ``HomeAssistantError`` during the cascade maps to ``LockDisconnected``."""
         mock_set_user = AsyncMock(
@@ -2649,22 +2435,16 @@ class TestSetUser:
         )
         user = User(user_id=1, name="lcm:1:Alice")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users([]),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
             pytest.raises(LockDisconnected, match="transport closed"),
         ):
-            await matter_lock_simple.async_set_user(user)
+            await matter_lock.async_set_user(user)
 
         assert mock_set_user.call_count == 2
 
     async def test_set_user_update_falls_back_to_compact_on_charset_rejection(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+        self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
         """UPDATE prefers the compact ``lcm<slot>`` tier over bare slot-only.
 
@@ -2683,12 +2463,6 @@ class TestSetUser:
         # DEBUG, so enable DEBUG capture explicitly.
         caplog.set_level(logging.DEBUG, logger=_PROVIDER_MODULE)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2700,7 +2474,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=7, created=False)
         assert mock_set_user.call_count == 2
@@ -2709,7 +2483,7 @@ class TestSetUser:
         assert "rejected" in caplog.text and "lcm:2:Updated Name" in caplog.text
 
     async def test_set_user_update_tolerates_when_all_attempts_fail(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock, caplog
+        self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
         """UPDATE tolerates the failure when every cascade candidate fails.
 
@@ -2727,12 +2501,6 @@ class TestSetUser:
         )
         user = User(user_id=2, name="lcm:2:Bob")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2744,7 +2512,7 @@ class TestSetUser:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
         ):
-            result = await matter_lock_simple.async_set_user(user)
+            result = await matter_lock.async_set_user(user)
 
         assert result == SetUserResult(user_id=9, created=False)
         assert mock_set_user.call_count == 3
@@ -2762,20 +2530,14 @@ class TestDeleteUser:
     """Test async_delete_user removes lock users."""
 
     async def test_delete_user_calls_clear_lock_user(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """clear_lock_user is called with the correct user_index."""
         mock_clear_user = AsyncMock(return_value=None)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
         ):
-            await matter_lock_simple.async_delete_user(3)
+            await matter_lock.async_delete_user(3)
 
         mock_clear_user.assert_called_once()
         # The first positional arg after client/node is user_index
@@ -2783,38 +2545,26 @@ class TestDeleteUser:
         assert 3 in call_args.args or call_args.kwargs.get("user_index") == 3
 
     async def test_delete_user_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """HomeAssistantError from clear_lock_user raises LockDisconnected."""
         mock_clear_user = AsyncMock(side_effect=HomeAssistantError("offline"))
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_delete_user(3)
+            await matter_lock.async_delete_user(3)
 
     async def test_delete_user_service_validation_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """ServiceValidationError from clear_lock_user raises LockOperationFailed."""
         mock_clear_user = AsyncMock(side_effect=ServiceValidationError("bad user"))
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
             pytest.raises(LockOperationFailed, match="rejected input"),
         ):
-            await matter_lock_simple.async_delete_user(3)
+            await matter_lock.async_delete_user(3)
 
 
 # =============================================================================
@@ -2834,17 +2584,11 @@ class TestReleaseManagedSlot:
         )
 
     async def test_release_deletes_tagged_user(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Finds the lcm:<slot>: user and clears it via clear_lock_user."""
         mock_clear_user = AsyncMock(return_value=None)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2856,24 +2600,18 @@ class TestReleaseManagedSlot:
             ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
         ):
-            await matter_lock_simple.async_release_managed_slot(5)
+            await matter_lock.async_release_managed_slot(5)
 
         mock_clear_user.assert_called_once()
         call = mock_clear_user.call_args
         assert 42 in call.args or call.kwargs.get("user_index") == 42
 
     async def test_release_adopts_legacy_untagged_user_at_credential_index(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A legacy user owning a PIN at credential_index=slot is treated as the slot's owner."""
         mock_clear_user = AsyncMock(return_value=None)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     {
@@ -2885,24 +2623,18 @@ class TestReleaseManagedSlot:
             ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
         ):
-            await matter_lock_simple.async_release_managed_slot(3)
+            await matter_lock.async_release_managed_slot(3)
 
         mock_clear_user.assert_called_once()
         call = mock_clear_user.call_args
         assert 99 in call.args or call.kwargs.get("user_index") == 99
 
     async def test_release_no_op_when_no_lcm_user(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """No tagged or legacy user for the slot -> clear_lock_user not called."""
         mock_clear_user = AsyncMock(return_value=None)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_users(
                 [
                     # An unrelated user with a PIN at a different slot --
@@ -2916,7 +2648,7 @@ class TestReleaseManagedSlot:
             ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
         ):
-            await matter_lock_simple.async_release_managed_slot(5)
+            await matter_lock.async_release_managed_slot(5)
 
         mock_clear_user.assert_not_called()
 
@@ -2953,7 +2685,7 @@ class TestSetCredential:
         )
 
     async def test_set_credential_success_returns_true(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Successful set_lock_credential returns True."""
         mock_set_credential = AsyncMock(
@@ -2961,15 +2693,9 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
-            result = await matter_lock_simple.async_set_credential(
+            result = await matter_lock.async_set_credential(
                 1,
                 credential,
                 "1234",
@@ -2979,25 +2705,19 @@ class TestSetCredential:
         assert result is WriteResult.CONFIRMED
 
     async def test_set_credential_pushes_unreadable_optimistically(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """async_set_credential pushes SlotCredential.unreadable() on success."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
         mock_set_credential = AsyncMock(
             return_value={"credential_index": 2, "user_index": 2}
         )
         credential = self._make_credential(slot=2, pin="5678")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 2, credential, "5678", name=None, source="direct"
             )
 
@@ -3006,7 +2726,7 @@ class TestSetCredential:
         )
 
     async def test_set_credential_duplicate_direct_raises(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Duplicate status from lock raises DuplicateCodeError for direct source."""
         mock_set_credential = AsyncMock(
@@ -3014,16 +2734,10 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             pytest.raises(DuplicateCodeError),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="direct"
             )
 
@@ -3055,7 +2769,7 @@ class TestSetCredential:
         )
 
     async def test_set_credential_duplicate_sync_retries_and_succeeds(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Duplicate on sync source clears the existing credential and retries once."""
         mock_set_credential = AsyncMock(
@@ -3067,17 +2781,11 @@ class TestSetCredential:
         mock_clear = AsyncMock(return_value={})
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
         ):
-            result = await matter_lock_simple.async_set_credential(
+            result = await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
 
@@ -3093,7 +2801,7 @@ class TestSetCredential:
         assert mock_clear.call_args.kwargs["credential_index"] == 10
 
     async def test_set_credential_duplicate_sync_persistent_raises(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Persistent duplicate on sync source raises DuplicateCodeError after retry."""
         mock_set_credential = AsyncMock(
@@ -3102,18 +2810,12 @@ class TestSetCredential:
         mock_clear = AsyncMock(return_value={})
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(DuplicateCodeError),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
 
@@ -3121,7 +2823,7 @@ class TestSetCredential:
         assert mock_clear.call_count == 1
 
     async def test_set_credential_duplicate_sync_retry_transient_routes_to_retry(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A transient status on the post-clear retry routes to retry (#1257).
 
@@ -3139,18 +2841,12 @@ class TestSetCredential:
         mock_clear = AsyncMock(return_value={})
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
 
@@ -3158,7 +2854,7 @@ class TestSetCredential:
         assert mock_clear.call_count == 1
 
     async def test_set_credential_duplicate_sync_retry_definitive_rejection_raises(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A definitive rejection on the post-clear retry raises CodeRejectedError.
 
@@ -3175,18 +2871,12 @@ class TestSetCredential:
         mock_clear = AsyncMock(return_value={})
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(CodeRejectedError),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
 
@@ -3194,7 +2884,7 @@ class TestSetCredential:
         assert mock_clear.call_count == 1
 
     async def test_set_credential_sync_duplicate_external_surfaces_immediately(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """When LCM owns no PIN for the user, the duplicate must be external.
 
@@ -3207,18 +2897,12 @@ class TestSetCredential:
         mock_clear = AsyncMock(return_value={})
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             # autouse empty-user fixture: user has no existing PIN credential.
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(DuplicateCodeError),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
         # No retry, no clear -- the duplicate is external and out of scope.
@@ -3226,7 +2910,7 @@ class TestSetCredential:
         mock_clear.assert_not_called()
 
     async def test_set_credential_sync_duplicate_clear_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """clear_lock_credential transport failure during retry maps to LockDisconnected."""
         mock_set_credential = AsyncMock(
@@ -3235,25 +2919,19 @@ class TestSetCredential:
         mock_clear = AsyncMock(side_effect=HomeAssistantError("connection lost"))
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockDisconnected, match="sync-duplicate retry"),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
         # First set raised duplicate; clear failed; no retry attempt is made.
         assert mock_set_credential.call_count == 1
 
     async def test_set_credential_sync_duplicate_clear_matter_client_exception(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A MatterClientException during the duplicate-retry clear routes to retry.
 
@@ -3268,24 +2946,18 @@ class TestSetCredential:
         mock_clear = AsyncMock(side_effect=MatterClientException("Not connected"))
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockDisconnected, match="sync-duplicate retry"),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
         assert mock_set_credential.call_count == 1
 
     async def test_set_credential_sync_duplicate_clear_service_validation_error(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """clear_lock_credential rejection during retry maps to LockOperationFailed."""
         mock_set_credential = AsyncMock(
@@ -3294,24 +2966,18 @@ class TestSetCredential:
         mock_clear = AsyncMock(side_effect=ServiceValidationError("bad slot"))
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             self._patch_user_with_pin(user_id=1, credential_index=10),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockOperationFailed, match="sync-duplicate retry"),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
         assert mock_set_credential.call_count == 1
 
     async def test_set_credential_non_duplicate_failure_raises_code_rejected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Non-duplicate SetCredentialFailedError raises CodeRejectedError."""
         mock_set_credential = AsyncMock(
@@ -3319,21 +2985,15 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             pytest.raises(CodeRejectedError),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="direct"
             )
 
     async def test_set_credential_ha_error_raises_code_rejected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """ServiceValidationError from helper raises CodeRejectedError."""
         mock_set_credential = AsyncMock(
@@ -3341,41 +3001,29 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=1, pin="1")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             pytest.raises(CodeRejectedError),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1", name=None, source="direct"
             )
 
     async def test_set_credential_transport_error_raises_lock_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A non-validation HomeAssistantError (transport) routes to retry path."""
         mock_set_credential = AsyncMock(side_effect=HomeAssistantError("endpoint gone"))
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="direct"
             )
 
     async def test_set_credential_unknown_status_routes_to_retry(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """An unmapped ``unknown(N)`` status routes to retry, not disable (#1257).
 
@@ -3387,21 +3035,15 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
 
     async def test_set_credential_matter_client_exception_routes_to_retry(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """``InvalidState: Not connected`` at startup routes to retry (#1257).
 
@@ -3414,21 +3056,15 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=1, pin="1234")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 1, credential, "1234", name=None, source="sync"
             )
 
     async def test_set_credential_create_passes_credential_index_none(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """When the user has no PIN yet, set_lock_credential gets credential_index=None.
 
@@ -3442,15 +3078,9 @@ class TestSetCredential:
         # _empty_user_list autouse fixture already gives no users -> no PIN
         # for user_id 3, so the CREATE path runs.
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 3,
                 credential,
                 "9999",
@@ -3465,7 +3095,7 @@ class TestSetCredential:
         assert call_kwargs["user_index"] == 3
 
     async def test_set_credential_modify_passes_existing_credential_index(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """When the user already owns a PIN, set_lock_credential MODIFY'es at that index."""
         mock_set_credential = AsyncMock(
@@ -3473,12 +3103,6 @@ class TestSetCredential:
         )
         credential = self._make_credential(slot=3, pin="9999")
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             # Override the autouse empty-user fixture: user 3 already owns
             # a PIN at credential_index 11.
             patch(
@@ -3498,7 +3122,7 @@ class TestSetCredential:
             ),
             patch(f"{_PROVIDER_MODULE}.set_lock_credential", mock_set_credential),
         ):
-            await matter_lock_simple.async_set_credential(
+            await matter_lock.async_set_credential(
                 3, credential, "9999", name="Carol", source="direct"
             )
 
@@ -3549,25 +3173,19 @@ class TestDeleteCredential:
             yield mock
 
     async def test_delete_credential_returns_true(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Successful clear returns True."""
         mock_clear = AsyncMock(return_value=None)
         ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
         ):
-            result = await matter_lock_simple.async_delete_credential(ref)
+            result = await matter_lock.async_delete_credential(ref)
         assert result is True
 
     async def test_delete_credential_returns_false_when_user_has_no_pin(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Delete for a user with no PIN credential is a no-op (returns False).
 
@@ -3579,12 +3197,6 @@ class TestDeleteCredential:
         # Override the autouse fixture to seed a user with no PIN credential
         # at ref.user_id=1.
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
                 AsyncMock(
@@ -3602,37 +3214,31 @@ class TestDeleteCredential:
             ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
         ):
-            result = await matter_lock_simple.async_delete_credential(
+            result = await matter_lock.async_delete_credential(
                 CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
             )
         assert result is False
         mock_clear.assert_not_called()
 
     async def test_delete_credential_pushes_empty(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Successful delete pushes SlotCredential.empty() to coordinator."""
         mock_coordinator = MagicMock()
-        matter_lock_simple.coordinator = mock_coordinator
+        matter_lock.coordinator = mock_coordinator
         mock_clear = AsyncMock(return_value=None)
         ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
         ):
-            await matter_lock_simple.async_delete_credential(ref)
+            await matter_lock.async_delete_credential(ref)
 
         mock_coordinator.push_update.assert_called_once_with(
             {4: SlotCredential.empty()}
         )
 
     async def test_delete_credential_passes_correct_args(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """clear_lock_credential is addressed by the user's rediscovered PIN index.
 
@@ -3643,75 +3249,51 @@ class TestDeleteCredential:
         mock_clear = AsyncMock(return_value=None)
         ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
         ):
-            await matter_lock_simple.async_delete_credential(ref)
+            await matter_lock.async_delete_credential(ref)
 
         call_kwargs = mock_clear.call_args.kwargs
         assert call_kwargs["credential_type"] == "pin"
         assert call_kwargs["credential_index"] == 4
 
     async def test_delete_credential_transport_error_raises_lock_disconnected(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A transport HomeAssistantError routes to the retry path (LockDisconnected)."""
         mock_clear = AsyncMock(side_effect=HomeAssistantError("transport down"))
         ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_delete_credential(ref)
+            await matter_lock.async_delete_credential(ref)
 
     async def test_delete_credential_matter_client_exception_routes_to_retry(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """``InvalidState: Not connected`` during clear routes to retry (#1257)."""
         mock_clear = AsyncMock(side_effect=MatterClientException("Not connected"))
         ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
         with (
             patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple,
+                matter_lock,
                 "_find_pin_credential_index_for_user",
                 AsyncMock(return_value=5),
             ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockDisconnected),
         ):
-            await matter_lock_simple.async_delete_credential(ref)
+            await matter_lock.async_delete_credential(ref)
 
     async def test_delete_credential_validation_error_raises_operation_failed(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
+        self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A ServiceValidationError is a reachable-but-failed operation."""
         mock_clear = AsyncMock(side_effect=ServiceValidationError("bad"))
         ref = CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
         with (
-            patch.object(
-                matter_lock_simple, "_get_matter_client", return_value=MagicMock()
-            ),
-            patch.object(
-                matter_lock_simple, "_get_matter_node", return_value=MagicMock()
-            ),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
             pytest.raises(LockOperationFailed),
         ):
-            await matter_lock_simple.async_delete_credential(ref)
+            await matter_lock.async_delete_credential(ref)

@@ -289,82 +289,73 @@ class MatterLock(BaseLock):
             None,
         )
 
-    def _get_matter_client(self) -> Any | None:
-        """Return the MatterClient of the entry that owns this lock's device."""
-        device = self._fresh_device_entry()
-        if device is None:
-            return None
-        try:
-            return self._owning_matter_client(device)
-        except Exception as err:
-            LOGGER.debug(
-                "Failed to get Matter client for %s: %s",
-                self.lock.entity_id,
-                err,
-            )
-            return None
+    def _resolve(self) -> tuple[Any | None, Any | None, Any | None]:
+        """
+        Resolve (client, node, device) for this lock in a single pass.
 
-    def _get_matter_node(self) -> Any | None:
-        """Resolve this lock's MatterNode via its owning entry's client."""
+        ``client`` is the owning entry's MatterClient, ``node`` its matched
+        MatterNode, ``device`` the registry entry they were resolved from.
+        Any of client/node may be None when unresolved; ``device`` is returned
+        even then so callers can report and log against it. Resolution errors
+        are swallowed to None -- this seam never raises; callers decide whether
+        a missing client/node is fatal.
+        """
         device = self._fresh_device_entry()
         if device is None:
-            return None
+            return None, None, None
         try:
             client = self._owning_matter_client(device)
             if client is None:
-                return None
-            return self._match_node(client, device)
+                return None, None, device
+            return client, self._match_node(client, device), device
         except Exception as err:
             LOGGER.debug(
-                "Failed to resolve Matter node for %s: %s",
+                "Failed to resolve Matter client/node for %s: %s",
                 self.lock.entity_id,
                 err,
             )
-            return None
+            return None, None, device
 
     def _require_client_and_node(self) -> tuple[Any, Any]:
         """
-        Get client and node, raising LockDisconnected if either is unavailable.
+        Resolve client and node, raising LockDisconnected if either is missing.
 
-        The two failures are reported separately because they mean different
-        things: a missing client is the Matter integration not being loaded,
-        while an unresolved node is the device not being in the owning client's
-        current node set (issue #1268). On a node miss, log the comparison so
-        the cause -- multiple fabrics vs a stale device -- is diagnosable.
+        The failures are reported distinctly: a missing client is the Matter
+        integration not being loaded; a client whose server_info has not arrived
+        yet (e.g. mid-reconnect) is "not ready"; an otherwise-unresolved node is
+        the device not being in the owning client's current node set (issue
+        #1268). On a node miss, log the comparison so the cause -- multiple
+        fabrics vs a stale device -- is diagnosable.
         """
-        client = self._get_matter_client()
+        client, node, device = self._resolve()
         if not client:
             raise LockDisconnected(
                 f"Matter client unavailable for {self.lock.entity_id}"
             )
-        node = self._get_matter_node()
         if not node:
-            # A client whose server_info has not arrived yet (e.g. mid-reconnect)
-            # cannot resolve any node. Report that as "not ready" rather than
-            # "node not found", so a transient is not misdiagnosed as a device or
-            # fabric mismatch (issue #1268 review).
             if getattr(client, "server_info", None) is None:
                 raise LockDisconnected(
                     f"Matter client for {self.lock.entity_id} is not ready "
                     "(server info unavailable)"
                 )
-            self._log_node_resolution_failure(client)
+            self._log_node_resolution_failure(device, client)
             raise LockDisconnected(
                 f"Matter node not found for {self.lock.entity_id}; device is not "
                 "in the Matter client's current node set"
             )
         return client, node
 
-    def _log_node_resolution_failure(self, client: Any) -> None:
+    def _log_node_resolution_failure(self, device: Any, client: Any) -> None:
         """
         Log why node resolution failed -- diagnostic only, never raises.
 
         Surfaces the data that distinguishes the candidate causes (issue #1268):
         more than one loaded Matter entry (wrong-fabric resolution) vs a stale
-        or unmatched device identifier.
+        or unmatched device identifier. ``device`` is the entry the failed
+        resolution actually used, passed in so the log describes that exact
+        device rather than re-resolving it.
         """
         try:
-            device = self._fresh_device_entry()
             matter_entries = self.hass.config_entries.async_loaded_entries(
                 MATTER_DOMAIN
             )
@@ -1098,8 +1089,7 @@ class MatterLock(BaseLock):
         if self._push_unsubs:
             return
 
-        client = self._get_matter_client()
-        node = self._get_matter_node()
+        client, node, _device = self._resolve()
         node_id = node.node_id if node else None
         if not client or node_id is None:
             raise LockDisconnected(
