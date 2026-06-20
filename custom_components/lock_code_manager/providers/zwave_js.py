@@ -142,13 +142,18 @@ class ZWaveJSLock(ZWaveJSUserCodeFallbackSupport):
     @property
     def hard_refresh_interval(self) -> timedelta | None:
         """
-        Re-read all credentials hourly to recover from missed push events.
+        Disable periodic drift detection: Z-Wave is event-driven end to end.
 
-        Credentials are normally kept current by the access-control node-event
-        push, but a missed or value-less event would otherwise strand a slot
-        (for example as unreadable). This periodic drift refresh is the backstop.
+        Both User Code CC and User Credential CC push change notifications, so a
+        periodic re-read would only catch out-of-band programming that arrived
+        with no event -- and on a masking lock a re-read cannot recover the value
+        anyway, so it would not even resolve the slot it claims to protect. LCM
+        does not chase silent out-of-band changes, so the hourly poll earned its
+        keep for neither readability nor occupancy. Hard refresh is still used on
+        demand (initial load, missing/unknown slots) and by the per-write
+        confirmation read -- just not on a timer.
         """
-        return timedelta(hours=1)
+        return None
 
     @property
     def supports_native_users(self) -> bool:
