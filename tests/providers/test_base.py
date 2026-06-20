@@ -61,6 +61,39 @@ class MockLCMLockWithPush(MockLCMLock):
         self.unsubscribe_calls += 1
 
 
+class _CapsLock(MockLCMLock):
+    """Mock lock that advertises PIN capabilities."""
+
+    async def async_get_capabilities(self) -> LockCapabilities:
+        """Report a single PIN credential type with a 4-8 length range."""
+        return LockCapabilities(
+            supports_user_management=True,
+            max_users=30,
+            credential_types={
+                CredentialType.PIN: CredentialTypeCapability(
+                    num_slots=30, min_length=4, max_length=8, supports_learn=False
+                )
+            },
+        )
+
+
+async def test_cached_capabilities_exposes_warmed_cache(hass: HomeAssistant):
+    """cached_capabilities is None until probed, then returns the cached snapshot."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", "caps_lock", config_entry=config_entry
+    )
+    lock = _CapsLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+    assert lock.cached_capabilities is None
+
+    caps = await lock._get_cached_capabilities()
+    assert lock.cached_capabilities is caps
+    assert lock.cached_capabilities.length_bounds(CredentialType.PIN) == (4, 8)
+
+
 async def test_base(hass: HomeAssistant):
     """Test base class."""
     entity_reg = er.async_get(hass)

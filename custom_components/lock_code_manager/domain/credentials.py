@@ -16,7 +16,7 @@ coordinator's currency.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -286,6 +286,58 @@ class LockCapabilities:
     def supports(self, credential_type: CredentialType) -> bool:
         """Return True when the lock advertises ``credential_type``."""
         return credential_type in self.credential_types
+
+    def length_bounds(
+        self, credential_type: CredentialType
+    ) -> tuple[int, int | None] | None:
+        """
+        Return the effective ``(min, max)`` value length for a credential type.
+
+        ``None`` when the type is unsupported. A non-positive advertised
+        bound means "unbounded" rather than a literal limit: Matter reports
+        ``max_pin_length`` as ``... or 0``, where ``0`` is "unknown", so it
+        normalizes to no upper bound (``max`` of ``None``). A non-positive
+        minimum normalizes to ``0`` (no minimum).
+        """
+        cap = self.capability_for(credential_type)
+        if cap is None:
+            return None
+        return (
+            max(cap.min_length, 0),
+            cap.max_length if cap.max_length > 0 else None,
+        )
+
+
+def aggregate_length_bounds(
+    capabilities: Iterable[LockCapabilities | None],
+    credential_type: CredentialType,
+) -> tuple[int | None, int | None]:
+    """
+    Fold many locks' length limits into one tightest-common ``(min, max)``.
+
+    Each bound is ``None`` when nothing constrains it. Locks with no
+    capabilities (``None``) or that do not support ``credential_type``
+    contribute nothing, so an all-unknown set yields ``(None, None)``.
+
+    The result is the tightest range every lock can satisfy: the largest
+    minimum and the smallest maximum. A returned ``min`` greater than ``max``
+    signals an unsatisfiable intersection across locks; the caller decides how
+    to present it. User-interface defaults deliberately live in the caller, not
+    here, so non-interface callers can reuse this unchanged.
+    """
+    mins: list[int] = []
+    maxes: list[int] = []
+    for caps in capabilities:
+        if caps is None:
+            continue
+        bounds = caps.length_bounds(credential_type)
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        mins.append(lo)
+        if hi is not None:
+            maxes.append(hi)
+    return (max(mins) if mins else None, min(maxes) if maxes else None)
 
 
 def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
