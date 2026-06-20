@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "8190497b729d",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-drop-hourly-drift-refresh",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/providers/zwave_js/test_uc_fallback.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/81/90497b729d/0/metadata.json",
+      "transcript": "/81/90497b729d/0/full.jsonl",
+      "content_hash": "/81/90497b729d/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4842,
+    "cache_creation_tokens": 26849,
+    "cache_read_tokens": 2985946,
+    "output_tokens": 15105,
+    "api_call_count": 23
+  }
+}
