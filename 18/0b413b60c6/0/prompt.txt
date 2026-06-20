@@ -1,0 +1,9 @@
+when and why did we set a hard refresh interval on zwave locks? I thought we had decided before that we always get events with User Code CC with the only potential gap being an external program but we shouldn't worry about that. User Credential CC has notifications too, so what changed?
+
+---
+
+when and why did we set a hard refresh interval on zwave locks? I thought we had decided before that we always get events with User Code CC with the only potential gap being an external program but we shouldn't worry about that. User Credential CC has notifications too, so what changed?
+
+---
+
+so the only point her eis to get a readable code? We can't even guarantee we will get a readable code if the lock masks it, so why not just fall back into that path when that happens?
