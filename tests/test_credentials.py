@@ -13,6 +13,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     SetUserResult,
     User,
     UserType,
+    aggregate_length_bounds,
     credential_from_slot,
     slot_credential_of,
     user_from_slot,
@@ -274,6 +275,73 @@ class TestLockCapabilities:
         assert not caps.supports(CredentialType.RFID)
         with pytest.raises(TypeError):
             caps.credential_types[CredentialType.RFID] = pin_cap  # type: ignore[index]
+
+
+def _caps(min_length: int, max_length: int) -> LockCapabilities:
+    """Build a single-PIN-type LockCapabilities with the given length bounds."""
+    return LockCapabilities(
+        supports_user_management=True,
+        max_users=30,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=30,
+                min_length=min_length,
+                max_length=max_length,
+                supports_learn=False,
+            )
+        },
+    )
+
+
+class TestLengthBounds:
+    """LockCapabilities.length_bounds normalizes per-type length limits."""
+
+    def test_returns_min_and_max_for_supported_type(self) -> None:
+        assert _caps(4, 8).length_bounds(CredentialType.PIN) == (4, 8)
+
+    def test_unsupported_type_returns_none(self) -> None:
+        assert _caps(4, 8).length_bounds(CredentialType.RFID) is None
+
+    def test_non_positive_max_means_unbounded(self) -> None:
+        # Matter reports max_pin_length as `... or 0` -- 0 is "unknown", not
+        # "zero characters", so it must normalize to no upper bound.
+        assert _caps(4, 0).length_bounds(CredentialType.PIN) == (4, None)
+
+    def test_negative_min_clamps_to_zero(self) -> None:
+        assert _caps(-1, 8).length_bounds(CredentialType.PIN) == (0, 8)
+
+
+class TestAggregateLengthBounds:
+    """aggregate_length_bounds folds many locks into one tightest-common range."""
+
+    def test_no_capabilities_is_unconstrained(self) -> None:
+        assert aggregate_length_bounds([], CredentialType.PIN) == (None, None)
+
+    def test_skips_none_and_unsupported_caps(self) -> None:
+        unsupported = LockCapabilities(
+            supports_user_management=False, max_users=0, credential_types={}
+        )
+        assert aggregate_length_bounds([None, unsupported], CredentialType.PIN) == (
+            None,
+            None,
+        )
+
+    def test_single_lock_passes_bounds_through(self) -> None:
+        assert aggregate_length_bounds([_caps(4, 8)], CredentialType.PIN) == (4, 8)
+
+    def test_tightest_common_takes_max_of_mins_and_min_of_maxes(self) -> None:
+        assert aggregate_length_bounds(
+            [_caps(4, 8), _caps(6, 10)], CredentialType.PIN
+        ) == (6, 8)
+
+    def test_unbounded_max_does_not_constrain_aggregate_max(self) -> None:
+        assert aggregate_length_bounds(
+            [_caps(4, 0), _caps(6, 8)], CredentialType.PIN
+        ) == (6, 8)
+
+    def test_empty_intersection_returns_min_greater_than_max(self) -> None:
+        lo, hi = aggregate_length_bounds([_caps(6, 6), _caps(4, 4)], CredentialType.PIN)
+        assert lo is not None and hi is not None and lo > hi
 
 
 class TestProjectionHelpers:
