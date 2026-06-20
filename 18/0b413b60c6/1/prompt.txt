@@ -1,0 +1,25 @@
+/doctor
+
+---
+
+remove headroom from your mcp settings
+
+---
+
+does the text entity for pins respect the min and max length as specified in lock capabilities?
+
+---
+
+do both
+
+---
+
+ok
+
+---
+
+go - but wondering how to generalize the _bounds function for not just PINs but for passwords and other credential types too just to make things easier in the future
+
+---
+
+name each offending lock. don't care where aggregate_length_bounds lives as long as its logical. Porceed with implementation otherwise
