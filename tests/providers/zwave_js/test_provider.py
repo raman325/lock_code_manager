@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1001,9 +1000,9 @@ async def test_async_delete_credential_maps_failed_command_to_lock_disconnected(
         )
 
 
-async def test_hard_refresh_interval_is_hourly(zwave_js_lock: ZWaveJSLock) -> None:
-    """The drift-recovery backstop is scheduled (not disabled)."""
-    assert zwave_js_lock.hard_refresh_interval == timedelta(hours=1)
+async def test_hard_refresh_interval_disabled(zwave_js_lock: ZWaveJSLock) -> None:
+    """No periodic drift poll: Z-Wave trusts its event stream end to end."""
+    assert zwave_js_lock.hard_refresh_interval is None
 
 
 async def test_async_delete_user_calls_helper(

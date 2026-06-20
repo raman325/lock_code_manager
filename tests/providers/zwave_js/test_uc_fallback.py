@@ -1100,8 +1100,9 @@ async def test_uc_v1_set_verify_failure_is_non_fatal(
     ``_push_credential_update`` delivers the truth to the coordinator.
     Failing here turns a flaky-interview lock (issue #1251) into a
     slot-suspension feedback loop -- the exact pathology the fallback
-    is meant to dodge. The hourly hard-refresh backstop reconciles any
-    cache drift that genuinely matters.
+    is meant to dodge. The on-demand refresh on missing/unknown slots,
+    plus the next sync tick, reconcile any cache drift that genuinely
+    matters.
     """
     mock_coordinator = MagicMock()
     mock_coordinator.data = {}

@@ -456,8 +456,9 @@ class ZWaveJSUserCodeFallbackSupport(BaseLock):
         true post-write state, so the coordinator already has the
         truth. Failing the whole operation here turns a flaky lock into
         a slot-suspension feedback loop -- the exact pathology the
-        fallback is meant to dodge. The hourly hard-refresh backstop
-        reconciles any genuine cache drift.
+        fallback is meant to dodge. The on-demand refresh on missing or
+        unknown slots, plus the next sync tick, reconcile any genuine
+        cache drift.
 
         Non-Z-Wave exceptions (programming bugs) still propagate.
         """

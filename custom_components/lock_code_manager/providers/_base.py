@@ -149,7 +149,13 @@ class BaseLock:
         hard_refresh_interval = None
         connection_check_interval = timedelta(seconds=30)
 
-    Push with drift detection (recommended for Z-Wave JS):
+    Push only (e.g. Z-Wave JS), trusting the event stream without a drift poll:
+        supports_push = True
+        hard_refresh_interval = None
+        connection_check_interval = None
+        # Override subscribe_push_updates() to handle value events
+
+    Push with drift detection (e.g. Matter):
         supports_push = True
         hard_refresh_interval = timedelta(hours=1)
         connection_check_interval = None
@@ -991,9 +997,9 @@ class BaseLock:
             # stacks send no confirming push for an ambiguous write (node-zwave-js
             # emits no credential event when its post-write verify fails on a
             # masked lock), so waiting passively would let the breaker suspend a
-            # slot whose code actually landed before the hourly drift refresh can
-            # run. The read confirms a present-but-masked slot; a genuinely-absent
-            # slot stays pending and the sync tick re-syncs after the TTL.
+            # slot whose code actually landed. The active read confirms a
+            # present-but-masked slot; a genuinely-absent slot stays pending and
+            # the sync tick re-syncs after the TTL.
             self._record_optimistic_write(code_slot, str(usercode))
             if self.coordinator is not None:
                 await self.coordinator.async_confirm_pending_writes()
