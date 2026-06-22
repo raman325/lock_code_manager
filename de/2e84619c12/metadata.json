@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "de2e84619c12",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-length-capabilities",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/credentials.py",
+    "custom_components/lock_code_manager/domain/slot_coordinator.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/text.py",
+    "tests/test_slot_coordinator.py",
+    "tests/test_text.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/de/2e84619c12/0/metadata.json",
+      "transcript": "/de/2e84619c12/0/full.jsonl",
+      "content_hash": "/de/2e84619c12/0/content_hash.txt",
+      "prompt": "/de/2e84619c12/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 52601,
+    "cache_creation_tokens": 215430,
+    "cache_read_tokens": 9986859,
+    "output_tokens": 90687,
+    "api_call_count": 62
+  }
+}
