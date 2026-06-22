@@ -95,9 +95,10 @@ async def test_base(hass: HomeAssistant):
     assert lock.usercode_scan_interval == timedelta(minutes=1)
     with pytest.raises(NotImplementedError):
         assert lock.domain
-    # async_is_integration_connected has a sensible default — it returns
-    # False here because the test config entry isn't in the LOADED state.
-    assert await lock.async_internal_is_integration_connected() is False
+    # async_internal_is_reachable combines the integration and device
+    # signals — it returns False here because the test config entry isn't in
+    # the LOADED state (integration down short-circuits the combined check).
+    assert await lock.async_internal_is_reachable() is False
     # hard_refresh / set / clear / get all check connection first via
     # _execute_rate_limited; since the default connection check returned
     # False above, they raise LockDisconnected before reaching the abstract
@@ -209,6 +210,53 @@ async def test_connection_transition_resubscribes(
         lock.set_connected(True)
         await lock.coordinator.async_refresh()
         assert lock.subscribe_calls == 1
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_connection_transition_on_device_availability(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """A device-level (node) outage drives the same resubscribe/refresh path.
+
+    Recovery must be detected uniformly whether the outage was at the
+    integration/transport layer or the device/node layer: with the
+    integration still connected, toggling device availability alone must
+    unsubscribe on the drop and resubscribe + refresh on recovery
+    (issue #1257 recovery latency).
+    """
+    with patch(
+        "custom_components.lock_code_manager.domain.locks.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert isinstance(lock, MockLCMLockWithPush)
+
+        lock.subscribe_calls = 0
+        lock.unsubscribe_calls = 0
+        lock._min_operation_delay = 0.0
+        lock._last_operation_time = 0.0
+
+        await lock.coordinator.async_refresh()
+
+        # Integration stays connected; only the node drops.
+        lock.set_device_available(False)
+        await lock.coordinator.async_refresh()
+        assert lock.unsubscribe_calls == 1
+
+        lock.set_device_available(True)
+        lock.coordinator.async_request_refresh = AsyncMock()
+        await lock.coordinator.async_refresh()
+        assert lock.subscribe_calls == 1
+        lock.coordinator.async_request_refresh.assert_awaited()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
