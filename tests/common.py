@@ -63,6 +63,7 @@ class MockLCMLock(BaseLock):
         """Initialize mock lock."""
         super().__init__(*args, **kwargs)
         self._connected = True
+        self._device_available = True
         self._hard_refresh_interval: timedelta | None = None
         self.codes: dict[int, str] = {1: "1234", 2: "5678"}
         self.service_calls: defaultdict[str, list] = defaultdict(list)
@@ -81,9 +82,17 @@ class MockLCMLock(BaseLock):
         """Set connection state for testing."""
         self._connected = connected
 
+    def set_device_available(self, available: bool) -> None:
+        """Set device (node) availability for testing."""
+        self._device_available = available
+
     async def async_is_integration_connected(self) -> bool:
         """Return whether the integration's client/driver/broker is connected."""
         return self._connected
+
+    async def async_is_device_available(self) -> bool:
+        """Return whether the physical device (node) is reachable."""
+        return self._device_available
 
     async def async_hard_refresh_codes(self) -> dict[int, SlotCredential]:
         """Perform hard refresh of all codes."""

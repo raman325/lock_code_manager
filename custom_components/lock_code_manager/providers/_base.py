@@ -137,7 +137,7 @@ class BaseLock:
        - Set hard_refresh_interval = None to disable
 
     4. Poll connection state:
-       - Periodic async_internal_is_integration_connected() at connection_check_interval
+       - Periodic async_internal_is_reachable() at connection_check_interval
        - Helps detect reconnects for integrations without config entry state signals
        - Set connection_check_interval = None to disable
 
@@ -254,12 +254,18 @@ class BaseLock:
         pre_execute runs inside the lock before the operation, for checks
         that must be atomic with the operation (e.g., duplicate detection).
         """
-        if not await self.async_internal_is_integration_connected():
+        # Evaluate both layers, feed the combined reachability to the
+        # transition handler, then raise the layer-specific message. The two
+        # checks are kept distinct for diagnostics; the transition only cares
+        # whether the lock is reachable end-to-end.
+        integration_up = await self.async_is_integration_connected()
+        device_up = await self.async_is_device_available()
+        self._note_reachability(integration_up and device_up)
+        if not integration_up:
             raise LockDisconnected(
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - integration not connected"
             )
-
-        if not await self.async_is_device_available():
+        if not device_up:
             raise LockDisconnected(
                 f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - device not available"
             )
@@ -878,12 +884,32 @@ class BaseLock:
         return self.lock_config_entry.state == ConfigEntryState.LOADED
 
     @final
-    async def async_internal_is_integration_connected(self) -> bool:
-        """Return whether the integration's client/driver/broker is connected."""
-        is_up = await self.async_is_integration_connected()
+    async def async_internal_is_reachable(self) -> bool:
+        """
+        Return whether the lock is reachable end-to-end right now.
+
+        Combines the integration/transport signal
+        (``async_is_integration_connected``) with the device/node signal
+        (``async_is_device_available``): the lock is reachable only when both
+        layers are up. Recovery is therefore detected uniformly whether the
+        outage was at the network or the device layer -- a node that comes
+        back while the integration stayed connected drives the same
+        resubscribe/refresh transition as an integration reconnect, instead of
+        waiting out the connectivity breaker's backoff probe (issue #1257).
+        """
+        is_up = (
+            await self.async_is_integration_connected()
+            and await self.async_is_device_available()
+        )
+        self._note_reachability(is_up)
+        return is_up
+
+    @final
+    @callback
+    def _note_reachability(self, is_up: bool) -> None:
+        """Feed a reachability observation to the transition handler and remember it."""
         self._handle_connection_transition(is_up)
         self._last_connection_up = is_up
-        return is_up
 
     @final
     @callback

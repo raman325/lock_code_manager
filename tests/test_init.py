@@ -655,7 +655,7 @@ async def test_no_slot_coordinator_warning_during_initial_setup(
     Before the fix, per-lock entities (``code`` sensor, ``in_sync`` binary
     sensor) were scheduled by ``_async_setup_new_locks`` while the slot
     coordinators had not yet been created. The await on
-    ``async_internal_is_integration_connected`` between locks let the event
+    ``async_internal_is_reachable`` between locks let the event
     loop drain the entity-add tasks for prior locks, whose
     ``async_added_to_hass`` then warned about the missing coordinator.
 

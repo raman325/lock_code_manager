@@ -870,7 +870,7 @@ async def _async_setup_new_locks(
 
         added_locks.append(result)
 
-        if not await result.async_internal_is_integration_connected():
+        if not await result.async_internal_is_reachable():
             _LOGGER.debug(
                 "%s (%s): Lock %s is not connected yet. Entities will be created "
                 "but will be unavailable until the lock comes online. This is normal "

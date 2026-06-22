@@ -431,7 +431,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
     async def _async_connection_check(self, now: datetime) -> None:
         """Poll connection state so providers can resubscribe on reconnect."""
         try:
-            await self._lock.async_internal_is_integration_connected()
+            await self._lock.async_internal_is_reachable()
         except LockCodeManagerError as err:
             _LOGGER.debug(
                 "Connection check failed for %s: %s", self._lock.lock.entity_id, err
