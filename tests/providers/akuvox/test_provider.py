@@ -34,6 +34,7 @@ from custom_components.lock_code_manager.providers.akuvox import (
     _parse_tag,
 )
 from tests.providers.helpers import (
+    ProviderNativeTransportContractTests,
     ServiceProviderConnectionTests,
     register_mock_service,
 )
@@ -158,6 +159,25 @@ class TestProperties:
 
 class TestConnection(ServiceProviderConnectionTests):
     """Connection tests for Akuvox provider using shared mixin."""
+
+
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Akuvox routes a native ``OSError`` from ``list_users`` to LockDisconnected."""
+
+    # Reaches local_akuvox through BaseLock.async_call_service, whose native
+    # transport exception is OSError (an unwrapped ConnectionError/ReadTimeout).
+    native_transport_read_service = "list_users"
+
+    @pytest.fixture
+    def provider_lock(
+        self, akuvox_lock: AkuvoxLock, lcm_config_entry: MockConfigEntry
+    ) -> AkuvoxLock:
+        """A lock with managed slots, so the read actually calls the service.
+
+        ``async_get_users`` short-circuits with no managed slots, never
+        reaching the service seam, so the contract needs an LCM entry.
+        """
+        return akuvox_lock
 
 
 # ---------------------------------------------------------------------------

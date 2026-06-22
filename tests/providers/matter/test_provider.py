@@ -42,7 +42,10 @@ from custom_components.lock_code_manager.providers.matter import (
     _lcm_slot_from_raw_users_by_credential_index,
     _lcm_slot_from_raw_users_by_user_index,
 )
-from tests.providers.helpers import ServiceProviderConnectionTests
+from tests.providers.helpers import (
+    ProviderNativeTransportContractTests,
+    ServiceProviderConnectionTests,
+)
 
 # Module path where lock_helpers functions are imported in the provider
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
@@ -114,6 +117,35 @@ async def test_hard_refresh_interval(matter_lock_simple: MatterLock) -> None:
 
 class TestConnection(ServiceProviderConnectionTests):
     """Connection tests for Matter provider using shared mixin."""
+
+
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Matter routes a native ``MatterClientException`` to LockDisconnected.
+
+    ``InvalidState: Not connected`` (a ``MatterClientException``) is raised by
+    the matter-server client before its websocket connects at startup and is
+    independent of ``HomeAssistantError`` (issue #1257, PR #1286). The
+    provider-specific read sites (get_lock_users / get_lock_info / set / clear)
+    are also covered individually below.
+    """
+
+    native_transport_exception = MatterClientException("Not connected")
+
+    @pytest.fixture
+    def provider_lock(self, matter_lock: MatterLock) -> MatterLock:
+        """A lock with a wired client/node so the read reaches ``get_lock_users``.
+
+        ``matter_lock_simple`` has no node, so ``_require_client_and_node``
+        raises before the patched SDK call -- a false pass for this contract.
+        """
+        return matter_lock
+
+    def inject_native_transport_error(self, hass, provider_lock):
+        """Patch the lowest read-path SDK call (``get_lock_users``)."""
+        return patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(side_effect=self.native_transport_exception),
+        )
 
 
 class TestDeviceAvailability:

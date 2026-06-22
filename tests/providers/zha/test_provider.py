@@ -26,6 +26,22 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
+from tests.providers.helpers import ProviderNativeTransportContractTests
+
+
+@pytest.mark.skip(
+    reason="ZHA's read path deliberately degrades per-slot: a native zigpy "
+    "error (DeliveryError / TimeoutError) from cluster.get_pin_code is caught "
+    "and the slot marked unreadable, so the coordinator does not treat a "
+    "transient error as confirmed-empty. There is no native non-"
+    "HomeAssistantError exception that maps to LockDisconnected at a read seam "
+    "(the cluster gate raises LockDisconnected only when the cluster is "
+    "absent, not from a native exception), so the issue #1257 contract does "
+    "not apply."
+)
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Documents that the native-transport contract does not apply to ZHA reads."""
+
 
 # ---------------------------------------------------------------------------
 # Property tests

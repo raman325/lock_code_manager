@@ -50,8 +50,41 @@ from custom_components.lock_code_manager.providers._zwave_js_uc import (
     ZWaveJSUserCodeFallbackSupport,
 )
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from tests.providers.helpers import ProviderNativeTransportContractTests
 
 from .conftest import get_zwave_lock, uc_only_caps_response, uc_slot_walk
+
+_UC_MODULE = "custom_components.lock_code_manager.providers._zwave_js_uc"
+
+
+class TestUCNativeTransportContract(ProviderNativeTransportContractTests):
+    """UC fallback routes a native ``BaseZwaveJSServerError`` to LockDisconnected.
+
+    The value-DB walk (``get_usercodes``) on the User Code CC fallback path
+    raises ``zwave_js_server`` errors independent of ``HomeAssistantError``;
+    they must surface as ``LockDisconnected`` rather than escaping the read
+    path to the sync catch-all (issue #1257).
+    """
+
+    native_transport_exception = FailedZWaveCommand("cmd", 1, "node gone")
+
+    @pytest.fixture
+    async def provider_lock(
+        self, uc_fallback_lock: ZWaveJSLock, mock_uc_utils: dict
+    ) -> ZWaveJSLock:
+        """A lock with UC fallback already detected (capabilities cached)."""
+        # Establish UC mode first; detection itself walks the value DB, so the
+        # native error must be injected only into the subsequent read.
+        await uc_fallback_lock.async_get_capabilities()
+        return uc_fallback_lock
+
+    def inject_native_transport_error(self, hass, provider_lock):
+        """Fail the post-detection value-DB walk (``get_usercodes``)."""
+        return patch(
+            f"{_UC_MODULE}.get_usercodes",
+            MagicMock(side_effect=self.native_transport_exception),
+        )
+
 
 # ---------------------------------------------------------------------------
 # User Code CC fallback (issue #1251)
