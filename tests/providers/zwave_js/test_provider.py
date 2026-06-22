@@ -44,8 +44,41 @@ from custom_components.lock_code_manager.domain.exceptions import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from tests.providers.helpers import ProviderNativeTransportContractTests
 
 # Properties tests
+
+
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Z-Wave JS routes a native ``BaseZwaveJSServerError`` to LockDisconnected.
+
+    The unified ``access_control`` read raises ``zwave_js_server`` errors (e.g.
+    ``FailedZWaveCommand``) that are independent of ``HomeAssistantError``; they
+    must surface as ``LockDisconnected`` rather than escaping to the sync
+    catch-all (issue #1257).
+    """
+
+    native_transport_exception = FailedZWaveCommand("cmd", 1, "node gone")
+
+    @pytest.fixture
+    def provider_lock(
+        self,
+        zwave_js_lock: ZWaveJSLock,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+    ) -> ZWaveJSLock:
+        """A lock on the unified path with empty data and mocked capabilities."""
+        mock_access_control.get_users_cached.return_value = []
+        mock_access_control.get_all_credentials_cached.return_value = []
+        return zwave_js_lock
+
+    def inject_native_transport_error(self, hass, provider_lock):
+        """Fail the lowest unified read call (``get_users_cached``)."""
+        # ``node.access_control`` is the class-patched mock_access_control.
+        provider_lock.node.access_control.get_users_cached.side_effect = (
+            self.native_transport_exception
+        )
+        return
 
 
 async def test_domain(zwave_js_lock: ZWaveJSLock) -> None:

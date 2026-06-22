@@ -27,8 +27,22 @@ from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
+from tests.providers.helpers import ProviderNativeTransportContractTests
 
 from .conftest import _minimal_lock
+
+
+@pytest.mark.skip(
+    reason="Zigbee2MQTT's read path deliberately degrades per-slot: a native "
+    "OSError on MQTT publish or an asyncio TimeoutError waiting for the bridge "
+    "response is caught and the slot marked unreadable, so a transient MQTT "
+    "error is not treated as confirmed-empty. Its connection gates raise "
+    "LockDisconnected from boolean checks (MQTT enabled / connected / "
+    "available), not from a native exception, so the issue #1257 contract does "
+    "not apply to a read seam."
+)
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Documents that the native-transport contract does not apply to Z2M reads."""
 
 
 def test_zigbee2mqtt_provider_properties_and_no_device_entry_skips_name() -> None:

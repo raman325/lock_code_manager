@@ -1,5 +1,7 @@
 """Test the Virtual lock platform."""
 
+import pytest
+
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
@@ -11,6 +13,16 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
+from tests.providers.helpers import ProviderNativeTransportContractTests
+
+
+@pytest.mark.skip(
+    reason="The virtual provider has no transport layer -- async_get_users "
+    "reads in-memory state with no SDK/client call -- so there is no native "
+    "transport exception and the issue #1257 contract does not apply."
+)
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Documents that the native-transport contract does not apply to virtual."""
 
 
 async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):

@@ -32,6 +32,7 @@ from custom_components.lock_code_manager.providers.schlage import (
     _parse_tag,
 )
 from tests.providers.helpers import (
+    ProviderNativeTransportContractTests,
     ServiceProviderConnectionTests,
     ServiceProviderDeviceAvailabilityTests,
     register_mock_service,
@@ -121,6 +122,25 @@ class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
     """Device availability tests for Schlage provider using shared mixin."""
 
     availability_service = "get_codes"
+
+
+class TestNativeTransportContract(ProviderNativeTransportContractTests):
+    """Schlage routes a native ``OSError`` from ``get_codes`` to LockDisconnected."""
+
+    # Reaches the schlage integration through BaseLock.async_call_service, whose
+    # native transport exception is OSError (an unwrapped ConnectionError).
+    native_transport_read_service = "get_codes"
+
+    @pytest.fixture
+    def provider_lock(
+        self, schlage_lock: SchlageLock, simple_lcm_config_entry: MockConfigEntry
+    ) -> SchlageLock:
+        """A lock with managed slots, so the read actually calls the service.
+
+        ``async_get_users`` short-circuits with no managed slots, never
+        reaching the service seam, so the contract needs an LCM entry.
+        """
+        return schlage_lock
 
 
 # ---------------------------------------------------------------------------
