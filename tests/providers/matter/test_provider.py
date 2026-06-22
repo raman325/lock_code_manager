@@ -342,6 +342,23 @@ async def test_get_usercodes_get_lock_users_communication_error(
             await matter_lock.async_get_usercodes()
 
 
+async def test_get_usercodes_get_lock_users_client_exception(
+    hass: HomeAssistant, matter_lock: MatterLock
+) -> None:
+    """``MatterClientException`` from get_lock_users routes to LockDisconnected.
+
+    ``InvalidState: Not connected`` (a ``MatterClientException``, raised
+    by the matter-server client before its websocket is connected at
+    startup) is independent of ``HomeAssistantError`` -- so a read site
+    that only catches ``HomeAssistantError`` lets it escape to the sync
+    catchall and spuriously suspends the slot (issue #1257).
+    """
+    mock_get_lock_users = AsyncMock(side_effect=MatterClientException("Not connected"))
+    with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
+        with pytest.raises(LockDisconnected, match="get_lock_users failed"):
+            await matter_lock.async_get_usercodes()
+
+
 async def test_get_usercodes_multiple_credential_types(
     hass: HomeAssistant,
     e2e_matter_lock: MatterLock,
@@ -2012,6 +2029,24 @@ class TestGetCapabilities:
         ):
             await matter_lock.async_get_capabilities()
 
+    async def test_get_capabilities_client_exception(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """``MatterClientException`` from get_lock_info raises LockDisconnected.
+
+        Independent of ``HomeAssistantError`` (issue #1257): a startup
+        ``InvalidState: Not connected`` must route to retry, not escape
+        the read site and suspend the slot.
+        """
+        mock_get_lock_info = AsyncMock(
+            side_effect=MatterClientException("Not connected")
+        )
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
+            pytest.raises(LockDisconnected, match="get_lock_info failed"),
+        ):
+            await matter_lock.async_get_capabilities()
+
 
 # =============================================================================
 # async_set_user tests
@@ -2443,6 +2478,34 @@ class TestSetUser:
 
         assert mock_set_user.call_count == 2
 
+    async def test_set_user_create_routes_client_exception_during_fallback(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A ``MatterClientException`` during the cascade maps to ``LockDisconnected``.
+
+        ``InvalidState: Not connected`` is a transport failure, not a
+        charset rejection, so it short-circuits the cascade (trying the
+        next candidate name would hit the same closed connection) and
+        routes to retry rather than escaping to the catchall suspend
+        (issue #1257). It is independent of ``HomeAssistantError``, so
+        the prior fix that only added ``MatterError`` did not cover it.
+        """
+        mock_set_user = AsyncMock(
+            side_effect=[
+                UnknownError("InvalidCommand (0x85)"),
+                MatterClientException("Not connected"),
+            ]
+        )
+        user = User(user_id=1, name="lcm:1:Alice")
+        with (
+            self._patch_users([]),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+            pytest.raises(LockDisconnected, match="Not connected"),
+        ):
+            await matter_lock.async_set_user(user)
+
+        assert mock_set_user.call_count == 2
+
     async def test_set_user_update_falls_back_to_compact_on_charset_rejection(
         self, hass: HomeAssistant, matter_lock: MatterLock, caplog
     ) -> None:
@@ -2563,6 +2626,24 @@ class TestDeleteUser:
         with (
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
             pytest.raises(LockOperationFailed, match="rejected input"),
+        ):
+            await matter_lock.async_delete_user(3)
+
+    async def test_delete_user_client_exception(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """``MatterClientException`` from clear_lock_user raises LockDisconnected.
+
+        This is the exact path behind the original #1257 report:
+        ``Unexpected error during clear usercode ... InvalidState: Not
+        connected``. The clear-user site only caught ``HomeAssistantError``,
+        so the client exception escaped to the sync catchall and
+        suspended the slot instead of being retried.
+        """
+        mock_clear_user = AsyncMock(side_effect=MatterClientException("Not connected"))
+        with (
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
+            pytest.raises(LockDisconnected, match="clear_lock_user failed"),
         ):
             await matter_lock.async_delete_user(3)
 

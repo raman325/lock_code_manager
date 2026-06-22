@@ -402,7 +402,11 @@ class MatterLock(BaseLock):
             raise LockOperationFailed(
                 f"Matter get_lock_users rejected input for {self.lock.entity_id}: {err}"
             ) from err
-        except HomeAssistantError as err:
+        except (HomeAssistantError, MatterError, MatterClientException) as err:
+            # MatterError / MatterClientException are independent of
+            # HomeAssistantError (e.g. ``InvalidState: Not connected`` while the
+            # client reconnects at startup, issue #1257); catch them explicitly
+            # or they escape to the sync catchall and suspend the slot.
             raise LockDisconnected(
                 f"Matter get_lock_users failed for {self.lock.entity_id}: {err}"
             ) from err
@@ -480,7 +484,10 @@ class MatterLock(BaseLock):
             raise LockOperationFailed(
                 f"Matter get_lock_info rejected input for {self.lock.entity_id}: {err}"
             ) from err
-        except HomeAssistantError as err:
+        except (HomeAssistantError, MatterError, MatterClientException) as err:
+            # Independent of HomeAssistantError (issue #1257): a startup
+            # ``InvalidState: Not connected`` must route to retry, not escape
+            # the read site and suspend the slot.
             raise LockDisconnected(
                 f"Matter get_lock_info failed for {self.lock.entity_id}: {err}"
             ) from err
@@ -690,7 +697,12 @@ class MatterLock(BaseLock):
                     f"Matter set_lock_user rejected input for "
                     f"{self.lock.entity_id} (user_name={name!r}): {err}"
                 ) from err
-            except HomeAssistantError as err:
+            except (HomeAssistantError, MatterClientException) as err:
+                # Transport failures (incl. ``InvalidState: Not connected`` at
+                # startup, issue #1257) are not charset-recoverable -- the next
+                # candidate name hits the same closed connection -- so short-
+                # circuit to retry instead of falling through. MatterClientException
+                # is independent of HomeAssistantError, hence the explicit catch.
                 raise LockDisconnected(
                     f"Matter set_lock_user failed for {self.lock.entity_id} "
                     f"(user_name={name!r}): {err}"
@@ -780,7 +792,11 @@ class MatterLock(BaseLock):
             raise LockOperationFailed(
                 f"Matter clear_lock_user rejected input for {self.lock.entity_id}: {err}"
             ) from err
-        except HomeAssistantError as err:
+        except (HomeAssistantError, MatterError, MatterClientException) as err:
+            # The original #1257 report's signature: ``Unexpected error during
+            # clear usercode ... InvalidState: Not connected``. MatterError /
+            # MatterClientException are independent of HomeAssistantError, so
+            # route them to retry rather than the sync catchall suspend.
             raise LockDisconnected(
                 f"Matter clear_lock_user failed for {self.lock.entity_id}: {err}"
             ) from err
