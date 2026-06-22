@@ -567,7 +567,7 @@ class LockCodesCard extends LockCodesCardBase {
                               </span>
                           </span>`
                         : nothing}
-                    ${this._renderCodeSection(slot, hasCode, mode)}
+                    ${this._renderCodeSection(slot, mode)}
                 </div>
             </div>
         `;
@@ -575,7 +575,6 @@ class LockCodesCard extends LockCodesCardBase {
 
     private _renderCodeSection(
         slot: LockCoordinatorSlotData,
-        hasCode: boolean,
         mode: CodeDisplayMode
     ): TemplateResult {
         const isEditing = this._editingSlot === slot.slot;
@@ -584,7 +583,7 @@ class LockCodesCard extends LockCodesCardBase {
         if (isEditing && isUnmanaged) {
             return this._renderCodeEditMode(slot);
         }
-        return this._renderCodeDisplayMode(slot, hasCode, mode, isUnmanaged && !isEditing);
+        return this._renderCodeDisplayMode(slot, mode, isUnmanaged && !isEditing);
     }
 
     private _renderCodeEditMode(slot: LockCoordinatorSlotData): TemplateResult {
@@ -627,7 +626,6 @@ class LockCodesCard extends LockCodesCardBase {
 
     private _renderCodeDisplayMode(
         slot: LockCoordinatorSlotData,
-        hasCode: boolean,
         mode: CodeDisplayMode,
         isEditable: boolean
     ): TemplateResult {
@@ -638,7 +636,7 @@ class LockCodesCard extends LockCodesCardBase {
             <div class="slot-code-row">
                 <span
                     class="lcm-code ${codeClass} ${editableClass}"
-                    title=${ifDefined(isEditable ? 'Click to edit' : undefined)}
+                    title=${ifDefined(isEditable ? 'Click to edit' : this._codeTitle(slot))}
                     @click=${isEditable ? (e: Event) => this._startEditing(e, slot) : nothing}
                 >
                     ${isPending
@@ -651,8 +649,7 @@ class LockCodesCard extends LockCodesCardBase {
                         : nothing}
                     ${this._formatCode(slot)}
                 </span>
-                ${mode === 'masked_with_reveal' &&
-                (hasCode || !!slot.configured_code || !!slot.configured_code_length)
+                ${mode === 'masked_with_reveal' && this._canReveal(slot)
                     ? html`<span class="slot-code-actions">
                           <ha-icon-button
                               class="lcm-reveal-button"
@@ -672,12 +669,50 @@ class LockCodesCard extends LockCodesCardBase {
         `;
     }
 
+    /**
+     * A code the lock can't read back, but which LCM manages and currently
+     * considers in sync — so LCM's configured PIN is a reliable stand-in. Shown
+     * italicized with a tooltip so it reads as "configured by LCM", not as a
+     * value read back from the lock (which could differ if changed at the keypad).
+     */
+    private _isProxyCode(slot: LockCoordinatorSlotData): boolean {
+        return (
+            slot.code === SLOT_CODE_UNREADABLE &&
+            slot.managed === true &&
+            slot.in_sync === true &&
+            (!!slot.configured_code || !!slot.configured_code_length)
+        );
+    }
+
+    /** Whether revealing can show a real value, i.e. whether to offer the eye. */
+    private _canReveal(slot: LockCoordinatorSlotData): boolean {
+        // An unreadable code LCM can't vouch for (unmanaged or out of sync) has
+        // nothing to reveal — hide the eye rather than toggle it to no effect.
+        if (slot.code === SLOT_CODE_UNREADABLE && !this._isProxyCode(slot)) return false;
+        return this._hasCode(slot) || !!slot.configured_code || !!slot.configured_code_length;
+    }
+
+    /** Tooltip for a code whose origin or unreadability isn't self-evident. */
+    private _codeTitle(slot: LockCoordinatorSlotData): string | undefined {
+        if (slot.code !== SLOT_CODE_UNREADABLE) return undefined;
+        return this._isProxyCode(slot)
+            ? 'Configured in Lock Code Manager — not read from the lock'
+            : "This lock doesn't report its stored code";
+    }
+
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
         const maskSuffix = shouldMask ? ' masked' : '';
 
-        if (slot.code === SLOT_CODE_UNREADABLE || slot.code_length) return 'masked';
+        if (slot.code === SLOT_CODE_UNREADABLE) {
+            // Managed + in sync: italicized configured-PIN proxy (still dimmed
+            // while masked). Otherwise the value is genuinely unknown and gets
+            // its own muted, hollow-dot treatment with no reveal.
+            if (this._isProxyCode(slot)) return `configured${maskSuffix}`;
+            return 'unreadable';
+        }
+        if (slot.code_length) return 'masked';
         if (!isSlotEmpty(slot.code)) return '';
 
         // Empty/null code on the lock — distinguish "off" (user disabled the slot)
@@ -695,16 +730,24 @@ class LockCodesCard extends LockCodesCardBase {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
-        // Active code on the lock
-        if (slot.code === SLOT_CODE_UNREADABLE) return '• • •';
-        if (isSlotEmpty(slot.code)) {
+        if (slot.code === SLOT_CODE_UNREADABLE) {
+            // Unmanaged or out of sync: the value is genuinely unknown. Hollow
+            // dots sized to the known length when we have one, else a short fixed
+            // placeholder — never the misleading fixed-length "• • •".
+            if (!this._isProxyCode(slot)) {
+                const length = slot.configured_code_length ?? slot.code_length ?? 0;
+                return '◦'.repeat(length > 0 ? length : 3);
+            }
+            // Managed + in sync: fall through to the configured-code block below,
+            // which renders LCM's PIN (masked or revealed) as the proxy value.
+        } else if (isSlotEmpty(slot.code)) {
             if (slot.code_length) return '•'.repeat(slot.code_length);
             // Fall through to configured code or dash below
         } else if (slot.code !== null) {
             return shouldMask ? '•'.repeat(String(slot.code).length) : String(slot.code);
         }
 
-        // Disabled LCM slot: show configured code (respect masking)
+        // Configured code from LCM: disabled slots, and the in-sync unreadable proxy.
         if (slot.configured_code) {
             return shouldMask ? '•'.repeat(slot.configured_code.length) : slot.configured_code;
         }

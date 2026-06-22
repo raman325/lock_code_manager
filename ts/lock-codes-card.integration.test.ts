@@ -273,9 +273,9 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
         });
 
-        it('_getCodeClass returns "masked" for "unreadable_code" sentinel', () => {
+        it('_getCodeClass returns "unreadable" for an unvouched unreadable code', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: 'unreadable_code' })).toBe(
-                'masked'
+                'unreadable'
             );
         });
 
@@ -283,8 +283,69 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._formatCode({ slot: 1, code: 'empty' })).toBe('—');
         });
 
-        it('_formatCode returns spaced bullets for "unreadable_code" sentinel', () => {
-            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('• • •');
+        it('_formatCode returns muted hollow dots for an unvouched unreadable code', () => {
+            // Unmanaged / out of sync: value is unknown. No length known here, so
+            // a fixed-width hollow placeholder (not the misleading "• • •").
+            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('◦◦◦');
+        });
+
+        it('_formatCode sizes hollow dots to the configured length when known', () => {
+            expect(
+                (card as any)._formatCode({
+                    slot: 1,
+                    code: 'unreadable_code',
+                    configured_code_length: 4
+                })
+            ).toBe('◦◦◦◦');
+        });
+
+        describe('managed + in-sync unreadable code (configured-PIN proxy)', () => {
+            const proxySlot = {
+                slot: 1,
+                code: 'unreadable_code',
+                managed: true,
+                in_sync: true
+            };
+
+            it('masks to the configured length, not a fixed 3 dots', () => {
+                expect((card as any)._revealed).toBe(false);
+                expect((card as any)._formatCode({ ...proxySlot, configured_code_length: 4 })).toBe(
+                    '••••'
+                );
+                expect(
+                    (card as any)._getCodeClass({ ...proxySlot, configured_code_length: 4 })
+                ).toBe('configured masked');
+            });
+
+            it('reveals the configured PIN, marked as configured (italic class)', () => {
+                (card as any)._revealed = true;
+                try {
+                    expect(
+                        (card as any)._formatCode({ ...proxySlot, configured_code: '1234' })
+                    ).toBe('1234');
+                    expect(
+                        (card as any)._getCodeClass({ ...proxySlot, configured_code: '1234' })
+                    ).toBe('configured');
+                } finally {
+                    (card as any)._revealed = false;
+                }
+            });
+
+            it('offers the eye for a proxy code but not an unvouched one', () => {
+                expect((card as any)._canReveal({ ...proxySlot, configured_code_length: 4 })).toBe(
+                    true
+                );
+                expect((card as any)._canReveal({ slot: 1, code: 'unreadable_code' })).toBe(false);
+            });
+
+            it('tooltips distinguish proxy from unreadable', () => {
+                expect(
+                    (card as any)._codeTitle({ ...proxySlot, configured_code_length: 4 })
+                ).toContain('Lock Code Manager');
+                expect((card as any)._codeTitle({ slot: 1, code: 'unreadable_code' })).toContain(
+                    "doesn't report"
+                );
+            });
         });
         it('_startEditing clears edit value for "empty" sentinel', () => {
             const mockEvent = { stopPropagation: () => {} };
@@ -803,9 +864,9 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
         });
 
-        it('returns masked for unreadable code', () => {
+        it('returns unreadable for an unvouched unreadable code', () => {
             expect((card as any)._getCodeClass({ slot: 1, code: 'unreadable_code' })).toBe(
-                'masked'
+                'unreadable'
             );
         });
 
@@ -1300,8 +1361,8 @@ describe('LockCodesCard integration', () => {
             await flush();
         });
 
-        it('returns bullets for unreadable code', () => {
-            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('• • •');
+        it('returns muted hollow dots for an unvouched unreadable code', () => {
+            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('◦◦◦');
         });
 
         it('returns dash for empty slot with no configured code', () => {

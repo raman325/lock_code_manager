@@ -167,7 +167,14 @@ describe('LockCodesCard logic', () => {
             type: 'code' | 'masked' | 'empty';
             value: string;
         } {
-            if (slot.code === SLOT_CODE_UNREADABLE) return { type: 'masked', value: '• • •' };
+            if (slot.code === SLOT_CODE_UNREADABLE) {
+                // Unvouched unreadable code: muted hollow dots, sized to a known
+                // length when present. (The managed + in-sync proxy that shows
+                // the configured PIN is covered in the integration tests against
+                // the real card method.)
+                const length = slot.configured_code_length ?? slot.code_length ?? 0;
+                return { type: 'masked', value: '◦'.repeat(length > 0 ? length : 3) };
+            }
             if (isSlotEmpty(slot.code)) {
                 if (slot.code_length)
                     return { type: 'masked', value: '•'.repeat(slot.code_length) };
@@ -207,9 +214,9 @@ describe('LockCodesCard logic', () => {
             expect(getCodeDisplay(slot)).toEqual({ type: 'empty', value: '' });
         });
 
-        it('returns masked indicator for unknown (unreadable) code', () => {
+        it('returns muted hollow dots for unknown (unreadable) code', () => {
             const slot: LockCoordinatorSlotData = { slot: 1, code: 'unreadable_code' };
-            expect(getCodeDisplay(slot)).toEqual({ type: 'masked', value: '• • •' });
+            expect(getCodeDisplay(slot)).toEqual({ type: 'masked', value: '◦◦◦' });
         });
 
         it('returns empty for "empty" sentinel code', () => {

@@ -214,6 +214,21 @@ export const lcmCodeStyles = css`
         font-weight: 400;
         letter-spacing: normal;
     }
+
+    /* Lock can't read the code back, but LCM manages it and it's in sync, so
+       LCM's configured PIN stands in. Italic marks it as configured by LCM, not
+       read from the lock; .masked still dims it while hidden. */
+    .lcm-code.configured {
+        font-style: italic;
+    }
+
+    /* Lock can't read the code back and LCM can't vouch for it (unmanaged or out
+       of sync). Muted hollow dots (◦) read as "a code exists but is unreadable",
+       distinct from privacy-masked dots; no reveal is offered. */
+    .lcm-code.unreadable {
+        color: var(--secondary-text-color);
+        opacity: 0.7;
+    }
 `;
 
 /**
