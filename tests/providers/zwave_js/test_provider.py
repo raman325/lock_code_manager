@@ -1308,14 +1308,12 @@ async def test_async_delete_credential_maps_ha_error_to_operation_failed(
 
 async def test_get_client_state_not_ready_when_client_missing(
     zwave_js_lock: ZWaveJSLock,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A loaded entry with no client reports not-ready."""
     runtime_data = MagicMock()
     runtime_data.client = None
-    monkeypatch.setattr(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data)
-
-    ready, reason = zwave_js_lock._get_client_state()
+    with patch.object(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data):
+        ready, reason = zwave_js_lock._get_client_state()
 
     assert ready is False
     assert "not ready" in reason
@@ -1323,14 +1321,12 @@ async def test_get_client_state_not_ready_when_client_missing(
 
 async def test_get_client_state_not_ready_when_disconnected(
     zwave_js_lock: ZWaveJSLock,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A client that is present but disconnected reports not-ready."""
     runtime_data = MagicMock()
     runtime_data.client = MagicMock(connected=False)
-    monkeypatch.setattr(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data)
-
-    ready, reason = zwave_js_lock._get_client_state()
+    with patch.object(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data):
+        ready, reason = zwave_js_lock._get_client_state()
 
     assert ready is False
     assert "not connected" in reason
@@ -1338,14 +1334,12 @@ async def test_get_client_state_not_ready_when_disconnected(
 
 async def test_get_client_state_not_ready_when_driver_missing(
     zwave_js_lock: ZWaveJSLock,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A connected client with no driver reports not-ready."""
     runtime_data = MagicMock()
     runtime_data.client = MagicMock(connected=True, driver=None)
-    monkeypatch.setattr(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data)
-
-    ready, reason = zwave_js_lock._get_client_state()
+    with patch.object(zwave_js_lock.lock_config_entry, "runtime_data", runtime_data):
+        ready, reason = zwave_js_lock._get_client_state()
 
     assert ready is False
     assert "driver not ready" in reason
