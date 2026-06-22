@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "bd848ab461ba",
+  "strategy": "manual-commit",
+  "branch": "fix/unreadable-pin-card-display",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/test_websocket.py",
+    "ts/lock-codes-card.integration.test.ts",
+    "ts/lock-codes-card.test.ts",
+    "ts/lock-codes-card.ts",
+    "ts/shared-styles.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/848ab461ba/0/metadata.json",
+      "transcript": "/bd/848ab461ba/0/full.jsonl",
+      "content_hash": "/bd/848ab461ba/0/content_hash.txt",
+      "prompt": "/bd/848ab461ba/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24724,
+    "cache_creation_tokens": 176975,
+    "cache_read_tokens": 33687350,
+    "output_tokens": 110300,
+    "api_call_count": 102
+  }
+}

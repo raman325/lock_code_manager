@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "bd848ab461ba",
+  "session_id": "a0b47440-59c2-4093-87d7-4d8614795656",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T03:05:38.821742Z",
+  "branch": "fix/unreadable-pin-card-display",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/test_websocket.py",
+    "ts/lock-codes-card.integration.test.ts",
+    "ts/lock-codes-card.test.ts",
+    "ts/lock-codes-card.ts",
+    "ts/shared-styles.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "c4789a986693",
+  "checkpoint_transcript_start": 419,
+  "transcript_lines_at_start": 419,
+  "token_usage": {
+    "input_tokens": 24724,
+    "cache_creation_tokens": 176975,
+    "cache_read_tokens": 33687350,
+    "output_tokens": 110300,
+    "api_call_count": 102
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-22T03:05:38.431468Z",
+    "agent_lines": 200,
+    "human_added": 35,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 235,
+    "agent_percentage": 85.1063829787234
+  }
+}
