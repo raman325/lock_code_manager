@@ -241,6 +241,13 @@ class CredentialTypeCapability:
     ``supports_learn`` is True when the lock can enroll the credential at the
     device (for example a fingerprint learn flow) rather than being told the
     value.
+
+    Length convention shared by every provider: a non-positive ``max_length``
+    means "no advertised maximum / unknown" -- never a literal zero-length
+    limit, which would be meaningless -- so providers map an absent or
+    unreadable maximum to ``0`` (Matter's ``max_pin_length or 0`` idiom). A
+    non-positive ``min_length`` means "no minimum". ``length_bounds`` applies
+    this normalization; do not emit a literal ``0`` to express a real limit.
     """
 
     num_slots: int
