@@ -1176,6 +1176,7 @@ class BaseLock:
         """
         return self._capabilities_cache
 
+    @final
     async def _get_cached_capabilities(self) -> LockCapabilities:
         """
         Return the lock's capabilities, populating the cache on first call.

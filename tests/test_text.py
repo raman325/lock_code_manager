@@ -2,6 +2,7 @@
 
 import logging
 from types import SimpleNamespace
+from unittest.mock import PropertyMock, patch
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -54,8 +55,15 @@ def _pin_caps(min_length: int, max_length: int) -> LockCapabilities:
 
 def _fake_lock(entity_id: str, caps: LockCapabilities | None):
     """A stand-in lock exposing only what the text entity reads."""
+
+    async def _get_cached_capabilities() -> LockCapabilities | None:
+        """Stand in for the async probe the add hook runs in the background."""
+        return caps
+
     return SimpleNamespace(
-        cached_capabilities=caps, lock=SimpleNamespace(entity_id=entity_id)
+        cached_capabilities=caps,
+        lock=SimpleNamespace(entity_id=entity_id),
+        _get_cached_capabilities=_get_cached_capabilities,
     )
 
 
@@ -91,56 +99,49 @@ def test_pin_bounds_default_without_capabilities(hass: HomeAssistant) -> None:
     assert (entity.native_min, entity.native_max) == (0, 9999)
 
 
-def test_pin_bounds_reflect_single_lock(hass: HomeAssistant) -> None:
-    """A lock advertising 4-8 sizes the PIN entity to 4-8."""
+def test_pin_max_reflects_single_lock(hass: HomeAssistant) -> None:
+    """A lock advertising 4-8 surfaces a max of 8; the min stays permissive."""
     entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(4, 8))])
-    assert (entity.native_min, entity.native_max) == (4, 8)
+    assert (entity.native_min, entity.native_max) == (0, 8)
 
 
-def test_pin_bounds_take_tightest_common(hass: HomeAssistant) -> None:
-    """Two locks collapse to the largest min and smallest max."""
+def test_pin_max_takes_tightest_common(hass: HomeAssistant) -> None:
+    """Two locks collapse to the smallest advertised maximum."""
     entity = _make_text_entity(
         hass,
         CONF_PIN,
         [_fake_lock("lock.a", _pin_caps(4, 8)), _fake_lock("lock.b", _pin_caps(6, 10))],
     )
-    assert (entity.native_min, entity.native_max) == (6, 8)
+    assert (entity.native_min, entity.native_max) == (0, 8)
 
 
-def test_pin_bounds_fall_back_on_empty_intersection(hass: HomeAssistant) -> None:
-    """Unsatisfiable across locks -> default range, not an inverted slider."""
-    entity = _make_text_entity(
-        hass,
-        CONF_PIN,
-        [_fake_lock("lock.a", _pin_caps(6, 6)), _fake_lock("lock.b", _pin_caps(4, 4))],
-    )
-    assert (entity.native_min, entity.native_max) == (0, 9999)
+def test_native_min_stays_zero_despite_advertised_minimum(hass: HomeAssistant) -> None:
+    """The advertised minimum is never surfaced as a hard floor.
 
-
-def test_pin_bounds_admit_empty_value_under_minimum(
-    hass: HomeAssistant, monkeypatch
-) -> None:
-    """An empty PIN must always render even when the lock requires a minimum.
-
-    HA raises at state-render time if the value is shorter than the min, so a
-    cleared PIN ("") forces the advertised minimum down to 0.
+    Surfacing it would make HA's text service reject the empty string that
+    clears a slot; the coordinator owns the minimum instead.
     """
     entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(6, 8))])
-    monkeypatch.setattr(LockCodeManagerText, "native_value", property(lambda self: ""))
     assert entity.native_min == 0
     assert entity.native_max == 8
 
 
-def test_pin_bounds_admit_out_of_range_current_value(
-    hass: HomeAssistant, monkeypatch
-) -> None:
-    """A stored PIN outside the advertised range still renders (bounds widen)."""
-    entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(6, 8))])
-    monkeypatch.setattr(
-        LockCodeManagerText, "native_value", property(lambda self: "1234")
-    )
-    assert entity.native_min == 4  # widened down to admit the length-4 value
-    assert entity.native_max == 8
+def test_native_max_widens_to_admit_longer_stored_value(hass: HomeAssistant) -> None:
+    """A stored PIN longer than the advertised max still renders (ceiling widens).
+
+    HA raises at state-render time if the value exceeds native_max, so a PIN
+    written before a (now tighter) lock advertised its limit forces the ceiling
+    up to admit it.
+    """
+    entity = _make_text_entity(hass, CONF_PIN, [_fake_lock("lock.a", _pin_caps(4, 8))])
+    with patch.object(
+        LockCodeManagerText,
+        "native_value",
+        new_callable=PropertyMock,
+        return_value="1234567890",
+    ):
+        assert entity.native_min == 0
+        assert entity.native_max == 10  # widened up to admit the length-10 value
 
 
 def test_name_entity_ignores_capabilities(hass: HomeAssistant) -> None:
@@ -149,23 +150,28 @@ def test_name_entity_ignores_capabilities(hass: HomeAssistant) -> None:
     assert (entity.native_min, entity.native_max) == (0, 9999)
 
 
-def test_lock_add_remove_rewrites_state(hass: HomeAssistant, monkeypatch) -> None:
+async def test_lock_add_remove_rewrites_state(hass: HomeAssistant) -> None:
     """Lock set changes re-push state so the frontend re-reads bounds."""
     entity = _make_text_entity(hass, CONF_PIN, [])
     entity.hass = hass
     entity.entity_id = "text.test"
-    writes: list[int] = []
-    monkeypatch.setattr(entity, "async_write_ha_state", lambda: writes.append(1))
 
-    added = _fake_lock("lock.a", _pin_caps(4, 8))
-    entity._handle_add_locks([added])
-    assert added in entity.locks
-    assert (entity.native_min, entity.native_max) == (4, 8)
-    assert len(writes) == 1
+    with patch.object(entity, "async_write_ha_state") as mock_write:
+        added = _fake_lock("lock.a", _pin_caps(4, 8))
+        entity._handle_add_locks([added])
+        await hass.async_block_till_done()
+        assert added in entity.locks
+        # The added lock's max is surfaced; the min stays permissive.
+        assert (entity.native_min, entity.native_max) == (0, 8)
+        assert mock_write.called  # immediate re-push, plus one after the probe
+        mock_write.reset_mock()
 
-    entity._handle_remove_lock("lock.a")
-    assert entity.locks == []
-    assert len(writes) == 2
+        entity._handle_remove_lock("lock.a")
+        await hass.async_block_till_done()
+        assert entity.locks == []
+        # Removing the only lock reverts the surfaced ceiling to the default.
+        assert (entity.native_min, entity.native_max) == (0, 9999)
+        assert mock_write.called  # the removal re-pushed state
 
 
 async def test_pin_entity_surfaces_lock_bounds(
@@ -195,8 +201,52 @@ async def test_pin_entity_surfaces_lock_bounds(
 
     state = hass.states.get(SLOT_2_PIN_ENTITY)
     assert state
-    assert state.attributes[ATTR_MIN] == 4
+    # The minimum is owned by the coordinator, not surfaced as a hard floor.
+    assert state.attributes[ATTR_MIN] == 0
     assert state.attributes[ATTR_MAX] == 8
+
+
+async def test_pin_clear_through_service_with_minimum_advertised(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Clearing a PIN via text.set_value works even when locks advertise a minimum.
+
+    Regression: surfacing the advertised minimum as ``native_min`` made HA's
+    text service reject the empty string (``len 0 < min``) before the
+    coordinator's empty-PIN exemption ran, so a slot could not be cleared.
+    """
+    for lock in lock_code_manager_config_entry.runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(6, 8)
+
+    # An in-range PIN goes through the service normally.
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "654321"},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
+        blocking=True,
+    )
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
+    assert state
+    assert state.state == "654321"
+
+    # Clearing must reach the coordinator (empty is exempt) rather than being
+    # rejected by HA's service-level minimum check.
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: ""},
+        target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
+        blocking=True,
+    )
+    state = hass.states.get(SLOT_2_PIN_ENTITY)
+    assert state
+    assert state.state == ""
+    state = hass.states.get(SLOT_2_ENABLED_ENTITY)
+    assert state
+    assert state.state == STATE_OFF
 
 
 async def test_text_entities(

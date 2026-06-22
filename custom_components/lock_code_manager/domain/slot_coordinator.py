@@ -219,8 +219,11 @@ class SlotEntityCoordinator:
 
         A non-empty PIN is validated against every bound lock's advertised
         length range before it is written; an empty PIN clears the slot and
-        is exempt. The check is the authoritative gate -- the text entity's
-        length hints are best-effort and do not block input.
+        is exempt. This is the authoritative *minimum* gate: the text entity
+        keeps ``native_min`` permissive so Home Assistant's ``text.set_value``
+        service neither rejects the empty clear nor pre-empts the per-lock
+        error built here. The maximum is additionally surfaced as the entity's
+        ``native_max`` ceiling, which Home Assistant does enforce.
         """
         if not value.strip():
             value = ""
@@ -245,11 +248,15 @@ class SlotEntityCoordinator:
         Reject ``value`` if it violates any bound lock's length range.
 
         Authoritative gate for credential length. Iterates every bound lock so
-        the error names each offending lock with its required range. Locks
-        whose capabilities are not cached (disconnected or not yet probed) and
-        locks that do not advertise ``credential_type`` are skipped -- the
-        write proceeds rather than blocking on unknown limits, and the sync
-        layer surfaces any later device rejection.
+        the error names each offending lock with its required range. The lock
+        set is the entry-wide ``runtime_data.locks`` -- the same set the text
+        entity mirrors in ``self.locks`` to size its surfaced bounds, since LCM
+        binds every lock to every slot; a future per-slot binding must update
+        both sites together. Locks whose capabilities are not cached
+        (disconnected or not yet probed) and locks that do not advertise
+        ``credential_type`` are skipped -- the write proceeds rather than
+        blocking on unknown limits, and the sync layer surfaces any later
+        device rejection.
         """
         length = len(value)
         violations: list[str] = []
