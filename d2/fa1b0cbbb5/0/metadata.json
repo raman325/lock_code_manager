@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d2fa1b0cbbb5",
+  "session_id": "767d0b4b-61ce-40e4-a26a-8aa50590fb1c",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T18:21:20.428149Z",
+  "branch": "fix/unified-reachability-backoff-recovery",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d4906f0e582d",
+  "token_usage": {
+    "input_tokens": 86695,
+    "cache_creation_tokens": 2557224,
+    "cache_read_tokens": 80617252,
+    "output_tokens": 321276,
+    "api_call_count": 240
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-22T18:21:19.923227Z",
+    "agent_lines": 0,
+    "human_added": 1018,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 1018,
+    "agent_percentage": 0
+  }
+}

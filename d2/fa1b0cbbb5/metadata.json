@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d2fa1b0cbbb5",
+  "strategy": "manual-commit",
+  "branch": "fix/unified-reachability-backoff-recovery",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/domain/coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d2/fa1b0cbbb5/0/metadata.json",
+      "transcript": "/d2/fa1b0cbbb5/0/full.jsonl",
+      "content_hash": "/d2/fa1b0cbbb5/0/content_hash.txt",
+      "prompt": "/d2/fa1b0cbbb5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86695,
+    "cache_creation_tokens": 2557224,
+    "cache_read_tokens": 80617252,
+    "output_tokens": 321276,
+    "api_call_count": 240
+  }
+}
