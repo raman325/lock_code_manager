@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "d2fa1b0cbbb5",
+  "session_id": "8037d8a8-10be-4bc5-ae5f-1328262250f0",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-22T18:21:23.714718Z",
+  "branch": "fix/unified-reachability-backoff-recovery",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "8a0c9317c81c",
+  "checkpoint_transcript_start": 321,
+  "transcript_lines_at_start": 321,
+  "token_usage": {
+    "input_tokens": 8962,
+    "cache_creation_tokens": 106246,
+    "cache_read_tokens": 14117888,
+    "output_tokens": 80850,
+    "api_call_count": 58
+  },
+  "session_metrics": {
+    "turn_count": 7
+  }
+}
