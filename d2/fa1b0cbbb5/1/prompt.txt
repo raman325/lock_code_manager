@@ -1,1 +1,25 @@
 merged. ff main, clean up stale branches, then create the follow up PRs
+
+---
+
+if this was a slot breaker issue, how was the code working after several minutes?
+
+---
+
+yes, everything else is merged
+
+---
+
+I thought we had an async_is_device_connected or something of that sort on the provider - when we have connectivity issues, whether they are at the network or device level, I think the backoff should be the same no?
+
+---
+
+what's the cost of doing a push unsub/resub? It's safer
+
+---
+
+what's the cost of doing a push unsub/resub? It's safer in that it ensures we are never relying on a stale subscription. Unless there's ar easl cost, that seems worth having. Convince me otherwise
+
+---
+
+yes, do it here
