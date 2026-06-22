@@ -413,6 +413,7 @@ def _serialize_slot(
     reveal: bool,
     name: str | None = None,
     managed: bool | None = None,
+    in_sync: bool | None = None,
     configured_code: str | None = None,
     active: bool | None = None,
     enabled: bool | None = None,
@@ -425,6 +426,8 @@ def _serialize_slot(
         result[CONF_NAME] = name
     if managed is not None:
         result[ATTR_MANAGED] = managed
+    if in_sync is not None:
+        result[ATTR_IN_SYNC] = in_sync
     if active is not None:
         result[ATTR_ACTIVE] = active
     if enabled is not None:
@@ -545,17 +548,34 @@ def _get_slot_metadata(
     }
 
 
+def _in_sync_entity_id(
+    ent_reg: er.EntityRegistry, entry_id: str, slot_num: int, lock_entity_id: str
+) -> str | None:
+    """Resolve the in_sync binary sensor entity id for a (slot, lock) pair."""
+    unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
+    return ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
+
+
 def _get_slot_state_entity_ids(hass: HomeAssistant, lock_entity_id: str) -> list[str]:
     """
-    Get entity IDs for slot state tracking (enabled, active, name, PIN).
+    Get entity IDs for slot state tracking (enabled, active, name, PIN, in_sync).
 
     Returns the specific LCM entity IDs whose state changes should trigger
-    websocket subscription updates for this lock's slots.
+    websocket subscription updates for this lock's slots. The in_sync sensor is
+    included so the card re-renders when sync status changes -- the unreadable
+    code's configured-PIN proxy display is gated on it.
     """
     slot_entities = _get_slot_entity_ids(hass, lock_entity_id)
+    ent_reg = er.async_get(hass)
     entity_ids: list[str] = []
-    for ids in slot_entities.values():
+    for slot_num, ids in slot_entities.items():
         entity_ids.extend(ids.all_entity_ids())
+        if ids.config_entry_id and (
+            in_sync_id := _in_sync_entity_id(
+                ent_reg, ids.config_entry_id, slot_num, lock_entity_id
+            )
+        ):
+            entity_ids.append(in_sync_id)
     return entity_ids
 
 
@@ -579,6 +599,7 @@ def _serialize_lock_coordinator(
     managed_slots = get_managed_slots(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, slot_entity_ids)
+    ent_reg = er.async_get(hass)
 
     slots = []
     for slot, code in sorted(data.items()):
@@ -586,9 +607,14 @@ def _serialize_lock_coordinator(
         slot_ids = slot_entity_ids.get(slot)
         entry_id = slot_ids.config_entry_id if slot_ids else None
         entry_title = None
+        in_sync = None
         if entry_id:
             entry = hass.config_entries.async_get_entry(entry_id)
             entry_title = entry.title if entry else None
+            in_sync = _get_bool_state(
+                hass,
+                _in_sync_entity_id(ent_reg, entry_id, slot, lock.lock.entity_id),
+            )
         slots.append(
             _serialize_slot(
                 slot,
@@ -596,6 +622,7 @@ def _serialize_lock_coordinator(
                 reveal=reveal,
                 name=meta.name if meta else None,
                 managed=slot in managed_slots,
+                in_sync=in_sync,
                 configured_code=meta.configured_pin if meta else None,
                 active=meta.active if meta else None,
                 enabled=meta.enabled if meta else None,

@@ -2892,6 +2892,26 @@ class TestSerializeSlotWithSlotCode:
         assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code_length"] == 4
 
+    def test_in_sync_included_when_known(self) -> None:
+        """``in_sync`` is serialized for both True and False so the card can gate on it."""
+        assert (
+            _serialize_slot(1, SlotCredential.unreadable(), reveal=False, in_sync=True)[
+                "in_sync"
+            ]
+            is True
+        )
+        assert (
+            _serialize_slot(
+                1, SlotCredential.unreadable(), reveal=False, in_sync=False
+            )["in_sync"]
+            is False
+        )
+
+    def test_in_sync_omitted_when_unknown(self) -> None:
+        """``in_sync`` is omitted when None so the card treats it as not-in-sync."""
+        result = _serialize_slot(1, SlotCredential.unreadable(), reveal=False)
+        assert "in_sync" not in result
+
     def test_regular_code_revealed(self) -> None:
         """Regular string code with reveal=True should include the code."""
         result = _serialize_slot(1, "1234", reveal=True)
