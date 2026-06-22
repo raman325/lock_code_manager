@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "babc16339183",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-client-exception-classification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/matter.py",
+    "tests/providers/matter/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/bc16339183/0/metadata.json",
+      "transcript": "/ba/bc16339183/0/full.jsonl",
+      "content_hash": "/ba/bc16339183/0/content_hash.txt",
+      "prompt": "/ba/bc16339183/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48362,
+    "cache_creation_tokens": 368582,
+    "cache_read_tokens": 6322628,
+    "output_tokens": 44350,
+    "api_call_count": 52
+  }
+}

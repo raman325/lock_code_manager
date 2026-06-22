@@ -1,0 +1,1 @@
+we still have an issue causing the circuit breaker to trip for matter locks on a slot. A user reported it (see the open issue) and I saw it myself
