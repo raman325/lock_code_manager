@@ -16,7 +16,11 @@ jobs:
         uses: actions/checkout@v7
       - name: Get Version
         id: get_version
-        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> "$GITHUB_OUTPUT"
+        # github.ref is unreliable for release events (it can resolve to the
+        # target branch, not the tag); the release payload's tag_name always is.
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
       - name: Update versions
         env:
           VERSION: ${{ steps.get_version.outputs.VERSION }}
@@ -38,5 +42,5 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ${{ github.workspace }}/custom_components/lock_code_manager/lock_code_manager.zip
           asset_name: lock_code_manager.zip
-          tag: ${{ github.ref }}
+          tag: ${{ github.event.release.tag_name }}
           overwrite: true
