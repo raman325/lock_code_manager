@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "e42d948aa707",
+  "strategy": "manual-commit",
+  "branch": "fix/release-tag-from-event",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e4/2d948aa707/0/metadata.json",
+      "transcript": "/e4/2d948aa707/0/full.jsonl",
+      "content_hash": "/e4/2d948aa707/0/content_hash.txt",
+      "prompt": "/e4/2d948aa707/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 347,
+    "cache_creation_tokens": 299342,
+    "cache_read_tokens": 3696133,
+    "output_tokens": 11089,
+    "api_call_count": 13
+  }
+}
