@@ -33,6 +33,7 @@ from homeassistant.core import (
     HomeAssistant,
     callback,
 )
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -42,6 +43,7 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_PIN_USED
 from .config import EntryConfig
+from .credentials import CredentialType
 from .queries import get_entry_config
 
 if TYPE_CHECKING:
@@ -214,9 +216,20 @@ class SlotEntityCoordinator:
         Normalizing whitespace and the empty-PIN side effect (disabling
         the slot on an active slot whose PIN was cleared) live here so
         entities do not have to coordinate sibling state themselves.
+
+        A non-empty PIN is validated against every bound lock's advertised
+        length range before it is written; an empty PIN clears the slot and
+        is exempt. This is the authoritative *minimum* gate: the text entity
+        keeps ``native_min`` permissive so Home Assistant's ``text.set_value``
+        service neither rejects the empty clear nor pre-empts the per-lock
+        error built here. The maximum is additionally surfaced as the entity's
+        ``native_max`` ceiling, which Home Assistant does enforce.
         """
         if not value.strip():
             value = ""
+
+        if value:
+            self._validate_credential_length(value, CredentialType.PIN)
 
         updates: dict[str, Any] = {CONF_PIN: value}
         if not value and self.is_enabled:
@@ -227,6 +240,46 @@ class SlotEntityCoordinator:
             updates[CONF_ENABLED] = False
 
         self._write_config_fields(updates)
+
+    def _validate_credential_length(
+        self, value: str, credential_type: CredentialType
+    ) -> None:
+        """
+        Reject ``value`` if it violates any bound lock's length range.
+
+        Authoritative gate for credential length. Iterates every bound lock so
+        the error names each offending lock with its required range. The lock
+        set is the entry-wide ``runtime_data.locks`` -- the same set the text
+        entity mirrors in ``self.locks`` to size its surfaced bounds, since LCM
+        binds every lock to every slot; a future per-slot binding must update
+        both sites together. Locks whose capabilities are not cached
+        (disconnected or not yet probed) and locks that do not advertise
+        ``credential_type`` are skipped -- the write proceeds rather than
+        blocking on unknown limits, and the sync layer surfaces any later
+        device rejection.
+        """
+        length = len(value)
+        violations: list[str] = []
+        for lock in self._config_entry.runtime_data.locks.values():
+            caps = lock.cached_capabilities
+            if caps is None:
+                continue
+            bounds = caps.length_bounds(credential_type)
+            if bounds is None:
+                continue
+            lo, hi = bounds
+            if length < lo or (hi is not None and length > hi):
+                required = (
+                    f"at least {lo} characters"
+                    if hi is None
+                    else f"{lo}-{hi} characters"
+                )
+                violations.append(f"{required} for {lock.display_name}")
+        if violations:
+            raise ServiceValidationError(
+                f"{credential_type.value.upper()} length {length} is not accepted "
+                f"by all locks: {'; '.join(violations)}"
+            )
 
     async def async_request_active_toggle(self, enabled: bool) -> None:
         """

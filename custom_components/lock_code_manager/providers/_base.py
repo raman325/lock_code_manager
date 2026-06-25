@@ -1190,6 +1190,19 @@ class BaseLock:
         return await self._project_users_to_slots(CredentialType.PIN)
 
     @final
+    @property
+    def cached_capabilities(self) -> LockCapabilities | None:
+        """
+        Return the already-probed capabilities, or ``None``. Never performs I/O.
+
+        Synchronous read of the same cache ``_get_cached_capabilities``
+        populates. Lets synchronous callers (e.g. the PIN text entity sizing
+        its length bounds) consult capabilities without awaiting; an unprobed
+        or disconnected lock reads ``None`` and contributes no constraint.
+        """
+        return self._capabilities_cache
+
+    @final
     async def _get_cached_capabilities(self) -> LockCapabilities:
         """
         Return the lock's capabilities, populating the cache on first call.
