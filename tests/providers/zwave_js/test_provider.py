@@ -39,6 +39,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
 )
@@ -496,9 +497,8 @@ async def test_pin_state_projects_masked_codes_as_unreadable(
 ) -> None:
     """The unified read projection maps masked/withheld codes to unreadable.
 
-    Mirrors the UC fallback's _uc_slot_state so a masked code read through
-    the unified access-control path is not mistaken for a readable PIN
-    (issue #1251 working-capability variant).
+    A masked code read through the unified access-control path must not be
+    mistaken for a readable PIN (issue #1251 working-capability variant).
     """
     assert zwave_js_lock._pin_state(data) == expected
 
@@ -699,6 +699,68 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
         },
         max_user_name_length=10,
     )
+
+
+async def test_async_get_capabilities_zero_slots_raises_actionable_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A degenerate ``num_slots == 0`` capability probe fails with an actionable error.
+
+    The unified API reports a PIN credential type but zero usable slots when the
+    node's interview is incomplete (values missing from the DB) or the connected
+    Z-Wave JS driver predates the spec-compliant capability fix (15.24.3). Rather
+    than the misleading "does not advertise PIN credential support", the provider
+    surfaces a structural ``LockCodeManagerProviderError`` that points at the
+    actual remedies: re-interview the lock and update Z-Wave JS (see issue #1298).
+    """
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+        "supports_user_management": False,
+        "max_users": 0,
+        "supported_user_types": [],
+        "max_user_name_length": 0,
+        "supported_credential_rules": [],
+        "supported_credential_types": {
+            pin_type_str: {
+                "num_slots": 0,
+                "min_length": 4,
+                "max_length": 10,
+                "supports_learn": False,
+            }
+        },
+    }
+
+    with pytest.raises(LockCodeManagerProviderError, match="interview"):
+        await zwave_js_lock.async_get_capabilities()
+
+
+async def test_async_get_capabilities_no_pin_type_returns_empty(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A lock that advertises no PIN credential type at all yields empty capabilities.
+
+    This is the genuinely-unsupported case (distinct from zero slots): the base
+    ``async_setup_internal`` rejects it with the generic "does not advertise PIN
+    credential support", which is accurate here.
+    """
+    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+        "supports_user_management": False,
+        "max_users": 0,
+        "supported_user_types": [],
+        "max_user_name_length": 0,
+        "supported_credential_rules": [],
+        "supported_credential_types": {},
+    }
+
+    caps = await zwave_js_lock.async_get_capabilities()
+
+    assert CredentialType.PIN not in caps.credential_types
 
 
 # Write primitive tests (Task 2)
