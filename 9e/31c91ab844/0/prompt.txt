@@ -1,0 +1,9 @@
+look at issue 1298
+
+---
+
+lets get rid of the UC only fallback as intended. We bump the minimum to 2026.7.0b0
+
+---
+
+the fact that you identified masked read protection as a workaround is concerning. That's a core architecture component. Have you verified that the bugs that caused us to do these workarounds have been fixed? There was one about verifying the state of a masked pin, there was another where a lock was advertising 0 slots because it was UC CC only, etc

@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "9e31c91ab844",
+  "strategy": "manual-commit",
+  "branch": "refactor/remove-uc-cc-fallback",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_zwave_js_uc.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "hacs.json",
+    "requirements_dev.txt",
+    "tests/providers/zwave_js/conftest.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/providers/zwave_js/test_uc_fallback.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9e/31c91ab844/0/metadata.json",
+      "transcript": "/9e/31c91ab844/0/full.jsonl",
+      "content_hash": "/9e/31c91ab844/0/content_hash.txt",
+      "prompt": "/9e/31c91ab844/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 57207,
+    "cache_creation_tokens": 272319,
+    "cache_read_tokens": 12774703,
+    "output_tokens": 82580,
+    "api_call_count": 92
+  }
+}
