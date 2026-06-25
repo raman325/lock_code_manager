@@ -733,7 +733,7 @@ async def test_async_get_capabilities_zero_slots_raises_actionable_error(
         },
     }
 
-    with pytest.raises(LockCodeManagerProviderError, match="interview"):
+    with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):
         await zwave_js_lock.async_get_capabilities()
 
 
