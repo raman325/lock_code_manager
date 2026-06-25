@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "bca5177b7561",
+  "session_id": "69a8307a-6372-463d-99bf-40cc0ca7e2e1",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-25T08:54:25.240868Z",
+  "branch": "refactor/remove-uc-cc-fallback",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/providers/zwave_js/test_provider.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-8[1m]",
+  "turn_id": "ecb67e3a9051",
+  "checkpoint_transcript_start": 708,
+  "transcript_lines_at_start": 708,
+  "token_usage": {
+    "input_tokens": 1834,
+    "cache_creation_tokens": 45876,
+    "cache_read_tokens": 3406634,
+    "output_tokens": 24796,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-25T08:54:24.947908Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
