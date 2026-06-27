@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, final
+from typing import TYPE_CHECKING, Any, final
 
 from homeassistant.components.lock import LockState
 from homeassistant.config_entries import ConfigEntry
@@ -30,6 +30,9 @@ from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import get_entry_config
 from .domain.slot_coordinator import SlotEntityCoordinator
 from .providers import BaseLock
+
+if TYPE_CHECKING:
+    from homeassistant.helpers.event import _TrackStateChangeFiltered
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,6 +85,12 @@ class BaseLockCodeManagerEntity(Entity):
         # bound to the new coordinator. See ``SlotEntityCoordinator``.
         self._slot_coordinator: SlotEntityCoordinator | None = None
 
+        # Availability is driven by a state-change subscription scoped to just
+        # the lock entities (re-scoped when locks are added/removed), rather
+        # than every state in the instance. Created in ``async_added_to_hass``;
+        # ``None`` until then.
+        self._available_state_tracker: _TrackStateChangeFiltered | None = None
+
     @final
     @property
     def _state(self) -> Any:
@@ -132,6 +141,7 @@ class BaseLockCodeManagerEntity(Entity):
         self.locks = [
             lock for lock in self.locks if lock.lock.entity_id != lock_entity_id
         ]
+        self._async_handle_locks_updated()
 
     @callback
     def _handle_add_locks(self, locks: list[BaseLock]) -> None:
@@ -141,6 +151,26 @@ class BaseLockCodeManagerEntity(Entity):
         Can be overwritten by platforms.
         """
         self.locks.extend(locks)
+        self._async_handle_locks_updated()
+
+    @callback
+    def _async_handle_locks_updated(self) -> None:
+        """
+        Re-scope the availability subscription after the lock set changes.
+
+        ``self.locks`` is mutated at runtime by ``_handle_add_locks`` and
+        ``_handle_remove_lock``. The availability subscription tracks only the
+        lock entities (not every state change in the instance), so it is
+        re-scoped to the new set here. Availability is recomputed immediately
+        because the added/removed lock's own state change will not otherwise
+        trigger an update.
+        """
+        if (tracker := self._available_state_tracker) is None:
+            return
+        tracker.async_update_listeners(
+            TrackStates(False, {lock.lock.entity_id for lock in self.locks}, set())
+        )
+        self._handle_available_state_update()
 
     def _get_removal_uid(self) -> str:
         """
@@ -240,13 +270,12 @@ class BaseLockCodeManagerEntity(Entity):
             )
 
         self._register_callbacks()
-        self.async_on_remove(
-            async_track_state_change_filtered(
-                self.hass,
-                TrackStates(True, set(), set()),
-                self._handle_available_state_update,
-            ).async_remove
+        self._available_state_tracker = async_track_state_change_filtered(
+            self.hass,
+            TrackStates(False, {lock.lock.entity_id for lock in self.locks}, set()),
+            self._handle_available_state_update,
         )
+        self.async_on_remove(self._available_state_tracker.async_remove)
         self._handle_available_state_update()
 
         _LOGGER.debug(
