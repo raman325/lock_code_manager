@@ -2050,3 +2050,35 @@ async def test_rapid_coordinator_updates_coalesce(
     assert set_calls[0] == (1, "1234", "test1"), (
         "Sync should restore the configured PIN"
     )
+
+
+async def test_availability_subscription_scoped_to_locks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Availability subscription is scoped to the lock entities, and re-scopes on lock changes.
+
+    Regression guard for the previous ``TrackStates(True, ...)`` all-states
+    subscription, which fired the availability handler on every state change in
+    the entire instance. The subscription must track only the lock entities and
+    be re-scoped when locks are added/removed at runtime.
+    """
+    entity = get_in_sync_entity_obj(hass, SLOT_1_ACTIVE_ENTITY)
+    tracker = entity._available_state_tracker
+    assert tracker is not None
+
+    # Scoped to the configured locks, NOT every state in the instance.
+    assert tracker._last_track_states.all_states is False
+    assert tracker._last_track_states.entities == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+    # Removing a lock re-scopes the subscription to the remaining locks.
+    entity._handle_remove_lock(LOCK_1_ENTITY_ID)
+    assert tracker._last_track_states.all_states is False
+    assert tracker._last_track_states.entities == {LOCK_2_ENTITY_ID}
+
+    # Re-adding the lock re-scopes the subscription to include it again.
+    re_added_lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    entity._handle_add_locks([re_added_lock])
+    assert tracker._last_track_states.all_states is False
+    assert tracker._last_track_states.entities == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
