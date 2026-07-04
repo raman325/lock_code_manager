@@ -111,6 +111,25 @@ async def test_node_property(
     assert node.node_id == lock_schlage_be469.node_id
 
 
+async def test_node_raises_lock_disconnected_when_entry_not_loaded(
+    hass: HomeAssistant,
+    zwave_js_lock: ZWaveJSLock,
+    zwave_integration: MockConfigEntry,
+) -> None:
+    """Node resolution while the zwave_js entry is down maps to LockDisconnected.
+
+    Home Assistant's async_get_node_from_entity_id raises a raw ValueError
+    when the zwave_js config entry is not loaded (issue #1321). The provider
+    must translate that into LockDisconnected so the base class routes it to
+    the degraded-setup/retry path instead of dropping the lock.
+    """
+    await hass.config_entries.async_unload(zwave_integration.entry_id)
+    await hass.async_block_till_done()
+
+    with pytest.raises(LockDisconnected):
+        _ = zwave_js_lock.node
+
+
 async def test_setup_is_idempotent(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
