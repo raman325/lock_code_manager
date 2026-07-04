@@ -657,7 +657,10 @@ class BaseLock:
         try:
             try:
                 if not await self.async_is_integration_connected():
-                    LOGGER.warning(
+                    # Expected during a cold start (the provider integration
+                    # simply hasn't finished loading); recovery is automatic,
+                    # so this is informational, not a warning.
+                    LOGGER.info(
                         "Provider integration for %s is not ready yet. "
                         "Provider setup is deferred until it finishes "
                         "loading; entities will be created but unavailable "
@@ -695,7 +698,9 @@ class BaseLock:
                     try:
                         await self.coordinator.async_config_entry_first_refresh()
                     except (ConfigEntryNotReady, UpdateFailed) as err:
-                        LOGGER.warning(
+                        # Expected while the lock/integration is still coming
+                        # up; the entities already surface the unavailability.
+                        LOGGER.info(
                             "Failed to fetch initial data for lock %s: %s. "
                             "Entities will be created but unavailable until lock is ready.",
                             lock_entity_id,
@@ -704,7 +709,7 @@ class BaseLock:
                 else:
                     await self.coordinator.async_refresh()
                     if not self.coordinator.last_update_success:
-                        LOGGER.warning(
+                        LOGGER.info(
                             "Failed to fetch initial data for lock %s: %s. "
                             "Entities will be created but unavailable until lock is ready.",
                             lock_entity_id,
