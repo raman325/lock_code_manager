@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c329cb388b12",
+  "session_id": "581e72fb-c7d3-4a23-9304-1cd171fefc5b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-04T01:59:39.487901Z",
+  "branch": "fix/cold-start-log-levels",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "1b697dfe3fb0",
+  "checkpoint_transcript_start": 384,
+  "transcript_lines_at_start": 384,
+  "token_usage": {
+    "input_tokens": 2956,
+    "cache_creation_tokens": 13542,
+    "cache_read_tokens": 2437142,
+    "output_tokens": 7723,
+    "api_call_count": 13
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-04T01:59:39.283963Z",
+    "agent_lines": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "c329cb388b12",
+  "strategy": "manual-commit",
+  "branch": "fix/cold-start-log-levels",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c3/29cb388b12/0/metadata.json",
+      "transcript": "/c3/29cb388b12/0/full.jsonl",
+      "content_hash": "/c3/29cb388b12/0/content_hash.txt",
+      "prompt": "/c3/29cb388b12/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2956,
+    "cache_creation_tokens": 13542,
+    "cache_read_tokens": 2437142,
+    "output_tokens": 7723,
+    "api_call_count": 13
+  }
+}
