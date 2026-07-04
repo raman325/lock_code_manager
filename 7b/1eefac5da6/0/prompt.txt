@@ -1,0 +1,5 @@
+look at issue 1321 - we need to wait for the network to be ready before initializing the locks, and that should be the case across all providers and enforced in the base class. Do you agree with that approach?
+
+---
+
+lets create a fix - create the PR
