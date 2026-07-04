@@ -643,29 +643,40 @@ class BaseLock:
         capability probe OR the provider's own ``async_setup`` are logged
         and the coordinator is created anyway so the integration retries
         once the lock comes online.
+
+        When the provider integration is not connected yet (e.g. zwave_js
+        still loading during a slow Home Assistant boot, issue #1321), no
+        provider I/O is attempted at all: the capability probe and
+        ``async_setup`` are deferred to the integration's LOADED
+        transition, which re-runs them via
+        ``_async_on_integration_loaded``. This keeps an untranslated
+        provider exception during startup from dropping the lock
+        entirely.
         """
         self._lcm_config_entry = config_entry
         try:
-            if self.supports_native_users:
-                caps = await self._get_cached_capabilities()
-                if CredentialType.PIN not in caps.credential_types:
-                    raise LockCodeManagerProviderError(
-                        f"{self.lock.entity_id}: lock does not advertise PIN credential support"
+            try:
+                if not await self.async_is_integration_connected():
+                    LOGGER.warning(
+                        "Provider integration for %s is not ready yet. "
+                        "Provider setup is deferred until it finishes "
+                        "loading; entities will be created but unavailable "
+                        "until then.",
+                        self.lock.entity_id,
                     )
-            await self.async_setup(config_entry)
-        except (LockDisconnected, LockOperationFailed) as err:
-            LOGGER.warning(
-                "Provider setup failed for %s: %s. Coordinator will be "
-                "created but data will be unavailable until the lock "
-                "comes online. Setup will be retried when the lock "
-                "integration reconnects.",
-                self.lock.entity_id,
-                err,
-            )
-        else:
-            self._setup_succeeded = True
+                else:
+                    await self._async_run_provider_setup(config_entry)
+                    self._setup_succeeded = True
+            except (LockDisconnected, LockOperationFailed) as err:
+                LOGGER.warning(
+                    "Provider setup failed for %s: %s. Coordinator will be "
+                    "created but data will be unavailable until the lock "
+                    "comes online. Setup will be retried when the lock "
+                    "integration reconnects.",
+                    self.lock.entity_id,
+                    err,
+                )
 
-        try:
             lock_entity_id = self.lock.entity_id
             # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
             # when that integration reloads or reconnects.
@@ -714,13 +725,32 @@ class BaseLock:
         finally:
             self._setup_complete.set()
 
+    async def _async_run_provider_setup(self, config_entry: ConfigEntry) -> None:
+        """
+        Validate lock capabilities and run provider-specific setup.
+
+        Shared by initial setup and the integration-reconnect path so a
+        lock whose integration was still loading at boot gets the same
+        PIN-support validation once the integration comes up.
+        """
+        if self.supports_native_users:
+            caps = await self._get_cached_capabilities()
+            if CredentialType.PIN not in caps.credential_types:
+                raise LockCodeManagerProviderError(
+                    f"{self.lock.entity_id}: lock does not advertise PIN credential support"
+                )
+        await self.async_setup(config_entry)
+
     async def _async_on_integration_loaded(self) -> None:
         """
         Handle provider integration LOADED transition.
 
-        Re-runs ``async_setup`` to re-initialize provider state (e.g.
-        re-register event listeners after an integration reload), then
-        refreshes the coordinator and subscribes to push updates.
+        Re-runs the capability validation and ``async_setup`` to
+        re-initialize provider state (e.g. re-register event listeners
+        after an integration reload), then refreshes the coordinator and
+        subscribes to push updates. The validation matters for locks
+        whose initial setup was deferred because the integration was
+        still loading (issue #1321) -- this is the first time it can run.
 
         Operations are chained sequentially so setup completes before
         the coordinator refresh or push subscription begins.
@@ -735,12 +765,18 @@ class BaseLock:
 
         self._setup_running = True
         try:
-            await self.async_setup(self._lcm_config_entry)
+            await self._async_run_provider_setup(self._lcm_config_entry)
         except LockDisconnected, LockOperationFailed:
             LOGGER.debug(
                 "Provider setup failed for %s, will retry on next reconnect",
                 self.lock.entity_id,
                 exc_info=True,
+            )
+        except LockCodeManagerProviderError as err:
+            LOGGER.error(
+                "Provider setup failed validation for %s: %s",
+                self.lock.entity_id,
+                err,
             )
         else:
             if not self._setup_succeeded:

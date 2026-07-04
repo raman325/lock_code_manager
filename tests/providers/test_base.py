@@ -20,6 +20,11 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     EVENT_LOCK_STATE_CHANGED,
 )
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+)
 from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
@@ -822,6 +827,153 @@ async def test_on_integration_loaded_retries_on_disconnect(
         await lock._async_on_integration_loaded()
 
     assert lock._setup_succeeded is False
+
+
+class MockNativeUserLock(MockLCMLock):
+    """Mock lock that opts into the native-user capability validation."""
+
+    @property
+    def supports_native_users(self) -> bool:
+        """Return True so async_setup_internal runs the capability probe."""
+        return True
+
+
+def _pin_capabilities() -> LockCapabilities:
+    """Return capabilities advertising PIN support."""
+    return LockCapabilities(
+        supports_user_management=True,
+        max_users=10,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=10, min_length=4, max_length=8, supports_learn=False
+            )
+        },
+        max_user_name_length=10,
+    )
+
+
+def _make_base_test_lock(
+    hass: HomeAssistant, unique_id: str, lock_cls: type[MockLCMLock] = MockLCMLock
+) -> MockLCMLock:
+    """Create a mock lock wired to a registry entry and config entry."""
+    entity_reg = er.async_get(hass)
+    config_entry = MockConfigEntry(domain=DOMAIN)
+    config_entry.add_to_hass(hass)
+    lock_entity = entity_reg.async_get_or_create(
+        "lock", "test", unique_id, config_entry=config_entry
+    )
+    return lock_cls(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
+
+
+async def test_setup_internal_defers_provider_io_when_integration_not_connected(
+    hass: HomeAssistant,
+):
+    """Setup skips the capability probe and async_setup while the integration is down.
+
+    Regression test for issue #1321: the base class must not touch the
+    provider integration before it is connected — a provider whose probe
+    raises an untranslated error (e.g. zwave_js's node lookup ValueError)
+    would otherwise crash setup and permanently drop the lock.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_defer_io", MockNativeUserLock)
+    lock.set_connected(False)
+
+    with (
+        patch.object(lock, "async_get_capabilities") as mock_caps,
+        patch.object(lock, "async_setup") as mock_setup,
+    ):
+        await lock.async_setup_internal(lock.lock_config_entry)
+
+    mock_caps.assert_not_called()
+    mock_setup.assert_not_called()
+    assert lock._setup_succeeded is False
+    # Degraded, not dropped: coordinator and recovery listener exist.
+    assert lock.coordinator is not None
+    assert lock._config_entry_state_unsub is not None
+    assert lock._setup_complete.is_set()
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
+async def test_setup_complete_set_when_setup_raises_unexpectedly(
+    hass: HomeAssistant,
+):
+    """_setup_complete is set even when setup escapes with an unexpected error.
+
+    Waiters in async_wait_for_setup (shared lock instances across config
+    entries) must not hang forever when setup fails structurally.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_setup_complete")
+
+    with patch.object(lock, "async_setup", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            await lock.async_setup_internal(lock.lock_config_entry)
+
+    assert lock._setup_complete.is_set()
+
+
+async def test_on_integration_loaded_runs_deferred_capability_validation(
+    hass: HomeAssistant,
+):
+    """The reconnect path runs the capability validation setup deferred.
+
+    When initial setup ran degraded (integration down), the LOADED
+    transition must run the same probe + PIN validation as initial setup
+    before marking the provider set up.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_deferred_caps", MockNativeUserLock)
+    lock.set_connected(False)
+
+    caps_mock = AsyncMock(return_value=_pin_capabilities())
+    with patch.object(lock, "async_get_capabilities", caps_mock):
+        await lock.async_setup_internal(lock.lock_config_entry)
+        assert lock._setup_succeeded is False
+        caps_mock.assert_not_called()
+
+        # Integration comes up; simulate the LOADED transition callback.
+        lock.set_connected(True)
+        loaded_entry = MagicMock()
+        loaded_entry.state = ConfigEntryState.LOADED
+        lock.lock_config_entry = loaded_entry
+        await lock._async_on_integration_loaded()
+
+    caps_mock.assert_awaited_once()
+    assert lock._setup_succeeded is True
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
+async def test_on_integration_loaded_rejects_lock_without_pin_support(
+    hass: HomeAssistant,
+):
+    """Deferred validation failing (no PIN support) leaves setup unsuccessful.
+
+    The structural failure must not escape into the reconnect task; the
+    provider simply never reaches the set-up state.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_deferred_no_pin", MockNativeUserLock)
+    lock.set_connected(False)
+
+    no_pin_caps = LockCapabilities(
+        supports_user_management=True, max_users=10, credential_types={}
+    )
+    caps_mock = AsyncMock(return_value=no_pin_caps)
+    with patch.object(lock, "async_get_capabilities", caps_mock):
+        await lock.async_setup_internal(lock.lock_config_entry)
+
+        lock.set_connected(True)
+        loaded_entry = MagicMock()
+        loaded_entry.state = ConfigEntryState.LOADED
+        lock.lock_config_entry = loaded_entry
+        await lock._async_on_integration_loaded()
+
+    caps_mock.assert_awaited_once()
+    assert lock._setup_succeeded is False
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
 
 
 async def test_set_usercode_skips_refresh_for_push_provider(

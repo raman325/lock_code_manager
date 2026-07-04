@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.domain.credentials import WriteResult
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from tests.providers.zwave_js.conftest import ZWAVE_JS_LCM_CONFIG_SLOTS
 
 
 def async_capture_events(
@@ -273,3 +274,53 @@ class TestEvents:
         # Credential events push unreadable (the lock doesn't expose the Personal
         # Identification Number value in the event; a coordinator refresh reads it).
         assert e2e_zwave_lock.coordinator.data.get(1) == SlotCredential.unreadable()
+
+
+class TestColdStartRace:
+    """Regression tests for issue #1321: LCM setup racing zwave_js startup."""
+
+    async def test_lcm_setup_survives_zwave_entry_not_loaded(
+        self,
+        hass: HomeAssistant,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        mock_access_control,
+        mock_lock_helpers: dict,
+    ) -> None:
+        """LCM setup while zwave_js is still loading degrades and recovers.
+
+        Reproduces issue #1321: the zwave_js config entry has not reached
+        LOADED when LCM sets up (slow boot). The lock must not be dropped;
+        it stays registered in a degraded state and recovers automatically
+        when the zwave_js entry finishes loading.
+        """
+        assert await hass.config_entries.async_unload(zwave_integration.entry_id)
+        await hass.async_block_till_done()
+
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [lock_entity.entity_id],
+                CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
+            },
+            unique_id="test_zwave_js_cold_start",
+        )
+        lcm_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+
+        # The lock survived setup in a degraded state instead of being dropped.
+        lock = lcm_entry.runtime_data.locks.get(lock_entity.entity_id)
+        assert lock is not None
+        assert isinstance(lock, ZWaveJSLock)
+        assert lock.coordinator is not None
+        assert lock._setup_succeeded is False
+
+        # zwave_js finishes loading -> the LOADED transition drives recovery.
+        assert await hass.config_entries.async_setup(zwave_integration.entry_id)
+        await hass.async_block_till_done()
+
+        assert lock._setup_succeeded is True
+        assert lock._push_unsubs
+
+        await hass.config_entries.async_unload(lcm_entry.entry_id)

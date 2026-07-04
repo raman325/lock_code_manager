@@ -129,10 +129,20 @@ class ZWaveJSLock(BaseLock):
 
     @property
     def node(self) -> Node:
-        """Return ZWave JS node."""
-        return async_get_node_from_entity_id(
-            self.hass, self.lock.entity_id, self.ent_reg
-        )
+        """
+        Return ZWave JS node.
+
+        Home Assistant's helper raises a bare ``ValueError`` while the
+        zwave_js config entry is still loading (issue #1321); translate it
+        to ``LockDisconnected`` so callers route it to the degraded/retry
+        path instead of treating it as an unexpected crash.
+        """
+        try:
+            return async_get_node_from_entity_id(
+                self.hass, self.lock.entity_id, self.ent_reg
+            )
+        except ValueError as err:
+            raise LockDisconnected(f"Z-Wave JS node unavailable: {err}") from err
 
     @property
     def supports_push(self) -> bool:

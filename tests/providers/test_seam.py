@@ -202,7 +202,12 @@ async def test_setup_internal_rejects_lock_without_pin_support(
     lock = _make_lock(hass, _NoPinLock, "seam_setup_no_pin")
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
-    with pytest.raises(LockCodeManagerProviderError, match="PIN credential"):
+    # The stub's config entry never loads; force the connected signal so
+    # setup runs the capability validation instead of deferring it.
+    with (
+        patch.object(lock, "async_is_integration_connected", return_value=True),
+        pytest.raises(LockCodeManagerProviderError, match="PIN credential"),
+    ):
         await lock.async_setup_internal(config_entry)
 
 
@@ -237,7 +242,8 @@ async def test_setup_internal_accepts_slot_only_capabilities(
     lock = _make_lock(hass, _SlotOnlyCapsLock, "seam_setup_slot_only_caps")
     config_entry = MockConfigEntry(domain=DOMAIN)
     config_entry.add_to_hass(hass)
-    await lock.async_setup_internal(config_entry)
+    with patch.object(lock, "async_is_integration_connected", return_value=True):
+        await lock.async_setup_internal(config_entry)
 
     assert lock._setup_succeeded is True
     assert await lock._supports_user_records() is False
