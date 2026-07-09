@@ -1,0 +1,5 @@
+some time ago we submitted a PR to remove the UC only fallback logic. What triggered the fallback? When would a user use that instead of the access control API? We may need to put that back
+
+---
+
+the issue is that https://github.com/zwave-js/zwave-js/pull/8930 is nto yet getting released. So we need to have a fallback to handle the scenario this was designed to prevent
