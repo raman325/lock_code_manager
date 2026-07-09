@@ -15,14 +15,21 @@ import logging
 from typing import Any, Literal
 
 from zwave_js_server.client import Client
-from zwave_js_server.const import NodeStatus
+from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
+from zwave_js_server.const.command_class.lock import (
+    ATTR_IN_USE,
+    LOCK_USERCODE_PROPERTY,
+    LOCK_USERCODE_STATUS_PROPERTY,
+    CodeSlotStatus,
+)
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
     NotificationType,
 )
-from zwave_js_server.exceptions import BaseZwaveJSServerError
+from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
 from zwave_js_server.model.node import Node
+from zwave_js_server.util.lock import get_usercode
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
@@ -119,6 +126,11 @@ class ZWaveJSLock(BaseLock):
     write verification) -- guaranteed by the integration's minimum Home
     Assistant version. The legacy User Code CC value-path fallback that
     worked around the pre-15.24.3 capability bug (#1251) has been removed.
+
+    One temporary bridge remains: the User Code CC report shim (grep
+    ``_uc_``), which compensates for report-driven User Code CC changes
+    emitting no unified credential events on released drivers. See the
+    shim section below for details and the removal recipe.
     """
 
     lock_config_entry: ConfigEntry = field(repr=False)
@@ -555,6 +567,13 @@ class ZWaveJSLock(BaseLock):
         from its unified ``access_control`` API for both User Code CC and
         User Credential CC locks. The handlers are self-filtering and
         pushes are idempotent.
+
+        On nodes that advertise User Code CC, also subscribe to raw
+        ``value updated`` events for the User Code CC report shim (see
+        that section below): released drivers emit no unified events for
+        report-driven User Code CC changes, and both listener sets are
+        safe together because the handlers self-filter and pushes are
+        idempotent.
         """
         if self._push_unsubs:
             return
@@ -568,6 +587,8 @@ class ZWaveJSLock(BaseLock):
             ("credential modified", self._on_credential_changed),
             ("credential deleted", self._on_credential_deleted),
         ]
+        if self._node_advertises_user_code_cc():
+            subscriptions.append(("value updated", self._on_uc_value_updated))
 
         try:
             for name, handler in subscriptions:
@@ -601,6 +622,120 @@ class ZWaveJSLock(BaseLock):
         if args.credential_type != UserCredentialType.PIN_CODE:
             return
         self._confirm_slot(args.credential_slot, SlotCredential.empty())
+
+    # ------------------------------------------------------------------
+    # User Code CC report shim
+    #
+    # Bridges an upstream gap on released drivers: on locks the driver
+    # dispatches to User Code CC (User Code CC-only locks, and dual-CC
+    # locks whose User Credential CC advertises zero users), any change
+    # that arrives as a *report* -- keypad programming, zwave-js-ui
+    # edits, Home Assistant's ``zwave_js.set/clear_lock_usercode``
+    # services, and the driver's own post-write verification polls --
+    # updates the driver's value database without emitting a unified
+    # credential event. LCM disables periodic polling for push
+    # providers, so without this shim those changes would never reach
+    # the coordinator and sync could not reconcile them.
+    #
+    # zwave-js/zwave-js#8930 (merged, unreleased) fixes this by making
+    # the access-control API the source of truth for User Code CC. It
+    # also makes these User Code CC values internal, so once a driver
+    # with it ships the value events stop arriving and the unified
+    # events we already subscribe to take over -- the shim goes dormant
+    # on its own, no LCM change needed. To remove it once the minimum
+    # supported driver includes #8930:
+    #
+    # 1. Delete everything from this comment through
+    #    ``_uc_slot_in_use``.
+    # 2. Delete the ``_node_advertises_user_code_cc`` branch in
+    #    ``setup_push_subscription`` (and its docstring paragraph).
+    # 3. Delete the shim tests in
+    #    ``tests/providers/zwave_js/test_events.py`` (grep ``_uc_``)
+    #    and restore ``_EXPECTED_PUSH_UNSUB_COUNT`` to 3.
+    # ------------------------------------------------------------------
+
+    def _node_advertises_user_code_cc(self) -> bool:
+        """Return whether the node's endpoint 0 advertises User Code CC."""
+        return any(cc.id == CommandClass.USER_CODE for cc in self.node.command_classes)
+
+    @callback
+    def _on_uc_value_updated(self, event: dict[str, Any]) -> None:
+        """Handle ``value updated`` node events for User Code CC values."""
+        args: dict[str, Any] = event["args"]
+        if args.get("commandClass") != CommandClass.USER_CODE:
+            return
+
+        property_name = args.get("property")
+        if property_name not in (
+            LOCK_USERCODE_PROPERTY,
+            LOCK_USERCODE_STATUS_PROPERTY,
+        ):
+            return
+
+        code_slot = int(args["propertyKey"])
+        # Slot 0 is not a valid user code slot.
+        if code_slot == 0:
+            return
+
+        if property_name == LOCK_USERCODE_STATUS_PROPERTY:
+            self._handle_uc_status_update(code_slot, args.get("newValue"))
+        else:
+            self._handle_uc_code_update(code_slot, args.get("newValue"))
+
+    @callback
+    def _handle_uc_status_update(self, code_slot: int, status: Any) -> None:
+        """Handle a userIdStatus value update for a code slot."""
+        if status != CodeSlotStatus.AVAILABLE:
+            # Occupied statuses carry no code; the paired userCode update
+            # delivers the value.
+            return
+        # Ignore AVAILABLE when Lock Code Manager expects a PIN on this
+        # slot. Some locks send stale AVAILABLE events after a code was
+        # set, which would cause infinite sync loops.
+        if (
+            self.coordinator is not None
+            and self.coordinator.desired_credential(code_slot).is_present
+        ):
+            _LOGGER.debug(
+                "Lock %s: ignoring userIdStatus=AVAILABLE for slot %s "
+                "(LCM expects PIN on this slot)",
+                self.lock.entity_id,
+                code_slot,
+            )
+            return
+        self._confirm_slot(code_slot, SlotCredential.empty())
+
+    @callback
+    def _handle_uc_code_update(self, code_slot: int, new_value: Any) -> None:
+        """Handle a userCode value update for a code slot."""
+        if not new_value:
+            resolved = SlotCredential.empty()
+        else:
+            value = str(new_value)
+            slot_in_use = self._uc_slot_in_use(code_slot)
+            # Asymmetric in_use checks: masked codes count as unreadable
+            # even when in_use is None (some firmwares mask before
+            # reporting status), but all-zeros only counts as empty when
+            # in_use is explicitly False (zeros from a partially-loaded
+            # cache must not be misread as cleared).
+            if value == "*" * len(value) and slot_in_use is not False:
+                resolved = SlotCredential.unreadable()
+            elif value.strip("0") == "" and slot_in_use is False:
+                resolved = SlotCredential.empty()
+            else:
+                resolved = SlotCredential.known(value)
+        # Route through _confirm_slot like the unified handlers: the
+        # driver's post-write verification report doubles as the
+        # confirming push for a pending optimistic write.
+        self._confirm_slot(code_slot, resolved)
+
+    def _uc_slot_in_use(self, code_slot: int) -> bool | None:
+        """Return whether a User Code CC slot is in use, None when unknown."""
+        try:
+            in_use = get_usercode(self.node, code_slot).get(ATTR_IN_USE)
+        except NotFoundError:
+            return None
+        return in_use if isinstance(in_use, bool) else None
 
     @callback
     def teardown_push_subscription(self) -> None:
