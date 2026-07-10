@@ -1,0 +1,25 @@
+I don’t have enough information to say for sure but this seems unrelated to 1320 right?
+
+---
+
+how about the other open issue?
+
+---
+
+Yes
+
+---
+
+for users that don't have the other two fixes in place, do we need the full UC fallback? I noticed that even though the bugs have been fixed and released, they aren't available in the HA addon yet which means most users aren't using them
+
+---
+
+sorry I misspoke on versions, I meant 15.25.0
+
+---
+
+yes
+
+---
+
+1427 is merged so you can ff main and build it

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "50f3161621d5",
+  "strategy": "manual-commit",
+  "branch": "fix/uc-post-write-reconcile",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/zwave_js/conftest.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/50/f3161621d5/0/metadata.json",
+      "transcript": "/50/f3161621d5/0/full.jsonl",
+      "content_hash": "/50/f3161621d5/0/content_hash.txt",
+      "prompt": "/50/f3161621d5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3969,
+    "cache_creation_tokens": 282021,
+    "cache_read_tokens": 16849766,
+    "output_tokens": 60346,
+    "api_call_count": 75
+  }
+}
