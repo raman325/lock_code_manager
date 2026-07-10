@@ -1,6 +1,6 @@
 -r requirements_lint.txt
 -r requirements_test.txt
-aioesphomeapi==45.5.2
+aioesphomeapi==45.6.0
 aiofiles==25.1.0
 aiousbwatcher==1.1.2
 colorlog==6.10.1
