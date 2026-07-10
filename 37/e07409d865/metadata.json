@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "37e07409d865",
+  "strategy": "manual-commit",
+  "branch": "fix/z2m-users-payload-reads",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/37/e07409d865/0/metadata.json",
+      "transcript": "/37/e07409d865/0/full.jsonl",
+      "content_hash": "/37/e07409d865/0/content_hash.txt",
+      "prompt": "/37/e07409d865/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 65265,
+    "cache_creation_tokens": 1961657,
+    "cache_read_tokens": 46047286,
+    "output_tokens": 172309,
+    "api_call_count": 197
+  }
+}
