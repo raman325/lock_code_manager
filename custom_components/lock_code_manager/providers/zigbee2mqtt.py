@@ -73,13 +73,50 @@ def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     return str(pin_raw) != ""
 
 
+def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
+    """
+    Project one Zigbee2MQTT ``users`` entry to a SlotCredential.
+
+    The status vocabulary comes from zigbee-herdsman-converters'
+    ``lockUserStatus`` map (available/enabled/disabled); statuses outside
+    it are published as ``not_supported_<n>``. Mapping traps:
+
+    - ``enabled`` without a usable PIN value is occupied-but-withheld
+      (``expose_pin`` off hides the code entirely), so it projects to
+      unreadable -- treating it as empty would make sync reprogram a slot
+      that already holds the right code.
+    - The one exception: an explicit ``pin_code: null`` on an enabled user
+      means the broker exposes the field and the device reports no code,
+      so that projects to empty.
+    - Unrecognized statuses (``not_supported_*``) project to unreadable,
+      not empty, for the same reprogramming-storm reason.
+    """
+    status = user_info.get("status")
+    pin_raw = user_info.get("pin_code")
+    if status == "enabled":
+        if _mqtt_payload_pin_has_code_value(pin_raw):
+            return SlotCredential.known(str(pin_raw))
+        if "pin_code" in user_info:
+            return SlotCredential.empty()
+        return SlotCredential.unreadable()
+    if status in ("available", "disabled"):
+        return SlotCredential.empty()
+    return SlotCredential.unreadable()
+
+
 @dataclass(repr=False, eq=False)
 class Zigbee2MQTTLock(BaseLock):
     """Class to represent Zigbee2MQTT lock."""
 
     _base_topic: str = field(init=False, default=DEFAULT_BASE_TOPIC)
     _friendly_name: str | None = field(init=False, default=None)
-    _pending_codes: dict[int, asyncio.Future[str | None]] = field(
+    _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
+        init=False, default_factory=dict
+    )
+    # Last projected state per slot from the most recent users payload;
+    # the delta gate in _process_z2m_device_payload compares against this
+    # so full-cached-state republications don't repush stale entries.
+    _last_users_states: dict[int, SlotCredential] = field(
         init=False, default_factory=dict
     )
 
@@ -227,7 +264,7 @@ class Zigbee2MQTTLock(BaseLock):
 
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
-            updates: dict[int, SlotCredential] = {}
+            states: dict[int, SlotCredential] = {}
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -247,31 +284,43 @@ class Zigbee2MQTTLock(BaseLock):
                     )
                     continue
 
-                status = user_info.get("status")
-                pin_code_present = "pin_code" in user_info
-                pin_raw = user_info.get("pin_code")
+                states[user_id] = _project_z2m_user_state(user_info)
 
-                # Zigbee2MQTT often omits pin_code when expose_pin is false (default on
-                # several Yale models). Treating that as empty makes the coordinator think
-                # the slot is cleared, so disabling the slot skips clear_usercode while the
-                # lock still holds the PIN. Only treat as empty when MQTT exposes the field.
-                if status == "enabled":
-                    if _mqtt_payload_pin_has_code_value(pin_raw):
-                        updates[user_id] = SlotCredential.known(str(pin_raw))
-                    elif pin_code_present:
-                        updates[user_id] = SlotCredential.empty()
-                    else:
-                        continue
-                else:
-                    updates[user_id] = SlotCredential.empty()
+            # The converter answers GetPinCode through the users object
+            # (fz.lock_pin_code_response), not through a pin_code response
+            # payload -- resolve the pending read here or every slot read
+            # times out (issue #1335). At most one read is pending at a
+            # time (async_get_users queries slots sequentially), so cached
+            # entries for other slots cannot satisfy a future they don't
+            # belong to.
+            for user_id, state in states.items():
+                if (
+                    future := self._pending_codes.pop(user_id, None)
+                ) is not None and not future.done():
+                    future.set_result(state)
 
-            if updates and self.coordinator:
+            # Zigbee2MQTT republishes its full cached state on every
+            # attribute change, so most users payloads restate old entries
+            # rather than report changes. Applying them verbatim lets a
+            # stale cache entry overwrite the optimistic push from a write
+            # that the device already accepted -- the slot flips back to
+            # its pre-write state and sync reprograms it forever (issue
+            # #1335). Gate on the previous payload so only entries that
+            # actually changed reach the coordinator.
+            changed = {
+                user_id: state
+                for user_id, state in states.items()
+                if self._last_users_states.get(user_id) != state
+            }
+            self._last_users_states.update(states)
+            if changed and self.coordinator:
                 LOGGER.debug(
                     "Lock %s received push update for slots: %s",
                     self.lock.entity_id,
-                    list(updates.keys()),
+                    list(changed),
                 )
-                self.coordinator.push_update(updates)
+                for user_id, state in changed.items():
+                    self._confirm_slot(user_id, state)
 
         pin_code_data = payload.get("pin_code")
         if pin_code_data and isinstance(pin_code_data, dict):
@@ -297,9 +346,9 @@ class Zigbee2MQTTLock(BaseLock):
                     user_enabled = pin_code_data.get("user_enabled", False)
                     pin_code = pin_code_data.get("pin_code")
                     if user_enabled and _mqtt_payload_pin_has_code_value(pin_code):
-                        future.set_result(str(pin_code))
+                        future.set_result(SlotCredential.known(str(pin_code)))
                     else:
-                        future.set_result(None)
+                        future.set_result(SlotCredential.empty())
 
     async def _async_ensure_device_subscription(self) -> None:
         """Subscribe to the Z2M device topic; idempotent."""
@@ -624,9 +673,7 @@ class Zigbee2MQTTLock(BaseLock):
                 )
                 slot_states[slot_num] = SlotCredential.unreadable()
             else:
-                slot_states[slot_num] = (
-                    SlotCredential.known(result) if result else SlotCredential.empty()
-                )
+                slot_states[slot_num] = result
             finally:
                 self._pending_codes.pop(slot_num, None)
 
