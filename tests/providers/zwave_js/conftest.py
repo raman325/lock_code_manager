@@ -470,5 +470,6 @@ def mock_access_control(lock_schlage_be469: Node):
     ac.get_all_credentials = AsyncMock(return_value=[])
     ac.set_credential = AsyncMock(return_value=SetCredentialResult.OK)
     ac.delete_credential = AsyncMock(return_value=SetCredentialResult.OK)
+    ac.get_credential = AsyncMock(return_value=None)
     with patch.object(type(lock_schlage_be469), "access_control", ac):
         yield ac

@@ -492,11 +492,6 @@ class ZWaveJSLock(BaseLock):
             ) from err
         except HomeAssistantError as err:
             key = getattr(err, "translation_key", None)
-            if key == "credential_rejected_duplicate":
-                raise DuplicateCodeError(
-                    code_slot=credential.slot,
-                    lock_entity_id=self.lock.entity_id,
-                ) from err
             if key == "credential_rejected_unknown":
                 _LOGGER.debug(
                     "Lock %s slot %s: driver returned ERROR_UNKNOWN; treating "
@@ -508,12 +503,28 @@ class ZWaveJSLock(BaseLock):
                     credential.slot,
                     err,
                 )
+                # No reconciliation read here: the seam's on-demand
+                # confirmation read hard-refreshes for every OPTIMISTIC
+                # write, so a single-slot read would be pure duplication.
                 return WriteResult.OPTIMISTIC
+            # Definitive rejection: pre-15.25.2 drivers never re-read the
+            # slot after a supervised failure, so an already-stale cache
+            # entry would stay wrong forever (see
+            # _async_uc_reconcile_value_db).
+            await self._async_uc_reconcile_value_db(credential.slot)
+            if key == "credential_rejected_duplicate":
+                raise DuplicateCodeError(
+                    code_slot=credential.slot,
+                    lock_entity_id=self.lock.entity_id,
+                ) from err
             raise CodeRejectedError(
                 code_slot=credential.slot,
                 lock_entity_id=self.lock.entity_id,
                 reason=str(err),
             ) from err
+        # Pre-15.25.2 drivers never persist a supervised success to the
+        # value database (see _async_uc_reconcile_value_db).
+        await self._async_uc_reconcile_value_db(credential.slot)
         return WriteResult.CONFIRMED
 
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
@@ -531,6 +542,11 @@ class ZWaveJSLock(BaseLock):
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err
         except HomeAssistantError as err:
+            # Same supervised-failure staleness as the set path (see
+            # _async_uc_reconcile_value_db). Success needs no read: the
+            # driver clears its cached User Code CC values on a
+            # successful delete since 15.24.3 (zwave-js/zwave-js#8866).
+            await self._async_uc_reconcile_value_db(ref.slot)
             raise LockOperationFailed(
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err
@@ -637,20 +653,34 @@ class ZWaveJSLock(BaseLock):
     # providers, so without this shim those changes would never reach
     # the coordinator and sync could not reconcile them.
     #
-    # zwave-js/zwave-js#8930 (merged, unreleased) fixes this by making
-    # the access-control API the source of truth for User Code CC. It
-    # also makes these User Code CC values internal, so once a driver
-    # with it ships the value events stop arriving and the unified
-    # events we already subscribe to take over -- the shim goes dormant
-    # on its own, no LCM change needed. To remove it once the minimum
-    # supported driver includes #8930:
+    # zwave-js/zwave-js#8930 (merged to the v16 branch, unreleased)
+    # fixes this by making the access-control API the source of truth
+    # for User Code CC. It also makes these User Code CC values
+    # internal -- and the driver does not emit value events for
+    # internal value IDs -- so once a driver with it ships the value
+    # events stop arriving and the unified events we already subscribe
+    # to take over: the shim goes dormant on its own, no LCM change
+    # needed.
+    #
+    # The shim also carries ``_async_uc_reconcile_value_db``, a
+    # post-write single-slot read that bridges a second gap fixed in
+    # driver 15.25.2 (zwave-js/zwave-js#8927): before that, supervised
+    # User Code CC writes through the unified API never persisted to
+    # (success) or reconciled (failure) the driver's value database,
+    # so cached reads served stale slots until the next report.
+    #
+    # To remove the whole section once the minimum supported driver
+    # includes #8930 (which implies #8927):
     #
     # 1. Delete everything from this comment through
-    #    ``_uc_slot_in_use``.
+    #    ``_async_uc_reconcile_value_db``.
     # 2. Delete the ``_node_advertises_user_code_cc`` branch in
     #    ``setup_push_subscription`` (and its docstring paragraph).
-    # 3. Delete the shim tests in
-    #    ``tests/providers/zwave_js/test_events.py`` (grep ``_uc_``)
+    # 3. Delete the ``_async_uc_reconcile_value_db`` call sites in
+    #    ``async_set_credential`` and ``async_delete_credential``.
+    # 4. Delete the shim tests in
+    #    ``tests/providers/zwave_js/test_events.py`` and
+    #    ``tests/providers/zwave_js/test_provider.py`` (grep ``_uc_``)
     #    and restore ``_EXPECTED_PUSH_UNSUB_COUNT`` to 3.
     # ------------------------------------------------------------------
 
@@ -736,6 +766,52 @@ class ZWaveJSLock(BaseLock):
         except NotFoundError:
             return None
         return in_use if isinstance(in_use, bool) else None
+
+    async def _async_uc_reconcile_value_db(self, code_slot: int) -> None:
+        """
+        Read one slot back from the device so the driver's cache converges.
+
+        Pre-15.25.2 drivers never persist a supervised User Code CC write
+        to the value database (success) and never re-read the slot after a
+        failure, so every later cached read -- including LCM's own initial
+        load after a restart -- serves the pre-write state. This fresh
+        single-slot read through the unified API forces the driver to
+        query the device: on the User Code CC dispatch path the solicited
+        report repairs the value database and doubles as a push through
+        the report shim above; on a User Credential CC lock the driver
+        dispatches natively and the read is merely redundant.
+
+        Best-effort by design: the write already concluded (the caller
+        returns or raises on its own evidence), so a failed read must not
+        change the outcome -- the next hard refresh or sync tick reconciles
+        instead.
+        """
+        if not self._node_advertises_user_code_cc():
+            return
+        try:
+            await self.node.access_control.get_credential(
+                UserCredentialType.PIN_CODE, code_slot
+            )
+        except BaseZwaveJSServerError as err:
+            _LOGGER.debug(
+                "Lock %s slot %s: post-write reconciliation read failed (%s); "
+                "leaving it to the next hard refresh or sync tick",
+                self.lock.entity_id,
+                code_slot,
+                err,
+            )
+        except Exception:
+            # Broad by design, mirroring the coordinator's confirmation-read
+            # backstop: two call sites run inside except clauses mapping the
+            # write outcome to typed errors, and an escaping exception here
+            # would replace that typed error and derail the seam's handling.
+            _LOGGER.exception(
+                "Lock %s slot %s: unexpected error during post-write "
+                "reconciliation read; leaving it to the next hard refresh "
+                "or sync tick",
+                self.lock.entity_id,
+                code_slot,
+            )
 
     @callback
     def teardown_push_subscription(self) -> None:
