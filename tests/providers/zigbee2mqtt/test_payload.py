@@ -359,3 +359,16 @@ def test_users_payload_before_coordinator_does_not_poison_delta_gate() -> None:
     lock.coordinator.push_update.assert_called_once_with(
         {2: SlotCredential.known("1234")}
     )
+
+
+def test_pin_code_boolean_user_does_not_resolve_slot_one() -> None:
+    """A malformed boolean ``user`` must not address slot 1 (int(True) == 1)."""
+    lock = _minimal_lock()
+    fut = MagicMock(spec=["cancel", "done", "set_result"])
+    fut.done.return_value = False
+    lock._pending_codes[1] = fut  # type: ignore[assignment]
+    lock._process_z2m_device_payload(
+        {"pin_code": {"user": True, "user_enabled": True, "pin_code": "9999"}}
+    )
+    fut.set_result.assert_not_called()
+    assert 1 in lock._pending_codes
