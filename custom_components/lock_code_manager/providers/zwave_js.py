@@ -800,6 +800,18 @@ class ZWaveJSLock(BaseLock):
                 code_slot,
                 err,
             )
+        except Exception:
+            # Broad by design, mirroring the coordinator's confirmation-read
+            # backstop: two call sites run inside except clauses mapping the
+            # write outcome to typed errors, and an escaping exception here
+            # would replace that typed error and derail the seam's handling.
+            _LOGGER.exception(
+                "Lock %s slot %s: unexpected error during post-write "
+                "reconciliation read; leaving it to the next hard refresh "
+                "or sync tick",
+                self.lock.entity_id,
+                code_slot,
+            )
 
     @callback
     def teardown_push_subscription(self) -> None:

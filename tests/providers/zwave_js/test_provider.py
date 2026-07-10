@@ -1655,3 +1655,29 @@ async def test_delete_credential_failure_triggers_reconcile_read(
     mock_access_control.get_credential.assert_awaited_once_with(
         UserCredentialType.PIN_CODE, 5
     )
+
+
+async def test_reconcile_read_unexpected_error_does_not_replace_typed_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """An unexpected reconcile-read error must not replace the mapped typed error.
+
+    The rejection call sites run inside except clauses; if the read raised
+    there, the seam would see the raw exception instead of DuplicateCodeError
+    and mishandle the rejection.
+    """
+    mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
+        translation_key="credential_rejected_duplicate"
+    )
+    mock_access_control.get_credential.side_effect = RuntimeError("boom")
+
+    with pytest.raises(DuplicateCodeError):
+        await zwave_js_lock.async_set_credential(
+            user_id=1,
+            credential=_pin_credential(3, "1111"),
+            pin="1111",
+            name=None,
+            source="sync",
+        )
