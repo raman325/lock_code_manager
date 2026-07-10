@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.2",
+  "checkpoint_id": "dfff3689de8a",
+  "session_id": "9ef648db-2e06-485c-ad43-4ee845dc76ca",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-10T19:07:02.486235Z",
+  "branch": "fix/z2m-users-payload-reads",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "tests/providers/zigbee2mqtt/test_payload.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "28a7de906dc0",
+  "checkpoint_transcript_start": 820,
+  "transcript_lines_at_start": 820,
+  "token_usage": {
+    "input_tokens": 3552,
+    "cache_creation_tokens": 651329,
+    "cache_read_tokens": 10520311,
+    "output_tokens": 36378,
+    "api_call_count": 34
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-10T19:07:02.100127Z",
+    "agent_lines": 146,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 146,
+    "agent_percentage": 100
+  }
+}
