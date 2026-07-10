@@ -307,20 +307,27 @@ class Zigbee2MQTTLock(BaseLock):
             # its pre-write state and sync reprograms it forever (issue
             # #1335). Gate on the previous payload so only entries that
             # actually changed reach the coordinator.
-            changed = {
-                user_id: state
-                for user_id, state in states.items()
-                if self._last_users_states.get(user_id) != state
-            }
-            self._last_users_states.update(states)
-            if changed and self.coordinator:
-                LOGGER.debug(
-                    "Lock %s received push update for slots: %s",
-                    self.lock.entity_id,
-                    list(changed),
-                )
-                for user_id, state in changed.items():
-                    self._confirm_slot(user_id, state)
+            #
+            # The gate only records payloads once a coordinator is
+            # attached: retained/live messages can arrive between
+            # async_setup's subscription and coordinator attach, and a
+            # pre-attach snapshot would gate out the first post-attach
+            # republication that should seed the initial state.
+            if self.coordinator is not None:
+                changed = {
+                    user_id: state
+                    for user_id, state in states.items()
+                    if self._last_users_states.get(user_id) != state
+                }
+                self._last_users_states.update(states)
+                if changed:
+                    LOGGER.debug(
+                        "Lock %s received push update for slots: %s",
+                        self.lock.entity_id,
+                        list(changed),
+                    )
+                    for user_id, state in changed.items():
+                        self._confirm_slot(user_id, state)
 
         pin_code_data = payload.get("pin_code")
         if pin_code_data and isinstance(pin_code_data, dict):

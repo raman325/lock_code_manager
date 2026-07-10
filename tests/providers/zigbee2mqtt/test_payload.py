@@ -343,3 +343,19 @@ def test_boolean_action_user_is_ignored() -> None:
     lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": False})
 
     lock.async_fire_code_slot_event.assert_not_called()
+
+
+def test_users_payload_before_coordinator_does_not_poison_delta_gate() -> None:
+    """A retained payload arriving before coordinator attach must not gate out
+    the first post-attach republication (it should still seed initial state)."""
+    lock = _minimal_lock()
+    payload = {"users": {"2": {"status": "enabled", "pin_code": "1234"}}}
+
+    assert lock.coordinator is None
+    lock._process_z2m_device_payload(payload)
+
+    lock.coordinator = MagicMock()
+    lock._process_z2m_device_payload(payload)
+    lock.coordinator.push_update.assert_called_once_with(
+        {2: SlotCredential.known("1234")}
+    )
