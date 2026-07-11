@@ -25,12 +25,79 @@ def test_mqtt_payload_pin_has_code_value_rejects_bool() -> None:
     assert _mqtt_payload_pin_has_code_value(True) is False
 
 
-def test_users_enabled_without_pin_key_skips_push() -> None:
-    """Do not infer EMPTY when expose_pin hides pin_code (enabled user, key absent)."""
+def test_users_enabled_without_pin_key_pushes_unreadable() -> None:
+    """An enabled user with expose_pin hiding pin_code is occupied-but-withheld."""
     lock = _minimal_lock()
     lock.coordinator = MagicMock()
     lock._process_z2m_device_payload({"users": {"5": {"status": "enabled"}}})
+    lock.coordinator.push_update.assert_called_once_with(
+        {5: SlotCredential.unreadable()}
+    )
+
+
+def test_users_not_supported_status_pushes_unreadable() -> None:
+    """An unrecognized status must not be misread as confirmed-empty."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock._process_z2m_device_payload({"users": {"3": {"status": "not_supported_5"}}})
+    lock.coordinator.push_update.assert_called_once_with(
+        {3: SlotCredential.unreadable()}
+    )
+
+
+def test_users_republication_of_unchanged_state_not_repushed() -> None:
+    """Zigbee2MQTT republishes its full cached state; unchanged entries stay quiet.
+
+    Without the delta gate, a stale cached entry republished after LCM's
+    optimistic write flips the slot back and sync reprograms it forever
+    (issue #1335).
+    """
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    payload = {"users": {"2": {"status": "enabled", "pin_code": "1234"}}}
+
+    lock._process_z2m_device_payload(payload)
+    lock.coordinator.push_update.assert_called_once_with(
+        {2: SlotCredential.known("1234")}
+    )
+
+    lock.coordinator.push_update.reset_mock()
+    lock._process_z2m_device_payload(payload)
     lock.coordinator.push_update.assert_not_called()
+
+    # A genuine change still gets through.
+    lock._process_z2m_device_payload({"users": {"2": {"status": "available"}}})
+    lock.coordinator.push_update.assert_called_once_with({2: SlotCredential.empty()})
+
+
+async def test_users_payload_resolves_pending_read() -> None:
+    """GetPinCode responses arrive via the users object (issue #1335).
+
+    The converter (fz.lock_pin_code_response) publishes the response inside
+    ``users``; the pending read future must resolve from it instead of
+    timing out.
+    """
+    loop = asyncio.get_running_loop()
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+
+    fut_known = loop.create_future()
+    lock._pending_codes[2] = fut_known
+    lock._process_z2m_device_payload(
+        {"users": {"2": {"status": "enabled", "pin_code": "1234"}}}
+    )
+    assert fut_known.done() and fut_known.result() == SlotCredential.known("1234")
+    assert 2 not in lock._pending_codes
+
+    fut_hidden = loop.create_future()
+    lock._pending_codes[3] = fut_hidden
+    lock._process_z2m_device_payload({"users": {"3": {"status": "enabled"}}})
+    assert fut_hidden.done() and fut_hidden.result() == SlotCredential.unreadable()
+
+    fut_available = loop.create_future()
+    lock._pending_codes[4] = fut_available
+    lock._process_z2m_device_payload({"users": {"4": {"status": "available"}}})
+    assert fut_available.done() and fut_available.result() == SlotCredential.empty()
 
 
 def test_users_enabled_with_numeric_zero_pin_updates() -> None:
@@ -63,7 +130,7 @@ def test_users_non_numeric_slot_key_skipped() -> None:
     lock.coordinator.push_update.assert_not_called()
 
 
-async def test_pin_code_get_disabled_or_empty_pin_sets_future_none() -> None:
+async def test_pin_code_get_disabled_or_empty_pin_sets_future_empty() -> None:
     """PIN response with disabled user, empty pin, or numeric zero."""
     loop = asyncio.get_running_loop()
     lock = _minimal_lock()
@@ -73,21 +140,21 @@ async def test_pin_code_get_disabled_or_empty_pin_sets_future_none() -> None:
     lock._process_z2m_device_payload(
         {"pin_code": {"user": 7, "user_enabled": False, "pin_code": "1234"}}
     )
-    assert fut_disabled.done() and fut_disabled.result() is None
+    assert fut_disabled.done() and fut_disabled.result() == SlotCredential.empty()
 
     fut_empty = loop.create_future()
     lock._pending_codes[8] = fut_empty
     lock._process_z2m_device_payload(
         {"pin_code": {"user": 8, "user_enabled": True, "pin_code": ""}}
     )
-    assert fut_empty.done() and fut_empty.result() is None
+    assert fut_empty.done() and fut_empty.result() == SlotCredential.empty()
 
     fut_zero = loop.create_future()
     lock._pending_codes[9] = fut_zero
     lock._process_z2m_device_payload(
         {"pin_code": {"user": 9, "user_enabled": True, "pin_code": 0}}
     )
-    assert fut_zero.done() and fut_zero.result() == "0"
+    assert fut_zero.done() and fut_zero.result() == SlotCredential.known("0")
 
 
 async def test_pin_code_deleted_schedules_refresh_task(
@@ -276,3 +343,32 @@ def test_boolean_action_user_is_ignored() -> None:
     lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": False})
 
     lock.async_fire_code_slot_event.assert_not_called()
+
+
+def test_users_payload_before_coordinator_does_not_poison_delta_gate() -> None:
+    """A retained payload arriving before coordinator attach must not gate out
+    the first post-attach republication (it should still seed initial state)."""
+    lock = _minimal_lock()
+    payload = {"users": {"2": {"status": "enabled", "pin_code": "1234"}}}
+
+    assert lock.coordinator is None
+    lock._process_z2m_device_payload(payload)
+
+    lock.coordinator = MagicMock()
+    lock._process_z2m_device_payload(payload)
+    lock.coordinator.push_update.assert_called_once_with(
+        {2: SlotCredential.known("1234")}
+    )
+
+
+def test_pin_code_boolean_user_does_not_resolve_slot_one() -> None:
+    """A malformed boolean ``user`` must not address slot 1 (int(True) == 1)."""
+    lock = _minimal_lock()
+    fut = MagicMock(spec=["cancel", "done", "set_result"])
+    fut.done.return_value = False
+    lock._pending_codes[1] = fut  # type: ignore[assignment]
+    lock._process_z2m_device_payload(
+        {"pin_code": {"user": True, "user_enabled": True, "pin_code": "9999"}}
+    )
+    fut.set_result.assert_not_called()
+    assert 1 in lock._pending_codes

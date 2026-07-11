@@ -152,6 +152,10 @@ class TestParseSlotNum:
             pytest.param("five", None, id="str-non-numeric"),
             pytest.param(None, None, id="none"),
             pytest.param([], None, id="non-coercible-type"),
+            # int() coerces booleans to 0/1; a malformed JSON true must not
+            # silently address slot 1.
+            pytest.param(True, None, id="bool-true-rejected"),
+            pytest.param(False, None, id="bool-false-rejected"),
         ],
     )
     def test_parse_slot_num(self, input_value: object, expected: int | None) -> None:
