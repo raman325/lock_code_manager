@@ -486,19 +486,23 @@ class LockCodeManagerFlowHandler(
             last_step=True,
         )
 
-    async def async_step_reauth(self, user_input: dict[str, Any]):
-        """Handle import flow step."""
+    async def async_step_reauth(self, user_input: dict[str, Any] | None = None):
+        """Handle reauth flow step."""
         config_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
+        assert config_entry
         errors = {}
         description_placeholders = {
             **self.context["title_placeholders"],
             "lock": self.context["lock_entity_id"],
         }
 
-        if CONF_SLOTS not in user_input:
-            assert config_entry
+        if user_input is None:
+            # The frontend re-invokes the step with no input to render the
+            # form; seed the lock selector from the entry's current config.
+            user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
+        elif CONF_SLOTS not in user_input:
             additional_errors, additional_placeholders = _check_common_slots(
                 self.hass,
                 user_input[CONF_LOCKS],

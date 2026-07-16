@@ -270,6 +270,33 @@ async def test_config_flow_reauth(
     assert result["reason"] == "locks_updated"
 
 
+async def test_config_flow_reauth_form_refetch(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """The reauth form renders when re-fetched with no user input.
+
+    The frontend re-invokes the current step with ``user_input=None`` to
+    render the form when the user opens the flow, so the step must handle
+    ``None`` and seed defaults from the entry's configured locks.
+    """
+    lock_code_manager_config_entry.async_start_reauth(
+        hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
+    )
+    await hass.async_block_till_done()
+    [flow] = lock_code_manager_config_entry.async_get_active_flows(
+        hass, {SOURCE_REAUTH}
+    )
+
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"], None)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth"
+    assert result["data_schema"]({})[CONF_LOCKS] == [
+        LOCK_1_ENTITY_ID,
+        LOCK_2_ENTITY_ID,
+    ]
+
+
 async def test_reauth_wins_over_stale_options(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ):
