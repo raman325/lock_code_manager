@@ -1,0 +1,9 @@
+use searxng or firecrawl to get the latest post here: https://community.home-assistant.io/t/custom-component-lock-code-manager-an-integration-to-manage-lock-usercodes-across-multiple-integrations-z-wave-matter-zigbee2mqtt-via-mqtt-schlage-wifi/695681/86
+
+---
+
+yes
+
+---
+
+fix 2, 3, and 4 in one PR, 1 in another

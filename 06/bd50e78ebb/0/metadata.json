@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "06bd50e78ebb",
+  "session_id": "e195c857-8910-4d40-b4b2-1b22552277d8",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-16T02:48:23.291336Z",
+  "branch": "fix/zwave-caps-recovery-and-degraded-locks",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_seam.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/test_init.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "bc73f112c748",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 57661,
+    "cache_creation_tokens": 439823,
+    "cache_read_tokens": 21655644,
+    "output_tokens": 81964,
+    "api_call_count": 104
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01DTmYqTc3JpdF13QoAxso4P",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bc73f112c748",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 53,
+        "end": 54,
+        "entry_ids": [
+          "1fb21469-644d-4a5b-81ac-dec219f9020c"
+        ],
+        "tool_use_id": "toolu_01DTmYqTc3JpdF13QoAxso4P"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DTmYqTc3JpdF13QoAxso4P"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-16T02:48:23.233825Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 267,
+    "human_modified": 49,
+    "human_removed": 0,
+    "total_committed": 267,
+    "total_lines_changed": 316,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 6955,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex-security/scan.log": 6955
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "06bd50e78ebb",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-caps-recovery-and-degraded-locks",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/test_base.py",
+    "tests/providers/test_seam.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/06/bd50e78ebb/0/metadata.json",
+      "transcript": "/06/bd50e78ebb/0/full.jsonl",
+      "compact_transcript": "/06/bd50e78ebb/0/transcript.jsonl",
+      "content_hash": "/06/bd50e78ebb/0/content_hash.txt",
+      "prompt": "/06/bd50e78ebb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 57661,
+    "cache_creation_tokens": 439823,
+    "cache_read_tokens": 21655644,
+    "output_tokens": 81964,
+    "api_call_count": 104
+  }
+}
