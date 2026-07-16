@@ -60,13 +60,15 @@ class LockCodesCardEditor extends LitElement {
 
         return html`
             <div class="editor-row">
-                ${this._loading
-                    ? html`<span>Loading locks...</span>`
-                    : this._locks.length === 0
-                      ? html`<div class="no-locks-warning">
-                            No locks are currently managed by Lock Code Manager.
-                        </div>`
-                      : nothing}
+                ${
+                    this._loading
+                        ? html`<span>Loading locks...</span>`
+                        : this._locks.length === 0
+                          ? html`<div class="no-locks-warning">
+                                No locks are currently managed by Lock Code Manager.
+                            </div>`
+                          : nothing
+                }
                 <ha-entity-picker
                     .hass=${this._hass}
                     .value=${this._config.lock_entity_id}

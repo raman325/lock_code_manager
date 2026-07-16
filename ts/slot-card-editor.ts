@@ -91,13 +91,15 @@ class LcmSlotCardEditor extends LitElement {
 
         return html`
             <div class="editor-row">
-                ${this._loading
-                    ? html`<span>Loading config entries...</span>`
-                    : this._configEntries.length === 0
-                      ? html`<div class="no-entries-warning">
-                            No Lock Code Manager config entries found.
-                        </div>`
-                      : nothing}
+                ${
+                    this._loading
+                        ? html`<span>Loading config entries...</span>`
+                        : this._configEntries.length === 0
+                          ? html`<div class="no-entries-warning">
+                                No Lock Code Manager config entries found.
+                            </div>`
+                          : nothing
+                }
                 <ha-select
                     .label=${'LCM Config Entry'}
                     .value=${this._config.config_entry_id ?? ''}

@@ -118,8 +118,7 @@ describe('LockCodeManagerViewStrategy', () => {
                 'collapsed_sections',
                 {
                     collapsed_sections: ['conditions', 'lock_status'] as (
-                        | 'conditions'
-                        | 'lock_status'
+                        'conditions' | 'lock_status'
                     )[]
                 },
                 { collapsedSections: ['conditions', 'lock_status'] }

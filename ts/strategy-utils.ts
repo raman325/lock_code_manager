@@ -4,8 +4,7 @@ import { LovelaceViewConfig } from './ha_type_stubs';
  * Validation result for view strategy config.
  */
 export type ConfigValidationResult =
-    | { valid: true }
-    | { error: 'missing' | 'both_specified'; valid: false };
+    { valid: true } | { error: 'missing' | 'both_specified'; valid: false };
 
 /**
  * Validates that exactly one of config_entry_id or config_entry_title is provided.
