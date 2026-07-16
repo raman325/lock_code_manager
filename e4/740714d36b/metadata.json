@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e4740714d36b",
+  "strategy": "manual-commit",
+  "branch": "fix/lock-setup-failed-repair",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/providers/test_base.py",
+    "tests/test_init.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/740714d36b/0/metadata.json",
+      "transcript": "/e4/740714d36b/0/full.jsonl",
+      "compact_transcript": "/e4/740714d36b/0/transcript.jsonl",
+      "content_hash": "/e4/740714d36b/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12967,
+    "cache_creation_tokens": 36204,
+    "cache_read_tokens": 7204400,
+    "output_tokens": 15272,
+    "api_call_count": 24
+  }
+}

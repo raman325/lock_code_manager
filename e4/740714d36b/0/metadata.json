@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e4740714d36b",
+  "session_id": "e195c857-8910-4d40-b4b2-1b22552277d8",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-16T02:55:22.737643Z",
+  "branch": "fix/lock-setup-failed-repair",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "tests/providers/test_base.py",
+    "tests/test_init.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/__init__.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "bc73f112c748",
+  "checkpoint_transcript_start": 574,
+  "transcript_lines_at_start": 574,
+  "compact_transcript_start": 117,
+  "token_usage": {
+    "input_tokens": 12967,
+    "cache_creation_tokens": 36204,
+    "cache_read_tokens": 7204400,
+    "output_tokens": 15272,
+    "api_call_count": 24
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01DTmYqTc3JpdF13QoAxso4P",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "bc73f112c748",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 53,
+        "end": 54,
+        "entry_ids": [
+          "1fb21469-644d-4a5b-81ac-dec219f9020c"
+        ],
+        "tool_use_id": "toolu_01DTmYqTc3JpdF13QoAxso4P"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DTmYqTc3JpdF13QoAxso4P"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-16T02:55:22.669756Z",
+    "agent_lines": 169,
+    "agent_removed": 2,
+    "human_added": 10,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 179,
+    "total_lines_changed": 183,
+    "agent_percentage": 93.44262295081968,
+    "metric_version": 2
+  }
+}
