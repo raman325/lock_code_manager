@@ -720,8 +720,15 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
     )
 
 
-def _zero_slot_caps() -> dict:
-    """Return a degenerate capabilities response: PIN type advertised, 0 slots."""
+def _user_code_caps(num_slots: int) -> dict:
+    """
+    Return a User Code CC capabilities response with the given slot count.
+
+    ``num_slots=0`` is the degenerate interview-incomplete shape from issue
+    #1298; a positive count is the recovered/healthy shape. Everything else
+    matches what the driver reports for a User Code CC dispatch (no user
+    management, spec-default 4-10 code length).
+    """
     pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
     return {
         "supports_user_management": False,
@@ -731,27 +738,7 @@ def _zero_slot_caps() -> dict:
         "supported_credential_rules": [],
         "supported_credential_types": {
             pin_type_str: {
-                "num_slots": 0,
-                "min_length": 4,
-                "max_length": 10,
-                "supports_learn": False,
-            }
-        },
-    }
-
-
-def _healthy_caps() -> dict:
-    """Return a healthy capabilities response with 30 PIN slots."""
-    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
-    return {
-        "supports_user_management": False,
-        "max_users": 0,
-        "supported_user_types": [],
-        "max_user_name_length": 0,
-        "supported_credential_rules": [],
-        "supported_credential_types": {
-            pin_type_str: {
-                "num_slots": 30,
+                "num_slots": num_slots,
                 "min_length": 4,
                 "max_length": 10,
                 "supports_learn": False,
@@ -777,8 +764,8 @@ async def test_async_get_capabilities_zero_slots_recovers_via_users_count_query(
     concluding the lock is unusable (issue #1298 follow-up).
     """
     mock_lock_helpers["async_get_credential_capabilities"].side_effect = [
-        _zero_slot_caps(),
-        _healthy_caps(),
+        _user_code_caps(num_slots=0),
+        _user_code_caps(num_slots=30),
     ]
     invoke = AsyncMock()
     with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
@@ -807,7 +794,7 @@ async def test_async_get_capabilities_zero_slots_raises_actionable_error(
     """
     mock_lock_helpers[
         "async_get_credential_capabilities"
-    ].return_value = _zero_slot_caps()
+    ].return_value = _user_code_caps(num_slots=0)
     invoke = AsyncMock()
     with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
         with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):
@@ -831,7 +818,7 @@ async def test_async_get_capabilities_zero_slots_recovery_query_failure_still_ra
     """
     mock_lock_helpers[
         "async_get_credential_capabilities"
-    ].return_value = _zero_slot_caps()
+    ].return_value = _user_code_caps(num_slots=0)
     invoke = AsyncMock(side_effect=FailedZWaveCommand("cmd", 1, "node asleep"))
     with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
         with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):

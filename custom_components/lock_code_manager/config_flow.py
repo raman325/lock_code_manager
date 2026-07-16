@@ -508,8 +508,20 @@ class LockCodeManagerFlowHandler(
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
+                # Consume any options-flow save that sat unprocessed while
+                # the entry was failed (no update listener registered in
+                # that state) and clear it: the data→options migration
+                # merges options-preferred, so leaving stale options in
+                # place would silently override this reauth fix on the
+                # next load.
                 self.hass.config_entries.async_update_entry(
-                    config_entry, data={**config_entry.data, **user_input}
+                    config_entry,
+                    data={
+                        **config_entry.data,
+                        **config_entry.options,
+                        **user_input,
+                    },
+                    options={},
                 )
                 self.hass.async_create_task(
                     self.hass.config_entries.async_reload(config_entry.entry_id),

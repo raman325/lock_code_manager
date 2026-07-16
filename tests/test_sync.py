@@ -854,6 +854,63 @@ class TestSyncStateMachine:
 
         assert manager._state is SyncState.OUT_OF_SYNC
 
+    async def test_tick_suspends_while_provider_setup_not_validated(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """A lock whose provider setup has not validated suspends sync quietly.
+
+        A structurally-degraded lock (e.g. zero usable PIN slots after a
+        re-inclusion) is kept in runtime data with entities, but attempting
+        writes against it would fail on the capability probe and land in the
+        generic error handler — raising a misleading "report this bug"
+        suspension repair on top of the accurate lock_setup_failed one, and
+        re-firing the recovery device query on every attempt. The tick must
+        suspend without calling _perform_sync, and resume via
+        request_sync_check once validation succeeds.
+        """
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.OUT_OF_SYNC
+        manager._coordinator.data[1] = SlotCredential.empty()
+        manager._lock._setup_succeeded = False
+
+        with patch.object(
+            manager, "_perform_sync", new_callable=AsyncMock
+        ) as perform_sync:
+            await manager._async_tick()
+            await hass.async_block_till_done()
+
+        perform_sync.assert_not_called()
+        assert manager._state is SyncState.SUSPENDED
+
+        # Validation succeeds later (re-interview + integration reload); the
+        # next sync-check request resumes reconciliation.
+        manager._lock._setup_succeeded = True
+        manager.request_sync_check()
+        assert manager._state is SyncState.OUT_OF_SYNC
+
+    async def test_suspended_does_not_resume_while_setup_not_validated(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """request_sync_check keeps an unvalidated lock suspended even when reachable."""
+        entity_obj = get_in_sync_entity_obj(hass, SLOT_1_IN_SYNC_ENTITY)
+        manager = entity_obj._sync_manager
+
+        manager._state = SyncState.SUSPENDED
+        manager._code_suspend_target = None
+        manager._lock._setup_succeeded = False
+        assert manager._coordinator.unreachable is False
+
+        manager.request_sync_check()
+        assert manager._state is SyncState.SUSPENDED
+
     async def test_syncing_to_suspended_on_unexpected_error(
         self,
         hass: HomeAssistant,

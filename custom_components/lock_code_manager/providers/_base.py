@@ -529,6 +529,21 @@ class BaseLock:
         """
         return False
 
+    @final
+    @property
+    def provider_setup_succeeded(self) -> bool:
+        """
+        Return whether provider setup (including capability validation) succeeded.
+
+        False both while setup is deferred (provider integration still
+        loading) and after a structural validation failure (e.g. the lock
+        reports zero usable PIN slots). Sync managers gate write attempts
+        on this so a degraded lock is not hammered with operations that
+        fail on the capability probe; the LOADED-transition revalidation
+        flips it back and reconciliation resumes.
+        """
+        return self._setup_succeeded
+
     @property
     def supports_native_users(self) -> bool:
         """
@@ -841,6 +856,10 @@ class BaseLock:
                 self.lock.entity_id,
                 err,
             )
+            # A previously-validated lock can fail revalidation (e.g. a
+            # re-interview zeroed its slot count); reset the flag so sync
+            # stays gated and the eventual recovery is observable.
+            self._setup_succeeded = False
             self._report_setup_validation_failure(err)
         else:
             if not self._setup_succeeded:

@@ -372,10 +372,14 @@ class ZWaveJSLock(BaseLock):
             "users count once before concluding the lock is unusable",
             self.lock.entity_id,
         )
+        # .get() rather than subscription: a KeyError from a node model
+        # missing its root endpoint would escape past every typed handler
+        # and get the lock dropped instead of degraded.
+        endpoint = self.node.endpoints.get(0)
+        if endpoint is None:
+            return False
         try:
-            await self.node.endpoints[0].async_invoke_cc_api(
-                CommandClass.USER_CODE, "getUsersCount"
-            )
+            await endpoint.async_invoke_cc_api(CommandClass.USER_CODE, "getUsersCount")
         except BaseZwaveJSServerError as err:
             _LOGGER.debug(
                 "Lock %s: users count recovery query failed: %s",
