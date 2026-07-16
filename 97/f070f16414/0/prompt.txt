@@ -1,0 +1,361 @@
+do a code review on both PRs although 1344 is merged so anything you identify will have to be fixed in a new branch
+
+---
+
+<task-notification>
+<task-id>a33d4731a8dc5fd06</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a33d4731a8dc5fd06.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: conventions check" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've read the diff and AGENTS.md (the master guidance). Now let me evaluate the diff against the stated conventions.
+
+The relevant governing rules in `/Users/raman/projects/lock_code_manager/AGENTS.md` under "Code Style":
+- Line 277: "**Spell out acronyms** in code comments instead of using abbreviations."
+- Line 270: "**No inline/local imports** — always import at the top of the file."
+- Line 275-276: "Do NOT add Google-style `Args:`/`Returns:` sections"
+- Line 315: "**Minimize caplog text assertions**"
+
+Checking the diff: no inline imports (all new imports are top-of-file), no `Args:`/`Returns:` section headers (the `_async_recover_user_code_slot_count` docstring mentions the return value as inline prose, which the rule explicitly permits), and no caplog assertions. The only convention touched is the acronym rule.
+
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 234,
+    "summary": "New docstring for _async_recover_user_code_slot_count uses the unexpanded acronym \"CC\" (Command Class) repeatedly, e.g. \"Re-query the User Code CC users count\", \"a User Code CC lock's PIN slot count\", \"refreshValues on the CC reads that same cached value\".",
+    "failure_scenario": "Violates AGENTS.md (Code Style) line 277: \"Spell out acronyms in code comments instead of using abbreviations.\" \"CC\" is never expanded to \"Command Class\" in these comment/docstring lines."
+  },
+  {
+    "file": "tests/providers/zwave_js/test_provider.py",
+    "line": 685,
+    "summary": "New test docstring uses the abbreviation \"value DB\": \"defaulting to 0 when it is missing from the value DB\". The parallel production comment in zwave_js.py deliberately spells this out as \"missing from the value database\", so the test docstring is inconsistent with the rule the code follows.",
+    "failure_scenario": "Violates AGENTS.md (Code Style) line 277: \"Spell out acronyms in code comments instead of using abbreviations.\" \"DB\" should be \"database\" (as the production code does)."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 29,
+    "summary": "Modified comment line reads \"Only delete per-lock issues if no other LCM entry manages this lock\", using the unexpanded acronym \"LCM\".",
+    "failure_scenario": "Technically violates AGENTS.md (Code Style) line 277: \"Spell out acronyms in code comments instead of using abbreviations.\" Note: \"LCM\" is used pervasively throughout the repo and AGENTS.md itself, so this is likely an accepted domain term rather than a rule the maintainer enforces — low confidence."
+  }
+]</result>
+<usage><subagent_tokens>65696</subagent_tokens><tool_uses>2</tool_uses><duration_ms>54649</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a472716347b39a9f1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a472716347b39a9f1.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: simplification finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my analysis of the diff and current file state, here are the simplification findings:
+
+```json
+[
+  {
+    "file": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 701,
+    "summary": "The `else: if self._setup_succeeded:` clause on the outer try in async_setup_internal is a redundant re-derivation. `_setup_succeeded` is only ever set True at line 682, immediately after `_async_run_provider_setup` returns on the no-exception success path. The `else` block runs on every no-exception path (including the deferred not-connected path where `_setup_succeeded` is False), so it must re-check the flag to avoid clearing in the deferred case. Simpler form: call `self._clear_setup_validation_issue()` directly on line 682 right after `self._setup_succeeded = True`, and delete the whole `else` clause.",
+    "failure_scenario": "The extra else-clause + guard splits the success side-effect (clear the repair issue) away from where success is actually established. A future edit that adds another success exit or reorders the deferred branch has to remember to keep the `if self._setup_succeeded` guard in sync, or it will spuriously clear/keep the repair issue; co-locating the clear with the flag assignment makes that class of bug impossible."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 692,
+    "summary": "The two `except LockCodeManagerProviderError` handlers — initial setup (692-700) and `_async_on_integration_loaded` (838-844) — are copy-paste with slight variation: both LOGGER.error the same 'Provider setup failed validation for %s' theme and both call `self._report_setup_validation_failure(err)`. Only the trailing sentence of the log string differs. A single helper (e.g. `self._handle_validation_failure(err)` that logs + reports) would collapse both sites.",
+    "failure_scenario": "The repair issue is now reported from two places with two near-identical-but-not-identical log lines. Any change to the failure-reporting contract (issue id, adding a metric, tweaking wording) must be made in both spots; the two log strings will drift and a maintainer debugging from logs won't be able to tell which path fired without reading the code."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 289,
+    "summary": "The zero-slot recovery flow reads capabilities and extracts `pin` in an identical two-line pair twice: lines 289-290 and again 298-299 inside the recovery `if`. The 4-condition `and`-chain then falls through to the same `if pin and pin[\"num_slots\"] &gt; 0` success check. Extracting a tiny `_read_pin_capability()` returning `(caps, pin)` removes the copy-pasted `caps = ...; pin = caps[...].get(_PIN_TYPE_STR)` pair and makes the recovery re-read a single call.",
+    "failure_scenario": "`_PIN_TYPE_STR` lookup and the caps read are duplicated; if the capabilities dict shape or the PIN-extraction key ever changes, both pairs must be updated in lockstep, and the second (recovery-only) pair is easy to miss since it lives inside a conditional exercised only in the interview-incomplete case."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/tests/providers/zwave_js/test_provider.py",
+    "line": 740,
+    "summary": "`_zero_slot_caps()` and `_healthy_caps()` are near-identical dict builders that differ only in the PIN block's `num_slots` (0 vs 30) — every other field (supports_user_management, max_users, supported_user_types, credential rules, min/max length, supports_learn) is duplicated verbatim. A single `_caps(num_slots)` builder parametrized on slot count would express the one meaningful difference.",
+    "failure_scenario": "Two ~15-line literal dicts that must stay structurally identical for the tests to be comparing like-with-like. When the unified-capabilities response shape gains or renames a field, both builders need the same edit; if only one is updated the tests silently stop covering the recovery-vs-degenerate distinction they exist to prove."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/tests/providers/test_base.py",
+    "line": 968,
+    "summary": "Across the four new tests the same `no_pin_caps = LockCapabilities(supports_user_management=True, max_users=10, credential_types={})` literal is rebuilt each time, and the LOADED-transition boilerplate (`loaded_entry = MagicMock(); loaded_entry.state = ConfigEntryState.LOADED; lock.lock_config_entry = loaded_entry`) is repeated verbatim in three of them. A module-level `_no_pin_caps()` helper (mirroring the existing `_pin_capabilities()`) and a `_set_integration_loaded(lock)` helper would remove the repetition.",
+    "failure_scenario": "The degraded-capability fixture and the 'force LOADED' dance are copied per-test; a change to how a lock detects its integration is loaded (e.g. checking more than `state`) forces edits in every copy, and the inconsistency risk means one test can quietly diverge and pass for the wrong reason."
+  }
+]
+```</result>
+<usage><subagent_tokens>64099</subagent_tokens><tool_uses>3</tool_uses><duration_ms>83156</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a896d645e93c28a12</task-id>
+<tool-use-id>toolu_01WXe1cht1tcn85FAsc992eM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a896d645e93c28a12.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: reuse finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my analysis of the diff and surrounding code, here are the reuse findings:
+
+```json
+[
+  {
+    "file": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 771,
+    "summary": "The new _report_setup_validation_failure / _clear_setup_validation_issue methods re-implement the exact lock-scoped repair create/delete pattern already written in domain/coordinator.py (lock_offline, lines 328 and 364): same f\"{key}_{lock.entity_id}\" id, same is_fixable=False, is_persistent=True, translation_placeholders={\"lock_entity_id\": ...}. The same shape is also open-coded in domain/util.py:148, domain/sync.py:484/517, and domain/slot_coordinator.py:409. No shared helper exists; this adds a 6th copy. A single helper (e.g. in domain/util.py) like _create_lock_issue(hass, key, lock_entity_id, severity, **extra) / _delete_lock_issue(hass, key, lock_entity_id) should be introduced and called by both the coordinator and _base.",
+    "failure_scenario": "The create-site and clear-site set the issue's flags/severity independently; a future change to how LCM repairs are constructed (e.g. adding is_persistent handling or a learn-more URL) must be hand-applied to 6 divergent blocks. Miss one and that lock's repair silently behaves differently from every other lock's."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/_base.py",
+    "line": 788,
+    "summary": "The issue-id string f\"lock_setup_failed_{self.lock.entity_id}\" is duplicated at three sites that must stay in lockstep: the create in _base.py:788, the clear in _base.py:804, and the cleanup delete in __init__.py:798. This mirrors the pre-existing lock_offline_ id built independently in coordinator.py:331, coordinator.py:367, and __init__.py:797. There is no id-builder/constant anywhere (confirmed in const.py); every repair key in this codebase is an ad-hoc f-string.",
+    "failure_scenario": "The delete in __init__.py (async_remove_entry) and the clear in async_unload live in different files from the create. If the id prefix or interpolation ever changes on one side (e.g. keyed by config-entry+lock to disambiguate multi-entry locks), the mismatched delete silently orphans the persistent repair, leaving a permanent 'Lock setup failed' notification the user cannot clear."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 342,
+    "summary": "_async_read_credential_capabilities wraps the call with the except BaseZwaveJSServerError -&gt; LockDisconnected / except HomeAssistantError -&gt; LockOperationFailed mapping, which is copy-pasted verbatim ~7 times in this same file (lines 236-239, 424-427, 498-501, 540-546, 593-603, 966-969). The extraction only factors out one of the seven; the transport-error-to-typed-error mapping is itself the duplicated unit and should be a shared context manager/decorator (e.g. `with _map_zwave_errors(\"get capabilities\"):`) reused by all call sites.",
+    "failure_scenario": "The two exception classes and their target LCM types are re-typed at 7 sites. If zwave_js_server adds a new base error class (or a call must map a third error), each of the 7 blocks needs the same edit; any missed site leaks an untyped exception that the degraded/retry routing in async_setup_internal cannot classify, dropping the lock instead of degrading it."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/tests/providers/zwave_js/test_provider.py",
+    "line": 655,
+    "summary": "The new _healthy_caps() helper re-declares the full healthy credential-capabilities dict that the mock_lock_helpers fixture in tests/providers/zwave_js/conftest.py:422 already provides as its default return_value (both are the num_slots=30 PIN caps). Worse, the values diverge: _healthy_caps uses supports_user_management=False, max_length=10 while the fixture uses supports_user_management=True, max_length=8. The recovery test could reuse the fixture default (or a shared factory) instead of a fourth hand-maintained copy.",
+    "failure_scenario": "The 'recovered' capabilities the test asserts on differ from the canonical healthy shape every other zwave test exercises through the fixture, so the recovery path is validated against a caps object no production code produces — a real schema change (e.g. renaming supported_credential_types) updates the fixture but leaves _healthy_caps stale, and the test keeps passing green against a dead shape."
+  },
+  {
+    "file": "/Users/raman/projects/lock_code_manager/tests/providers/zwave_js/test_provider.py",
+    "line": 640,
+    "summary": "_zero_slot_caps() and _healthy_caps() both spell out the entire supported_credential_types/supported_user_types/supported_credential_rules schema literal, differing only in num_slots (0 vs 30). They should derive from one factory that takes num_slots, matching how conftest builds its single caps template.",
+    "failure_scenario": "Two near-identical caps schemas are maintained by hand; a field added to the real capabilities payload must be pasted into both plus the conftest fixture, and any omission makes the zero-slot recovery assertions test a payload shape the provider never sees."
+  }
+]
+```</result>
+<usage><subagent_tokens>66388</subagent_tokens><tool_uses>9</tool_uses><duration_ms>96234</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a08cdba690dcc6e09</task-id>
+<tool-use-id>toolu_01X2thQqQhCU4DNyTWyhjupz</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a08cdba690dcc6e09.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: efficiency finder" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Confirmed: no persistent state gates the recovery. The docstring claims "one-shot," but it is only one-shot *within a single `async_get_capabilities` call* — nothing prevents it re-running on every probe. Here are my findings.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 296,
+    "summary": "Zero-slot recovery (getUsersCount device query + a second full capability re-read) has no once-per-lifetime gate or backoff; it re-runs on every async_get_capabilities miss.",
+    "failure_scenario": "A genuinely zero-slot lock (interview permanently incomplete, or driver &lt; 15.24.3) that answers getUsersCount but still reports 0 slots will never recover. Yet because the cache is invalidated on failure and _async_on_integration_loaded re-runs _async_run_provider_setup -&gt; _get_cached_capabilities on EVERY zwave_js config-entry LOADED transition, each reconnect/reload of a flapping zwave_js integration re-probes the device: 1 getUsersCount radio round-trip + 2 full async_get_credential_capabilities reads, forever, hammering a battery lock's radio. Cheaper: set an instance flag (e.g. _attempted_slot_recovery) so the getUsersCount device query runs at most once per provider instance lifetime, matching the 'one-shot' the docstring already claims."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 769,
+    "summary": "Invalidating _capabilities_cache on validation failure, combined with revalidation on every provider LOADED transition, forces a fresh full device capability probe for every degraded lock on each reconnect/reload.",
+    "failure_scenario": "Setting self._capabilities_cache = None on the no-PIN branch means a lock that is structurally degraded never caches a result. _async_on_integration_loaded re-runs _async_run_provider_setup unconditionally on each LOADED transition, so every degraded lock re-issues its full async_get_capabilities device read (for zwave_js, that is the 3-round-trip recovery sequence above) on every zwave_js reconnect and every LCM reload. At startup with N degraded locks this is N repeated blocking device reads with no backoff. Cheaper: cache the negative/last-known capabilities and only re-probe on an explicit, rate-limited signal rather than clearing the cache so every revalidation path re-hits the radio."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 289,
+    "summary": "The recovery success path performs two sequential full credential-capability reads plus the getUsersCount query — three sequential device round-trips — on the same probe.",
+    "failure_scenario": "async_get_capabilities calls _async_read_credential_capabilities (read 1), then _async_recover_user_code_slot_count (getUsersCount device query), then _async_read_credential_capabilities again (read 2), all awaited sequentially. Every zero-slot probe pays 3 serialized radio round-trips on a slow/battery Z-Wave node. On a lock that stays degenerate after the query this is pure waste (read 2 returns the same 0). Cheaper: skip the unconditional second full capability read — read back only the User Code CC supportedUsers value the query repopulated, or short-circuit the re-read when getUsersCount reported the same count."
+  },
+  {
+    "file": "tests/providers/test_base.py",
+    "line": 452,
+    "summary": "The new repair-issue tests each drive a full async_setup_internal (coordinator creation + async_refresh + push wiring + async_shutdown/async_unload teardown) to assert on nothing but the issue registry.",
+    "failure_scenario": "test_setup_validation_failure_raises_and_clears_repair_issue, test_reconnect_validation_failure_raises_repair_issue, and test_unload_permanently_clears_setup_failed_repair_issue only verify that _report_setup_validation_failure / _clear_setup_validation_issue create and delete the repair issue, but each spins up and tears down a real LockUsercodeUpdateCoordinator (an async refresh cycle) per test. Cheaper: exercise _report_setup_validation_failure / _clear_setup_validation_issue (or _async_run_provider_setup) directly against the issue registry without standing up and shutting down the coordinator, reserving the full setup path for the one degrade-and-recover test that actually asserts coordinator existence."
+  }
+]
+```</result>
+<usage><subagent_tokens>74911</subagent_tokens><tool_uses>10</tool_uses><duration_ms>120742</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a89f55ef618f3043b</task-id>
+<tool-use-id>toolu_017GqaK2YGkHgc3gkWKZYWrc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a89f55ef618f3043b.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle: altitude check" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my analysis of the diff and surrounding code, here are the findings:
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 541,
+    "summary": "Options-preferred merge in _setup_entry_after_start assumes options is always newer than data, but the reauth flow writes fresh config to data (config_flow.py:511-512, `data={**config_entry.data, **user_input}`) — the merge papers over the real defect (no update listener registered while the entry is failed) rather than fixing the lifecycle.",
+    "failure_scenario": "User saves an options-flow fix while the entry is down (lands in options), then later fixes the SAME entry via the reauth flow (fresh config written to data) and reload. On the successful reload the merge `{**data, **options}` prefers the stale earlier options over the newer reauth data, silently reverting the reauth fix. The 'options is newest' invariant that EntryConfig.from_entry relies on is not enforced anywhere in the state machine; the deeper fix is to register the update listener / clear options even for a failed entry, or have reauth write through the same precedence."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 884,
+    "summary": "lock_setup_failed_{lock_entity_id} is a globally-keyed per-lock issue but is raised and cleared from per-BaseLock-instance methods. async_unload(remove_permanently) clears it unconditionally, without the `_lock_managed_by_other_entry` guard that async_remove_entry (__init__.py:796) uses for the very same id.",
+    "failure_scenario": "Two LCM entries manage the same physical lock and both raised lock_setup_failed. The user removes the lock from entry A only; A's async_unload(True) deletes the shared global issue, dismissing entry B's still-valid repair. Because lock_setup_failed is only re-raised on setup/LOADED (unlike lock_offline, which any coordinator poll re-raises), B's repair stays gone until B is reloaded/reconnected. Repair lifecycle is split across _base.py (raise/clear), coordinator.py (lock_offline), and __init__.py (bulk cleanup), so the id/guard logic drifts between the removal path and the unload/recovery path."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 376,
+    "summary": "The getUsersCount recovery awaits a synchronous device query (async_invoke_cc_api) on a node that is, by the code's own comment, typically a battery lock whose interview completed while ASLEEP — exactly the node most likely to not respond promptly.",
+    "failure_scenario": "For a sleeping battery lock the queued getUsersCount command resolves only when the node next wakes (potentially hours) or after a server-side timeout. Because this runs inside async_get_capabilities → _get_cached_capabilities → _async_run_provider_setup, it can stall the LCM setup/validation coroutine on the sleeping lock instead of degrading fast and revalidating on the next reconnect/LOADED transition. The one-shot poke is a provider-specific bandaid layered on the base validation path; the retry/recovery belongs in the base's reconnect machinery (or upstream in HA lock_helpers, where a solicited UsersNumberReport could repopulate supportedUsers) rather than a blocking device query at setup time."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 376,
+    "summary": "Hardcoded `self.node.endpoints[0]` for the User Code CC invoke assumes the CC lives on the root endpoint; _node_advertises_user_code_cc similarly only inspects `self.node.command_classes` (endpoint 0), while lock_helpers.async_get_credential_capabilities derives the correct endpoint internally.",
+    "failure_scenario": "On a multi-endpoint Z-Wave lock whose User Code CC is exposed on a non-root endpoint, both the capability check and the getUsersCount poke target endpoint 0 and miss the CC, so recovery either no-ops or errors on an endpoint that doesn't advertise the CC — and the provider raises the 'no usable PIN slots' structural error for a lock that is actually fine. The endpoint should be derived the same way the rest of the User Code CC surface derives it, not hardcoded to 0."
+  },
+  {
+    "file": "custom_components/lock_code_manager/__init__.py",
+    "line": 798,
+    "summary": "async_remove_entry must statically enumerate every per-lock issue id (lock_offline, lock_setup_failed) that is raised by other layers; there is no single per-lock repair registry/helper, so each newly-added issue type must be manually mirrored here or it leaks.",
+    "failure_scenario": "lock_setup_failed is raised in _base.py, lock_offline in coordinator.py, slot repairs elsewhere, and cleanup is duplicated across async_remove_entry, the async_unload path, and the recovery clears. The next per-lock repair added anywhere will orphan on entry removal unless a developer remembers to add another `async_delete_issue(...f\"..._{lock_entity_id}\")` line here — the id strings are the only coupling. A per-lock issue helper that owns id construction, the _lock_managed_by_other_entry guard, and cleanup would remove this scattering."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 769,
+    "summary": "The degenerate-cache invalidation (`self._capabilities_cache = None`) lives only in the base PIN-validation branch, so it only fires for providers that RETURN a degenerate-but-successful LockCapabilities (matter/seam). The zwave provider raises inside async_get_capabilities instead, and the invalidation contract between the two paths is implicit.",
+    "failure_scenario": "The recovery correctness depends on a subtle split: matter/seam rely on line 769 to drop a cached no-PIN read, while zwave relies on async_get_capabilities raising (so _get_cached_capabilities never caches). If a future provider returns degenerate caps from a code path other than the base PIN check (e.g. a slot-only branch that later proves unusable), the stale successful capability read is served to every revalidation and the lock can never recover without a full reload — the exact failure this diff set out to fix. The cache-invalidation-on-degenerate-read belongs inside _get_cached_capabilities / the retry machinery, not duplicated per validation branch."
+  }
+]
+```</result>
+<usage><subagent_tokens>73423</subagent_tokens><tool_uses>10</tool_uses><duration_ms>179356</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4ca02df91312bc06</task-id>
+<tool-use-id>toolu_01RdXEHWidqtdH16qtnvNh1p</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a4ca02df91312bc06.output</output-file>
+<status>completed</status>
+<summary>Agent "Angle A: line-by-line scan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Based on my line-by-line scan of the diff and the enclosing functions in the actual repo files, here are the candidate findings.
+
+```json
+[
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 379,
+    "summary": "Recovery query catches only BaseZwaveJSServerError, not HomeAssistantError — escape drops the lock",
+    "failure_scenario": "A User Code CC battery lock reports 0 PIN slots, so _async_recover_user_code_slot_count runs node.endpoints[0].async_invoke_cc_api('getUsersCount'). Every other provider I/O in this file catches BOTH BaseZwaveJSServerError AND HomeAssistantError (e.g. lines 346/348, 424/426, 966/968), but this new method catches only BaseZwaveJSServerError. If the HA zwave_js layer raises a HomeAssistantError (node/driver not ready), it propagates uncaught out of async_get_capabilities → _get_cached_capabilities → _async_run_provider_setup. async_setup_internal only catches LockDisconnected/LockOperationFailed/LockCodeManagerProviderError, so the raw HomeAssistantError escapes to _async_setup_new_locks, which pops (drops) the lock — the exact invisible-lock/no-retry outcome this PR set out to prevent."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 376,
+    "summary": "node.endpoints[0] lookup in recovery can raise KeyError/IndexError that escapes and drops the lock",
+    "failure_scenario": "If node.endpoints has no key 0 (node model not fully populated at the moment the zero-slot probe fires during a slow interview), self.node.endpoints[0] raises KeyError. That is not a BaseZwaveJSServerError, so it is not caught in _async_recover_user_code_slot_count and propagates out of async_get_capabilities → async_setup_internal (uncaught) → _async_setup_new_locks pops the lock instead of degrading it."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/_base.py",
+    "line": 844,
+    "summary": "_async_on_integration_loaded structural-failure branch never resets _setup_succeeded to False",
+    "failure_scenario": "A zwave lock initially sets up successfully (_setup_succeeded=True). Later a re-interview corrupts/zeroes the slot count; the provider integration LOADED transition re-runs _async_run_provider_setup, which raises LockCodeManagerProviderError. The except branch reports the repair issue but leaves _setup_succeeded=True (stale). The lock is now degraded and has a repair issue open, yet internal state still claims setup succeeded; a subsequent genuine recovery won't emit the 'Provider setup succeeded' transition log (guarded by `if not self._setup_succeeded` at line 846). Impact is limited to logging today, but the state flag is now inconsistent with reality."
+  },
+  {
+    "file": "custom_components/lock_code_manager/providers/zwave_js.py",
+    "line": 296,
+    "summary": "getUsersCount device query re-issued on every reconnect for a permanently-degraded lock",
+    "failure_scenario": "For a lock that is genuinely stuck at zero usable PIN slots (old Z-Wave JS driver &lt; 15.24.3, or an interview that never completes), async_get_capabilities runs on initial setup AND on every provider integration LOADED/reconnect transition (_async_on_integration_loaded → _async_run_provider_setup → _get_cached_capabilities re-probes since the cache was invalidated). Each pass re-invokes the getUsersCount device query, waking a battery lock and logging an INFO line every time. Over repeated zwave_js reconnects/reloads this becomes repeated device wakeups (battery drain) and log spam despite the 'one-shot' framing in the docstring — the query is one-shot per capability read, not per lock lifetime."
+  }
+]
+```</result>
+<usage><subagent_tokens>91752</subagent_tokens><tool_uses>24</tool_uses><duration_ms>343975</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a269f624f5699d07f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a269f624f5699d07f.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify: unload guard mismatch" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>REFUTED.
+
+Every path to `BaseLock.async_unload(True)` funnels through `async_unload_lock` at `__init__.py:666-671`, where `await lock.async_unload(remove_permanently)` executes only inside `if not _lock_managed_by_other_entry(hass, config_entry, _lock_entity_id)`. The sole caller that passes `remove_permanently=True` is the update-listener `locks_to_remove` path (`__init__.py:1041-1042`); the only other caller, `async_unload_entry` (`:758`), passes the default `False`. So when entry A drops a lock that loaded entry B still manages, `_lock_managed_by_other_entry` (which scans other non-disabled/non-ignored entries' configs via `has_lock`, `:613-625`) returns True, and `lock.async_unload(...)` — and therefore `_clear_setup_validation_issue()` on the shared BaseLock instance (`_find_shared_lock_instance`, `:628-652`) — is never invoked, leaving the `lock_setup_failed_{lock_entity_id}` repair intact for B. The candidate's premise (async_unload(True) running while another entry manages the lock) is exactly what that gate blocks, so the bug is not reachable.</result>
+<usage><subagent_tokens>64308</subagent_tokens><tool_uses>8</tool_uses><duration_ms>67851</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2d24608bf910b44a</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a2d24608bf910b44a.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify: stale _setup_succeeded flag" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>CONFIRMED. In `_async_on_integration_loaded` (`_base.py:838-844`), the `except LockCodeManagerProviderError` branch reports the repair issue but never sets `self._setup_succeeded = False`, so a previously-successful lock that later fails structural validation on a LOADED transition retains the stale `_setup_succeeded = True` while a `lock_setup_failed` repair is open — a genuine internal-state inconsistency.
+
+However, the only behavioral consequence is a missing "Provider setup succeeded" info log on eventual recovery: the sole reads of `_setup_succeeded` are the two log/issue guards at lines 702 and 846, and it gates nothing functional (coordinator refresh, push subscription, and entity availability all proceed unconditionally). Notably the repair issue is still cleared on recovery, since `_clear_setup_validation_issue()` at line 852 runs unconditionally, not under the `if not self._setup_succeeded` guard. The initial-setup path (lines 692-700) has the same non-reset asymmetry, but there it is harmless because `_setup_succeeded` defaults to False. So: real-but-minor — the only impact is a missing log line.</result>
+<usage><subagent_tokens>44515</subagent_tokens><tool_uses>3</tool_uses><duration_ms>34709</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7c3199d8b3f22f3d</task-id>
+<tool-use-id>toolu_01JgSXKRyj6odjjL4Yw1ohSg</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a7c3199d8b3f22f3d.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify: recovery except coverage" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have enough to render a verdict. Key findings:
+
+- `NotFoundError` (exceptions.py line 49) IS `class NotFoundError(BaseZwaveJSServerError)` — a subclass. `async_invoke_cc_api` (endpoint.py line 217) raises exactly this when the CC is absent, so it is CAUGHT by the recovery method's `except BaseZwaveJSServerError`. Claim (d) is wrong.
+- The library send path (`client.async_send_command`, client.py ~113) just does `return await future` with no `asyncio.wait_for`/timeout wrapper; results are resolved via `FailedCommand`/other `BaseZwaveJSServerError` subclasses. No `asyncio.TimeoutError` is constructible from this call. Claim (c) is wrong.
+- Nothing in this call chain (`async_invoke_cc_api` → `async_send_command` → client) raises `HomeAssistantError`; the only HA-flavored error is `self.node` raising `LockDisconnected` (zwave_js.py line 157), which IS in `async_setup_internal`'s caught set (`except (LockDisconnected, LockOperationFailed)`, _base.py line 683). Claim (b) does not reach the silent-drop path.
+- `node.endpoints` is a plain `dict[int, Endpoint]` (node/__init__.py line 127), so `self.node.endpoints[0]` (zwave_js.py line 376) is an unguarded subscription. A `KeyError` here is neither `BaseZwaveJSServerError` nor one of the three exceptions `async_setup_internal` catches, so it WOULD escape to `_async_setup_new_locks` and pop the lock. But endpoint 0 (the root endpoint) is treated as universally present across the library (`node.command_classes`, `node.async_invoke_cc_api`, etc. all do `self.endpoints[0]` unguarded), so its absence is not a realistic state.
+
+VERDICT: PLAUSIBLE — Three of the four named mechanisms are provably not constructible: NotFoundError subclasses BaseZwaveJSServerError (so it is caught), the library's websocket send has no timeout wrapper (no asyncio.TimeoutError), and no layer in this chain raises HomeAssistantError except self.node's LockDisconnected which async_setup_internal already catches. The only genuine unhandled escape is a KeyError from the unguarded `self.node.endpoints[0]` dict subscription, which would indeed bypass all three caught types and produce the silent drop — but endpoint 0 is assumed always-present throughout zwave-js-server-python, making this a real-but-improbable state rather than a demonstrable bug.</result>
+<usage><subagent_tokens>57572</subagent_tokens><tool_uses>15</tool_uses><duration_ms>99685</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a901ef6d58661042c</task-id>
+<tool-use-id>toolu_01APbfVLkt6r7L1uq1tKwZFs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a901ef6d58661042c.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify: test caps duplication" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>CONFIRMED. Both helpers are verified: `_zero_slot_caps` (lines 723-740) and `_healthy_caps` (lines 743-760) are byte-for-byte identical except `num_slots` (0 vs 30) — both carry `supports_user_management=False, max_users=0, max_user_name_length=0, min_length=4, max_length=10`, so a `_caps(num_slots=...)` factory would cleanly collapse these two ~18-line literals. The divergence from the `mock_lock_helpers` fixture default (conftest.py lines 422-438: `supports_user_management=True, max_users=30, max_user_name_length=10, max_length=8, num_slots=30`) is real and spans four fields, so `_healthy_caps` is a unique caps shape no fixture produces, and the recovery test (line 788 asserts `num_slots == 30`) would go stale if a schema change touched only the fixture. One caveat on claim (a): a `num_slots`-only factory serves the two local helpers but cannot reproduce the conftest default without also reconciling those four divergent fields, so "serves all three sites" holds only if the fixture is changed to (or derived from) the `_healthy` shape.</result>
+<usage><subagent_tokens>42583</subagent_tokens><tool_uses>4</tool_uses><duration_ms>30196</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a715d3bb0ebf681e7</task-id>
+<tool-use-id>toolu_01T6XqX5jH267qTo1sC4yTwD</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/e195c857-8910-4d40-b4b2-1b22552277d8/tasks/a715d3bb0ebf681e7.output</output-file>
+<status>completed</status>
+<summary>Agent "Verify: missing integration test" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>REFUTED. `tests/providers/zwave_js/test_e2e.py` (the cold-start test at lines ~290-327) drives the full integration path: it sets up a complete LCM config entry via `hass.config_entries.async_setup(lcm_entry.entry_id)` while the zwave_js entry is unloaded so the lock's setup/validation structurally fails, then asserts `lcm_entry.runtime_data.locks.get(lock_entity.entity_id) is not None`, `lock.coordinator is not None`, and `lock._setup_succeeded is False` — with a follow-on recovery assertion once zwave_js loads. That pins exactly the behavior the candidate claims is only unit-tested: a degraded lock stays in `runtime_data.locks` after going through `__init__.py`/`_async_setup_new_locks`, so a regression re-dropping it at that layer would fail this e2e test. (Additionally, `tests/test_init.py::test_options_saved_while_entry_down_survive_data_migration` at lines 1325-1361 does a full setup asserting `runtime_data.locks` membership for a degraded-config scenario, though the zwave e2e is the direct hit.) The only unverified sub-claim is per-lock *entity* creation for the degraded lock, which the zwave e2e does not explicitly assert — but the central "stays in runtime_data.locks via the integration path" claim is directly covered.</result>
+<usage><subagent_tokens>75623</subagent_tokens><tool_uses>7</tool_uses><duration_ms>52870</duration_ms></usage>
+</task-notification>
+
+---
+
+merge main (ffwded) into branch
+
+---
+
+fix CI for 1333 and 1328

@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "97f070f16414",
+  "strategy": "manual-commit",
+  "branch": "dependabot/npm_and_yarn/prettier-3.9.5",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/97/f070f16414/0/metadata.json",
+      "transcript": "/97/f070f16414/0/full.jsonl",
+      "compact_transcript": "/97/f070f16414/0/transcript.jsonl",
+      "content_hash": "/97/f070f16414/0/content_hash.txt",
+      "prompt": "/97/f070f16414/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 134517,
+    "cache_creation_tokens": 1133444,
+    "cache_read_tokens": 81629488,
+    "output_tokens": 172490,
+    "api_call_count": 251
+  }
+}

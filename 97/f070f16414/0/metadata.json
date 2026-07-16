@@ -1,0 +1,109 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "97f070f16414",
+  "session_id": "e195c857-8910-4d40-b4b2-1b22552277d8",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-16T04:00:58.735277Z",
+  "branch": "dependabot/npm_and_yarn/prettier-3.9.5",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "58c08dfd96e7",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 134517,
+    "cache_creation_tokens": 1133444,
+    "cache_read_tokens": 81629488,
+    "output_tokens": 172490,
+    "api_call_count": 251
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01DTmYqTc3JpdF13QoAxso4P",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:systematic-debugging"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "58c08dfd96e7",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 53,
+        "end": 54,
+        "entry_ids": [
+          "1fb21469-644d-4a5b-81ac-dec219f9020c"
+        ],
+        "tool_use_id": "toolu_01DTmYqTc3JpdF13QoAxso4P"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01DTmYqTc3JpdF13QoAxso4P"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:systematic-debugging",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_011MvBPXwkYZT9627ep6EyGS",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "58c08dfd96e7",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 718,
+        "end": 719,
+        "entry_ids": [
+          "aa333e0f-ef46-4a3d-b47e-e7876db18860"
+        ],
+        "tool_use_id": "toolu_011MvBPXwkYZT9627ep6EyGS"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_011MvBPXwkYZT9627ep6EyGS"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 6955,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex-security/scan.log": 6955
+      }
+    }
+  ]
+}
