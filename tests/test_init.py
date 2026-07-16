@@ -1311,6 +1311,45 @@ async def test_setup_entry_after_start_does_not_stack_update_listeners(
     assert runtime_data.update_listener_registered is False
 
 
+async def test_options_saved_while_entry_down_survive_data_migration(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """Options written while the entry could not process them survive setup.
+
+    When an entry fails setup (e.g. a configured lock entity vanished after a
+    Z-Wave exclusion), no update listener is registered, so an options-flow
+    save just sits in ``options``. The data→options migration in
+    ``_setup_entry_after_start`` used to overwrite ``options`` wholesale with
+    the stale ``data``, silently discarding the user's fix on the next
+    successful setup. The migration must merge options-preferred instead —
+    the same precedence ``EntryConfig.from_entry`` uses.
+    """
+    old_config = copy.deepcopy(BASE_CONFIG)
+    # The user's fix, saved via the options flow while the entry was down:
+    # LOCK_2 removed from the entry.
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_LOCKS] = [LOCK_1_ENTITY_ID]
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=old_config,
+        options=new_config,
+        unique_id="Mock Title Options Survive",
+    )
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # The saved options won: LOCK_2 is not managed and the persisted config
+    # (migrated back to data by the update listener) reflects the fix.
+    assert set(config_entry.runtime_data.locks) == {LOCK_1_ENTITY_ID}
+    assert config_entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+    assert not config_entry.options
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
+
+
 async def test_unload_stops_sync_managers_before_callbacks_and_platforms(
     hass: HomeAssistant,
     mock_lock_config_entry,

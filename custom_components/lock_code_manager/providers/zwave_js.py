@@ -281,15 +281,22 @@ class ZWaveJSLock(BaseLock):
 
         ``num_slots == 0`` while a PIN type is advertised is no longer a
         routing branch -- it means the node interview is incomplete or the
-        driver is too old, so we raise an actionable error (issue #1298).
+        driver is too old. Before concluding that, a one-shot recovery
+        query re-reads the users count from the device (see
+        ``_async_recover_user_code_slot_count``); only when the re-read is
+        still degenerate do we raise an actionable error (issue #1298).
         """
-        try:
-            caps = await lock_helpers.async_get_credential_capabilities(self.node)
-        except BaseZwaveJSServerError as err:
-            raise LockDisconnected(f"get capabilities failed: {err}") from err
-        except HomeAssistantError as err:
-            raise LockOperationFailed(f"get capabilities failed: {err}") from err
+        caps = await self._async_read_credential_capabilities()
         pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
+
+        if (
+            pin is not None
+            and pin["num_slots"] == 0
+            and self._node_advertises_user_code_cc()
+            and await self._async_recover_user_code_slot_count()
+        ):
+            caps = await self._async_read_credential_capabilities()
+            pin = caps["supported_credential_types"].get(_PIN_TYPE_STR)
 
         if pin and pin["num_slots"] > 0:
             return LockCapabilities(
@@ -331,6 +338,52 @@ class ZWaveJSLock(BaseLock):
             credential_types={},
             max_user_name_length=0,
         )
+
+    async def _async_read_credential_capabilities(self) -> dict[str, Any]:
+        """Read raw credential capabilities, mapping transport errors."""
+        try:
+            return await lock_helpers.async_get_credential_capabilities(self.node)
+        except BaseZwaveJSServerError as err:
+            raise LockDisconnected(f"get capabilities failed: {err}") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"get capabilities failed: {err}") from err
+
+    async def _async_recover_user_code_slot_count(self) -> bool:
+        """
+        Re-query the User Code CC users count so the driver caches it.
+
+        The driver derives a User Code CC lock's PIN slot count from the
+        cached ``supportedUsers`` value and reports 0 when it is missing
+        from the value database -- the state a battery lock lands in when
+        its interview completes while asleep (common right after a
+        factory-reset re-inclusion, issue #1298). ``refreshValues`` on the
+        CC reads that same cached value rather than re-querying it, so the
+        only primitive that repopulates it is the CC API ``getUsersCount``
+        device query: the solicited UsersNumberReport persists
+        ``supportedUsers``, after which the cached capability read serves
+        real numbers.
+
+        Returns True when the query completed and a capability re-read is
+        worthwhile; False when it failed (the caller falls through to the
+        actionable structural error).
+        """
+        _LOGGER.info(
+            "Lock %s reports zero PIN slots; re-querying the User Code CC "
+            "users count once before concluding the lock is unusable",
+            self.lock.entity_id,
+        )
+        try:
+            await self.node.endpoints[0].async_invoke_cc_api(
+                CommandClass.USER_CODE, "getUsersCount"
+            )
+        except BaseZwaveJSServerError as err:
+            _LOGGER.debug(
+                "Lock %s: users count recovery query failed: %s",
+                self.lock.entity_id,
+                err,
+            )
+            return False
+        return True
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """

@@ -632,7 +632,12 @@ class BaseLock:
 
         Validates the lock advertises PIN credential support for
         native-user providers; structural failures
-        (``LockCodeManagerProviderError``) propagate and prevent setup.
+        (``LockCodeManagerProviderError``) are logged and the lock is
+        kept degraded — the same outcome as the reconnect path — so the
+        LOADED transition can revalidate once the underlying condition is
+        fixed (e.g. a re-interview repopulating a Z-Wave lock's slot
+        count). Dropping the lock here would leave it invisible with no
+        retry path until a full reload.
         ``supports_user_management`` is deliberately NOT required: a
         native-user provider can serve a slot-only lock (e.g. a Z-Wave
         User Code CC fallback), in which case the seam's
@@ -676,6 +681,14 @@ class BaseLock:
                     "created but data will be unavailable until the lock "
                     "comes online. Setup will be retried when the lock "
                     "integration reconnects.",
+                    self.lock.entity_id,
+                    err,
+                )
+            except LockCodeManagerProviderError as err:
+                LOGGER.error(
+                    "Provider setup failed validation for %s: %s. Entities "
+                    "will be created but unavailable; validation is retried "
+                    "when the lock's integration reloads or reconnects.",
                     self.lock.entity_id,
                     err,
                 )
@@ -741,6 +754,10 @@ class BaseLock:
         if self.supports_native_users:
             caps = await self._get_cached_capabilities()
             if CredentialType.PIN not in caps.credential_types:
+                # A degenerate-but-successful probe was just cached;
+                # invalidate it so the reconnect-path revalidation
+                # re-probes instead of serving the failed read forever.
+                self._capabilities_cache = None
                 raise LockCodeManagerProviderError(
                     f"{self.lock.entity_id}: lock does not advertise PIN credential support"
                 )

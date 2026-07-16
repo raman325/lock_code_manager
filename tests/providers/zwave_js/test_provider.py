@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import NodeStatus
+from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
@@ -720,23 +720,10 @@ async def test_async_get_capabilities_maps_lock_helpers_response(
     )
 
 
-async def test_async_get_capabilities_zero_slots_raises_actionable_error(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    A degenerate ``num_slots == 0`` capability probe fails with an actionable error.
-
-    The unified API reports a PIN credential type but zero usable slots when the
-    node's interview is incomplete (values missing from the DB) or the connected
-    Z-Wave JS driver predates the spec-compliant capability fix (15.24.3). Rather
-    than the misleading "does not advertise PIN credential support", the provider
-    surfaces a structural ``LockCodeManagerProviderError`` that points at the
-    actual remedies: re-interview the lock and update Z-Wave JS (see issue #1298).
-    """
+def _zero_slot_caps() -> dict:
+    """Return a degenerate capabilities response: PIN type advertised, 0 slots."""
     pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
-    mock_lock_helpers["async_get_credential_capabilities"].return_value = {
+    return {
         "supports_user_management": False,
         "max_users": 0,
         "supported_user_types": [],
@@ -752,8 +739,105 @@ async def test_async_get_capabilities_zero_slots_raises_actionable_error(
         },
     }
 
-    with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):
-        await zwave_js_lock.async_get_capabilities()
+
+def _healthy_caps() -> dict:
+    """Return a healthy capabilities response with 30 PIN slots."""
+    pin_type_str = lock_helpers.CREDENTIAL_TYPE_MAP[UserCredentialType.PIN_CODE]
+    return {
+        "supports_user_management": False,
+        "max_users": 0,
+        "supported_user_types": [],
+        "max_user_name_length": 0,
+        "supported_credential_rules": [],
+        "supported_credential_types": {
+            pin_type_str: {
+                "num_slots": 30,
+                "min_length": 4,
+                "max_length": 10,
+                "supports_learn": False,
+            }
+        },
+    }
+
+
+async def test_async_get_capabilities_zero_slots_recovers_via_users_count_query(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A degenerate ``num_slots == 0`` probe recovers by re-querying the users count.
+
+    The driver derives a User Code CC lock's slot count from the cached
+    ``supportedUsers`` value, defaulting to 0 when it is missing from the value
+    DB (e.g. the interview completed while the lock was asleep after a
+    re-inclusion). ``UserCodeCC.refreshValues`` reads that same cached value, so
+    the only primitive that repopulates it is the CC API ``getUsersCount``
+    device query. The provider invokes it once and re-reads capabilities before
+    concluding the lock is unusable (issue #1298 follow-up).
+    """
+    mock_lock_helpers["async_get_credential_capabilities"].side_effect = [
+        _zero_slot_caps(),
+        _healthy_caps(),
+    ]
+    invoke = AsyncMock()
+    with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
+        caps = await zwave_js_lock.async_get_capabilities()
+
+    invoke.assert_awaited_once_with(CommandClass.USER_CODE, "getUsersCount")
+    assert caps.credential_types[CredentialType.PIN].num_slots == 30
+    assert mock_lock_helpers["async_get_credential_capabilities"].await_count == 2
+
+
+async def test_async_get_capabilities_zero_slots_raises_actionable_error(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A degenerate ``num_slots == 0`` capability probe fails with an actionable error.
+
+    The unified API reports a PIN credential type but zero usable slots when the
+    node's interview is incomplete (values missing from the DB) or the connected
+    Z-Wave JS driver predates the spec-compliant capability fix (15.24.3). The
+    one-shot ``getUsersCount`` recovery query runs first; when the re-read is
+    still degenerate, the provider surfaces a structural
+    ``LockCodeManagerProviderError`` that points at the actual remedies:
+    re-interview the lock and update Z-Wave JS (see issue #1298).
+    """
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].return_value = _zero_slot_caps()
+    invoke = AsyncMock()
+    with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
+        with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):
+            await zwave_js_lock.async_get_capabilities()
+
+    invoke.assert_awaited_once_with(CommandClass.USER_CODE, "getUsersCount")
+    assert mock_lock_helpers["async_get_credential_capabilities"].await_count == 2
+
+
+async def test_async_get_capabilities_zero_slots_recovery_query_failure_still_raises(
+    zwave_js_lock: ZWaveJSLock,
+    mock_access_control: MagicMock,
+    mock_lock_helpers: dict,
+) -> None:
+    """
+    A failed recovery query falls through to the actionable structural error.
+
+    The ``getUsersCount`` device query is best-effort: when it fails (node
+    unreachable, command error), the provider raises the same actionable error
+    without re-reading capabilities.
+    """
+    mock_lock_helpers[
+        "async_get_credential_capabilities"
+    ].return_value = _zero_slot_caps()
+    invoke = AsyncMock(side_effect=FailedZWaveCommand("cmd", 1, "node asleep"))
+    with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
+        with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):
+            await zwave_js_lock.async_get_capabilities()
+
+    assert mock_lock_helpers["async_get_credential_capabilities"].await_count == 1
 
 
 async def test_async_get_capabilities_no_pin_type_returns_empty(

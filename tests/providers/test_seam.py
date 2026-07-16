@@ -27,7 +27,6 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
-    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
@@ -188,7 +187,12 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
 async def test_setup_internal_rejects_lock_without_pin_support(
     hass: HomeAssistant,
 ) -> None:
-    """A native-user lock missing PIN support fails setup with a typed error."""
+    """A native-user lock missing PIN support degrades instead of setting up.
+
+    The structural failure is logged and the lock kept degraded (setup not
+    marked successful, coordinator created) so it stays visible and
+    revalidates when the provider integration reloads.
+    """
 
     class _NoPinLock(_NativeStubLock):
         async def async_get_capabilities(self) -> LockCapabilities:
@@ -204,11 +208,14 @@ async def test_setup_internal_rejects_lock_without_pin_support(
     config_entry.add_to_hass(hass)
     # The stub's config entry never loads; force the connected signal so
     # setup runs the capability validation instead of deferring it.
-    with (
-        patch.object(lock, "async_is_integration_connected", return_value=True),
-        pytest.raises(LockCodeManagerProviderError, match="PIN credential"),
-    ):
+    with patch.object(lock, "async_is_integration_connected", return_value=True):
         await lock.async_setup_internal(config_entry)
+
+    assert lock._setup_succeeded is False
+    assert lock.coordinator is not None
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
 
 
 async def test_setup_internal_accepts_slot_only_capabilities(

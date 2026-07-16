@@ -529,9 +529,16 @@ def _setup_entry_after_start(
         config_entry.async_on_unload(_clear_listener_registered)
 
     if config_entry.data:
-        # Move data from data to options so update listener can work
+        # Move data from data to options so update listener can work.
+        # Merge options-preferred (matching EntryConfig.from_entry): a
+        # non-empty options here holds an options-flow save the entry
+        # could not process (no listener was registered while it was
+        # failed) — overwriting it with data would silently discard the
+        # user's fix.
         hass.config_entries.async_update_entry(
-            config_entry, data={}, options={**config_entry.data}
+            config_entry,
+            data={},
+            options={**config_entry.data, **config_entry.options},
         )
     else:
         hass.async_create_task(
@@ -857,6 +864,10 @@ async def _async_setup_new_locks(
     added_locks: list[BaseLock] = []
     for lock_entity_id, result in zip(locks_to_add, setup_results, strict=True):
         if isinstance(result, BaseException):
+            # Only unexpected exceptions land here: transport failures
+            # degrade inside async_setup_internal and structural
+            # validation failures are logged there and kept degraded, so
+            # a popped lock indicates a genuine bug, not a lock state.
             _LOGGER.error(
                 "%s (%s): Failed to set up lock %s: %s",
                 entry_id,
