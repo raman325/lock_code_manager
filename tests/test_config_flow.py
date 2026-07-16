@@ -270,6 +270,40 @@ async def test_config_flow_reauth(
     assert result["reason"] == "locks_updated"
 
 
+async def test_reauth_wins_over_stale_options(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+):
+    """A reauth fix is not reverted by stale options saved while the entry was failed.
+
+    While an entry is failed (e.g. a configured lock entity vanished after a
+    Z-Wave exclusion) no update listener is registered, so an options-flow
+    save just sits in ``options``. The data→options migration merges
+    options-preferred, so a reauth that only wrote into ``data`` would lose
+    to the stale options on the next load. The reauth write must therefore
+    consume the pending options (options-preferred, its own input winning)
+    and clear them.
+    """
+    entry = lock_code_manager_config_entry
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+
+    # An options-flow save the failed entry could never process.
+    stale_options = {**BASE_CONFIG, CONF_LOCKS: [LOCK_2_ENTITY_ID]}
+    hass.config_entries.async_update_entry(entry, options=stale_options)
+
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+    assert result["reason"] == "locks_updated"
+    await hass.async_block_till_done()
+
+    # The reauth's lock list won and the stale options were consumed, so the
+    # next data→options migration has nothing stale to prefer.
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+    assert not entry.options
+
+
 async def test_config_flow_slots_already_configured(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ):
