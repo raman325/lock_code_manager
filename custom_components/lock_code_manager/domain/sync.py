@@ -600,9 +600,12 @@ class SlotSyncManager:
                     self._code_suspend_target = None
                     self._state = SyncState.OUT_OF_SYNC
                     self._write_state()
-            elif not self._coordinator.unreachable:
-                # Suspended because the lock was unreachable; it is reachable
-                # again, so resume.
+            elif (
+                not self._coordinator.unreachable
+                and self._lock.provider_setup_succeeded
+            ):
+                # Suspended because the lock was unreachable or its provider
+                # setup had not validated; both have cleared, so resume.
                 self._breaker_reset_requested = True
                 self._state = SyncState.OUT_OF_SYNC
                 self._write_state()
@@ -751,8 +754,13 @@ class SlotSyncManager:
             self._write_state()
             return
 
-        # -- OUT_OF_SYNC: check lock reachability, then attempt sync --
-        if self._coordinator.unreachable:
+        # -- OUT_OF_SYNC: check lock readiness, then attempt sync --
+        # An unvalidated provider setup (deferred or structurally failed)
+        # suspends alongside unreachability: any write would only fail on
+        # the capability probe, landing in the generic error handler with a
+        # misleading "report this bug" suspension — and, for Z-Wave, re-fire
+        # the slot-count recovery device query on every attempt.
+        if self._coordinator.unreachable or not self._lock.provider_setup_succeeded:
             self._state = SyncState.SUSPENDED
             self._write_state()
             return
