@@ -165,7 +165,7 @@
     },
     "deobfuscate_log": {
       "name": "Deobfuscate log",
-      "description": "Replace mask_pin tokens (pin#xxxxxxxx) in pasted log text with the plaintext PINs configured in any loaded Lock Code Manager entry. WARNING: the response contains plaintext PINs \u2014 do not paste it into public issues, forums, or any shared channel.",
+      "description": "Replace mask_pin tokens (pin#xxxxxxxx) in pasted log text with the plaintext PINs configured in any loaded Lock Code Manager entry. WARNING: the response contains plaintext PINs — do not paste it into public issues, forums, or any shared channel.",
       "fields": {
         "text": {
           "name": "Text",
@@ -222,6 +222,10 @@
     "lock_offline": {
       "title": "Lock unreachable: {lock_entity_id}",
       "description": "Lock Code Manager has been unable to communicate with `{lock_entity_id}` for multiple consecutive attempts. Code synchronization is paused until the lock is reachable again. This issue will be automatically dismissed when the lock recovers."
+    },
+    "lock_setup_failed": {
+      "title": "Lock setup failed: {lock_entity_id}",
+      "description": "Lock Code Manager could not set up `{lock_entity_id}`: {error}\n\nIts entities are created but unavailable, and code synchronization is paused for this lock. After addressing the cause, reload the lock's integration (or Lock Code Manager) to retry. This issue will be automatically dismissed when setup succeeds."
     }
   }
 }

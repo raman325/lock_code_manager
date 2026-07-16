@@ -23,6 +23,11 @@ from homeassistant.const import ATTR_DEVICE_ID, ATTR_ENTITY_ID, ATTR_STATE, CONF
 from homeassistant.core import Event, HomeAssistant, State, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from ..const import (
@@ -692,6 +697,10 @@ class BaseLock:
                     self.lock.entity_id,
                     err,
                 )
+                self._report_setup_validation_failure(err)
+            else:
+                if self._setup_succeeded:
+                    self._clear_setup_validation_issue()
 
             lock_entity_id = self.lock.entity_id
             # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
@@ -763,6 +772,38 @@ class BaseLock:
                 )
         await self.async_setup(config_entry)
 
+    @final
+    @callback
+    def _report_setup_validation_failure(self, err: Exception) -> None:
+        """
+        Raise a repair issue so the structural failure is visible in the UI.
+
+        The actionable error message (e.g. "re-interview the lock") would
+        otherwise land only in the log. Persistent so it survives restarts:
+        the underlying condition does too.
+        """
+        async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"lock_setup_failed_{self.lock.entity_id}",
+            is_fixable=False,
+            is_persistent=True,
+            severity=IssueSeverity.ERROR,
+            translation_key="lock_setup_failed",
+            translation_placeholders={
+                "lock_entity_id": self.lock.entity_id,
+                "error": str(err),
+            },
+        )
+
+    @final
+    @callback
+    def _clear_setup_validation_issue(self) -> None:
+        """Dismiss the setup-failed repair issue after validation succeeds."""
+        async_delete_issue(
+            self.hass, DOMAIN, f"lock_setup_failed_{self.lock.entity_id}"
+        )
+
     async def _async_on_integration_loaded(self) -> None:
         """
         Handle provider integration LOADED transition.
@@ -800,6 +841,7 @@ class BaseLock:
                 self.lock.entity_id,
                 err,
             )
+            self._report_setup_validation_failure(err)
         else:
             if not self._setup_succeeded:
                 LOGGER.info(
@@ -807,6 +849,7 @@ class BaseLock:
                     self.lock.entity_id,
                 )
             self._setup_succeeded = True
+            self._clear_setup_validation_issue()
         finally:
             self._setup_running = False
 
@@ -834,6 +877,12 @@ class BaseLock:
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Tear down config-entry-state listener, reconnect task, and push subscription."""
+        if remove_permanently:
+            # The lock is leaving Lock Code Manager entirely; a persistent
+            # setup-failed repair would otherwise outlive it. Non-permanent
+            # unloads (reload, restart) keep it — the condition does too.
+            self._clear_setup_validation_issue()
+
         if self._config_entry_state_unsub:
             self._config_entry_state_unsub()
             self._config_entry_state_unsub = None

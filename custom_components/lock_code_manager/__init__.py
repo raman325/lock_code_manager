@@ -792,9 +792,10 @@ async def async_remove_entry(
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
-        # Only delete lock_offline if no other LCM entry manages this lock.
+        # Only delete per-lock issues if no other LCM entry manages this lock.
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
             async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
+            async_delete_issue(hass, DOMAIN, f"lock_setup_failed_{lock_entity_id}")
         for slot_num in config.slots:
             async_delete_issue(
                 hass,

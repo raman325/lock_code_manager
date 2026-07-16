@@ -12,7 +12,11 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 
 from custom_components.lock_code_manager.const import (
     ATTR_EXTRA_DATA,
@@ -992,6 +996,108 @@ async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload
 
     await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
+
+
+async def test_setup_validation_failure_raises_and_clears_repair_issue(
+    hass: HomeAssistant,
+):
+    """A structural setup failure surfaces a repair issue; recovery clears it.
+
+    The actionable error message (e.g. zwave_js's "re-interview the lock")
+    used to land only in the log, addressed to a user who never sees it.
+    The repair carries it into the UI, and revalidation succeeding on the
+    provider integration's LOADED transition dismisses it automatically.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_repair_issue", MockNativeUserLock)
+    issue_reg = ir.async_get(hass)
+    issue_id = f"lock_setup_failed_{lock.lock.entity_id}"
+
+    no_pin_caps = LockCapabilities(
+        supports_user_management=True, max_users=10, credential_types={}
+    )
+    caps_mock = AsyncMock(return_value=no_pin_caps)
+    with patch.object(lock, "async_get_capabilities", caps_mock):
+        await lock.async_setup_internal(lock.lock_config_entry)
+
+        issue = issue_reg.async_get_issue(DOMAIN, issue_id)
+        assert issue is not None
+        assert issue.translation_placeholders
+        assert "PIN credential" in issue.translation_placeholders["error"]
+
+        # The lock's condition is fixed; the LOADED transition revalidates
+        # and the repair dismisses itself.
+        caps_mock.return_value = _pin_capabilities()
+        loaded_entry = MagicMock()
+        loaded_entry.state = ConfigEntryState.LOADED
+        lock.lock_config_entry = loaded_entry
+        await lock._async_on_integration_loaded()
+
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
+async def test_reconnect_validation_failure_raises_repair_issue(
+    hass: HomeAssistant,
+):
+    """Deferred validation failing on the reconnect path raises the repair too."""
+    lock = _make_base_test_lock(
+        hass, "test_lock_repair_issue_reconnect", MockNativeUserLock
+    )
+    lock.set_connected(False)
+    issue_reg = ir.async_get(hass)
+    issue_id = f"lock_setup_failed_{lock.lock.entity_id}"
+
+    no_pin_caps = LockCapabilities(
+        supports_user_management=True, max_users=10, credential_types={}
+    )
+    caps_mock = AsyncMock(return_value=no_pin_caps)
+    with patch.object(lock, "async_get_capabilities", caps_mock):
+        await lock.async_setup_internal(lock.lock_config_entry)
+        # Deferred: no probe ran, so no issue yet.
+        assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
+
+        lock.set_connected(True)
+        loaded_entry = MagicMock()
+        loaded_entry.state = ConfigEntryState.LOADED
+        lock.lock_config_entry = loaded_entry
+        await lock._async_on_integration_loaded()
+
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
+async def test_unload_permanently_clears_setup_failed_repair_issue(
+    hass: HomeAssistant,
+):
+    """Removing a lock permanently clears its setup-failed repair issue.
+
+    A non-permanent unload (reload, HA restart) must keep the persistent
+    issue so it survives until the failure actually resolves.
+    """
+    lock = _make_base_test_lock(hass, "test_lock_repair_unload", MockNativeUserLock)
+    issue_reg = ir.async_get(hass)
+    issue_id = f"lock_setup_failed_{lock.lock.entity_id}"
+
+    no_pin_caps = LockCapabilities(
+        supports_user_management=True, max_users=10, credential_types={}
+    )
+    with patch.object(
+        lock, "async_get_capabilities", AsyncMock(return_value=no_pin_caps)
+    ):
+        await lock.async_setup_internal(lock.lock_config_entry)
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+
+    await lock.async_unload(False)
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
+
+    await lock.async_unload(True)
+    assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
+
+    await lock.coordinator.async_shutdown()
 
 
 async def test_on_integration_loaded_rejects_lock_without_pin_support(
