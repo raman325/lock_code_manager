@@ -339,18 +339,20 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         return html`
             <ha-card class="slot-card-state-${stateClass}">
-                ${this._actionError
-                    ? html`<div class="action-error" role="alert">
-                          <span>${this._actionError}</span>
-                          <button
-                              class="action-error-dismiss"
-                              @click=${this._dismissActionError}
-                              aria-label="Dismiss error"
-                          >
-                              ✕
-                          </button>
-                      </div>`
-                    : nothing}
+                ${
+                    this._actionError
+                        ? html`<div class="action-error" role="alert">
+                              <span>${this._actionError}</span>
+                              <button
+                                  class="action-error-dismiss"
+                                  @click=${this._dismissActionError}
+                                  aria-label="Dismiss error"
+                              >
+                                  ✕
+                              </button>
+                          </div>`
+                        : nothing
+                }
                 ${this._renderHeader(stateClass)}
                 <div class="content">
                     ${this._renderHero(pin, pinLength, enabled, mode)}
@@ -560,73 +562,81 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
             <div class="hero">
                 <div class="hero-row">
                     <div class="hero-field">
-                        ${editingName
-                            ? html`<input
-                                  class="edit-input name-edit-input"
-                                  type="text"
-                                  aria-label="Edit name"
-                                  .value=${name ?? ''}
-                                  @blur=${this._handleEditBlur}
-                                  @keydown=${this._handleEditKeydown}
-                              />`
-                            : html`<span
-                                  class="hero-name-value editable"
-                                  role="button"
-                                  tabindex="0"
-                                  aria-label="Edit name"
-                                  @click=${() => this._startEditing('name')}
-                                  @keydown=${(e: KeyboardEvent) => {
-                                      if (e.key === 'Enter' || e.key === ' ') {
-                                          e.preventDefault();
-                                          this._startEditing('name');
+                        ${
+                            editingName
+                                ? html`<input
+                                      class="edit-input name-edit-input"
+                                      type="text"
+                                      aria-label="Edit name"
+                                      .value=${name ?? ''}
+                                      @blur=${this._handleEditBlur}
+                                      @keydown=${this._handleEditKeydown}
+                                  />`
+                                : html`<span
+                                      class="hero-name-value editable"
+                                      role="button"
+                                      tabindex="0"
+                                      aria-label="Edit name"
+                                      @click=${() => this._startEditing('name')}
+                                      @keydown=${(e: KeyboardEvent) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault();
+                                              this._startEditing('name');
+                                          }
+                                      }}
+                                  >
+                                      ${
+                                          name
+                                              ? html`${name}`
+                                              : html`<em class="placeholder">Unnamed</em>`
                                       }
-                                  }}
-                              >
-                                  ${name
-                                      ? html`${name}`
-                                      : html`<em class="placeholder">Unnamed</em>`}
-                              </span>`}
+                                  </span>`
+                        }
                     </div>
                 </div>
                 <div class="hero-row">
                     <div class="hero-field hero-pin">
                         <span class="hero-field-label">PIN</span>
-                        ${this._editingField === 'pin'
-                            ? html`<input
-                                  class="edit-input pin-edit-input"
-                                  type="text"
-                                  inputmode="numeric"
-                                  pattern="[0-9]*"
-                                  aria-label="Edit PIN"
-                                  .value=${pin ?? ''}
-                                  @blur=${this._handleEditBlur}
-                                  @keydown=${this._handleEditKeydown}
-                              />`
-                            : html`<span
-                                  class="hero-pin-value editable ${shouldMask && hasPin
-                                      ? 'masked'
-                                      : ''}"
-                                  role="button"
-                                  tabindex="0"
-                                  aria-label="Edit PIN"
-                                  @click=${() => this._startEditing('pin')}
-                                  @keydown=${(e: KeyboardEvent) => {
-                                      if (e.key === 'Enter' || e.key === ' ') {
-                                          e.preventDefault();
-                                          this._startEditing('pin');
-                                      }
-                                  }}
-                              >
-                                  ${displayPin ?? html`<em class="placeholder">Unset</em>`}
-                              </span>`}
-                        ${mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
-                            ? html`<ha-icon-button
-                                  class="reveal"
-                                  .path=${this._revealed ? mdiEyeOff : mdiEye}
-                                  @click=${this._toggleReveal}
-                                  .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
-                              ></ha-icon-button>`
-                            : nothing}
+                        ${
+                            this._editingField === 'pin'
+                                ? html`<input
+                                      class="edit-input pin-edit-input"
+                                      type="text"
+                                      inputmode="numeric"
+                                      pattern="[0-9]*"
+                                      aria-label="Edit PIN"
+                                      .value=${pin ?? ''}
+                                      @blur=${this._handleEditBlur}
+                                      @keydown=${this._handleEditKeydown}
+                                  />`
+                                : html`<span
+                                      class="hero-pin-value editable ${
+                                          shouldMask && hasPin ? 'masked' : ''
+                                      }"
+                                      role="button"
+                                      tabindex="0"
+                                      aria-label="Edit PIN"
+                                      @click=${() => this._startEditing('pin')}
+                                      @keydown=${(e: KeyboardEvent) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault();
+                                              this._startEditing('pin');
+                                          }
+                                      }}
+                                  >
+                                      ${displayPin ?? html`<em class="placeholder">Unset</em>`}
+                                  </span>`
+                        }
+                        ${
+                            mode === 'masked_with_reveal' && hasPin && this._editingField !== 'pin'
+                                ? html`<ha-icon-button
+                                      class="reveal"
+                                      .path=${this._revealed ? mdiEyeOff : mdiEye}
+                                      @click=${this._toggleReveal}
+                                      .label=${this._revealed ? 'Hide PIN' : 'Reveal PIN'}
+                                  ></ha-icon-button>`
+                                : nothing
+                        }
                     </div>
                     <div class="hero-toggle">
                         <ha-switch
@@ -732,25 +742,27 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
         hasHelpers: boolean
     ): TemplateResult {
         return html`
-            ${hasEntity
-                ? html`${this._renderConditionBlock(conditions.condition_entity!)}
-                      <span
-                          class="remove-link"
-                          role="button"
-                          tabindex="0"
-                          aria-label="Remove condition"
-                          @click=${() => this._removeCondition()}
-                          @keydown=${(e: KeyboardEvent) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  this._removeCondition();
-                              }
-                          }}
-                      >
-                          <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
-                          Remove condition
-                      </span>`
-                : nothing}
+            ${
+                hasEntity
+                    ? html`${this._renderConditionBlock(conditions.condition_entity!)}
+                          <span
+                              class="remove-link"
+                              role="button"
+                              tabindex="0"
+                              aria-label="Remove condition"
+                              @click=${() => this._removeCondition()}
+                              @keydown=${(e: KeyboardEvent) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault();
+                                      this._removeCondition();
+                                  }
+                              }}
+                          >
+                              <ha-svg-icon .path=${mdiDelete}></ha-svg-icon>
+                              Remove condition
+                          </span>`
+                    : nothing
+            }
             ${hasHelpers ? this._renderHelpers() : nothing}
         `;
     }
@@ -1008,9 +1020,14 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
 
         return html`
             <div class="lock-row">
-                ${showSync
-                    ? html`<ha-icon class="lcm-sync-icon ${iconClass}" icon="${icon}"></ha-icon>`
-                    : nothing}
+                ${
+                    showSync
+                        ? html`<ha-icon
+                              class="lcm-sync-icon ${iconClass}"
+                              icon="${icon}"
+                          ></ha-icon>`
+                        : nothing
+                }
                 <div class="lock-info">
                     <span
                         class="lock-name"
@@ -1028,17 +1045,21 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                     >
                         ${lock.name}
                     </span>
-                    ${showSync && lock.syncStatus !== 'suspended' && lock.lastSynced
-                        ? html`<span class="lock-synced-time">
-                              Last synced to lock
-                              <ha-relative-time
-                                  .hass=${this._hass}
-                                  .datetime=${lock.lastSynced}
-                              ></ha-relative-time>
-                          </span>`
-                        : showSync
-                          ? html`<span class="lock-synced-time ${iconClass}">${statusText}</span>`
-                          : nothing}
+                    ${
+                        showSync && lock.syncStatus !== 'suspended' && lock.lastSynced
+                            ? html`<span class="lock-synced-time">
+                                  Last synced to lock
+                                  <ha-relative-time
+                                      .hass=${this._hass}
+                                      .datetime=${lock.lastSynced}
+                                  ></ha-relative-time>
+                              </span>`
+                            : showSync
+                              ? html`<span class="lock-synced-time ${iconClass}"
+                                    >${statusText}</span
+                                >`
+                              : nothing
+                    }
                 </div>
             </div>
         `;
@@ -1201,9 +1222,11 @@ class LockCodeManagerSlotCard extends LcmSlotCardBase {
                             )}
                         @value-changed=${(e: CustomEvent) => this._handlePickerChange(e)}
                     ></ha-entity-picker>
-                    ${this._dialogSaving
-                        ? html`<div class="dialog-saving" aria-live="polite">Saving…</div>`
-                        : nothing}
+                    ${
+                        this._dialogSaving
+                            ? html`<div class="dialog-saving" aria-live="polite">Saving…</div>`
+                            : nothing
+                    }
                 </div>
             </ha-dialog>
         `;

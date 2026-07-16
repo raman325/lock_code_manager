@@ -159,16 +159,20 @@ class LockCodesCard extends LockCodesCardBase {
                     </div>
                     <h2 class="card-header-title">${headerTitle}</h2>
                 </div>
-                ${isSuspended
-                    ? html`<div class="suspended-banner" role="status">
-                          <ha-icon icon="mdi:alert-circle" aria-hidden="true"></ha-icon>
-                          <span>Sync suspended — lock is unreachable</span>
-                      </div>`
-                    : nothing}
+                ${
+                    isSuspended
+                        ? html`<div class="suspended-banner" role="status">
+                              <ha-icon icon="mdi:alert-circle" aria-hidden="true"></ha-icon>
+                              <span>Sync suspended — lock is unreachable</span>
+                          </div>`
+                        : nothing
+                }
                 <div class="card-content">
-                    ${this._error
-                        ? html`<div class="message">${this._error}</div>`
-                        : this._renderSlots()}
+                    ${
+                        this._error
+                            ? html`<div class="message">${this._error}</div>`
+                            : this._renderSlots()
+                    }
                     ${this._renderSummaryTable()}
                 </div>
             </ha-card>
@@ -508,65 +512,81 @@ class LockCodesCard extends LockCodesCardBase {
 
         return html`
             <div
-                class="slot-chip ${stateClass} ${pendingClass} ${managedClass} ${clickableClass} ${isAlone
-                    ? 'full-width'
-                    : ''}"
+                class="slot-chip ${stateClass} ${pendingClass} ${managedClass} ${clickableClass} ${
+                    isAlone ? 'full-width' : ''
+                }"
                 title=${ifDefined(isClickable ? 'Click to manage this slot' : undefined)}
                 role=${ifDefined(isClickable ? 'button' : undefined)}
                 tabindex=${ifDefined(isClickable ? '0' : undefined)}
-                aria-label=${isClickable
-                    ? `Manage slot ${slot.slot}${slot.config_entry_title ? ` · ${slot.config_entry_title}` : ''}`
-                    : nothing}
+                aria-label=${
+                    isClickable
+                        ? `Manage slot ${slot.slot}${slot.config_entry_title ? ` · ${slot.config_entry_title}` : ''}`
+                        : nothing
+                }
                 @click=${isClickable ? () => this._navigateToSlot(slot.config_entry_id) : nothing}
-                @keydown=${isClickable
-                    ? (e: KeyboardEvent) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              this._navigateToSlot(slot.config_entry_id);
+                @keydown=${
+                    isClickable
+                        ? (e: KeyboardEvent) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  this._navigateToSlot(slot.config_entry_id);
+                              }
                           }
-                      }
-                    : nothing}
+                        : nothing
+                }
             >
                 <div class="slot-top">
                     <span class="slot-label">
                         Slot
-                        ${slot.slot}${slot.config_entry_title
-                            ? html` ·
-                                  <span class="slot-entry-title">${slot.config_entry_title}</span>`
-                            : nothing}
+                        ${slot.slot}${
+                            slot.config_entry_title
+                                ? html` ·
+                                      <span class="slot-entry-title"
+                                          >${slot.config_entry_title}</span
+                                      >`
+                                : nothing
+                        }
                     </span>
                     <div class="slot-badges">
                         <span class="lcm-badge ${statusClass}">
-                            ${statusClass === 'active' ||
-                            statusClass === 'inactive' ||
-                            statusClass === 'disabled'
-                                ? html`<span class="dot" aria-hidden="true"></span>`
-                                : nothing}
+                            ${
+                                statusClass === 'active' ||
+                                statusClass === 'inactive' ||
+                                statusClass === 'disabled'
+                                    ? html`<span class="dot" aria-hidden="true"></span>`
+                                    : nothing
+                            }
                             ${statusText}
                         </span>
-                        ${managed === undefined
-                            ? nothing
-                            : html`<span class="lcm-badge ${managed ? 'managed' : 'external'}">
-                                  ${managed ? 'Managed' : 'Unmanaged'}
-                              </span>`}
+                        ${
+                            managed === undefined
+                                ? nothing
+                                : html`<span class="lcm-badge ${managed ? 'managed' : 'external'}">
+                                      ${managed ? 'Managed' : 'Unmanaged'}
+                                  </span>`
+                        }
                     </div>
                 </div>
                 <div class="slot-content-row">
-                    ${showName
-                        ? html`<span class="slot-name-row">
-                              ${isPending
-                                  ? html`<ha-svg-icon
-                                            class="slot-name-pending-icon"
-                                            .path=${mdiClockOutline}
-                                            aria-hidden="true"
-                                        ></ha-svg-icon>
-                                        <span class="visually-hidden">Pending sync</span>`
-                                  : nothing}
-                              <span class="slot-name ${slotName ? '' : 'unnamed'}">
-                                  ${slotName ?? 'Unnamed'}
-                              </span>
-                          </span>`
-                        : nothing}
+                    ${
+                        showName
+                            ? html`<span class="slot-name-row">
+                                  ${
+                                      isPending
+                                          ? html`<ha-svg-icon
+                                                    class="slot-name-pending-icon"
+                                                    .path=${mdiClockOutline}
+                                                    aria-hidden="true"
+                                                ></ha-svg-icon>
+                                                <span class="visually-hidden">Pending sync</span>`
+                                          : nothing
+                                  }
+                                  <span class="slot-name ${slotName ? '' : 'unnamed'}">
+                                      ${slotName ?? 'Unnamed'}
+                                  </span>
+                              </span>`
+                            : nothing
+                    }
                     ${this._renderCodeSection(slot, mode)}
                 </div>
             </div>
@@ -639,32 +659,36 @@ class LockCodesCard extends LockCodesCardBase {
                     title=${ifDefined(isEditable ? 'Click to edit' : this._codeTitle(slot))}
                     @click=${isEditable ? (e: Event) => this._startEditing(e, slot) : nothing}
                 >
-                    ${isPending
-                        ? html`<ha-svg-icon
-                                  class="lcm-code-pending-icon"
-                                  .path=${mdiClockOutline}
-                                  aria-hidden="true"
-                              ></ha-svg-icon>
-                              <span class="visually-hidden">Pending sync</span>`
-                        : nothing}
+                    ${
+                        isPending
+                            ? html`<ha-svg-icon
+                                      class="lcm-code-pending-icon"
+                                      .path=${mdiClockOutline}
+                                      aria-hidden="true"
+                                  ></ha-svg-icon>
+                                  <span class="visually-hidden">Pending sync</span>`
+                            : nothing
+                    }
                     ${this._formatCode(slot)}
                 </span>
-                ${mode === 'masked_with_reveal' && this._canReveal(slot)
-                    ? html`<span class="slot-code-actions">
-                          <ha-icon-button
-                              class="lcm-reveal-button"
-                              .path=${this._revealed ? mdiEyeOff : mdiEye}
-                              @click=${(e: Event) => {
-                                  // Stop propagation so the click doesn't also
-                                  // trigger the parent slot-chip's navigation
-                                  // when the chip is clickable (managed slots).
-                                  e.stopPropagation();
-                                  this._toggleReveal();
-                              }}
-                              .label=${this._revealed ? 'Hide codes' : 'Reveal codes'}
-                          ></ha-icon-button>
-                      </span>`
-                    : nothing}
+                ${
+                    mode === 'masked_with_reveal' && this._canReveal(slot)
+                        ? html`<span class="slot-code-actions">
+                              <ha-icon-button
+                                  class="lcm-reveal-button"
+                                  .path=${this._revealed ? mdiEyeOff : mdiEye}
+                                  @click=${(e: Event) => {
+                                      // Stop propagation so the click doesn't also
+                                      // trigger the parent slot-chip's navigation
+                                      // when the chip is clickable (managed slots).
+                                      e.stopPropagation();
+                                      this._toggleReveal();
+                                  }}
+                                  .label=${this._revealed ? 'Hide codes' : 'Reveal codes'}
+                              ></ha-icon-button>
+                          </span>`
+                        : nothing
+                }
             </div>
         `;
     }
