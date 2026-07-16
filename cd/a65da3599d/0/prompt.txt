@@ -1,0 +1,5 @@
+check the latest open issue in the repo as well as the last comment from Craig here: https://community.home-assistant.io/t/custom-component-lock-code-manager-an-integration-to-manage-lock-usercodes-across-multiple-integrations-z-wave-matter-zigbee2mqtt-via-mqtt-schlage-wifi/695681/88
+
+---
+
+lets fix 1348, I will ask for diagnostics

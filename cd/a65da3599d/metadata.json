@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cda65da3599d",
+  "strategy": "manual-commit",
+  "branch": "fix/reauth-none-user-input",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cd/a65da3599d/0/metadata.json",
+      "transcript": "/cd/a65da3599d/0/full.jsonl",
+      "compact_transcript": "/cd/a65da3599d/0/transcript.jsonl",
+      "content_hash": "/cd/a65da3599d/0/content_hash.txt",
+      "prompt": "/cd/a65da3599d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42895,
+    "cache_creation_tokens": 84625,
+    "cache_read_tokens": 2378486,
+    "output_tokens": 16935,
+    "api_call_count": 28
+  }
+}

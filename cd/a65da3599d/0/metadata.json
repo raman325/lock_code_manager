@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "cda65da3599d",
+  "session_id": "c0e112a0-238e-4aa9-9643-f6d192de7438",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-16T16:16:11.991601Z",
+  "branch": "fix/reauth-none-user-input",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_config_flow.py",
+    "custom_components/lock_code_manager/config_flow.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "a5fbcf3c6d25",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 42895,
+    "cache_creation_tokens": 84625,
+    "cache_read_tokens": 2378486,
+    "output_tokens": 16935,
+    "api_call_count": 28
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01Y3WFiyiFnq91ARnhHEVFiF",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "superpowers:test-driven-development"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a5fbcf3c6d25",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 67,
+        "end": 68,
+        "entry_ids": [
+          "4f6162b3-edda-4639-a539-513b0a39a05c"
+        ],
+        "tool_use_id": "toolu_01Y3WFiyiFnq91ARnhHEVFiF"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01Y3WFiyiFnq91ARnhHEVFiF"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: superpowers:test-driven-development",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015pnL7S3aD3WS8YPJ72ztWj",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "commit-commands:commit-push-pr"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "a5fbcf3c6d25",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 168,
+        "end": 169,
+        "entry_ids": [
+          "88fa56af-49fd-44e2-af14-7ce0dc39351e"
+        ],
+        "tool_use_id": "toolu_015pnL7S3aD3WS8YPJ72ztWj"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015pnL7S3aD3WS8YPJ72ztWj"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: commit-commands:commit-push-pr",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-16T16:16:11.972133Z",
+    "agent_lines": 35,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 35,
+    "total_lines_changed": 39,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
