@@ -945,6 +945,55 @@ async def test_on_integration_loaded_runs_deferred_capability_validation(
     await lock.async_unload(False)
 
 
+async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload(
+    hass: HomeAssistant,
+):
+    """Initial-setup validation failure degrades the lock instead of dropping it.
+
+    A structural failure (no PIN support / zero usable slots) during initial
+    setup used to propagate, making ``_async_setup_new_locks`` pop the lock
+    from runtime data with no retry path and no UI surface — a re-included
+    Z-Wave lock whose interview completed asleep stayed invisible until a
+    full reload. Initial setup now matches the reconnect path: the failure is
+    logged, the coordinator and recovery listener are still created, and the
+    LOADED transition re-runs validation so the lock recovers once the
+    underlying condition is fixed (e.g. after a re-interview).
+    """
+    lock = _make_base_test_lock(
+        hass, "test_lock_structural_degraded", MockNativeUserLock
+    )
+
+    no_pin_caps = LockCapabilities(
+        supports_user_management=True, max_users=10, credential_types={}
+    )
+    caps_mock = AsyncMock(return_value=no_pin_caps)
+    with patch.object(lock, "async_get_capabilities", caps_mock):
+        await lock.async_setup_internal(lock.lock_config_entry)
+
+        caps_mock.assert_awaited_once()
+        assert lock._setup_succeeded is False
+        # Degraded, not dropped: coordinator and recovery listener exist.
+        assert lock.coordinator is not None
+        assert lock._config_entry_state_unsub is not None
+        assert lock._setup_complete.is_set()
+
+        # The lock's condition is fixed (e.g. re-interview repopulated the
+        # slot count); the next LOADED transition revalidates and recovers.
+        caps_mock.return_value = _pin_capabilities()
+        # Validation failure must invalidate the capability cache; a
+        # degenerate-but-successful read would otherwise be served to every
+        # revalidation, making recovery impossible.
+        loaded_entry = MagicMock()
+        loaded_entry.state = ConfigEntryState.LOADED
+        lock.lock_config_entry = loaded_entry
+        await lock._async_on_integration_loaded()
+
+    assert lock._setup_succeeded is True
+
+    await lock.coordinator.async_shutdown()
+    await lock.async_unload(False)
+
+
 async def test_on_integration_loaded_rejects_lock_without_pin_support(
     hass: HomeAssistant,
 ):

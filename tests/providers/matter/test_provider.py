@@ -31,7 +31,6 @@ from custom_components.lock_code_manager.domain.credentials import (
 from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
-    LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,
 )
@@ -205,20 +204,25 @@ async def test_setup_internal_unsupported_lock(
     matter_lock: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Base setup raises when the lock advertises no PIN credential support.
+    """Base setup degrades when the lock advertises no PIN credential support.
 
     ``supports_user_management`` alone no longer fails setup (slot-only
     locks are served via the seam's credential-primitive routing); the
     structural requirement is PIN support, which this lock also lacks.
+    The failure keeps the lock degraded (coordinator created, setup not
+    marked successful) rather than raising, so it stays visible and
+    revalidates when the provider integration reloads.
     """
     mock_get_lock_info = AsyncMock(return_value={"supports_user_management": False})
-    with (
-        patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-        pytest.raises(
-            LockCodeManagerError, match="does not advertise PIN credential support"
-        ),
-    ):
+    with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
         await matter_lock.async_setup_internal(simple_lcm_config_entry)
+
+    assert matter_lock._setup_succeeded is False
+    assert matter_lock.coordinator is not None
+    assert matter_lock._setup_complete.is_set()
+
+    await matter_lock.coordinator.async_shutdown()
+    await matter_lock.async_unload(False)
 
 
 async def test_setup_internal_no_pin_support(
@@ -226,18 +230,21 @@ async def test_setup_internal_no_pin_support(
     matter_lock: MatterLock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Base setup raises when the lock supports users but not PIN credentials."""
+    """Base setup degrades when the lock supports users but not PIN credentials."""
     mock_get_lock_info = AsyncMock(
         return_value={
             "supports_user_management": True,
             "supported_credential_types": ["rfid"],
         }
     )
-    with (
-        patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info),
-        pytest.raises(LockCodeManagerError, match="PIN credential"),
-    ):
+    with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
         await matter_lock.async_setup_internal(simple_lcm_config_entry)
+
+    assert matter_lock._setup_succeeded is False
+    assert matter_lock.coordinator is not None
+
+    await matter_lock.coordinator.async_shutdown()
+    await matter_lock.async_unload(False)
 
 
 # ---------------------------------------------------------------------------
