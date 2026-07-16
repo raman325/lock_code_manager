@@ -1069,6 +1069,16 @@ async def test_remove_entry_cleans_up_repair_issues(
             translation_key="lock_offline",
             translation_placeholders={"lock_entity_id": lock_id},
         )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"lock_setup_failed_{lock_id}",
+            is_fixable=False,
+            is_persistent=True,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="lock_setup_failed",
+            translation_placeholders={"lock_entity_id": lock_id, "error": "test"},
+        )
 
     # Call the remove hook directly so the fixture teardown (which
     # async_unloads the entry) still sees a registered entry. HA calls
@@ -1089,6 +1099,7 @@ async def test_remove_entry_cleans_up_repair_issues(
         )
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert issue_reg.async_get_issue(DOMAIN, f"lock_offline_{lock_id}") is None
+        assert issue_reg.async_get_issue(DOMAIN, f"lock_setup_failed_{lock_id}") is None
 
 
 async def test_reload_resets_sync_state_cleanly(

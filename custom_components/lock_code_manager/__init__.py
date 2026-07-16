@@ -101,7 +101,12 @@ from .domain.services import (
     async_set_usercode,
 )
 from .domain.slot_coordinator import SlotEntityCoordinator
-from .domain.util import build_pin_deobfuscation_map, deobfuscate_pins
+from .domain.util import (
+    PER_LOCK_ISSUE_KEYS,
+    build_pin_deobfuscation_map,
+    deobfuscate_pins,
+    per_lock_issue_id,
+)
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 
@@ -792,9 +797,12 @@ async def async_remove_entry(
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
-        # Only delete lock_offline if no other LCM entry manages this lock.
+        # Only delete per-lock issues if no other LCM entry manages this lock.
         if not _lock_managed_by_other_entry(hass, config_entry, lock_entity_id):
-            async_delete_issue(hass, DOMAIN, f"lock_offline_{lock_entity_id}")
+            for issue_key in PER_LOCK_ISSUE_KEYS:
+                async_delete_issue(
+                    hass, DOMAIN, per_lock_issue_id(issue_key, lock_entity_id)
+                )
         for slot_num in config.slots:
             async_delete_issue(
                 hass,
