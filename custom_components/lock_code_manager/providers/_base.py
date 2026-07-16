@@ -67,7 +67,7 @@ from ..domain.exceptions import (
 )
 from ..domain.models import SlotCredential
 from ..domain.queries import find_entry_for_lock_slot, get_managed_slots
-from ..domain.util import mask_pin
+from ..domain.util import mask_pin, per_lock_issue_id
 from ._util import make_tagged_name, parse_tag
 from .const import LOGGER
 
@@ -680,6 +680,7 @@ class BaseLock:
                 else:
                     await self._async_run_provider_setup(config_entry)
                     self._setup_succeeded = True
+                    self._clear_setup_validation_issue()
             except (LockDisconnected, LockOperationFailed) as err:
                 LOGGER.warning(
                     "Provider setup failed for %s: %s. Coordinator will be "
@@ -698,9 +699,6 @@ class BaseLock:
                     err,
                 )
                 self._report_setup_validation_failure(err)
-            else:
-                if self._setup_succeeded:
-                    self._clear_setup_validation_issue()
 
             lock_entity_id = self.lock.entity_id
             # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
@@ -785,7 +783,7 @@ class BaseLock:
         async_create_issue(
             self.hass,
             DOMAIN,
-            f"lock_setup_failed_{self.lock.entity_id}",
+            per_lock_issue_id("lock_setup_failed", self.lock.entity_id),
             is_fixable=False,
             is_persistent=True,
             severity=IssueSeverity.ERROR,
@@ -801,7 +799,9 @@ class BaseLock:
     def _clear_setup_validation_issue(self) -> None:
         """Dismiss the setup-failed repair issue after validation succeeds."""
         async_delete_issue(
-            self.hass, DOMAIN, f"lock_setup_failed_{self.lock.entity_id}"
+            self.hass,
+            DOMAIN,
+            per_lock_issue_id("lock_setup_failed", self.lock.entity_id),
         )
 
     async def _async_on_integration_loaded(self) -> None:

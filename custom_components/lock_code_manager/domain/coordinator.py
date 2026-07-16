@@ -32,6 +32,7 @@ from .exceptions import LockCodeManagerError
 from .models import SlotCredential
 from .queries import get_entry_config
 from .resilience import CircuitBreaker
+from .util import per_lock_issue_id
 
 if TYPE_CHECKING:
     from ..providers import BaseLock
@@ -328,7 +329,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
             async_create_issue(
                 self.hass,
                 DOMAIN,
-                f"lock_offline_{self._lock.lock.entity_id}",
+                per_lock_issue_id("lock_offline", self._lock.lock.entity_id),
                 is_fixable=False,
                 is_persistent=True,
                 severity=IssueSeverity.WARNING,
@@ -364,7 +365,7 @@ class LockUsercodeUpdateCoordinator(DataUpdateCoordinator[dict[int, SlotCredenti
         async_delete_issue(
             self.hass,
             DOMAIN,
-            f"lock_offline_{self._lock.lock.entity_id}",
+            per_lock_issue_id("lock_offline", self._lock.lock.entity_id),
         )
 
     async def async_get_usercodes(self) -> dict[int, SlotCredential]:

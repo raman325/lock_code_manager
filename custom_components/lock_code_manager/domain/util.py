@@ -20,6 +20,18 @@ from .config import EntryConfig, build_slot_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
+# Every repair issue keyed on a lock entity id. Creation sites live in
+# different layers (lock_offline in the coordinator, lock_setup_failed in
+# the provider base), but cleanup on entry removal iterates this tuple —
+# add new per-lock issue keys here or their persistent issues orphan when
+# the entry is deleted.
+PER_LOCK_ISSUE_KEYS = ("lock_offline", "lock_setup_failed")
+
+
+def per_lock_issue_id(key: str, lock_entity_id: str) -> str:
+    """Build the repair issue id for a per-lock issue key."""
+    return f"{key}_{lock_entity_id}"
+
 
 def mask_pin(
     pin: str | None,
