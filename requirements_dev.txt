@@ -6,7 +6,7 @@ aiousbwatcher==1.1.2
 colorlog==6.11.0
 debugpy==1.8.21
 ha-silabs-firmware-client==0.3.0
-homeassistant>=2026.7.2
+homeassistant>=2026.7.3
 matter-python-client==1.2.8
 pyserial==3.5
 pyudev==0.24.4
