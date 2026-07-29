@@ -1,0 +1,72 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b41cc8584534",
+  "session_id": "9a3c6660-b741-4362-9a24-fe5465e36d80",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-29T20:02:55.004118Z",
+  "branch": "dependabot-ha-group",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/dependabot.yaml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "6d57dbdea175",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 99299,
+    "cache_read_tokens": 3062854,
+    "output_tokens": 23156,
+    "api_call_count": 33
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-login-2026-07-29T19:41:55.403799Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "login"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "b4a1e62b7520",
+      "timestamp": "2026-07-29T19:41:55.403799Z",
+      "native": {
+        "command": "/login"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/login",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-29T20:02:54.987908Z",
+    "agent_lines": 18,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 18,
+    "total_lines_changed": 18,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

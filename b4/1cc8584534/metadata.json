@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b41cc8584534",
+  "strategy": "manual-commit",
+  "branch": "dependabot-ha-group",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".github/dependabot.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b4/1cc8584534/0/metadata.json",
+      "transcript": "/b4/1cc8584534/0/full.jsonl",
+      "compact_transcript": "/b4/1cc8584534/0/transcript.jsonl",
+      "content_hash": "/b4/1cc8584534/0/content_hash.txt",
+      "prompt": "/b4/1cc8584534/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 99299,
+    "cache_read_tokens": 3062854,
+    "output_tokens": 23156,
+    "api_call_count": 33
+  }
+}

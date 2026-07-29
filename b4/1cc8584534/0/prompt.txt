@@ -1,0 +1,23 @@
+there are a bunch of dependency PRs open. Fix the ones that can be fixed and merge them
+
+---
+
+/login
+
+---
+
+should the zha related things get grouped together?
+
+---
+
+<task-notification>
+<task-id>bo4j2kc8o</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/9a3c6660-b741-4362-9a24-fe5465e36d80/tasks/bo4j2kc8o.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll until the 5 dependency PRs merge (up to 40 min)" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+really all dependencies for HA should be part of the group
