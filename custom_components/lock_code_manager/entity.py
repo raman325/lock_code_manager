@@ -333,10 +333,17 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         )
         self.lock = lock
         if lock.device_entry:
-            self._attr_device_info = DeviceInfo(
-                connections=lock.device_entry.connections,
-                identifiers=lock.device_entry.identifiers,
-            )
+            # Link this entity to the lock's own device. Since HA 2026.8 a
+            # device belongs to a single config entry, so a helper
+            # integration must not reuse another integration's device
+            # identifiers/connections in ``device_info`` (which added LCM's
+            # config entry to that device and now forks a duplicate device
+            # instead). Setting ``device_entry`` links the entity to the
+            # existing device without claiming ownership of it; the entity
+            # platform honors a pre-set ``device_entry`` when ``device_info``
+            # is not provided.
+            self._attr_device_info = None
+            self.device_entry = lock.device_entry
 
         self._attr_unique_id = build_slot_unique_id(
             self.base_unique_id, slot_num, self.key, lock.lock.entity_id

@@ -97,7 +97,20 @@ async def test_entry_setup_and_unload(
     for entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         device = dev_reg.async_get_device({(DOMAIN, entity_id)})
         assert device
-        assert device.config_entries == {mock_lock_entry_id, lcm_entry_id}
+        # LCM links its per-lock entities to the lock's own device but no
+        # longer adds its config entry to it -- a device belongs to a single
+        # config entry as of HA 2026.8.
+        assert device.config_entries == {mock_lock_entry_id}
+        lcm_device_entities = {
+            entry.unique_id
+            for entry in er.async_entries_for_device(ent_reg, device.id)
+            if entry.config_entry_id == lcm_entry_id
+        }
+        assert lcm_device_entities == {
+            f"{lcm_entry_id}|{slot}|{key}|{entity_id}"
+            for slot in range(1, 3)
+            for key in (ATTR_CODE, ATTR_IN_SYNC)
+        }
 
     unique_ids = set()
     for slot in range(1, 3):
@@ -199,11 +212,18 @@ async def test_entry_setup_and_unload(
     )
     await hass.async_block_till_done()
 
-    # Validate that the config entry is removed from the device associated with the
-    # lock that was removed from the config entry
+    # LOCK_2 was removed from the LCM config entry; its device keeps its own
+    # config entry and no longer has any LCM entities linked to it.
     device = dev_reg.async_get_device({(DOMAIN, LOCK_2_ENTITY_ID)})
     assert device
     assert device.config_entries == {mock_lock_entry_id}
+    assert not [
+        entry
+        for entry in er.async_entries_for_device(
+            ent_reg, device.id, include_disabled_entities=True
+        )
+        if entry.config_entry_id == lcm_entry_id
+    ]
 
     unique_ids = set()
     for slot in range(1, 3):
