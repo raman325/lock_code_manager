@@ -3,7 +3,7 @@
 aioesphomeapi==45.7.0
 aiofiles==25.1.0
 aiousbwatcher==1.1.2
-colorlog==6.11.0
+colorlog==6.12.0
 debugpy==1.8.21
 ha-silabs-firmware-client==0.3.0
 homeassistant>=2026.7.3
