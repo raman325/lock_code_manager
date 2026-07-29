@@ -23,10 +23,28 @@ updates:
       - "dependencies"
       - "python"
     groups:
+      # HA pins these exactly (directly or via integration manifests), so they
+      # must move in lockstep with the homeassistant version under test.
       homeassistant:
         patterns:
           - "homeassistant"
           - "pytest-homeassistant-custom-component"
+          - "aioesphomeapi"
+          - "aiofiles"
+          - "aiousbwatcher"
+          - "colorlog"
+          - "debugpy"
+          - "ha-silabs-firmware-client"
+          - "matter-python-client"
+          - "pyserial"
+          - "pyudev"
+          - "universal-silabs-flasher"
+          - "usb-devices"
+          - "zeroconf"
+          - "zha"
+          - "zha-quirks"
+          - "zigpy"
+          - "zwave-js-server-python"
   - package-ecosystem: npm
     directory: "/" # Location of package manifests
     schedule:
