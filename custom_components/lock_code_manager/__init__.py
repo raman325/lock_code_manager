@@ -1040,11 +1040,10 @@ async def async_update_listener(
     for lock_entity_id in locks_to_remove:
         callbacks.invoke_lock_removed_handlers(lock_entity_id)
         lock: BaseLock = runtime_data.locks[lock_entity_id]
-        if lock.device_entry:
-            dev_reg = dr.async_get(hass)
-            dev_reg.async_update_device(
-                lock.device_entry.id, remove_config_entry_id=entry_id
-            )
+        # LCM no longer adds its config entry to the lock's device (its
+        # per-lock entities link to the device via ``device_entry``), so
+        # there is no config-entry association to unmerge here; the per-lock
+        # entities are torn down by ``async_unload_lock`` below.
         await async_unload_lock(
             hass, config_entry, lock_entity_id=lock_entity_id, remove_permanently=True
         )
