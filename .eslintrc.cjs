@@ -33,6 +33,9 @@ module.exports = {
         },
         {
             files: ['pbt/**/*.ts'],
+            parserOptions: {
+                project: ['./pbt/tsconfig.json']
+            },
             rules: {
                 'import/no-extraneous-dependencies': 'off' // bombadil is a devDependency
             }
