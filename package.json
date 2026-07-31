@@ -27,6 +27,7 @@
     "lit-html": "^3.3.3"
   },
   "devDependencies": {
+    "@antithesishq/bombadil": "0.6.1",
     "@babel/core": "^7.29.7",
     "@babel/preset-env": "^7.29.7",
     "@rollup/plugin-babel": "^7.1.0",

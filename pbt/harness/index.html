@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>LCM Bombadil Harness</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                margin: 16px;
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 16px;
+            }
+            #chaos-panel {
+                grid-column: 1 / -1;
+                border: 2px dashed #999;
+                padding: 8px;
+            }
+            #chaos-panel button {
+                margin: 4px;
+                padding: 8px 12px;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- Chaos levers live in light DOM so Bombadil's click actions reach
+             them; each simulates a backend-driven change through the mock
+             hass subscription pipeline. -->
+        <div id="chaos-panel">
+            <button id="chaos-external-pin">External PIN change</button>
+            <button id="chaos-toggle-active">Toggle slot active</button>
+            <button id="chaos-toggle-enabled">Toggle slot enabled</button>
+            <button id="chaos-rename">Rename slot user</button>
+            <button id="chaos-toggle-sync">Flip lock sync status</button>
+            <button id="chaos-toggle-suspended">Toggle lock suspended</button>
+            <button id="chaos-clear-slot">Clear random slot</button>
+            <button id="chaos-add-slot">Add lock slot</button>
+        </div>
+        <div id="masked-zone"></div>
+        <div id="lock-codes-zone"></div>
+        <script
+            type="module"
+            src="/custom_components/lock_code_manager/www/generated/lock-code-manager.js"
+        ></script>
+        <script type="module" src="/pbt/harness/harness.js"></script>
+    </body>
+</html>
