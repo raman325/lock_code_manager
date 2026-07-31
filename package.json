@@ -19,7 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:pbt": "yarn build ; node pbt/run.mjs"
+    "test:pbt": "yarn build && node pbt/run.mjs"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",

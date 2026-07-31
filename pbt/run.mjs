@@ -33,6 +33,10 @@ if (process.env.CI === 'true') {
 
 const bombadil = spawn('node_modules/.bin/bombadil', args, { stdio: 'inherit' });
 const exitCode = await new Promise((resolve) => {
+    bombadil.on('error', (err) => {
+        console.error('failed to launch bombadil:', err);
+        resolve(1);
+    });
     bombadil.on('exit', (code) => resolve(code ?? 1));
 });
 server.kill();

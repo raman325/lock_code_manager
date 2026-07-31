@@ -16,7 +16,9 @@ function deepText(root: Element | ShadowRoot): string {
     let text = '';
     for (const el of root.querySelectorAll('*')) {
         if (el.shadowRoot) {
-            text += deepText(el.shadowRoot);
+            // Join with a separator so text nodes straddling a shadow
+            // boundary can't fuse into a digit run that isn't really there.
+            text += `${deepText(el.shadowRoot)}\n`;
         }
     }
     text += root.textContent ?? '';
@@ -36,7 +38,7 @@ function deepQueryAll(root: Element | Document | ShadowRoot, selector: string): 
 
 declare global {
     interface Window {
-        __lcmHarness: {
+        __lcmHarness?: {
             model: {
                 revision: number;
                 slots: Record<
@@ -66,21 +68,23 @@ const lockCodesChipCount = extract((state) => {
     return zone ? deepQueryAll(zone, '.slot-chip').length : -1;
 });
 
-const secretPins = extract((state) => state.window.__lcmHarness.secretPins());
+const secretPins = extract((state) => state.window.__lcmHarness?.secretPins() ?? []);
 
 const modelSlotCount = extract(
-    (state) => Object.keys(state.window.__lcmHarness.model.slots).length
+    (state) => Object.keys(state.window.__lcmHarness?.model.slots ?? {}).length
 );
 
 const modelNames = extract((state) =>
-    Object.values(state.window.__lcmHarness.model.slots).map((slot) => slot.name)
+    Object.values(state.window.__lcmHarness?.model.slots ?? {}).map((slot) => slot.name)
 );
 
 const cardText = extract((state) => deepText(state.document.body));
 
 /** Masked cards must never render a secret PIN as cleartext. */
 export const maskedPinNeverLeaks = always(() =>
-    secretPins.current.every((pin) => !maskedZoneText.current.includes(pin))
+    secretPins.current.every(
+        (pin) => !new RegExp(`(?<!\\d)${pin}(?!\\d)`).test(maskedZoneText.current)
+    )
 );
 
 /** The lock-codes card renders exactly one chip per model slot. */
@@ -89,17 +93,14 @@ export const chipCountMatchesModel = always(() =>
 );
 
 /** Subscription liveness: pushed names eventually appear in the DOM. */
-export const namesEventuallyRendered = always(() => {
-    const names = modelNames.current;
-    return now(() => names.length > 0).implies(
-        eventually(() => names.every((name) => cardText.current.includes(name))).within(
-            10,
-            'seconds'
-        )
-    );
-});
+export const namesEventuallyRendered = always(() =>
+    eventually(() => modelNames.current.every((name) => cardText.current.includes(name))).within(
+        10,
+        'seconds'
+    )
+);
 
-const modelSuspended = extract((state) => state.window.__lcmHarness.model.suspended);
+const modelSuspended = extract((state) => state.window.__lcmHarness?.model.suspended ?? false);
 
 const suspendedBannerVisible = extract((state) => {
     const zone = state.document.querySelector('#lock-codes-zone');

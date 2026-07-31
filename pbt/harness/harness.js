@@ -169,8 +169,8 @@ function randomSlotNum() {
 
 const chaosHandlers = {
     'chaos-add-slot': () => {
-        const next = Math.max(0, ...Object.keys(model.slots).map(Number)) + 1;
-        if (next <= 6) {
+        const next = [1, 2, 3, 4, 5, 6].find((n) => !model.slots[n]);
+        if (next) {
             model.slots[next] = {
                 active: true,
                 enabled: true,
@@ -191,7 +191,9 @@ const chaosHandlers = {
     },
     'chaos-rename': () => {
         const slot = model.slots[randomSlotNum()];
-        slot.name = `Renamed ${model.revision}`;
+        // Digit-free label: a numeric revision could collide with a live
+        // secret PIN and falsely trip the no-leak property.
+        slot.name = `Renamed ${String(model.revision).replace(/\d/g, (d) => 'ABCDEFGHIJ'[Number(d)])}`;
     },
     'chaos-toggle-active': () => {
         const slot = model.slots[randomSlotNum()];

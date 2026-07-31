@@ -2,8 +2,9 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PORT = Number(process.env.PBT_PORT ?? 8199);
 const MIME = {
     '.css': 'text/css',
@@ -15,6 +16,11 @@ const MIME = {
 
 const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+    if (url.pathname === '/favicon.ico') {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
     let path = normalize(url.pathname).replace(/^(\.\.[/\\])+/, '');
     if (path.endsWith('/')) {
         path = `${path}index.html`;
