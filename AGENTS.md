@@ -333,7 +333,7 @@ Two complementary layers exist alongside the example-based suites:
   renders). Run locally with `yarn test:pbt` (env knobs:
   `BOMBADIL_TIME_LIMIT`, `BOMBADIL_HEADLESS=1`). CI runs it nightly and on
   manual dispatch (`bombadil.yml`), never on pull requests. Inspect
-  violations with `yarn node_modules/.bin/bombadil browser inspect pbt-output`.
+  violations with `yarn bombadil browser inspect pbt-output`.
 
 Counterexample triage: a found counterexample is a deliverable. Either fix
 the code, or — only for documented contract edges — narrow the strategy
