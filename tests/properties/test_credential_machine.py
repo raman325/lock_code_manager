@@ -55,6 +55,11 @@ class CredentialMachine(RuleBasedStateMachine):
         self.lock.codes = {}
         # Rate-limit delay between operations would dominate machine runtime.
         self.lock._min_operation_delay = 0
+        # Machine correctness also assumes an example never spans the
+        # coordinator's 10-second request-refresh cooldown: past it, the
+        # deferred debounced refresh could freshen coordinator.data between a
+        # rule's _would_duplicate read and its assertion. Examples run in
+        # milliseconds, leaving orders of magnitude of margin.
         self.coordinator = LockUsercodeUpdateCoordinator(
             self.hass, self.lock, self.config_entry
         )
@@ -108,11 +113,11 @@ class CredentialMachine(RuleBasedStateMachine):
         self._run(self.lock.async_internal_clear_usercode(slot))
         self.expected.pop(slot, None)
 
-    @rule()
-    def set_same_pin_is_no_change(self) -> None:
-        if not self.expected:
+    @rule(slot=SLOTS)
+    def set_same_pin_is_no_change(self, slot: int) -> None:
+        if slot not in self.expected:
             return
-        slot, pin = next(iter(self.expected.items()))
+        pin = self.expected[slot]
         if self._would_duplicate(slot, pin):
             # An external change may have copied this PIN onto another slot;
             # the duplicate guard fires before the no-change shortcut.
