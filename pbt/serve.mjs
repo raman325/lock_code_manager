@@ -25,6 +25,14 @@ const server = createServer(async (req, res) => {
     if (path.endsWith('/')) {
         path = `${path}index.html`;
     }
+    // The cards navigate via history.pushState to virtual Home Assistant
+    // routes (e.g. /config/integrations/...), and a browser reload then
+    // requests that route from this server. Serve the harness page for any
+    // extensionless path — mirroring the real frontend's single-page-app
+    // routing — while keeping honest 404s for missing assets.
+    if (!extname(path)) {
+        path = '/pbt/harness/index.html';
+    }
     try {
         const body = await readFile(join(ROOT, path));
         res.writeHead(200, {
