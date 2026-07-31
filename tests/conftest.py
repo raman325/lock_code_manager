@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from datetime import timedelta
+import os
 from typing import Any
 from unittest.mock import patch
 
+from hypothesis import settings as hypothesis_settings
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -36,6 +38,16 @@ from custom_components.lock_code_manager.providers._base import BaseLock
 from .common import BASE_CONFIG, MockCalendarEntity, MockLCMLock, MockLockEntity
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
+
+# Hypothesis profiles: "dev" keeps the full-suite run within its
+# seconds budget; CI opts into deeper exploration via HYPOTHESIS_PROFILE=ci.
+# deadline=None in both: per-example deadlines flake under the HA test
+# harness's timing noise and CI runner variance.
+hypothesis_settings.register_profile("dev", max_examples=15, deadline=None)
+hypothesis_settings.register_profile(
+    "ci", max_examples=200, deadline=None, print_blob=True
+)
+hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 TEST_DOMAIN = "test"
 
