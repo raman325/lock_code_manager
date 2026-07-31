@@ -30,6 +30,12 @@ module.exports = {
                 'import/no-extraneous-dependencies': 'off', // Test deps (vitest, etc.) are devDependencies
                 'sort-keys': 'off'                          // Test objects are ordered for readability, not alphabetically
             }
+        },
+        {
+            files: ['pbt/**/*.ts'],
+            rules: {
+                'import/no-extraneous-dependencies': 'off' // bombadil is a devDependency
+            }
         }
     ],
     parser: '@typescript-eslint/parser',

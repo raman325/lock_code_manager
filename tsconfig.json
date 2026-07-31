@@ -18,6 +18,7 @@
     ".eslintrc.cjs",
     "tsconfig.json",
     "rollup.config.js",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "pbt/spec.ts"
   ]
 }
