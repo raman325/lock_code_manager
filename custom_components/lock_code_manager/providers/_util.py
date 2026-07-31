@@ -98,7 +98,8 @@ def parse_slot_num(value: object) -> int | None:
     Convert a slot identifier to an int, or return None if not convertible.
 
     Mirrors ``int(value)`` while collapsing the ``TypeError``/``ValueError``
-    that providers otherwise catch when a lock reports a non-numeric slot key.
+    that providers otherwise catch when a lock reports a non-numeric slot key
+    (and ``OverflowError``, which ``int`` raises for infinite floats).
     JSON booleans are rejected rather than coerced (``int(True)`` is 1, so a
     malformed ``true`` would otherwise silently address slot 1).
     Call sites remain responsible for their own logging and skip/return flow.
@@ -107,5 +108,5 @@ def parse_slot_num(value: object) -> int | None:
         return None
     try:
         return int(value)  # type: ignore[call-overload]
-    except TypeError, ValueError:
+    except TypeError, ValueError, OverflowError:
         return None
