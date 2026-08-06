@@ -316,6 +316,29 @@ tests/providers/
 - Provider `async_setup` must be idempotent — tests verify it can be called multiple times.
 - Don't use `MagicMock()` for coordinators when the real coordinator can be used.
 
+## Property-based testing
+
+Two complementary layers exist alongside the example-based suites:
+
+- **Python (Hypothesis)** — `tests/properties/` runs as part of the normal
+  `pytest tests/` invocation. The default `dev` profile uses 15 examples to
+  keep the suite fast; CI sets `HYPOTHESIS_PROFILE=ci` (200 examples). Run
+  the deep profile locally with `HYPOTHESIS_PROFILE=ci pytest tests/properties/`.
+  `test_credential_machine.py` is a stateful machine driving the real
+  BaseLock write orchestration against `MockLCMLock`.
+- **TypeScript (Bombadil)** — `ts/pbt/` contains a browser harness that mounts
+  the built cards with a scripted mock `hass` plus a chaos panel, and a
+  Bombadil spec (`ts/pbt/spec.ts`) with temporal-logic properties (no PIN leaks
+  from masked cards, chip counts match the model, pushed data eventually
+  renders). Run locally with `yarn test:pbt` (env knobs:
+  `BOMBADIL_TIME_LIMIT`, `BOMBADIL_HEADLESS=1`). CI runs it nightly and on
+  manual dispatch (`bombadil.yml`), never on pull requests. Inspect
+  violations with `yarn bombadil browser inspect pbt-output`.
+
+Counterexample triage: a found counterexample is a deliverable. Either fix
+the code, or — only for documented contract edges — narrow the strategy
+with a comment citing the contract. Never silence one by rerunning.
+
 ## Adding Lock Provider Support
 
 1. Create new file in `providers/` (e.g., `my_provider.py`)

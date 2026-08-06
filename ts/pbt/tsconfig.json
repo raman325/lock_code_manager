@@ -1,0 +1,10 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "noEmit": true,
+        "skipLibCheck": true
+    },
+    "include": ["spec.ts"]
+}

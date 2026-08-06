@@ -7,6 +7,7 @@ venv
 .codex
 .coverage
 coverage/
+.hypothesis/
 .pytest_cache
 .mypy_cache
 .ruff_cache
@@ -22,3 +23,4 @@ docs/
 .github/hooks/
 .opencode/
 junit.xml
+pbt-output/
