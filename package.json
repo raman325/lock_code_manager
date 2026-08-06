@@ -14,12 +14,12 @@
   "scripts": {
     "build": "yarn install ; rollup -c",
     "watch": "rollup -c --watch",
-    "lint": "eslint --ext .ts ./ts ./pbt",
+    "lint": "eslint --ext .ts ./ts",
     "lint:fix": "yarn lint --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:pbt": "yarn build && node pbt/run.mjs"
+    "test:pbt": "yarn build && node ts/pbt/run.mjs"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",

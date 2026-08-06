@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const PORT = Number(process.env.PBT_PORT ?? 8199);
 const MIME = {
     '.css': 'text/css',
@@ -31,7 +31,7 @@ const server = createServer(async (req, res) => {
     // extensionless path — mirroring the real frontend's single-page-app
     // routing — while keeping honest 404s for missing assets.
     if (!extname(path)) {
-        path = '/pbt/harness/index.html';
+        path = '/ts/pbt/harness/index.html';
     }
     try {
         const body = await readFile(join(ROOT, path));
@@ -46,5 +46,5 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-    console.log(`harness at http://127.0.0.1:${PORT}/pbt/harness/`);
+    console.log(`harness at http://127.0.0.1:${PORT}/ts/pbt/harness/`);
 });

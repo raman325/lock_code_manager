@@ -11,14 +11,14 @@ const PORT = Number(process.env.PBT_PORT ?? 8199);
 const TIME_LIMIT = process.env.BOMBADIL_TIME_LIMIT ?? '60s';
 const HEADLESS = process.env.BOMBADIL_HEADLESS === '1' || process.env.CI === 'true';
 
-const server = spawn('node', ['pbt/serve.mjs'], { stdio: 'inherit' });
+const server = spawn('node', ['ts/pbt/serve.mjs'], { stdio: 'inherit' });
 await sleep(500);
 
 const args = [
     'browser',
     'test',
-    `http://127.0.0.1:${PORT}/pbt/harness/`,
-    'pbt/spec.ts',
+    `http://127.0.0.1:${PORT}/ts/pbt/harness/`,
+    'ts/pbt/spec.ts',
     `--time-limit=${TIME_LIMIT}`,
     '--exit-on-violation',
     '--output-path=pbt-output',

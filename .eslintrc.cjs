@@ -32,9 +32,9 @@ module.exports = {
             }
         },
         {
-            files: ['pbt/**/*.ts'],
+            files: ['ts/pbt/**/*.ts'],
             parserOptions: {
-                project: ['./pbt/tsconfig.json']
+                project: ['./ts/pbt/tsconfig.json']
             },
             rules: {
                 'import/no-extraneous-dependencies': 'off' // bombadil is a devDependency

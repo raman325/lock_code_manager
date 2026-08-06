@@ -326,9 +326,9 @@ Two complementary layers exist alongside the example-based suites:
   the deep profile locally with `HYPOTHESIS_PROFILE=ci pytest tests/properties/`.
   `test_credential_machine.py` is a stateful machine driving the real
   BaseLock write orchestration against `MockLCMLock`.
-- **TypeScript (Bombadil)** — `pbt/` contains a browser harness that mounts
+- **TypeScript (Bombadil)** — `ts/pbt/` contains a browser harness that mounts
   the built cards with a scripted mock `hass` plus a chaos panel, and a
-  Bombadil spec (`pbt/spec.ts`) with temporal-logic properties (no PIN leaks
+  Bombadil spec (`ts/pbt/spec.ts`) with temporal-logic properties (no PIN leaks
   from masked cards, chip counts match the model, pushed data eventually
   renders). Run locally with `yarn test:pbt` (env knobs:
   `BOMBADIL_TIME_LIMIT`, `BOMBADIL_HEADLESS=1`). CI runs it nightly and on
