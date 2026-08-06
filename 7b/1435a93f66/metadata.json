@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "7b1435a93f66",
+  "strategy": "manual-commit",
+  "branch": "property-based-testing",
+  "checkpoints_count": 18,
+  "files_touched": [
+    "AGENTS.md",
+    "package.json",
+    "pbt/harness/harness.js",
+    "pbt/run.mjs",
+    "pbt/serve.mjs",
+    "pbt/spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/1435a93f66/0/metadata.json",
+      "transcript": "/7b/1435a93f66/0/full.jsonl",
+      "compact_transcript": "/7b/1435a93f66/0/transcript.jsonl",
+      "content_hash": "/7b/1435a93f66/0/content_hash.txt",
+      "prompt": "/7b/1435a93f66/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 278,
+    "cache_creation_tokens": 908374,
+    "cache_read_tokens": 34045113,
+    "output_tokens": 166977,
+    "api_call_count": 144
+  }
+}
