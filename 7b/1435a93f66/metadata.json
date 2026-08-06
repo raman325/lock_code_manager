@@ -3,14 +3,24 @@
   "checkpoint_id": "7b1435a93f66",
   "strategy": "manual-commit",
   "branch": "property-based-testing",
-  "checkpoints_count": 18,
+  "checkpoints_count": 19,
   "files_touched": [
+    ".eslintrc.cjs",
     "AGENTS.md",
     "package.json",
     "pbt/harness/harness.js",
+    "pbt/harness/index.html",
     "pbt/run.mjs",
     "pbt/serve.mjs",
-    "pbt/spec.ts"
+    "pbt/spec.ts",
+    "pbt/tsconfig.json",
+    "ts/pbt/harness/harness.js",
+    "ts/pbt/harness/index.html",
+    "ts/pbt/run.mjs",
+    "ts/pbt/serve.mjs",
+    "ts/pbt/spec.ts",
+    "ts/pbt/tsconfig.json",
+    "tsconfig.build.json"
   ],
   "sessions": [
     {
@@ -19,13 +29,20 @@
       "compact_transcript": "/7b/1435a93f66/0/transcript.jsonl",
       "content_hash": "/7b/1435a93f66/0/content_hash.txt",
       "prompt": "/7b/1435a93f66/0/prompt.txt"
+    },
+    {
+      "metadata": "/7b/1435a93f66/1/metadata.json",
+      "transcript": "/7b/1435a93f66/1/full.jsonl",
+      "compact_transcript": "/7b/1435a93f66/1/transcript.jsonl",
+      "content_hash": "/7b/1435a93f66/1/content_hash.txt",
+      "prompt": "/7b/1435a93f66/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 278,
-    "cache_creation_tokens": 908374,
-    "cache_read_tokens": 34045113,
-    "output_tokens": 166977,
-    "api_call_count": 144
+    "input_tokens": 328,
+    "cache_creation_tokens": 986939,
+    "cache_read_tokens": 36360451,
+    "output_tokens": 181086,
+    "api_call_count": 171
   }
 }

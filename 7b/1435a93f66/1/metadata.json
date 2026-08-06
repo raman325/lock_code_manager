@@ -1,0 +1,70 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "7b1435a93f66",
+  "session_id": "a06729a5-cb8c-4819-a9fa-e2083eb7380e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T05:29:40.938875Z",
+  "branch": "property-based-testing",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".eslintrc.cjs",
+    "AGENTS.md",
+    "package.json",
+    "pbt/harness/harness.js",
+    "pbt/harness/index.html",
+    "pbt/run.mjs",
+    "pbt/serve.mjs",
+    "pbt/spec.ts",
+    "pbt/tsconfig.json",
+    "ts/pbt/harness/harness.js",
+    "ts/pbt/harness/index.html",
+    "ts/pbt/run.mjs",
+    "ts/pbt/serve.mjs",
+    "ts/pbt/spec.ts",
+    "ts/pbt/tsconfig.json",
+    "tsconfig.build.json"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "83a5631324c8",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 78565,
+    "cache_read_tokens": 2315338,
+    "output_tokens": 14109,
+    "api_call_count": 27
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-06T05:29:40.924197Z",
+    "agent_lines": 519,
+    "agent_removed": 519,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 519,
+    "total_lines_changed": 1038,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 519,
+      "agent_lines_removed": 519
+    }
+  ]
+}
