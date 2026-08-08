@@ -29,7 +29,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
 from custom_components.lock_code_manager.binary_sensor import (
@@ -40,6 +40,11 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.domain.credentials import (
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+)
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.slot_coordinator import (
     PinRequiredError,
@@ -48,6 +53,7 @@ from custom_components.lock_code_manager.domain.slot_coordinator import (
 
 from .common import (
     LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_PIN_ENTITY,
@@ -57,6 +63,168 @@ from .common import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _pin_caps(min_length: int, max_length: int) -> LockCapabilities:
+    """Build LockCapabilities advertising a PIN type with the given bounds."""
+    return LockCapabilities(
+        supports_user_management=True,
+        max_users=30,
+        credential_types={
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=30,
+                min_length=min_length,
+                max_length=max_length,
+                supports_learn=False,
+            )
+        },
+    )
+
+
+async def test_request_pin_update_rejects_out_of_range_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A PIN shorter than the lock minimum is rejected and never written."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(4, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError):
+        await coordinator.async_request_pin_update("12")
+
+    # The rejected PIN must not reach config.
+    assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == (
+        "1234"
+    )
+
+
+async def test_request_pin_update_rejects_too_long_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A PIN longer than the lock maximum is rejected."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(4, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError):
+        await coordinator.async_request_pin_update("123456789")
+
+
+async def test_request_pin_update_allows_in_range_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A PIN within the advertised range is written normally."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(4, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_pin_update("567890")
+    await hass.async_block_till_done()
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == (
+        "567890"
+    )
+
+
+async def test_request_pin_update_empty_pin_exempt_from_length(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Clearing the PIN is allowed even when the lock requires a minimum length."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(4, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_pin_update("")
+    await hass.async_block_till_done()
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == ""
+
+
+async def test_request_pin_update_fails_open_without_capabilities(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """Locks with unknown capabilities do not block a write."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_pin_update("12")
+    await hass.async_block_till_done()
+
+    assert (
+        get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == "12"
+    )
+
+
+async def test_validation_names_each_offending_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """The rejection message names every lock the PIN violates."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    runtime_data.locks[LOCK_1_ENTITY_ID]._capabilities_cache = _pin_caps(6, 8)
+    runtime_data.locks[LOCK_2_ENTITY_ID]._capabilities_cache = _pin_caps(6, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError) as exc:
+        await coordinator.async_request_pin_update("12")
+
+    message = str(exc.value)
+    assert runtime_data.locks[LOCK_1_ENTITY_ID].display_name in message
+    assert runtime_data.locks[LOCK_2_ENTITY_ID].display_name in message
+
+
+async def test_request_pin_update_accepts_boundary_lengths(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A PIN exactly at the min or max is accepted; one past either end is rejected."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(4, 8)
+    coordinator = runtime_data.slot_coordinators[1]
+
+    for ok in ("1234", "12345678"):  # exactly the min (4) and the max (8)
+        await coordinator.async_request_pin_update(ok)
+        await hass.async_block_till_done()
+        assert (
+            get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == ok
+        )
+
+    for bad in ("123", "123456789"):  # one under the min and one over the max
+        with pytest.raises(ServiceValidationError):
+            await coordinator.async_request_pin_update(bad)
+
+
+async def test_validation_message_unbounded_max_says_at_least(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A lock advertising a minimum but no maximum yields an 'at least N' message."""
+    runtime_data = lock_code_manager_config_entry.runtime_data
+    for lock in runtime_data.locks.values():
+        lock._capabilities_cache = _pin_caps(6, 0)  # max 0 == unbounded
+    coordinator = runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError) as exc:
+        await coordinator.async_request_pin_update("12")
+
+    assert "at least 6 characters" in str(exc.value)
 
 
 async def test_coordinator_registered_for_each_slot(
