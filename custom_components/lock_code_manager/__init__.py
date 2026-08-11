@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 import logging
 from pathlib import Path
 from typing import Any
@@ -80,7 +80,11 @@ from .const import (
     STRATEGY_PATH,
     Platform,
 )
-from .domain.config import EntryConfig
+from .domain.config import (
+    EntryConfig,
+    build_slot_device_identifier,
+    parse_slot_device_identifier,
+)
 from .domain.exceptions import LockDisconnected, LockOperationFailed
 from .domain.locks import async_create_lock_instance, get_locks_from_targets
 from .domain.models import (
@@ -587,6 +591,7 @@ async def async_setup_entry(
         name=config_entry.title,
         serial_number=entry_id,
     )
+    _async_prune_orphaned_slot_devices(hass, config_entry)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
@@ -811,6 +816,96 @@ async def async_remove_entry(
             )
 
 
+@callback
+def _async_remove_slot_devices(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    slot_nums: Iterable[int],
+) -> None:
+    """
+    Remove the per-slot devices for slots that are no longer configured.
+
+    Removing a slot's entities is not enough to retire its device: Home
+    Assistant's own registry cleanup only reaps devices referenced by
+    neither an entity nor a live config entry, and a slot device stays
+    attached to this entry forever. Left alone it lingers in the UI with
+    no way to delete it short of removing the whole entry (issue #1399).
+    """
+    dev_reg = dr.async_get(hass)
+    for slot_num in slot_nums:
+        identifier = build_slot_device_identifier(config_entry.entry_id, slot_num)
+        if device := dev_reg.async_get_device(identifiers={(DOMAIN, identifier)}):
+            _LOGGER.debug(
+                "%s (%s): Removing device for slot %s",
+                config_entry.entry_id,
+                config_entry.title,
+                slot_num,
+            )
+            dev_reg.async_remove_device(device.id)
+
+
+@callback
+def _async_prune_orphaned_slot_devices(
+    hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
+) -> None:
+    """
+    Drop slot devices left behind by a slot that is no longer in config.
+
+    Runs at setup so registries already polluted by the pre-fix behavior get
+    cleaned up on the next reload, rather than only newly-removed slots
+    benefiting. Sweeps by identifier rather than by diffing against a
+    previous config, so it also catches slots removed while the entry was
+    unloaded.
+    """
+    dev_reg = dr.async_get(hass)
+    entry_id = config_entry.entry_id
+    configured = get_entry_config(config_entry).slots
+    orphaned = {
+        slot_num
+        for device in dr.async_entries_for_config_entry(dev_reg, entry_id)
+        for domain, identifier in device.identifiers
+        if domain == DOMAIN
+        and (slot_num := parse_slot_device_identifier(entry_id, identifier)) is not None
+        and slot_num not in configured
+    }
+    if orphaned:
+        _LOGGER.debug(
+            "%s (%s): Pruning devices for unconfigured slots %s",
+            entry_id,
+            config_entry.title,
+            sorted(orphaned),
+        )
+        _async_remove_slot_devices(hass, config_entry, orphaned)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    config_entry: LockCodeManagerConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """
+    Allow deleting a slot device from the UI, but only once it is unused.
+
+    Home Assistant renders the device's Delete button only when this hook
+    exists, which is why there was previously no way to clear a stale slot
+    device (issue #1399). A device whose slot is still configured must stay:
+    deleting it would strand the slot's entities, and the next reload would
+    recreate it anyway.
+    """
+    entry_id = config_entry.entry_id
+    slot_nums = {
+        slot_num
+        for domain, identifier in device_entry.identifiers
+        if domain == DOMAIN
+        and (slot_num := parse_slot_device_identifier(entry_id, identifier)) is not None
+    }
+    # No slot identifier means this is the entry's own device, which has to
+    # outlive every slot -- it is what the slot devices hang off of.
+    if not slot_nums:
+        return False
+    return slot_nums.isdisjoint(get_entry_config(config_entry).slots)
+
+
 async def _async_setup_new_locks(
     hass: HomeAssistant,
     config_entry: LockCodeManagerConfigEntry,
@@ -994,6 +1089,9 @@ async def async_update_listener(
                 for slot_num in slots_to_remove
             )
         )
+        # After the entity removers have run, so the registry teardown order
+        # matches a normal removal (entities first, then their device).
+        _async_remove_slot_devices(hass, config_entry, slots_to_remove)
         for slot_num in slots_to_remove:
             coordinator = runtime_data.slot_coordinators.pop(slot_num, None)
             if coordinator is None:
